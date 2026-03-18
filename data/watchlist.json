@@ -1,0 +1,32 @@
+[
+  {
+    "ticker": "NEE",
+    "note": "",
+    "stage": "watching",
+    "addedAt": "2026-03-18T04:59:19.627Z"
+  },
+  {
+    "ticker": "COP",
+    "note": "",
+    "stage": "watching",
+    "addedAt": "2026-03-18T05:02:16.072Z"
+  },
+  {
+    "ticker": "NET",
+    "note": "",
+    "stage": "watching",
+    "addedAt": "2026-03-18T05:02:21.173Z"
+  },
+  {
+    "ticker": "ETR",
+    "note": "",
+    "stage": "watching",
+    "addedAt": "2026-03-18T05:02:25.555Z"
+  },
+  {
+    "ticker": "MSFT",
+    "note": "",
+    "stage": "watching",
+    "addedAt": "2026-03-18T05:02:30.755Z"
+  }
+]

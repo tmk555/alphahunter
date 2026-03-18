@@ -1,0 +1,2226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Alpha Hunter v6</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@17.0.2/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@17.0.2/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.22.5/babel.min.js"></script>
+<script src="https://unpkg.com/recharts@2.1.16/umd/Recharts.js"></script>
+<style>
+:root {
+  --bg:    #03030b; --bg2: #07071a; --bg3: #0b0b22;
+  --border:#14142e; --border2:#1e1e40;
+  --text:  #c8c8e8; --text2:#8888aa; --text3:#44446a;
+  --green: #00e676; --red: #ff3d57; --amber: #f0a500;
+  --cyan:  #00d4ff; --purple:#c44dff; --gold:#ffd700;
+  --font-mono: 'IBM Plex Mono', monospace;
+  --font-sans: 'IBM Plex Sans', sans-serif;
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+body { background:var(--bg); color:var(--text); font-family:var(--font-sans); font-size:14px; }
+::-webkit-scrollbar { width:4px; height:4px; }
+::-webkit-scrollbar-thumb { background:var(--border2); border-radius:2px; }
+
+/* ── Layout ─────────────────────────────────── */
+#app { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
+#ticker-bar { background:var(--bg2); border-bottom:1px solid var(--border); padding:0 16px; height:38px; display:flex; align-items:center; gap:20px; overflow-x:auto; flex-shrink:0; white-space:nowrap; }
+#header { background:var(--bg2); border-bottom:1px solid var(--border); padding:10px 16px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0; flex-wrap:wrap; gap:8px; }
+#tabs-row { background:var(--bg2); border-bottom:1px solid var(--border); display:flex; overflow-x:auto; flex-shrink:0; }
+#main { flex:1; overflow-y:auto; padding:20px; }
+
+/* ── Header ──────────────────────────────────── */
+.logo { font-family:var(--font-mono); font-size:18px; font-weight:600; color:var(--amber); letter-spacing:4px; }
+.logo span { font-size:10px; color:var(--text3); margin-left:6px; }
+.header-actions { display:flex; align-items:center; gap:10px; }
+.load-btn { padding:8px 20px; background:var(--amber); border:none; border-radius:4px; color:#000; font-family:var(--font-sans); font-weight:700; font-size:12px; letter-spacing:2px; cursor:pointer; }
+.load-btn:disabled { background:var(--text3); cursor:not-allowed; }
+.status-dot { width:7px; height:7px; border-radius:50%; display:inline-block; margin-right:5px; }
+.status-live { background:var(--green); animation:pulse 2s infinite; }
+.status-idle { background:var(--text3); }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+/* ── Ticker bar ──────────────────────────────── */
+.ticker-item { display:flex; align-items:center; gap:6px; font-family:var(--font-mono); font-size:11px; white-space:nowrap; }
+.ticker-sym { color:var(--text2); font-weight:600; }
+.ticker-price { color:var(--text); }
+.up { color:var(--green); }
+.dn { color:var(--red); }
+.neutral { color:var(--text2); }
+
+/* ── Tabs ────────────────────────────────────── */
+.tab { padding:11px 16px; border:none; background:transparent; cursor:pointer; font-family:var(--font-sans); font-weight:600; font-size:11px; letter-spacing:1.5px; color:var(--text3); border-bottom:2px solid transparent; transition:all 0.15s; white-space:nowrap; text-transform:uppercase; }
+.tab:hover { color:var(--text2); }
+.tab.active { color:var(--amber); border-bottom-color:var(--amber); }
+.tab-badge { font-size:8px; padding:1px 5px; background:rgba(0,230,118,0.15); color:var(--green); border-radius:3px; margin-left:5px; vertical-align:1px; }
+
+/* ── Panels ──────────────────────────────────── */
+.panel { background:var(--bg2); border:1px solid var(--border); border-radius:6px; padding:18px; margin-bottom:16px; }
+.panel-title { font-family:var(--font-mono); font-size:14px; font-weight:600; color:var(--text); letter-spacing:2px; margin-bottom:4px; }
+.panel-title span { color:var(--amber); }
+.panel-sub { font-size:11px; color:var(--text3); margin-bottom:14px; }
+.section-label { font-family:var(--font-mono); font-size:10px; color:var(--text3); letter-spacing:2px; text-transform:uppercase; margin-bottom:10px; }
+
+/* ── Tables ──────────────────────────────────── */
+.data-table { width:100%; border-collapse:collapse; font-size:12px; }
+.data-table th { padding:8px 12px; text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--text3); border-bottom:1px solid var(--border); background:var(--bg3); cursor:pointer; white-space:nowrap; }
+.data-table th:hover { color:var(--amber); }
+.data-table td { padding:9px 12px; border-bottom:1px solid var(--border); font-family:var(--font-mono); font-size:12px; white-space:nowrap; }
+.data-table tr:hover td { background:var(--bg3); }
+.td-name { font-family:var(--font-sans) !important; font-size:12px !important; color:var(--text2); max-width:160px; overflow:hidden; text-overflow:ellipsis; }
+.td-ticker { color:var(--cyan); font-weight:600; }
+
+/* ── RS Bar ──────────────────────────────────── */
+.rs-bar { display:flex; align-items:center; gap:6px; min-width:100px; }
+.rs-track { flex:1; height:3px; background:var(--border2); border-radius:2px; }
+.rs-fill { height:100%; border-radius:2px; }
+.rs-val { font-family:var(--font-mono); font-size:11px; font-weight:600; min-width:24px; text-align:right; }
+
+/* ── Sector Cards ────────────────────────────── */
+.sector-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:10px; margin-bottom:20px; }
+.sector-card { background:var(--bg3); border:1px solid var(--border); border-radius:5px; overflow:hidden; }
+.sector-card-bar { height:3px; }
+.sector-card-body { padding:11px 12px; }
+.sc-name { font-size:11px; color:var(--text); font-weight:600; margin-bottom:2px; }
+.sc-ticker { font-family:var(--font-mono); font-size:9px; color:var(--text3); margin-bottom:8px; }
+.sc-stats { display:grid; grid-template-columns:1fr 1fr; gap:5px 10px; }
+.sc-stat-label { font-size:8px; color:var(--text3); text-transform:uppercase; letter-spacing:.5px; }
+.sc-stat-val { font-family:var(--font-mono); font-size:11px; font-weight:600; }
+.sc-rs { display:flex; align-items:center; justify-content:space-between; margin-top:8px; }
+
+/* ── Swing Lab Cards ─────────────────────────── */
+.sl-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:14px; }
+.sl-card { background:var(--bg3); border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+.sl-card-header { padding:12px 14px 10px; border-bottom:1px solid var(--border); }
+.sl-card-title { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+.sl-ticker { font-family:var(--font-mono); font-size:16px; font-weight:600; color:var(--text); }
+.sl-name { font-size:11px; color:var(--text3); margin-top:2px; }
+.sl-metrics { display:flex; gap:12px; margin-top:8px; flex-wrap:wrap; }
+.sl-metric { text-align:center; }
+.sl-metric-label { font-size:8px; color:var(--text3); text-transform:uppercase; letter-spacing:.5px; }
+.sl-metric-val { font-family:var(--font-mono); font-size:12px; font-weight:600; margin-top:2px; }
+.sl-card-body { padding:12px 14px; }
+.sl-thesis { font-size:12px; color:var(--text2); line-height:1.7; margin-bottom:10px; }
+.sl-levels { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:10px; }
+.sl-level { background:var(--bg2); border:1px solid var(--border); border-radius:4px; padding:7px 10px; text-align:center; }
+.sl-level-label { font-size:8px; color:var(--text3); text-transform:uppercase; letter-spacing:.5px; }
+.sl-level-val { font-family:var(--font-mono); font-size:12px; font-weight:600; margin-top:3px; }
+.sl-tags { display:flex; flex-wrap:wrap; gap:5px; }
+.sl-tag { font-size:10px; padding:2px 7px; border-radius:3px; border:1px solid; }
+.sl-tag-risk { border-color:rgba(255,61,87,0.3); color:var(--red); background:rgba(255,61,87,0.06); }
+.sl-tag-catalyst { border-color:rgba(0,214,255,0.3); color:var(--cyan); background:rgba(0,214,255,0.06); }
+.sl-earnings { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--amber); margin-top:8px; padding:5px 8px; background:rgba(240,165,0,0.08); border-radius:3px; }
+
+/* ── Verdict badges ──────────────────────────── */
+.badge { font-size:10px; font-weight:700; padding:3px 8px; border-radius:3px; letter-spacing:.5px; font-family:var(--font-mono); }
+.badge-buy { background:rgba(0,230,118,0.15); color:var(--green); }
+.badge-watch { background:rgba(0,212,255,0.15); color:var(--cyan); }
+.badge-avoid { background:rgba(255,61,87,0.15); color:var(--red); }
+.badge-lead { background:rgba(0,230,118,0.12); color:var(--green); }
+.badge-lag  { background:rgba(255,61,87,0.12); color:var(--red); }
+.badge-neutral { background:rgba(136,136,170,0.12); color:var(--text2); }
+
+/* ── AI output ───────────────────────────────── */
+.ai-output { background:var(--bg3); border:1px solid var(--border); border-radius:5px; padding:16px; font-size:13px; line-height:1.8; color:var(--text); min-height:100px; }
+.ai-output h2, .ai-output h3 { font-family:var(--font-mono); color:var(--amber); font-size:11px; letter-spacing:2px; text-transform:uppercase; margin:14px 0 6px; border-bottom:1px solid var(--border); padding-bottom:5px; }
+.ai-output ul, .ai-output ol { padding-left:18px; }
+.ai-output li { margin-bottom:4px; }
+.ai-output strong { color:var(--text); }
+.ai-input-row { display:flex; gap:10px; margin-top:12px; }
+.ai-textarea { flex:1; background:var(--bg2); border:1px solid var(--border); border-radius:4px; color:var(--text); padding:10px 14px; font-size:13px; font-family:var(--font-sans); resize:vertical; outline:none; min-height:60px; }
+.ai-textarea::placeholder { color:var(--text3); }
+
+/* ── Buttons ─────────────────────────────────── */
+.btn { padding:9px 18px; border:1px solid var(--border); border-radius:4px; background:transparent; color:var(--text2); cursor:pointer; font-size:12px; font-family:var(--font-sans); font-weight:600; letter-spacing:1px; transition:all 0.15s; }
+.btn:hover { border-color:var(--amber); color:var(--amber); }
+.btn-primary { background:var(--amber); border-color:var(--amber); color:#000; font-weight:700; }
+.btn-primary:hover { opacity:0.85; }
+.btn-primary:disabled { background:var(--text3); border-color:var(--text3); color:var(--bg); cursor:not-allowed; }
+.btn-sm { padding:5px 12px; font-size:11px; }
+.btn-group { display:flex; gap:6px; }
+.mode-btn { padding:7px 14px; border:1px solid var(--border); background:transparent; color:var(--text3); cursor:pointer; font-size:11px; font-weight:600; letter-spacing:1px; transition:all 0.15s; border-radius:3px; }
+.mode-btn.active { border-color:var(--amber); color:var(--amber); background:rgba(240,165,0,0.08); }
+
+/* ── Macro cards ─────────────────────────────── */
+.macro-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:10px; margin-bottom:18px; }
+.macro-card { background:var(--bg3); border:1px solid var(--border); border-radius:5px; padding:12px; }
+.macro-label { font-size:8px; color:var(--text3); letter-spacing:2px; text-transform:uppercase; margin-bottom:6px; }
+.macro-price { font-family:var(--font-mono); font-size:16px; color:var(--text); margin-bottom:4px; }
+.macro-chg { font-family:var(--font-mono); font-size:11px; }
+
+/* ── Misc ────────────────────────────────────── */
+.loader { display:flex; align-items:center; gap:8px; padding:20px; color:var(--text3); font-size:12px; }
+.spinner { width:16px; height:16px; border:2px solid var(--border); border-top-color:var(--amber); border-radius:50%; animation:spin 0.7s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.empty { text-align:center; padding:40px; color:var(--text3); font-size:13px; }
+.error-box { background:rgba(255,61,87,0.07); border:1px solid rgba(255,61,87,0.25); border-radius:5px; padding:12px 16px; color:var(--red); font-size:12px; margin-bottom:14px; }
+.info-box { background:rgba(240,165,0,0.07); border:1px solid rgba(240,165,0,0.25); border-radius:5px; padding:12px 16px; color:var(--amber); font-size:12px; margin-bottom:14px; }
+.grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+.grid-3 { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+@media (max-width:768px) { .grid-2,.grid-3 { grid-template-columns:1fr; } }
+.divider { border:none; border-top:1px solid var(--border); margin:16px 0; }
+.preset-pill { padding:5px 12px; border:1px solid var(--border); border-radius:20px; background:transparent; color:var(--text2); cursor:pointer; font-size:11px; transition:all 0.15s; }
+.preset-pill:hover { border-color:var(--cyan); color:var(--cyan); }
+.tag-row { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px; }
+.num { font-family:var(--font-mono); }
+.muted { color:var(--text3); }
+.text-green { color:var(--green); }
+.text-red   { color:var(--red); }
+.text-amber { color:var(--amber); }
+.text-cyan  { color:var(--cyan); }
+.anim-in { animation:fadeUp 0.3s ease; }
+@keyframes fadeUp { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+const { BarChart, Bar, XAxis, YAxis, Tooltip, Cell, ResponsiveContainer } = Recharts;
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const fmt  = (n,d=2) => n != null ? Number(n).toFixed(d) : '—';
+const fmtP = v => v == null ? '—' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`;
+const fmtC = v => v == null ? '' : v >= 0 ? 'up' : 'dn';
+const fmtK = n => {
+  if (!n) return '—';
+  if (n >= 1e12) return `$${(n/1e12).toFixed(1)}T`;
+  if (n >= 1e9)  return `$${(n/1e9).toFixed(1)}B`;
+  if (n >= 1e6)  return `$${(n/1e6).toFixed(0)}M`;
+  return `$${n}`;
+};
+const rsColor = rs => rs >= 90 ? '#00e676' : rs >= 70 ? '#69f0ae' : rs >= 50 ? '#f0a500' : rs >= 30 ? '#ff8c00' : '#ff3d57';
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, opts);
+  if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || `HTTP ${r.status}`); }
+  return r.json();
+}
+
+async function askClaude(prompt, systemPrompt = '', useWebSearch = false) {
+  const d = await api('/api/claude', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ prompt, systemPrompt, useWebSearch, maxTokens:1500 }),
+  });
+  return d.content || '';
+}
+
+// RS Trend badge — shows direction and magnitude of RS change over past week
+function RSTrendBadge({ trend, rs }) {
+  if (!trend) return <span style={{color:'var(--text3)',fontSize:10}}>—</span>;
+  const dir  = trend.direction;
+  const mag  = trend.vs1m != null ? Math.abs(trend.vs1m).toFixed(0) : '';
+  const icon = dir === 'rising' ? '▲' : dir === 'falling' ? '▼' : '→';
+  // Low-RS stocks rising from a weak base (e.g. RS 1→6) shown in grey not green
+  // They are rising but NOT actionable yet
+  const lowBase = rs != null && rs < 50 && dir === 'rising';
+  const col  = lowBase ? 'var(--text3)' :
+               dir === 'rising'  ? 'var(--green)' :
+               dir === 'falling' ? 'var(--red)'   : 'var(--text3)';
+  const tip  = (lowBase ? '[Low RS — not actionable yet] ' : '') +
+    `1W: ${trend.vs1w!=null?(trend.vs1w>0?'+':'')+trend.vs1w:'?'} | 1M: ${trend.vs1m!=null?(trend.vs1m>0?'+':'')+trend.vs1m:'?'} | 3M: ${trend.vs3m!=null?(trend.vs3m>0?'+':'')+trend.vs3m:'?'}`;
+  return (
+    <span title={tip} style={{color:col,fontFamily:'var(--font-mono)',fontSize:11,fontWeight:700,cursor:'help'}}>
+      {icon}{mag?` ${mag}`:''}
+      {lowBase && <span style={{fontSize:9,color:'var(--text3)',marginLeft:2}}>low</span>}
+    </span>
+  );
+}
+
+// Market regime banner — shown at top of Swing Lab
+function RegimeBanner({ regime }) {
+  if (!regime) return null;
+  const bg  = regime.swingOk === false ? 'rgba(255,61,87,0.1)' : regime.regime === 'BULL / RISK ON' ? 'rgba(0,230,118,0.08)' : 'rgba(240,165,0,0.08)';
+  const col = regime.swingOk === false ? 'var(--red)' : regime.regime === 'BULL / RISK ON' ? 'var(--green)' : 'var(--amber)';
+  return (
+    <div style={{padding:'10px 14px',background:bg,border:`1px solid ${col}44`,borderRadius:5,marginBottom:14,display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
+      <div>
+        <span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:col,fontSize:12,letterSpacing:1}}>{regime.regime}</span>
+        {regime.warning && <span style={{fontSize:11,color:'var(--text2)',marginLeft:10}}>{regime.warning}</span>}
+      </div>
+      <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>
+        SPY {regime.spyAbove50?'above':'below'} 50MA · {regime.spyAbove200?'above':'below'} 200MA · VIX {regime.vixLevel?.toFixed(0)}
+      </div>
+    </div>
+  );
+}
+
+function RSBar({ rs }) {
+  if (rs == null) return <span className="muted">—</span>;
+  return (
+    <div className="rs-bar">
+      <div className="rs-track">
+        <div className="rs-fill" style={{width:`${rs}%`, background:rsColor(rs)}}/>
+      </div>
+      <span className="rs-val" style={{color:rsColor(rs)}}>{rs}</span>
+    </div>
+  );
+}
+
+function Loader({ msg = 'Loading...' }) {
+  return <div className="loader"><div className="spinner"/>{msg}</div>;
+}
+
+function ErrorBox({ msg }) {
+  return <div className="error-box">⚠ {msg}</div>;
+}
+
+function formatAI(text) {
+  if (!text) return null;
+  return text
+    .replace(/##\s+(.+)/g, '<h3>$1</h3>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/^[-•]\s+(.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>.*<\/li>)/gs, m => `<ul>${m}</ul>`)
+    .replace(/\n\n/g, '<br/><br/>')
+    .replace(/\n/g, '<br/>');
+}
+
+function AIOutput({ text, loading }) {
+  if (loading) return <div className="ai-output"><Loader msg="Claude is analyzing with web search..."/></div>;
+  if (!text)   return null;
+  return (
+    <div className="ai-output anim-in"
+      dangerouslySetInnerHTML={{__html: formatAI(text)}} />
+  );
+}
+
+// ─── ROOT APP ─────────────────────────────────────────────────────────────────
+function App() {
+  const [tab, setTab] = useState('pulse');
+  const [tickerData, setTickerData] = useState([]);
+  const [isLive, setIsLive] = useState(false);
+
+  // Shared data cache
+  const [rsData,  setRsData]  = useState([]);
+  const [rsLoaded, setRsLoaded] = useState(false);
+
+  useEffect(() => {
+    loadTicker();
+    const id = setInterval(loadTicker, 60000);
+    return () => clearInterval(id);
+  }, []);
+
+  async function loadTicker() {
+    try {
+      const d = await api('/api/macro');
+      const items = (d.macro || []).filter(m =>
+        ['SPY','QQQ','IWM','^VIX'].includes(m.symbol)
+      );
+      setTickerData(items);
+      setIsLive(items.length > 0);
+    } catch(_) {}
+  }
+
+  async function loadAll() {
+    // Preload RS data shared across tabs
+    try {
+      const d = await api('/api/rs-scan');
+      setRsData(d.stocks || []);
+      setRsLoaded(true);
+    } catch(_) {}
+  }
+
+  const TABS = [
+    { id:'pulse',     label:'⚡ Market Pulse' },
+    { id:'sectors',   label:'🔄 Sectors' },
+    { id:'industries',label:'🏭 Industries' },
+    { id:'rs',        label:'📊 RS Dashboard' },
+    { id:'swinglab',  label:'🎯 Swing Lab', badge:'AI' },
+
+    { id:'signals',   label:'📡 Trade Signals' },
+    { id:'watchlist', label:'⭐ Watchlist' },
+  ];
+
+  return (
+    <div id="app">
+      {/* TICKER BAR */}
+      <div id="ticker-bar">
+        {tickerData.length === 0 && <span className="muted" style={{fontSize:11}}>Click LOAD DATA to fetch live market data</span>}
+        {tickerData.map(t => (
+          <div className="ticker-item" key={t.symbol}>
+            <span className="ticker-sym">{t.name || t.symbol}</span>
+            <span className="ticker-price">{t.symbol==='^VIX'?fmt(t.price,1):`$${fmt(t.price,t.price>100?0:2)}`}</span>
+            <span className={fmtC(t.chg1d)}>{fmtP(t.chg1d)}</span>
+          </div>
+        ))}
+        {isLive && <span style={{marginLeft:'auto',fontSize:10,color:'var(--green)',fontFamily:'var(--font-mono)'}}>
+          <span className="status-dot status-live"/>{new Date().toLocaleTimeString()}
+        </span>}
+      </div>
+
+      {/* HEADER */}
+      <div id="header">
+        <div>
+          <div className="logo">ALPHA HUNTER <span>v6</span></div>
+          <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)',marginTop:2,letterSpacing:2}}>
+            IBD-STANDARD RS · SWING LAB · SECTOR ROTATION · MACRO
+          </div>
+        </div>
+        <div className="header-actions">
+          {isLive && <span style={{fontSize:10,color:'var(--green)',fontFamily:'var(--font-mono)'}}><span className="status-dot status-live"/>LIVE DATA</span>}
+          <button className="load-btn" onClick={loadAll}>↻ REFRESH ALL</button>
+        </div>
+      </div>
+
+      {/* TABS */}
+      <div id="tabs-row">
+        {TABS.map(t => (
+          <button key={t.id} className={`tab ${tab===t.id?'active':''}`}
+            onClick={() => setTab(t.id)}>
+            {t.label}
+            {t.badge && <span className="tab-badge">{t.badge}</span>}
+          </button>
+        ))}
+      </div>
+
+      {/* CONTENT */}
+      <div id="main">
+        {tab==='pulse'      && <MarketPulseTab />}
+        {tab==='sectors'    && <SectorsTab />}
+        {tab==='industries' && <IndustriesTab />}
+        {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} setRsData={setRsData} setRsLoaded={setRsLoaded}/>}
+        {tab==='leaders'    && <LeadersTab />}
+        {tab==='macro'      && <MacroTab />}
+        {tab==='swinglab'   && <SwingLabTab rsData={rsData} rsLoaded={rsLoaded} />}
+        {tab==='watchlist'  && <WatchlistTab rsData={rsData} />}
+        {tab==='signals'    && <SignalsTab rsData={rsData} />}
+        {tab==='scanner'    && <ScannerTab />}
+        {tab==='thematic'   && <ThematicTab />}
+      </div>
+    </div>
+  );
+}
+
+// ─── Reusable sort hook ───────────────────────────────────────────────────────
+function useSortTable(defaultKey, defaultDir = -1) {
+  const [sortKey, setSortKey] = useState(defaultKey);
+  const [sortDir, setSortDir] = useState(defaultDir);
+  function toggleSort(k) {
+    if (sortKey === k) setSortDir(d => -d);
+    else { setSortKey(k); setSortDir(-1); }
+  }
+  function sortData(data) {
+    if (!sortKey || !data) return data || [];
+    return [...data].sort((a, b) => {
+      const av = a[sortKey] ?? -Infinity;
+      const bv = b[sortKey] ?? -Infinity;
+      if (typeof av === 'string') return sortDir * av.localeCompare(bv);
+      return sortDir * (av < bv ? -1 : av > bv ? 1 : 0);
+    });
+  }
+  function SH({ k, label, title }) {
+    return (
+      <th onClick={() => toggleSort(k)} title={title||''}
+        style={{cursor:'pointer',userSelect:'none',color:sortKey===k?'var(--amber)':''}}>
+        {label}{sortKey===k?(sortDir>0?' ▲':' ▼'):''}
+      </th>
+    );
+  }
+  return { sortKey, sortDir, toggleSort, sortData, SH };
+}
+
+// ─── SECTORS TAB ──────────────────────────────────────────────────────────────
+function SectorsTab() {
+  const [data,    setData]   = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState('');
+  const { sortData: sortSec, SH: SecSH } = useSortTable('rsRank');
+  const [aiText,  setAiText]  = useState('');
+  const [aiLoading,setAiLoad] = useState(false);
+
+  useEffect(() => { load(); }, []);
+
+  async function load() {
+    setLoading(true); setError('');
+    try { const d = await api('/api/sectors'); setData(d.sectors || []); }
+    catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  async function analyze() {
+    setAiLoad(true); setAiText('');
+    const rows = data.map(s =>
+      `${s.name}(${s.symbol}): RS=${s.rsRank} 1d=${fmtP(s.chg1d)} 1m=${fmtP(s.chg1m)} 3m=${fmtP(s.chg3m)} vsMA50=${fmt(s.vsMA50)}%`
+    ).join('\n');
+    const text = await askClaude(
+      `Sector performance data:\n${rows}\n\n## ROTATION NARRATIVE\nMoney flowing FROM→TO? What macro regime does this signal?\n\n## TOP 3 SECTORS TO OWN NOW\nFor each: why it's leading, best sub-industry play, one stock idea with entry logic.\n\n## 2 SECTORS TO AVOID\nDistribution signals, specific reasons.\n\n## 30-DAY TRADE PLAN\nConcrete allocation and timing.`,
+      'You are a top-tier institutional sector rotation strategist. ## headers, - bullets. Max 600 words.',
+      true
+    );
+    setAiText(text); setAiLoad(false);
+  }
+
+  const barData = [...data].sort((a,b) => b.rsRank - a.rsRank);
+
+  return (
+    <div>
+      <div className="panel">
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14,flexWrap:'wrap',gap:8}}>
+          <div>
+            <div className="panel-title">Sector <span>Rotation</span></div>
+            <div className="panel-sub">IBD RS: (3M×40%+6M×20%+9M×20%+12M×20%) from real daily closes · Ranked within 11 sectors · RS trend shown after first load</div>
+          </div>
+          <div style={{display:'flex',gap:8}}>
+            <button className="btn btn-sm" onClick={load}>↻ Refresh</button>
+            <button className="btn btn-primary btn-sm" onClick={analyze} disabled={aiLoading || !data.length}>🧠 AI Analysis</button>
+          </div>
+        </div>
+        {error && <ErrorBox msg={error}/>}
+        {loading ? <Loader msg="Fetching sector ETFs..."/> : (
+          <>
+            <div className="sector-grid">
+              {data.map(s => (
+                <div className="sector-card" key={s.symbol}>
+                  <div className="sector-card-bar" style={{background:s.color||'#888'}}/>
+                  <div className="sector-card-body">
+                    <div className="sc-name">{s.name}</div>
+                    <div className="sc-ticker">{s.symbol}</div>
+                    <div className="sc-stats">
+                      <div>
+                        <div className="sc-stat-label">Price</div>
+                        <div className="sc-stat-val">${fmt(s.price)}</div>
+                      </div>
+                      <div>
+                        <div className="sc-stat-label">1D</div>
+                        <div className={`sc-stat-val ${fmtC(s.chg1d)}`}>{fmtP(s.chg1d)}</div>
+                      </div>
+                      <div>
+                        <div className="sc-stat-label">1W</div>
+                        <div className={`sc-stat-val ${fmtC(s.chg1w)}`}>{fmtP(s.chg1w)}</div>
+                      </div>
+                      <div>
+                        <div className="sc-stat-label">1M</div>
+                        <div className={`sc-stat-val ${fmtC(s.chg1m)}`}>{fmtP(s.chg1m)}</div>
+                      </div>
+                      <div>
+                        <div className="sc-stat-label">3M</div>
+                        <div className={`sc-stat-val ${fmtC(s.chg3m)}`}>{fmtP(s.chg3m)}</div>
+                      </div>
+                      <div>
+                        <div className="sc-stat-label">vs 200MA</div>
+                        <div className={`sc-stat-val ${s.vsMA200>0?'up':'dn'}`}>{fmt(s.vsMA200,1)}%</div>
+                      </div>
+                    </div>
+                    <div className="sc-rs">
+                      <span style={{fontSize:9,color:'var(--text3)'}}>RS</span>
+                      <RSBar rs={s.rsRank}/>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {barData.length > 0 && (
+              <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:'14px 14px 4px',marginBottom:14}}>
+                <div className="section-label">RS Rankings — All Sectors</div>
+                <ResponsiveContainer width="100%" height={180}>
+                  <BarChart data={barData} margin={{top:4,right:4,left:-20,bottom:36}}>
+                    <XAxis dataKey="symbol" tick={{fill:'var(--text3)',fontSize:9,fontFamily:'var(--font-mono)'}} angle={-45} textAnchor="end" interval={0}/>
+                    <YAxis tick={{fill:'var(--text3)',fontSize:9}} domain={[0,100]}/>
+                    <Tooltip contentStyle={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,fontSize:11}} formatter={v=>[`${v}/99`,'IBD RS']}/>
+                    <Bar dataKey="rsRank" radius={[3,3,0,0]}>
+                      {barData.map((s,i) => <Cell key={i} fill={s.color||rsColor(s.rsRank)} fillOpacity={0.9}/>)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </>
+        )}
+        <AIOutput text={aiText} loading={aiLoading}/>
+        <SectorIndustryRSTrend type="sectors" title="Sector RS Trend History" api="/api/rs-history/sectors"/>
+      </div>
+    </div>
+  );
+}
+
+// ─── INDUSTRIES TAB ───────────────────────────────────────────────────────────
+function IndustriesTab() {
+  const [data,    setData]   = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState('');
+  const { sortData, SH: IndSH } = useSortTable('rsRank');
+  const [aiText,  setAiText]  = useState('');
+  const [aiLoading,setAiLoad] = useState(false);
+  const [selInd, setSelInd]   = useState(null);
+  const [drillText, setDrillT] = useState('');
+  const [drillLoad, setDrillL] = useState(false);
+
+  useEffect(() => { load(); }, []);
+
+  async function load() {
+    setLoading(true); setError('');
+    try { const d = await api('/api/industries'); setData(d.industries || []); }
+    catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  async function drill(ind) {
+    setSelInd(ind.symbol); setDrillL(true); setDrillT('');
+    const ctx = `RS:${ind.rsRank} 1d:${fmtP(ind.chg1d)} 1m:${fmtP(ind.chg1m)} 3m:${fmtP(ind.chg3m)} vsMA50:${fmt(ind.vsMA50)}%`;
+    const t = await askClaude(
+      `Deep drill: ${ind.name} ETF (${ind.symbol}, ${ind.sector}). Data: ${ctx}\n\n## WHY THIS INDUSTRY\nCurrent tailwinds and headwinds (2-3 sentences).\n\n## TOP 3 STOCK LEADERS\nFor each: ticker, why leading, current setup quality, one risk.\n\n## BEST TRADE RIGHT NOW\n- Entry zone\n- Stop level and reason\n- Price target and R/R ratio\n- Hold period`,
+      'You are an elite sector analyst. ## headers, - bullets. Max 450 words.',
+      true
+    );
+    setDrillT(t); setDrillL(false);
+  }
+
+  async function analyzeAll() {
+    setAiLoad(true); setAiText('');
+    const rows = data.map(e =>
+      `${e.name}(${e.symbol},${e.sector}): RS=${e.rsRank} 1d=${fmtP(e.chg1d)} 1m=${fmtP(e.chg1m)} 3m=${fmtP(e.chg3m)}`
+    ).join('\n');
+    const t = await askClaude(
+      `Industry ETF data:\n${rows}\n\n## HOTTEST INDUSTRIES (4)\nEach: why leading, 2 stock names, stage (EARLY/MID/LATE).\n\n## COLD INDUSTRIES (3)\nWhy money is leaving.\n\n## HIDDEN ROTATION\nLess obvious industry gaining strength.\n\n## 2 BEST ETF TRADES\nEntry, stop, target, R/R.`,
+      'You are an elite industry rotation strategist. ## headers, - bullets. Max 600 words.',
+      true
+    );
+    setAiText(t); setAiLoad(false);
+  }
+
+  return (
+    <div>
+      <div className="panel">
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14,flexWrap:'wrap',gap:8}}>
+          <div>
+            <div className="panel-title">Industry <span>Rotation</span></div>
+            <div className="panel-sub">IBD RS: same formula as stocks · Ranked within 22 industry ETFs · Note: sector RS 85 ≠ stock RS 85 (different universes)</div>
+          </div>
+          <div style={{display:'flex',gap:8}}>
+            <button className="btn btn-sm" onClick={load}>↻ Refresh</button>
+            <button className="btn btn-primary btn-sm" onClick={analyzeAll} disabled={aiLoading||!data.length}>🧠 Full Analysis</button>
+          </div>
+        </div>
+        {error && <ErrorBox msg={error}/>}
+        {loading ? <Loader msg="Fetching industry ETFs..."/> : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>#</th><th>ETF</th><th>Industry</th><th>Sector</th>
+                <IndSH k="price" label="Price"/>
+                <IndSH k="chg1d" label="1D"/>
+                <IndSH k="chg1w" label="1W"/>
+                <IndSH k="chg1m" label="1M"/>
+                <IndSH k="chg3m" label="3M"/>
+                <IndSH k="vsMA50" label="vs 50MA"/>
+                <IndSH k="vsMA200" label="vs 200MA"/>
+                <IndSH k="rsRank" label="IBD RS"/>
+              </tr>
+            </thead>
+            <tbody>
+              {sortData(data).map((e,i) => (
+                <tr key={e.symbol} onClick={() => drill(e)}
+                  style={{cursor:'pointer', background:selInd===e.symbol?'var(--bg3)':''}}>
+                  <td className="muted">{i+1}</td>
+                  <td><span className="td-ticker">{e.symbol}</span></td>
+                  <td className="td-name">{e.name}</td>
+                  <td className="muted" style={{fontSize:11}}>{e.sector}</td>
+                  <td>${fmt(e.price)}</td>
+                  <td className={fmtC(e.chg1d)}>{fmtP(e.chg1d)}</td>
+                  <td className={fmtC(e.chg1w)}>{fmtP(e.chg1w)}</td>
+                  <td className={fmtC(e.chg1m)}>{fmtP(e.chg1m)}</td>
+                  <td className={fmtC(e.chg3m)}>{fmtP(e.chg3m)}</td>
+                  <td className={e.vsMA50>0?'up':'dn'}>{fmt(e.vsMA50,1)}%</td>
+                  <td className={e.vsMA200>0?'up':'dn'}>{fmt(e.vsMA200,1)}%</td>
+                  <td><RSBar rs={e.rsRank}/></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {(drillLoad || drillText) && (
+          <div style={{marginTop:14}}>
+            <div className="section-label" style={{marginBottom:8}}>DEEP DRILL — {selInd}</div>
+            <AIOutput text={drillText} loading={drillLoad}/>
+          </div>
+        )}
+        {(aiLoading || aiText) && (
+          <div style={{marginTop:14}}>
+            <div className="section-label" style={{marginBottom:8}}>FULL INDUSTRY ROTATION ANALYSIS</div>
+            <AIOutput text={aiText} loading={aiLoading}/>
+          </div>
+        )}
+        <SectorIndustryRSTrend type="industries" title="Industry RS Trend History" api="/api/rs-history/industries"/>
+      </div>
+    </div>
+  );
+}
+
+// ─── LEADERS / LAGGARDS ───────────────────────────────────────────────────────
+function LeadersTab() {
+  const [data,    setData]    = useState({ leaders:[], laggards:[] });
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState('');
+  const [sel,     setSel]     = useState(null);
+  const [aiText,  setAiText]  = useState('');
+  const [aiLoad,  setAiLoad]  = useState(false);
+
+  useEffect(() => { load(); }, []);
+
+  async function load() {
+    setLoading(true); setError('');
+    try { const d = await api('/api/leaders-laggards'); setData(d); }
+    catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  async function analyze(stock) {
+    setSel(stock.ticker); setAiLoad(true); setAiText('');
+    const ctx = `Price:$${fmt(stock.price)} 1d:${fmtP(stock.chg1d)} RS:${stock.rsRank} Vol ratio:${fmt(stock.volRatio,2)}x`;
+    const t = await askClaude(
+      `Quick analysis of ${stock.ticker} (${stock.name}). Data: ${ctx}\n\n## WHY IT'S ${stock.rsRank>60?'LEADING':'LAGGING'}\n2-3 sentences with specific data.\n\n## TRADE SETUP\n- Entry · Stop · Target · R/R · Hold period\n\n## TOP RISK\nWhat kills this setup.`,
+      'Elite hedge fund analyst. ## headers, - bullets. Max 350 words.',
+      true
+    );
+    setAiText(t); setAiLoad(false);
+  }
+
+  const StockRow = ({ s, rc }) => (
+    <tr onClick={() => analyze(s)} style={{cursor:'pointer',background:sel===s.ticker?'var(--bg3)':''}}>
+      <td><span className="td-ticker">{s.ticker}</span></td>
+      <td className="td-name">{s.name}</td>
+      <td className={fmtC(s.chg1d)} style={{fontWeight:700}}>{fmtP(s.chg1d)}</td>
+      <td>${fmt(s.price)}</td>
+      <td><RSBar rs={s.rsRank}/></td>
+      <td className={s.volRatio>1.5?'up':s.volRatio<0.7?'dn':''}>{fmt(s.volRatio,2)}x</td>
+      <td className="muted" style={{fontSize:11}}>{s.sector}</td>
+    </tr>
+  );
+
+  return (
+    <div>
+      <div className="panel">
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14}}>
+          <div>
+            <div className="panel-title">Leaders <span>/</span> Laggards</div>
+            <div className="panel-sub">Today's biggest movers — click any stock for instant AI trade setup</div>
+          </div>
+          <button className="btn btn-sm" onClick={load}>↻ Refresh</button>
+        </div>
+        {error && <ErrorBox msg={error}/>}
+        {loading ? <Loader msg="Scanning universe..."/> : (
+          <div className="grid-2">
+            <div>
+              <div className="section-label" style={{color:'var(--green)',marginBottom:8}}>⬆ LEADERS — Top 15 Movers</div>
+              <table className="data-table">
+                <thead><tr><th>Ticker</th><th>Name</th><th>1D Chg</th><th>Price</th><th>RS</th><th>Vol</th><th>Sector</th></tr></thead>
+                <tbody>{data.leaders.map(s => <StockRow key={s.ticker} s={s} rc="var(--green)"/>)}</tbody>
+              </table>
+            </div>
+            <div>
+              <div className="section-label" style={{color:'var(--red)',marginBottom:8}}>⬇ LAGGARDS — Bottom 15 Movers</div>
+              <table className="data-table">
+                <thead><tr><th>Ticker</th><th>Name</th><th>1D Chg</th><th>Price</th><th>RS</th><th>Vol</th><th>Sector</th></tr></thead>
+                <tbody>{data.laggards.map(s => <StockRow key={s.ticker} s={s} rc="var(--red)"/>)}</tbody>
+              </table>
+            </div>
+          </div>
+        )}
+        {(aiLoad || aiText) && (
+          <div style={{marginTop:14}}>
+            <div className="section-label" style={{marginBottom:8}}>AI ANALYSIS — {sel}</div>
+            <AIOutput text={aiText} loading={aiLoad}/>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── MACRO TAB ────────────────────────────────────────────────────────────────
+function MacroTab() {
+  const [data,    setData]   = useState([]);
+  const [spread,  setSpread] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState('');
+  const [aiText,  setAiText]  = useState('');
+  const [aiLoad,  setAiLoad]  = useState(false);
+
+  useEffect(() => { load(); }, []);
+
+  async function load() {
+    setLoading(true); setError('');
+    try {
+      const d = await api('/api/macro');
+      setData(d.macro || []);
+      setSpread(d.yieldSpread);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  async function analyze() {
+    setAiLoad(true); setAiText('');
+    const rows = data.map(m => `${m.name}(${m.symbol}): ${m.symbol==='^TNX'||m.symbol==='^IRX'?fmt(m.price,2)+'%':'$'+fmt(m.price)} chg:${fmtP(m.chg1d)}`).join(' | ');
+    const t = await askClaude(
+      `Macro data: ${rows}. Yield spread: ${spread!=null?spread+'%':'unknown'}.\n\n## MARKET REGIME\nRisk-on or risk-off? What does the full picture imply?\n\n## YIELD CURVE SIGNAL\nWhat growth/recession probability and Fed path does this price?\n\n## FED OUTLOOK\nCuts/holds/hikes? Next likely move and timing.\n\n## 3 ACTIONABLE MACRO TRADES\nSpecific instruments, direction, and rationale.\n\n## TOP 3 RISKS NEXT 30 DAYS\nSpecific events that could shift regime.`,
+      'Elite macro strategist. ## headers, - bullets. Max 600 words.',
+      true
+    );
+    setAiText(t); setAiLoad(false);
+  }
+
+  const get = sym => data.find(m => m.symbol === sym);
+  const vix  = get('^VIX');
+  const t10  = get('^TNX');
+  const t3m  = get('^IRX');
+  const inv  = spread != null && spread < 0;
+  const vixLevel = vix?.price < 15 ? {label:'CALM',col:'var(--green)'} :
+                   vix?.price < 20 ? {label:'NORMAL',col:'var(--cyan)'} :
+                   vix?.price < 28 ? {label:'ELEVATED',col:'var(--amber)'} :
+                                     {label:'FEAR',col:'var(--red)'};
+
+  return (
+    <div>
+      <div className="panel">
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14,flexWrap:'wrap',gap:8}}>
+          <div>
+            <div className="panel-title">Macro <span>Dashboard</span></div>
+            <div className="panel-sub">VIX · Yields · Dollar · Gold · Oil · Bitcoin — live Yahoo Finance data</div>
+          </div>
+          <div style={{display:'flex',gap:8}}>
+            <button className="btn btn-sm" onClick={load}>↻ Refresh</button>
+            <button className="btn btn-primary btn-sm" onClick={analyze} disabled={aiLoad||!data.length}>🧠 Macro Interpretation</button>
+          </div>
+        </div>
+        {error && <ErrorBox msg={error}/>}
+        {loading ? <Loader msg="Fetching macro indicators..."/> : (
+          <>
+            <div className="macro-grid">
+              {data.map(m => (
+                <div className="macro-card" key={m.symbol}>
+                  <div className="macro-label">{m.name}</div>
+                  <div className="macro-price">
+                    {m.symbol==='^TNX'||m.symbol==='^IRX' ? `${fmt(m.price,2)}%` :
+                     m.symbol==='USO'||m.symbol==='GLD'   ? `$${fmt(m.price,2)}` :
+                     m.symbol='^VIX'                       ? fmt(m.price,1) :
+                     `$${m.price>1000?(m.price/1000).toFixed(1)+'K':fmt(m.price,2)}`}
+                  </div>
+                  <div className={`macro-chg ${fmtC(m.chg1d)}`}>{fmtP(m.chg1d)}</div>
+                </div>
+              ))}
+            </div>
+
+            {vix && (
+              <div className="grid-2" style={{marginBottom:14}}>
+                <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:14}}>
+                  <div className="section-label" style={{marginBottom:10}}>VIX FEAR GAUGE</div>
+                  <div style={{display:'flex',gap:6}}>
+                    {[['CALM','<15','var(--green)'],['NORMAL','15-20','var(--cyan)'],['ELEVATED','20-28','var(--amber)'],['FEAR','>28','var(--red)']].map(([l,r,c])=>(
+                      <div key={l} style={{flex:1,padding:'7px 4px',background:vixLevel.label===l?c+'22':'transparent',border:`1px solid ${vixLevel.label===l?c:'var(--border)'}`,borderRadius:4,textAlign:'center'}}>
+                        <div style={{fontSize:8,color:c,fontFamily:'var(--font-mono)',fontWeight:700}}>{l}</div>
+                        <div style={{fontSize:8,color:'var(--text3)',marginTop:2}}>{r}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{textAlign:'center',marginTop:12}}>
+                    <span style={{fontFamily:'var(--font-mono)',fontSize:28,color:vixLevel.col}}>{fmt(vix.price,1)}</span>
+                    <span style={{fontSize:10,color:'var(--text3)',marginLeft:6}}>— {vixLevel.label}</span>
+                  </div>
+                </div>
+                <div style={{background:'var(--bg3)',border:`1px solid ${inv?'rgba(255,61,87,0.3)':'var(--border)'}`,borderRadius:5,padding:14}}>
+                  <div className="section-label" style={{marginBottom:10}}>YIELD CURVE</div>
+                  {t3m && t10 && (
+                    <div>
+                      <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+                        <span style={{fontSize:11,color:'var(--text3)'}}>3M yield</span>
+                        <span style={{fontFamily:'var(--font-mono)',fontSize:13}}>{fmt(t3m.price,2)}%</span>
+                      </div>
+                      <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+                        <span style={{fontSize:11,color:'var(--text3)'}}>10Y yield</span>
+                        <span style={{fontFamily:'var(--font-mono)',fontSize:13}}>{fmt(t10.price,2)}%</span>
+                      </div>
+                      <div style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderTop:'1px solid var(--border)'}}>
+                        <span style={{fontSize:11,color:'var(--text3)'}}>Spread (10Y-3M)</span>
+                        <span style={{fontFamily:'var(--font-mono)',fontSize:13,color:inv?'var(--red)':'var(--green)',fontWeight:700}}>
+                          {spread!=null?`${spread>0?'+':''}${spread}%`:'—'}
+                          {inv ? ' ⚠ INVERTED' : ' ✓ NORMAL'}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+        <AIOutput text={aiText} loading={aiLoad}/>
+      </div>
+    </div>
+  );
+}
+
+// ─── RS SCANNER TAB ───────────────────────────────────────────────────────────
+function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded }) {
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState('');
+  const [minRS,   setMinRS]   = useState(70);
+  const [sortKey, setSortKey] = useState('rsRank');
+  const [sortDir, setSortDir] = useState(-1);
+
+  async function load() {
+    setLoading(true); setError('');
+    try {
+      const d = await api('/api/rs-scan');
+      setRsData(d.stocks || []);
+      setRsLoaded(true);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  useEffect(() => { if (!rsLoaded) load(); }, []);
+
+  function toggleSort(k) {
+    if (sortKey === k) setSortDir(d => -d);
+    else { setSortKey(k); setSortDir(-1); }
+  }
+
+  const filtered = rsData
+    .filter(s => s.rsRank >= minRS)
+    .sort((a,b) => sortDir * ((a[sortKey]??0) < (b[sortKey]??0) ? -1 : 1));
+
+  const SH = ({k, label}) => (
+    <th onClick={() => toggleSort(k)}>
+      {label} {sortKey===k ? (sortDir>0?'▲':'▼') : ''}
+    </th>
+  );
+
+  return (
+    <div>
+      <div className="panel">
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14,flexWrap:'wrap',gap:8}}>
+          <div>
+            <div className="panel-title">RS <span>Scanner</span></div>
+            <div className="panel-sub">REAL IBD RS — 12-month actual closing prices · (3M×40%+6M×20%+9M×20%+12M×20%) · {rsData.length} stocks in universe</div>
+          </div>
+          <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+            <label style={{fontSize:11,color:'var(--text3)'}}>Min RS</label>
+            <input type="number" value={minRS} onChange={e=>setMinRS(+e.target.value)} min={1} max={99}
+              style={{width:60,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',padding:'5px 8px',fontSize:12,fontFamily:'var(--font-mono)'}}/>
+            <button className="btn btn-primary btn-sm" onClick={load} disabled={loading}>
+              {loading ? 'Scanning...' : '⟳ Scan'}
+            </button>
+          </div>
+        </div>
+        {error && <ErrorBox msg={error}/>}
+        {loading ? <Loader msg={`Scanning ${80}+ stocks...`}/> : (
+          <>
+            <div style={{fontSize:11,color:'var(--text3)',marginBottom:10}}>
+              Showing <strong style={{color:'var(--amber)'}}>{filtered.length}</strong> stocks with RS ≥ {minRS} — click column headers to sort
+            </div>
+            <div style={{overflowX:'auto'}}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <SH k="rsRank" label="IBD RS"/>
+                    <th title="▲ RS rising this week | → RS flat | ▼ RS falling. Points vs 7 days ago.">Trend ⓘ</th>
+                    <SH k="swingMomentum" label="SwingMom"/>
+                    <th title="✓ = passes swing filter (RS≥70, SwingMom≥55, within 7% of high, vol≥1.1x)">Swing ⓘ</th>
+                    <th title="✓ = passes position filter (RS≥70+rising, above 200MA, not extended >5% above 50MA)">Posit ⓘ</th>
+                    <th>Ticker</th><th>Name</th>
+                    <SH k="chg1d"  label="1D"/>
+                    <SH k="chg1w"  label="1W"/>
+                    <SH k="chg1m"  label="1M"/>
+                    <SH k="chg3m"  label="3M"/>
+                    <SH k="vsMA50" label="vs 50MA"/>
+                    <SH k="vsMA200" label="vs 200MA"/>
+                    <SH k="distFromHigh" label="vs 52wk H"/>
+                    <SH k="volumeRatio" label="Vol Ratio"/>
+                    <th>Sector</th>
+                    <th title="Days until next earnings. Red = ≤7 days. Amber = ≤14 days.">Earn ⓘ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map(s => (
+                    <tr key={s.ticker}>
+                      <td><RSBar rs={s.rsRank}/></td>
+                      <td><RSTrendBadge trend={s.rsTrend} rs={s.rsRank}/></td>
+                      <td>
+                        {s.swingMomentum != null ? (
+                          <span style={{fontFamily:'var(--font-mono)',fontSize:11,fontWeight:700,
+                            color:s.swingMomentum>=60?'var(--green)':s.swingMomentum>=45?'var(--amber)':'var(--red)'}}>
+                            {s.swingMomentum}
+                          </span>
+                        ) : <span className="muted">—</span>}
+                      </td>
+                      <td style={{textAlign:'center'}}>
+                        {(s.rsRank>=70 && s.swingMomentum>=55 && s.vsMA50>0 && s.volumeRatio>=1.1 && (s.distFromHigh||1)<=0.07)
+                          ? <span style={{color:'var(--green)',fontWeight:700,fontSize:13}}>✓</span>
+                          : <span style={{color:'var(--muted)',fontSize:11}}>—</span>}
+                      </td>
+                      <td style={{textAlign:'center'}}>
+                        {(s.rsRank>=70 && s.vsMA200>0 && s.vsMA50<=5 && s.vsMA50>-15 && (s.distFromHigh||1)<=0.30 && s.rsTrend?.vs1m>3)
+                          ? <span style={{color:'var(--amber)',fontWeight:700,fontSize:13}}>✓</span>
+                          : <span style={{color:'var(--muted)',fontSize:11}}>—</span>}
+                      </td>
+                      <td><span className="td-ticker">{s.ticker}</span></td>
+                      <td className="td-name">{s.name}</td>
+                      <td className={fmtC(s.chg1d)}>{fmtP(s.chg1d)}</td>
+                      <td className={fmtC(s.chg1w)}>{fmtP(s.chg1w)}</td>
+                      <td className={fmtC(s.chg1m)}>{fmtP(s.chg1m)}</td>
+                      <td className={fmtC(s.chg3m)}>{fmtP(s.chg3m)}</td>
+                      <td className={s.vsMA50>0?'up':'dn'}>{fmt(s.vsMA50,1)}%</td>
+                      <td className={s.vsMA200>0?'up':'dn'}>{fmt(s.vsMA200,1)}%</td>
+                      <td className="muted">-{s.distFromHigh!=null?(s.distFromHigh*100).toFixed(1):'-'}%</td>
+                      <td className={s.volumeRatio>1.5?'up':s.volumeRatio<0.7?'dn':''}>{fmt(s.volumeRatio,2)}x</td>
+                      <td className="muted" style={{fontSize:11}}>{s.sector}</td>
+                      <td style={{fontSize:10}}>
+                        {s.earningsDate && (
+                          <span style={{
+                            color: s.daysToEarnings<=7?'var(--red)':s.daysToEarnings<=14?'var(--amber)':'var(--text3)',
+                            fontFamily:'var(--font-mono)',fontWeight:s.daysToEarnings<=14?700:400,
+                          }} title={`Next earnings: ${s.earningsDate}`}>
+                            ⚠{s.daysToEarnings}d
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+
+        {/* ── RS TREND HISTORY (merged) ── */}
+        {rsLoaded && (
+          <RSTrendSection rsData={rsData} />
+        )}
+
+        {/* ── TRADING REFERENCE GUIDE ── */}
+        <TradingGuide />
+      </div>
+    </div>
+  );
+}
+
+// ─── SWING LAB ────────────────────────────────────────────────────────────────
+function SwingLabTab({ rsData, rsLoaded }) {
+  const [mode,    setMode]   = useState('swing');
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState('');
+  const [results, setResults] = useState([]);
+  const [regime,  setRegime]  = useState(null);
+  const [summary, setSummary] = useState('');
+  const [scanned, setScanned] = useState(0);
+  const [total,   setTotal]   = useState(0);
+
+  async function runScan() {
+    if (!rsLoaded || !rsData.length) {
+      setError('Load RS data first — click "↻ REFRESH ALL" in the header, or visit RS Scanner tab');
+      return;
+    }
+    setLoading(true); setError(''); setResults([]);
+
+    try {
+      const d = await api('/api/swing-lab/scan', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ stocks: rsData, mode }),
+      });
+      setResults(d.results || []);
+      setRegime(d.regime || null);
+      setScanned(d.scannedCount || 0);
+      setTotal(d.totalInput || 0);
+      setSummary(d.message || '');
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  const verdictBadge = v => {
+    if (v === 'BUY')   return <span className="badge badge-buy">BUY</span>;
+    if (v === 'WATCH') return <span className="badge badge-watch">WATCH</span>;
+    if (v === 'AVOID') return <span className="badge badge-avoid">AVOID</span>;
+    return <span className="badge badge-neutral">{v||'—'}</span>;
+  };
+
+  const confColor = c => c==='high'?'var(--green)':c==='medium'?'var(--amber)':'var(--red)';
+
+  return (
+    <div>
+      <div className="panel" style={{marginBottom:14}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12,flexWrap:'wrap',gap:8}}>
+          <div>
+            <div className="panel-title">Swing <span>Lab</span></div>
+            <div className="panel-sub">
+              <strong style={{color:'var(--text)'}}>RS Scanner</strong> = full ranked list, you decide. &nbsp;
+              <strong style={{color:'var(--amber)'}}>Swing Lab</strong> = auto-filtered setups with AI-generated entry/stop/target/earnings risk.<br/>
+              Filter: IBD RS ≥ 70 (institutional strength) + SwingMomentum ≥ 55 (accelerating now) + within 7% of 52wk high + vol ≥ 1.1x
+            </div>
+          </div>
+        </div>
+
+        {regime && <RegimeBanner regime={regime} />}
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,flexWrap:'wrap'}}>
+          <div className="btn-group">
+            {['swing','position','both'].map(m => (
+              <button key={m} className={`mode-btn ${mode===m?'active':''}`}
+                onClick={() => setMode(m)}>
+                {m === 'swing' ? '⚡ Swing (2-10d)' : m === 'position' ? '📈 Position (3-8w)' : '⚡📈 Both'}
+              </button>
+            ))}
+          </div>
+          <button className="btn btn-primary" onClick={runScan} disabled={loading}>
+            {loading ? '⟳ Scanning...' : `⟳ Scan & Calculate Levels`}
+          </button>
+          <span style={{fontSize:10,color:'var(--text3)'}}>
+            ATR levels always computed · AI verdict/thesis requires API key
+          </span>
+          {scanned>0 && !results[0]?.brief && (
+            <span style={{fontSize:10,color:'var(--amber)'}}>⚠ No API key — showing algo levels only</span>
+          )}
+          {scanned > 0 && <span style={{fontSize:11,color:'var(--text3)'}}>
+            {scanned} candidates from {total} stocks
+          </span>}
+        </div>
+
+        {!rsLoaded && (
+          <div className="info-box">
+            ℹ RS data not loaded yet — go to <strong>RS Dashboard</strong> tab and click ⟳ Scan, or click <strong>↻ REFRESH ALL</strong>.
+          </div>
+        )}
+        <div style={{padding:'8px 12px',background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)',marginBottom:10,fontSize:11,color:'var(--text3)'}}>
+          💡 <strong style={{color:'var(--green)'}}>No API key needed</strong> — ATR-based entry/stop/target calculated automatically.
+          &nbsp;<strong style={{color:'var(--amber)'}}>API key optional</strong> — adds AI trade thesis + earnings date.
+        </div>
+        {error && <ErrorBox msg={error}/>}
+        {summary && !results.length && (
+          <div className="info-box">ℹ {summary}</div>
+        )}
+      </div>
+
+      {loading && (
+        <div className="panel">
+          <Loader msg="Filtering RS universe → generating AI trade briefs with live news search..."/>
+          <div style={{fontSize:11,color:'var(--text3)',marginTop:8,padding:'0 20px'}}>
+            This takes 30-90 seconds — Claude is searching for latest news and earnings dates for each candidate.
+          </div>
+        </div>
+      )}
+
+      {results.length > 0 && (
+        <div className="sl-grid">
+          {results.map(s => {
+            const b = s.brief || {};
+            return (
+              <div className="sl-card anim-in" key={s.ticker}>
+                <div className="sl-card-header">
+                  <div className="sl-card-title">
+                    <div>
+                      <span className="sl-ticker">{s.ticker}</span>
+                      <span style={{fontSize:11,color:'var(--text3)',marginLeft:8}}>${fmt(s.price)}</span>
+                    </div>
+                    <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                      {verdictBadge(b.verdict)}
+                      {b.confidence && <span style={{fontSize:10,color:confColor(b.confidence)}}>{b.confidence}</span>}
+                    </div>
+                  </div>
+                  <div className="sl-name">{s.name} · {s.sector}</div>
+                  <div className="sl-metrics">
+                    <div className="sl-metric">
+                      <div className="sl-metric-label">RS Rank</div>
+                      <div className="sl-metric-val" style={{color:rsColor(s.rsRank)}}>{s.rsRank}</div>
+                    </div>
+                    <div className="sl-metric">
+                      <div className="sl-metric-label">vs 50MA</div>
+                      <div className={`sl-metric-val ${s.vsMA50>0?'up':'dn'}`}>{fmt(s.vsMA50,1)}%</div>
+                    </div>
+                    <div className="sl-metric">
+                      <div className="sl-metric-label">Vol Ratio</div>
+                      <div className={`sl-metric-val ${s.volumeRatio>1.5?'up':''}`}>{fmt(s.volumeRatio,2)}x</div>
+                    </div>
+                    <div className="sl-metric">
+                      <div className="sl-metric-label">vs 52wk H</div>
+                      <div className="sl-metric-val muted">-{((s.distFromHigh||0)*100).toFixed(1)}%</div>
+                    </div>
+                    <div className="sl-metric">
+                      <div className="sl-metric-label">SwingMom</div>
+                      <div className="sl-metric-val" style={{color:s.swingMomentum>=60?'var(--green)':s.swingMomentum>=45?'var(--amber)':'var(--red)'}}>{s.swingMomentum||'—'}</div>
+                    </div>
+                    <div className="sl-metric">
+                      <div className="sl-metric-label">Hold</div>
+                      <div className="sl-metric-val" style={{color:'var(--cyan)'}}>{b.holdPeriod||'—'}</div>
+                    </div>
+                    <div className="sl-metric">
+                      <div className="sl-metric-label">R/R</div>
+                      <div className="sl-metric-val" style={{color:'var(--green)'}}>{b.riskReward||'—'}</div>
+                    </div>
+                  </div>
+                </div>
+                <div className="sl-card-body">
+                  {b.thesis && <div className="sl-thesis">{b.thesis}</div>}
+                  {/* Algorithmic levels (no API key needed) */}
+                {s.algoSetup && (
+                  <div style={{marginBottom:10}}>
+                    <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>
+                      CALCULATED LEVELS (ATR-based, no AI needed)
+                    </div>
+                    <div className="sl-levels">
+                      <div className="sl-level">
+                        <div className="sl-level-label">Entry</div>
+                        <div className="sl-level-val up">{s.algoSetup.entryZone||'—'}</div>
+                      </div>
+                      <div className="sl-level">
+                        <div className="sl-level-label">Stop</div>
+                        <div className="sl-level-val dn">{s.algoSetup.stopLevel||'—'}</div>
+                      </div>
+                      <div className="sl-level">
+                        <div className="sl-level-label">T1 ({s.algoSetup.riskReward} R/R)</div>
+                        <div className="sl-level-val" style={{color:'var(--cyan)'}}>{s.algoSetup.target1||'—'}</div>
+                      </div>
+                    </div>
+                    <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>
+                      ATR: ${s.algoSetup.atrUsed} ({s.atrPct}% of price) · Stop: {s.algoSetup.stopPct}% from entry
+                    </div>
+                  </div>
+                )}
+                {/* AI levels (only when API key is set) */}
+                {b && b.entryZone && (
+                  <div style={{marginBottom:10}}>
+                    <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>
+                      AI ANALYSIS
+                    </div>
+                    <div className="sl-levels">
+                      <div className="sl-level">
+                        <div className="sl-level-label">AI Entry</div>
+                        <div className="sl-level-val up">{b.entryZone}</div>
+                      </div>
+                      <div className="sl-level">
+                        <div className="sl-level-label">AI Stop</div>
+                        <div className="sl-level-val dn">{b.stopLevel}</div>
+                      </div>
+                      <div className="sl-level">
+                        <div className="sl-level-label">AI T1</div>
+                        <div className="sl-level-val" style={{color:'var(--cyan)'}}>{b.target1||'—'}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                  {b.positionSize && (
+                    <div style={{fontSize:11,padding:'4px 8px',background:'rgba(0,212,255,0.08)',borderRadius:3,marginTop:6,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>
+                      📐 Size: {b.positionSize} {s.atrPct?`· ATR: ${s.atrPct}% of price`:''}
+                    </div>
+                  )}
+                  {(s.earningsDate || b?.earningsDate) && (
+                    <div className="sl-earnings" style={{
+                      background: (s.daysToEarnings||99)<=7?'rgba(255,61,87,0.15)':'rgba(240,165,0,0.08)',
+                      borderColor: (s.daysToEarnings||99)<=7?'rgba(255,61,87,0.5)':'rgba(240,165,0,0.3)',
+                    }}>
+                      ⚠ Earnings: <strong>{s.earningsDate || b?.earningsDate}</strong>
+                      {s.daysToEarnings!=null && ` — ${s.daysToEarnings} days away`}
+                      {(s.earningsRisk || (s.daysToEarnings!=null && s.daysToEarnings<=14)) &&
+                        <strong style={{color:'var(--red)',marginLeft:6}}>DO NOT HOLD</strong>}
+                    </div>
+                  )}
+                  {b.rsTrendNote && (
+                    <div style={{fontSize:11,color:'var(--cyan)',marginTop:8}}>
+                      📈 RS: {b.rsTrendNote}
+                    </div>
+                  )}
+                  {b.recentNews && (
+                    <div style={{fontSize:11,color:'var(--text3)',marginTop:6,fontStyle:'italic'}}>
+                      📰 {b.recentNews}
+                    </div>
+                  )}
+                  {(b.catalysts?.length > 0 || b.riskFlags?.length > 0) && (
+                    <div className="sl-tags" style={{marginTop:10}}>
+                      {(b.catalysts||[]).slice(0,2).map(c => <span key={c} className="sl-tag sl-tag-catalyst">⬆ {c}</span>)}
+                      {(b.riskFlags||[]).slice(0,2).map(r => <span key={r} className="sl-tag sl-tag-risk">⚠ {r}</span>)}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── TRADE SIGNALS ────────────────────────────────────────────────────────────
+function SignalsTab({ rsData }) {
+  const [loading, setLoading] = useState(false);
+  const [result,  setResult]  = useState('');
+  const [error,   setError]   = useState('');
+  const [ticker,  setTicker]  = useState('');
+  const [mode,    setMode]    = useState('swing');
+
+  async function generate() {
+    const sym = ticker.trim().toUpperCase(); if (!sym) return;
+    setLoading(true); setResult(''); setError('');
+
+    // Always get algorithmic levels first (no API key needed)
+    try {
+      const ad = await api('/api/trade-setup', { method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ ticker: sym, mode }) });
+      if (ad?.setup) {
+        const ss = ad.setup;
+        setResult('## ' + sym + ' — ' + mode.toUpperCase() + ' LEVELS (ATR-based, no API key)\n\n' +
+          '- **IBD RS:** ' + ad.ibdRS + '/99  · **SwingMom:** ' + ad.swingMomentum + '  · **RS Trend:** ' + (ad.rsTrend||'—') + '\n' +
+          '- **vs 50MA:** ' + fmt(ad.vsMA50,1) + '%  · **vs 200MA:** ' + fmt(ad.vsMA200,1) + '%  · **ATR:** $' + ad.atr + ' (' + ad.atrPct + '% of price)\n\n' +
+          '**Entry Zone:** ' + ss.entryZone + '\n' +
+          '**Stop Level:** ' + ss.stopLevel + '\n' +
+          '**Target 1:** ' + ss.target1 + '  · **Target 2:** ' + ss.target2 + '\n' +
+          '**Risk/Reward:** ' + ss.riskReward + '  · **Stop risk:** ' + ss.stopPct + '% per share\n\n' +
+          '_Position size = (1% of account) ÷ (entry − stop)_\n\n---\n' +
+          '_Set ANTHROPIC_API_KEY in .env for AI thesis, news, and earnings date._');
+      }
+    } catch(algoErr) {
+      console.warn('Algo levels failed:', algoErr.message);
+    }
+
+    // Step 2: AI analysis (appends below algo levels, requires API key)
+    const stock = rsData.find(s => s.ticker === sym);
+    const ctx = stock
+      ? `Price:$${fmt(stock.price)} RS:${stock.rsRank}/99 vs50MA:${fmt(stock.vsMA50,1)}% vs200MA:${fmt(stock.vsMA200,1)}% volRatio:${fmt(stock.volumeRatio,2)}x distFromHigh:-${((stock.distFromHigh||0)*100).toFixed(1)}% sector:${stock.sector}`
+      : 'search for current data';
+    try {
+      const t = await askClaude(
+        `Generate ${mode==='swing'?'SWING TRADE (2-10 day)':'POSITION TRADE (3-8 week)'} signal for ${sym}. Data: ${ctx}\n\n## SETUP THESIS\nWhat makes this tradeable right now? (3-4 sentences)\n\n## MOMENTUM & RS CHECK\n- RS vs sector and SPY: improving or deteriorating?\n- Price cycle position: early breakout / mid-trend / extended / climax?\n\n## ENTRY CRITERIA\n- Ideal entry zone (specific price range)\n- Entry trigger / confirmation needed\n- Volume requirement\n\n## RISK MANAGEMENT\n- Stop loss level with specific rationale\n- Maximum position size (% of portfolio)\n\n## PRICE TARGETS\n- Target 1 (conservative)\n- Target 2 (bull case)\n- Risk/Reward Ratio\n\n## SIGNAL RATING: ★★★★★\nRate 1-5 with one sentence justification.`,
+        'Elite hedge fund analyst. ## headers, - bullets. Max 600 words.',
+        true
+      );
+      setResult(prev => prev
+        ? prev + '\n\n---\n\n## AI ANALYSIS\n\n' + t
+        : t);
+    } catch(e) {
+      // API key not set or error — algo levels already shown, that is fine
+      if (!e.message.includes('ANTHROPIC')) setError(e.message);
+    }
+    setLoading(false);
+  }
+
+  const TOP_EXAMPLES = rsData.slice(0,10).map(s=>s.ticker);
+  const EXAMPLES = TOP_EXAMPLES.length ? TOP_EXAMPLES : ['NVDA','PLTR','MSTR','LLY','AXON','GEV','COIN','CEG','CRWD','TSM'];
+
+  return (
+    <div>
+      <div className="panel">
+        <div className="panel-title" style={{marginBottom:4}}>Trade <span>Signals</span></div>
+        <div className="panel-sub">ATR-based trade levels computed from price data — <strong>no API key needed</strong> · API key adds AI thesis and news</div>
+
+        <div className="tag-row">
+          {EXAMPLES.map(t => (
+            <button key={t} className="preset-pill" onClick={() => setTicker(t)}>{t}</button>
+          ))}
+        </div>
+
+        <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap'}}>
+          <input value={ticker} onChange={e=>setTicker(e.target.value.toUpperCase())}
+            onKeyDown={e=>e.key==='Enter'&&generate()} placeholder="Enter ticker..."
+            style={{flex:1,minWidth:140,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',padding:'10px 14px',fontSize:14,fontFamily:'var(--font-mono)',outline:'none',letterSpacing:2}}/>
+          {['swing','position'].map(m => (
+            <button key={m} className={`mode-btn ${mode===m?'active':''}`}
+              onClick={() => setMode(m)}>{m}</button>
+          ))}
+          <button className="btn btn-primary" onClick={generate} disabled={loading||!ticker}>
+            {loading ? 'Generating...' : 'Generate Signal'}
+          </button>
+        </div>
+
+        {error && <ErrorBox msg={error}/>}
+        <AIOutput text={result} loading={loading}/>
+      </div>
+    </div>
+  );
+}
+
+// ─── AI SCANNER ───────────────────────────────────────────────────────────────
+function ScannerTab() {
+  const [query,   setQuery]   = useState('');
+  const [loading, setLoading] = useState(false);
+  const [result,  setResult]  = useState('');
+  const [error,   setError]   = useState('');
+
+  async function run(q) {
+    const text = q || query; if (!text.trim()) return;
+    setQuery(text); setLoading(true); setResult(''); setError('');
+    try {
+      const t = await askClaude(text, 'You are an elite hedge fund analyst and trader. Use ## section headers and - bullets. Max 700 words.', true);
+      setResult(prev => prev
+        ? prev + '\n\n---\n\n## AI ANALYSIS\n\n' + t
+        : t);
+    } catch(e) {
+      // API key not set or error — algo levels already shown, that is fine
+      if (!e.message.includes('ANTHROPIC')) setError(e.message);
+    }
+    setLoading(false);
+  }
+
+  const PRESETS = [
+    ["Sector RS ranking",        "Which sectors have the strongest relative strength vs SPY this week? Give me a ranked list with thesis for the top 2."],
+    ["Top breakouts today",      "What are the top 5 stocks breaking out today with strong volume and RS above 85? Include current price and entry levels."],
+    ["Macro environment",        "What is the current macro environment — VIX level, yield curve status, Fed stance — and how should I position swing trades this week?"],
+    ["Risk events this week",    "What are the key macro risk events (Fed, CPI, earnings, geopolitical) this week that could disrupt swing trades?"],
+    ["Semis vs Software RS",     "Compare semiconductors vs software right now — which group has better relative strength and momentum, and why?"],
+    ["Best swing setup today",   "What is the single best swing trade setup in the market today? Give me ticker, entry, stop, target, and thesis."],
+  ];
+
+  return (
+    <div>
+      <div className="panel">
+        <div className="panel-title" style={{marginBottom:4}}>AI <span>Scanner</span></div>
+        <div className="panel-sub">Ask anything about current market conditions — Claude searches the web for live context</div>
+
+        <div className="tag-row">
+          {PRESETS.map(([label, q]) => (
+            <button key={label} className="preset-pill" onClick={() => run(q)}>{label}</button>
+          ))}
+        </div>
+
+        <div className="ai-input-row">
+          <textarea className="ai-textarea" value={query} onChange={e=>setQuery(e.target.value)}
+            placeholder="Ask a market question… e.g. 'Analyze NVDA for a swing trade right now'"
+            onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();run();}}}/>
+          <button className="btn btn-primary" onClick={()=>run()} disabled={loading||!query.trim()}>
+            {loading ? '...' : 'Ask'}
+          </button>
+        </div>
+
+        {error && <ErrorBox msg={error} style={{marginTop:12}}/>}
+        {result || loading ? <div style={{marginTop:12}}><AIOutput text={result} loading={loading}/></div> : null}
+      </div>
+    </div>
+  );
+}
+
+// ─── THEMATIC HUNT ────────────────────────────────────────────────────────────
+function ThematicTab() {
+  const [theme,   setTheme]  = useState('');
+  const [loading, setLoading] = useState(false);
+  const [result,  setResult]  = useState('');
+  const [error,   setError]   = useState('');
+
+  const THEMES = [
+    'AI Power Infrastructure', 'Nuclear Energy Revival', 'Defense & Geopolitics',
+    'Quantum Computing', 'Crypto/Bitcoin Infrastructure', 'GLP-1 Supply Chain',
+    'Reshoring & US Industrials', 'Robotics & Automation', 'Critical Minerals',
+    'Data Center Buildout', 'Grid Modernization', 'Space Economy',
+  ];
+
+  async function hunt(t) {
+    const tgt = t || theme; if (!tgt.trim()) return;
+    setTheme(tgt); setLoading(true); setResult(''); setError('');
+    try {
+      const r = await askClaude(
+        `Find investable alpha in the "${tgt}" theme.\n\n## WHY NOW\nWhat makes this theme timely? Current catalysts with data. (3-4 sentences)\n\n## DIRECT PURE-PLAYS (4 stocks)\nTicker · Why it's the best pure-play · Stage (EARLY/MID/LATE) · Key risk.\n\n## HIDDEN GEMS — SECOND DERIVATIVE (3 stocks)\nLess crowded, better R/R, indirect beneficiaries that most people miss.\n\n## BEST ETF PROXY\n1-2 ETFs that capture this theme, which is better and why.\n\n## TIMING & CONFIRMATION\nEarly/mid/late stage? What catalyst confirms full rotation? What kills the thesis?\n\n## CONVICTION RANKING\nRank all 7 stocks: ticker, one-line rationale, entry range.`,
+        'Elite hedge fund thematic analyst. ## headers, - bullets. Max 650 words.',
+        true
+      );
+      setResult(r);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  return (
+    <div>
+      <div className="panel">
+        <div className="panel-title" style={{marginBottom:4}}>Thematic <span>Alpha Hunt</span></div>
+        <div className="panel-sub">Find direct plays AND second-derivative hidden gems with live news context</div>
+
+        <div className="tag-row">
+          {THEMES.map(t => (
+            <button key={t} className="preset-pill"
+              onClick={() => hunt(t)}
+              onMouseEnter={e=>{e.target.style.borderColor='var(--green)';e.target.style.color='var(--green)';}}
+              onMouseLeave={e=>{e.target.style.borderColor='var(--border)';e.target.style.color='var(--text2)';}}
+            >{t}</button>
+          ))}
+        </div>
+
+        <div className="ai-input-row">
+          <input value={theme} onChange={e=>setTheme(e.target.value)}
+            onKeyDown={e=>e.key==='Enter'&&hunt()}
+            placeholder="Custom theme… e.g. 'Longevity / anti-aging biotech'"
+            style={{flex:1,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',padding:'10px 14px',fontSize:13,fontFamily:'var(--font-sans)',outline:'none'}}/>
+          <button className="btn btn-primary" onClick={() => hunt()} disabled={loading||!theme.trim()}>
+            {loading ? 'Hunting...' : 'Hunt Alpha'}
+          </button>
+        </div>
+
+        {error && <ErrorBox msg={error} style={{marginTop:12}}/>}
+        {result || loading ? <div style={{marginTop:12}}><AIOutput text={result} loading={loading}/></div> : null}
+      </div>
+    </div>
+  );
+}
+
+// ─── RS TREND HISTORY TAB ────────────────────────────────────────────────────
+function RSTrendTab({ rsData }) {
+  const [history, setHistory] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [filter,  setFilter]  = useState('rising');
+  const [search,  setSearch]  = useState('');
+
+  useEffect(() => { loadHistory(); }, []);
+
+  async function loadHistory() {
+    setLoading(true);
+    try {
+      const d = await api('/api/rs-history');
+      setHistory(d);
+    } catch(_) {}
+    setLoading(false);
+  }
+
+  const dirColor = d => d === 'rising' ? 'var(--green)' : d === 'falling' ? 'var(--red)' : 'var(--text3)';
+  const dirIcon  = d => d === 'rising' ? '▲' : d === 'falling' ? '▼' : '→';
+
+  const trends = (history?.trends || [])
+    .filter(t => filter === 'all' || t.direction === filter)
+    .filter(t => !search || t.ticker.includes(search.toUpperCase()))
+    .slice(0, 60);
+
+  return (
+    <div>
+      <div className="panel">
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14,flexWrap:'wrap',gap:8}}>
+          <div>
+            <div className="panel-title">RS <span>Trend History</span></div>
+            <div className="panel-sub">
+              Daily RS snapshots saved to disk · {history?.totalDays || 0} days of history · 
+              Shows which stocks have rising vs falling institutional strength
+            </div>
+          </div>
+          <button className="btn btn-sm" onClick={loadHistory}>↻ Refresh</button>
+        </div>
+
+        {history?.totalDays === 0 && (
+          <div className="info-box">
+            ℹ No history yet. Run the RS Scanner once — it auto-saves a snapshot to <code>data/rs-history.json</code>. 
+            Check back after a few days to see trends.
+          </div>
+        )}
+
+        <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
+          {['rising','flat','falling','all'].map(f => (
+            <button key={f} className={`mode-btn ${filter===f?'active':''}`}
+              style={{borderColor: filter===f ? dirColor(f) : undefined, color: filter===f ? dirColor(f) : undefined}}
+              onClick={() => setFilter(f)}>
+              {dirIcon(f)} {f.charAt(0).toUpperCase()+f.slice(1)} ({(history?.trends||[]).filter(t=>f==='all'||t.direction===f).length})
+            </button>
+          ))}
+          <input value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="Search ticker..."
+            style={{padding:'6px 10px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontFamily:'var(--font-mono)',fontSize:12,outline:'none',width:130}}/>
+        </div>
+
+        {loading ? <Loader msg="Loading RS history..."/> : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>Current RS</th>
+                <th>Trend</th>
+                <th>vs 1 week</th>
+                <th>vs 1 month</th>
+                <th>vs 2 months</th>
+                <th>vs 3 months</th>
+                <th>Interpretation</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortTrend(allTrends).slice(page*PAGE_SIZE, (page+1)*PAGE_SIZE).map(t => {
+                // vs1w, vs2w, vs4w, vs3m are all available from server
+                const stock = rsData?.find(s => s.ticker === t.ticker);
+                const interp = t.direction === 'rising' && t.current >= 80
+                  ? 'Accelerating — institutions accumulating'
+                  : t.direction === 'rising'
+                  ? 'Improving — watch for RS ≥ 80'
+                  : t.direction === 'falling' && t.current < 50
+                  ? 'Weakening — avoid, possible distribution'
+                  : t.direction === 'falling'
+                  ? 'Fading from strength — wait for stabilization'
+                  : 'Holding strength — steady leadership';
+                const trendColor = dirColor(t.direction);
+                return (
+                  <tr key={t.ticker}>
+                    <td><span className="td-ticker">{t.ticker}</span></td>
+                    <td><RSBar rs={t.current}/></td>
+                    <td style={{color:trendColor,fontFamily:'var(--font-mono)',fontWeight:700}}>
+                      {dirIcon(t.direction)} {t.direction}
+                    </td>
+                    <td className={t.vs1w>0?'up':t.vs1w<0?'dn':''}>{t.vs1w!=null?(t.vs1w>0?'+':'')+t.vs1w:' —'}</td>
+                    <td className={t.vs2w>0?'up':t.vs2w<0?'dn':''}>{t.vs2w!=null?(t.vs2w>0?'+':'')+t.vs2w:'—'}</td>
+                    <td className={t.vs4w>0?'up':t.vs4w<0?'dn':''}>{t.vs4w!=null?(t.vs4w>0?'+':'')+t.vs4w:'—'}</td>
+                    <td className={t.vs3m>0?'up':t.vs3m<0?'dn':''}>{t.vs3m!=null?(t.vs3m>0?'+':'')+t.vs3m:'—'}</td>
+                    <td style={{fontSize:11,color:'var(--text3)',maxWidth:220}}>{interp}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+        {allTrends.length > PAGE_SIZE && (
+          <div style={{display:'flex',alignItems:'center',gap:10,marginTop:10}}>
+            <button className="btn btn-sm" onClick={()=>setPage(p=>Math.max(0,p-1))} disabled={page===0}>← Prev</button>
+            <span style={{fontSize:11,color:'var(--text3)'}}>
+              {page*PAGE_SIZE+1}–{Math.min((page+1)*PAGE_SIZE, allTrends.length)} of {allTrends.length}
+            </span>
+            <button className="btn btn-sm" onClick={()=>setPage(p=>p+1)} disabled={(page+1)*PAGE_SIZE>=allTrends.length}>Next →</button>
+          </div>
+        )}
+
+        <div style={{marginTop:16,padding:'12px 16px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,fontSize:12,color:'var(--text3)',lineHeight:1.8}}>
+          <strong style={{color:'var(--amber)'}}>How to use RS Trend:</strong><br/>
+          <strong style={{color:'var(--text)'}}>Rising RS + RS ≥ 80</strong> = Institutional accumulation in progress — highest quality setups.<br/>
+          <strong style={{color:'var(--text)'}}>Rising RS + RS 60-79</strong> = Emerging leader — watch for RS to cross 80 as confirmation.<br/>
+          <strong style={{color:'var(--text)'}}>Flat RS + RS ≥ 75</strong> = Holding leadership — fine for position trades, market just rotating.<br/>
+          <strong style={{color:'var(--red)'}}>Falling RS</strong> = Distribution — institutions selling. Avoid new entries regardless of price action.<br/>
+          <br/>
+          RS history is saved each time you run the RS Scanner. After 5+ days you will see meaningful trends.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ─── MARKET PULSE TAB (first tab — sets the context before any trade) ─────────
+function MarketPulseTab() {
+  const [regime,   setRegime]   = useState(null);
+  const [macro,    setMacro]    = useState([]);
+  const [loading,  setLoading]  = useState(false);
+  const [spread,   setSpread]   = useState(null);
+  const [leaders,  setLeaders]  = useState([]);
+  const [laggards, setLaggards] = useState([]);
+  const [llLoad,   setLlLoad]   = useState(false);
+  const [aiText,   setAiText]   = useState('');
+  const [aiLoad,   setAiLoad]   = useState(false);
+
+  useEffect(() => { load(); }, []);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const [rd, md] = await Promise.all([api('/api/regime'), api('/api/macro')]);
+      setRegime(rd);
+      setMacro(md.macro || []);
+      setSpread(md.yieldSpread);
+    } catch(_) {}
+    setLoading(false);
+    // Load leaders/laggards separately (slower — full RS scan)
+    setLlLoad(true);
+    try {
+      const ld = await api('/api/leaders-laggards');
+      setLeaders(ld.leaders || []);
+      setLaggards(ld.laggards || []);
+    } catch(_) {}
+    setLlLoad(false);
+  }
+
+  async function interpret() {
+    setAiLoad(true); setAiText('');
+    const rows = macro.map(m => `${m.name}: ${m.price?.toFixed?.(m.symbol?.includes('TNX')||m.symbol?.includes('IRX')?2:1)||m.price} (${fmtP(m.chg1d)})`).join(' | ');
+    const t = await askClaude(
+      `Market data: ${rows}. Yield spread: ${spread}%. Regime: ${regime?.regime}.
+
+## TODAY'S TRADING PLAN
+Is today a swing-long day, defensive day, or avoid day? Why in 2 sentences.
+
+## 3 SECTORS TO FOCUS ON
+Based on current regime, where should I be looking?
+
+## 3 SECTORS TO AVOID
+Where is risk highest today?
+
+## KEY RISK TODAY
+One specific thing that could change regime in next 48 hours.`,
+      'Elite trading strategist. ## headers, - bullets. Max 400 words.', true
+    );
+    setAiText(t); setAiLoad(false);
+  }
+
+  const g = sym => macro.find(m => m.symbol === sym);
+  const spy = g('SPY'), vix = g('^VIX'), qqq = g('QQQ'), iwm = g('IWM');
+  const t10 = g('^TNX'), t3m = g('^IRX'), gld = g('GLD'), tlt = g('TLT');
+
+  if (loading) return <div className="panel"><Loader msg="Loading market pulse..."/></div>;
+
+  return (
+    <div>
+      {/* REGIME BANNER — most prominent element on the page */}
+      {regime && (
+        <div style={{padding:'20px 24px',background:regime.color+'18',border:`2px solid ${regime.color}55`,borderRadius:8,marginBottom:18}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
+            <div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:22,fontWeight:700,color:regime.color,letterSpacing:3}}>{regime.regime}</div>
+              {regime.warning && <div style={{fontSize:13,color:'var(--text2)',marginTop:6}}>{regime.warning}</div>}
+            </div>
+            <div style={{textAlign:'right'}}>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:13,color:'var(--text3)'}}>Position size multiplier</div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:28,color:regime.color,fontWeight:700}}>{regime.sizeMultiplier}x</div>
+            </div>
+          </div>
+          <div style={{display:'flex',gap:8,marginTop:14,flexWrap:'wrap'}}>
+            {(regime.riskOnSignals||[]).map(s => <span key={s} style={{fontSize:11,padding:'3px 10px',background:'rgba(0,230,118,0.12)',border:'1px solid rgba(0,230,118,0.3)',borderRadius:3,color:'var(--green)'}}>{s}</span>)}
+            {(regime.riskOffSignals||[]).map(s => <span key={s} style={{fontSize:11,padding:'3px 10px',background:'rgba(255,61,87,0.12)',border:'1px solid rgba(255,61,87,0.3)',borderRadius:3,color:'var(--red)'}}>{s}</span>)}
+          </div>
+        </div>
+      )}
+
+      {/* Key market levels */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:10,marginBottom:18}}>
+        {[
+          {l:'S&P 500',  q:spy,  big:true,  col:'var(--cyan)'},
+          {l:'Nasdaq',   q:qqq,  big:false, col:'var(--purple)'},
+          {l:'Russell',  q:iwm,  big:false, col:'var(--amber)'},
+          {l:'VIX',      q:vix,  big:true,  col: vix?.price<15?'var(--green)':vix?.price<25?'var(--amber)':'var(--red)'},
+          {l:'10Y Yield',q:t10,  big:false, col:'var(--cyan)', pct:false, sfx:'%'},
+          {l:'Yield Curve', q:null, big:false, col:spread&&spread<0?'var(--red)':'var(--green)',
+            customVal: spread!=null ? (spread > 0 ? `+${spread}%` : `${spread}%`) : '—',
+            customSub: spread&&spread<0 ? '⚠ INVERTED (10Y < 3M)' : spread&&spread===0 ? 'Flat' : `10Y minus 3M = ${spread}%`},
+          {l:'Gold',     q:gld,  big:false, col:'var(--gold)'},
+          {l:'Bonds TLT',q:tlt,  big:false, col:'var(--text2)'},
+        ].map(({l,q,big,col,customVal,customSub,sfx}) => (
+          <div key={l} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:12}}>
+            <div style={{fontSize:8,color:'var(--text3)',letterSpacing:2,textTransform:'uppercase',marginBottom:5}}>{l}</div>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:big?18:15,color:col,fontWeight:big?700:400}}>
+              {customVal || (q ? (sfx ? `${fmt(q.price,2)}${sfx}` : q.price>1000?`$${fmt(q.price,0)}`:`$${fmt(q.price,2)}`) : '—')}
+            </div>
+            <div style={{fontSize:10,color:q?.chg1d>=0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)',marginTop:3}}>
+              {customSub || (q ? fmtP(q.chg1d) : '')}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* SPY MA status */}
+      {regime && spy && (
+        <div className="panel" style={{marginBottom:14}}>
+          <div className="section-label" style={{marginBottom:10}}>SPY TREND STATUS</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10}}>
+            <div style={{textAlign:'center',padding:'10px',background:'var(--bg)',borderRadius:4,border:`1px solid ${regime.above50?'rgba(0,230,118,0.3)':'rgba(255,61,87,0.3)'}`}}>
+              <div style={{fontSize:10,color:'var(--text3)',marginBottom:6}}>vs 50-DAY MA</div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:14,color:regime.above50?'var(--green)':'var(--red)',fontWeight:700}}>{regime.above50?'ABOVE ✓':'BELOW ✗'}</div>
+              {regime.spy50 && <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>MA: ${regime.spy50?.toFixed(1)}</div>}
+            </div>
+            <div style={{textAlign:'center',padding:'10px',background:'var(--bg)',borderRadius:4,border:`1px solid ${regime.above200?'rgba(0,230,118,0.3)':'rgba(255,61,87,0.3)'}`}}>
+              <div style={{fontSize:10,color:'var(--text3)',marginBottom:6}}>vs 200-DAY MA</div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:14,color:regime.above200?'var(--green)':'var(--red)',fontWeight:700}}>{regime.above200?'ABOVE ✓':'BELOW ✗'}</div>
+              {regime.spy200 && <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>MA: ${regime.spy200?.toFixed(1)}</div>}
+            </div>
+            <div style={{textAlign:'center',padding:'10px',background:'var(--bg)',borderRadius:4,border:`1px solid ${regime.vixLevel<20?'rgba(0,230,118,0.3)':regime.vixLevel<28?'rgba(240,165,0,0.3)':'rgba(255,61,87,0.3)'}`}}>
+              <div style={{fontSize:10,color:'var(--text3)',marginBottom:6}}>VIX REGIME</div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:700,color:regime.vixLevel<20?'var(--green)':regime.vixLevel<28?'var(--amber)':'var(--red)'}}>
+                {regime.vixLevel<15?'CALM':regime.vixLevel<20?'NORMAL':regime.vixLevel<28?'ELEVATED':'FEAR'}
+              </div>
+              <div style={{fontSize:13,color:'var(--text)',fontFamily:'var(--font-mono)',marginTop:4}}>{regime.vixLevel?.toFixed(1)}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{display:'flex',gap:8,marginBottom:14}}>
+        <button className="btn btn-sm" onClick={load}>↻ Refresh</button>
+        <button className="btn btn-primary btn-sm" onClick={interpret} disabled={aiLoad||!macro.length}>🧠 Today's Trading Plan</button>
+      </div>
+      <AIOutput text={aiText} loading={aiLoad}/>
+
+      {/* Leaders / Laggards inline */}
+      <div style={{marginTop:20}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <div>
+            <div className="panel-title" style={{fontSize:15}}>Leaders <span>/</span> Laggards</div>
+            <div style={{fontSize:11,color:'var(--text3)'}}>Top/bottom RS stocks · sorted by IBD RS rank · click for AI analysis</div>
+          </div>
+        </div>
+        {llLoad ? <Loader msg="Loading RS ranks..."/> : (
+          <div className="grid-2">
+            <div>
+              <div className="section-label" style={{color:'var(--green)',marginBottom:8}}>
+                ⬆ LEADERS — Highest IBD RS, above 50MA
+              </div>
+              {leaders.length===0 && <div className="muted" style={{fontSize:12,padding:'10px 0'}}>Run RS Scanner first to populate</div>}
+              <table className="data-table">
+                <thead><tr><th>RS</th><th>Trend</th><th>Ticker</th><th>1D</th><th>1W</th><th>1M</th><th>vs 50MA</th></tr></thead>
+                <tbody>
+                  {leaders.slice(0,12).map(s => (
+                    <tr key={s.ticker}>
+                      <td><RSBar rs={s.rsRank}/></td>
+                      <td><RSTrendBadge trend={s.rsTrend} rs={s.rsRank}/></td>
+                      <td><span className="td-ticker">{s.ticker}</span></td>
+                      <td className={fmtC(s.chg1d)}>{fmtP(s.chg1d)}</td>
+                      <td className={fmtC(s.chg1w)}>{fmtP(s.chg1w)}</td>
+                      <td className={fmtC(s.chg1m)}>{fmtP(s.chg1m)}</td>
+                      <td className={s.vsMA50>0?'up':'dn'}>{fmt(s.vsMA50,1)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div>
+              <div className="section-label" style={{color:'var(--red)',marginBottom:8}}>
+                ⬇ LAGGARDS — Lowest IBD RS (avoid/short)
+              </div>
+              {laggards.length===0 && <div className="muted" style={{fontSize:12,padding:'10px 0'}}>Run RS Scanner first to populate</div>}
+              <table className="data-table">
+                <thead><tr><th>RS</th><th>Trend</th><th>Ticker</th><th>1D</th><th>1W</th><th>1M</th><th>vs 50MA</th></tr></thead>
+                <tbody>
+                  {laggards.slice(0,12).map(s => (
+                    <tr key={s.ticker}>
+                      <td><RSBar rs={s.rsRank}/></td>
+                      <td><RSTrendBadge trend={s.rsTrend} rs={s.rsRank}/></td>
+                      <td><span className="td-ticker">{s.ticker}</span></td>
+                      <td className={fmtC(s.chg1d)}>{fmtP(s.chg1d)}</td>
+                      <td className={fmtC(s.chg1w)}>{fmtP(s.chg1w)}</td>
+                      <td className={fmtC(s.chg1m)}>{fmtP(s.chg1m)}</td>
+                      <td className={s.vsMA50>0?'up':'dn'}>{fmt(s.vsMA50,1)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── WATCHLIST TAB ────────────────────────────────────────────────────────────
+function WatchlistTab({ rsData }) {
+  const [list,    setList]    = useState([]);
+  const [ticker,  setTicker]  = useState('');
+  const [note,    setNote]    = useState('');
+  const [stage,   setStage]   = useState('watching');
+  const [loading, setLoading] = useState(false);
+  const { sortData: sortWL, SH: WLSH } = useSortTable('addedAt', -1);
+
+  useEffect(() => { loadWL(); }, []);
+
+  async function loadWL() {
+    try { const d = await api('/api/watchlist'); setList(d.watchlist || []); } catch(_) {}
+  }
+
+  async function add() {
+    if (!ticker.trim()) return;
+    setLoading(true);
+    try {
+      await api('/api/watchlist', { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ ticker: ticker.toUpperCase(), note, stage }) });
+      setTicker(''); setNote('');
+      await loadWL();
+    } catch(_) {}
+    setLoading(false);
+  }
+
+  async function remove(t) {
+    await api(`/api/watchlist/${t}`, { method:'DELETE' });
+    await loadWL();
+  }
+
+  const stageColor = s => s==='active'?'var(--green)':s==='candidate'?'var(--amber)':'var(--text3)';
+  const stageLabel = s => s==='active'?'ACTIVE TRADE':s==='candidate'?'CANDIDATE':'WATCHING';
+
+  return (
+    <div>
+      <div className="panel">
+        <div className="panel-title" style={{marginBottom:4}}>⭐ <span>Watchlist</span></div>
+        <div className="panel-sub">Track stocks from idea → candidate → active trade. Persisted to disk.</div>
+
+        <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap',alignItems:'center'}}>
+          <input value={ticker} onChange={e=>setTicker(e.target.value.toUpperCase())} placeholder="TICKER"
+            style={{width:90,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',padding:'8px 10px',fontFamily:'var(--font-mono)',fontSize:13,outline:'none',letterSpacing:2}}/>
+          <input value={note} onChange={e=>setNote(e.target.value)} placeholder="Note (optional)"
+            style={{flex:1,minWidth:120,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',padding:'8px 10px',fontSize:12,outline:'none'}}/>
+          <select value={stage} onChange={e=>setStage(e.target.value)}
+            style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',padding:'8px 10px',fontSize:12,outline:'none'}}>
+            <option value="watching">Watching</option>
+            <option value="candidate">Candidate</option>
+            <option value="active">Active Trade</option>
+          </select>
+          <button className="btn btn-primary btn-sm" onClick={add} disabled={loading||!ticker}>+ Add</button>
+        </div>
+
+        {list.length === 0 && (
+          <div className="empty">No stocks in watchlist yet. Add tickers above.</div>
+        )}
+
+        {list.length > 0 && (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Stage</th><th>Ticker</th><th>Name</th>
+                <WLSH k="price"  label="Price"/>
+                <WLSH k="chg1d"  label="1D"/>
+                <WLSH k="chg1w"  label="1W"/>
+                <WLSH k="chg1m"  label="1M"/>
+                <WLSH k="rsRank" label="IBD RS"/>
+                <th>RS Trend</th>
+                <WLSH k="swingMomentum" label="SwingMom"/>
+                <th>Note</th>
+                <WLSH k="addedAt" label="Added"/>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortWL(list.map(w => {
+                const s2 = rsData?.find(r => r.ticker === w.ticker);
+                return {...w, price:s2?.price, chg1d:s2?.chg1d, chg1w:s2?.chg1w, chg1m:s2?.chg1m,
+                        rsRank:s2?.rsRank, swingMomentum:s2?.swingMomentum};
+              })).map(w => {
+                const s = w; // merged via sortWL map above
+                return (
+                  <tr key={w.ticker}>
+                    <td>
+                      <span style={{fontSize:10,padding:'2px 7px',borderRadius:3,background:stageColor(w.stage)+'22',color:stageColor(w.stage),fontFamily:'var(--font-mono)',letterSpacing:.5}}>{stageLabel(w.stage)}</span>
+                    </td>
+                    <td><span className="td-ticker">{w.ticker}</span></td>
+                    <td className="td-name">{s?.name || '—'}</td>
+                    <td>{s ? `$${fmt(s.price)}` : '—'}</td>
+                    <td className={fmtC(s?.chg1d)}>{fmtP(s?.chg1d)}</td>
+                    <td className={fmtC(s?.chg1w)}>{fmtP(s?.chg1w)}</td>
+                    <td className={fmtC(s?.chg1m)}>{fmtP(s?.chg1m)}</td>
+                    <td>{s ? <RSBar rs={s.rsRank}/> : '—'}</td>
+                    <td>{s ? <RSTrendBadge trend={s.rsTrend} rs={s.rsRank}/> : '—'}</td>
+                    <td>
+                      {s?.swingMomentum != null ? <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:s.swingMomentum>=60?'var(--green)':s.swingMomentum>=45?'var(--amber)':'var(--red)'}}>{s.swingMomentum}</span> : '—'}
+                    </td>
+                    <td style={{fontSize:11,color:'var(--text3)',maxWidth:160,overflow:'hidden',textOverflow:'ellipsis'}}>{w.note}</td>
+                    <td className="muted" style={{fontSize:10}}>{w.addedAt?.split('T')[0]}</td>
+                    <td><button className="btn btn-sm" onClick={()=>remove(w.ticker)} style={{padding:'3px 8px',fontSize:10,color:'var(--red)',borderColor:'rgba(255,61,87,0.3)'}}>✕</button></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+
+        <div style={{marginTop:16,padding:'12px 16px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,fontSize:12,color:'var(--text3)',lineHeight:1.9}}>
+          <strong style={{color:'var(--amber)'}}>Workflow:</strong><br/>
+          <strong style={{color:'var(--text)'}}>Watching</strong> → Found via Thematic Hunt or tip. Monitoring RS trend.<br/>
+          <strong style={{color:'var(--text)'}}>Candidate</strong> → RS ≥ 75 and rising. Waiting for swing momentum to confirm.<br/>
+          <strong style={{color:'var(--text)'}}>Active Trade</strong> → Position open. Track until exit.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ─── RS TREND SECTION (embedded in RS Dashboard) ─────────────────────────────
+function RSTrendSection({ rsData }) {
+  const [history,  setHistory]  = useState(null);
+  const [filter,   setFilter]   = useState('rising');
+  const [loading,  setLoading]  = useState(false);
+  const { sortData: sortTrend, SH: TrendSH } = useSortTable('current', -1);
+
+  useEffect(() => { loadH(); }, []);
+
+  async function loadH() {
+    setLoading(true);
+    try { const d = await api('/api/rs-history'); setHistory(d); } catch(_) {}
+    setLoading(false);
+  }
+
+  const dirColor = d => d==='rising'?'var(--green)':d==='falling'?'var(--red)':'var(--text3)';
+  const dirIcon  = d => d==='rising'?'▲':d==='falling'?'▼':'→';
+
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 60;
+  const allTrends = (history?.trends||[]).filter(t => filter==='all' || t.direction===filter);
+  const trends    = allTrends; // full list for sorting, sliced in render
+
+  return (
+    <div style={{marginTop:20}}>
+      <hr style={{border:'none',borderTop:'1px solid var(--border)',margin:'20px 0'}}/>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
+        <div>
+          <div className="panel-title" style={{fontSize:15}}>RS <span>Trend History</span></div>
+          <div style={{fontSize:11,color:'var(--text3)',lineHeight:1.8}}>
+            <strong style={{color:'var(--text)'}}>What these columns mean:</strong><br/>
+            RS Today = current percentile rank (85 = beats 85% of universe).
+            +/- 1W = how many RS points gained or lost vs 7 days ago.
+            +/- 4W = gained/lost vs 28 days ago (1 month of accumulation signal).<br/>
+            +/- 3M = RS change over 90 days — positive means sustained outperformance for a full quarter.<br/>
+            <strong style={{color:'var(--amber)'}}>Best setup: RS 65-79 today AND +/- 4W is +5 or more = emerging leader, entry zone.</strong>
+            &nbsp;{history?.totalDays||0} days of snapshots saved.
+          </div>
+        </div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+          {['rising','flat','falling','all'].map(f => (
+            <button key={f} className={`mode-btn ${filter===f?'active':''}`}
+              style={{fontSize:10,padding:'4px 10px',
+                      borderColor:filter===f?dirColor(f):undefined,
+                      color:filter===f?dirColor(f):undefined}}
+              onClick={()=>setFilter(f)}>
+              {dirIcon(f)} {f} ({(history?.trends||[]).filter(t=>f==='all'||t.direction===f).length})
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {history?.totalDays === 0 && (
+        <div className="info-box">ℹ No history yet — pre-generated on first RS scan. Run ⟳ Scan above.</div>
+      )}
+
+      {loading ? <Loader msg="Loading RS history..."/> : trends.length > 0 && (
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Ticker</th>
+              <TrendSH k="current"   label="RS Today" title="Current IBD RS rank (1-99, percentile vs universe)"/>
+              <TrendSH k="direction" label="Trend"/>
+              <TrendSH k="vs1w"  label="+/- 1W"  title="RS rank change vs 7 days ago. +8 = gained 8 percentile points this week."/>
+              <TrendSH k="vs2w"  label="+/- 2W"  title="RS rank change vs 14 days ago"/>
+              <TrendSH k="vs4w"  label="+/- 4W"  title="RS rank change vs 28 days ago (1 month). Key: rising 4W = sustained accumulation."/>
+              <TrendSH k="vs3m"  label="+/- 3M"  title="RS rank change vs 90 days ago. Positive = stock has been outperforming for a quarter."/>
+              <th>Signal</th>
+            </tr>
+          </thead>
+          <tbody>
+            {trends.map(t => {
+              const stock = rsData?.find(s => s.ticker === t.ticker);
+              const interp =
+                t.direction==='rising' && t.current>=80 ? '✓ SWING/POSITION — institutions accumulating' :
+                t.direction==='rising' && t.current>=70 ? '✓ SWING candidate — RS entering actionable zone' :
+                t.direction==='rising' && t.current>=55 ? '👁 WATCH — add to watchlist, RS approaching 70' :
+                t.direction==='rising'                  ? '— Low base rising (RS<55) — not actionable yet' :
+                t.direction==='falling' && t.current<50 ? '✗ AVOID — distribution, RS weakening below 50' :
+                t.direction==='falling'                 ? '✗ FADE — once-leader losing strength, avoid' :
+                t.current>=75                           ? '→ HOLD — maintaining leadership, ok for positions' :
+                                                          '— Neutral — monitor';
+              return (
+                <tr key={t.ticker}>
+                  <td><span className="td-ticker">{t.ticker}</span></td>
+                  <td><RSBar rs={t.current}/></td>
+                  <td style={{color:dirColor(t.direction),fontFamily:'var(--font-mono)',fontWeight:700}}>
+                    {dirIcon(t.direction)} {t.direction}
+                  </td>
+                  <td className={t.vs1w>0?'up':t.vs1w<0?'dn':''}>{t.vs1w!=null?(t.vs1w>0?'+':'')+t.vs1w:'—'}</td>
+                  <td className={t.vs1m>0?'up':t.vs1m<0?'dn':''}>{t.vs1m!=null?(t.vs1m>0?'+':'')+t.vs1m:'—'}</td>
+                  <td className={t.vs2m>0?'up':t.vs2m<0?'dn':''}>{t.vs2m!=null?(t.vs2m>0?'+':'')+t.vs2m:'—'}</td>
+                  <td className={t.vs3m>0?'up':t.vs3m<0?'dn':''}>{t.vs3m!=null?(t.vs3m>0?'+':'')+t.vs3m:'—'}</td>
+                  <td style={{fontSize:11,color:'var(--text3)'}}>{interp}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+// ─── TRADING REFERENCE GUIDE ──────────────────────────────────────────────────
+function TradingGuide() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{marginTop:20}}>
+      <hr style={{border:'none',borderTop:'1px solid var(--border)',margin:'20px 0'}}/>
+      <button className="btn btn-sm" onClick={()=>setOpen(o=>!o)} style={{marginBottom:12}}>
+        {open?'▼':'▶'} Trading Reference Guide — When to enter, what to look for
+      </button>
+      {open && (
+        <div style={{display:'grid',gap:12,gridTemplateColumns:'1fr 1fr'}}>
+          {/* Swing Setup */}
+          <div style={{background:'var(--bg3)',border:'1px solid rgba(0,212,255,0.3)',borderRadius:5,padding:16}}>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--cyan)',letterSpacing:2,fontWeight:700,marginBottom:12}}>
+              ⚡ SWING TRADE CHECKLIST (2-10 days)
+            </div>
+            {[
+              ['Market','SPY above 50MA + VIX below 25. Regime = BULL or NEUTRAL'],
+              ['IBD RS','≥ 70 AND rising (up ≥ 5pts last 4 weeks). Avoid RS > 90 chasing.'],
+              ['SwingMom','≥ 55. Confirms stock is actually moving right now, not just historical strength.'],
+              ['Price','Within 3-7% of 52-week high OR breaking to new 52-week high on volume.'],
+              ['Volume','Volume ratio ≥ 1.5x average. Institutions are buying.'],
+              ['Entry','At or just above current price / intraday base breakout.'],
+              ['Stop','1.5 × ATR below entry. No wider. If stop requires >5%, skip the trade.'],
+              ['Target','2.5 × ATR above entry (T1), 4 × ATR (T2). Exit 50% at T1.'],
+              ['Sizing','1% account risk per trade. Shares = ($account × 1%) ÷ (entry − stop). Never risk more than 1%.'],
+              ['Earnings','Never hold through earnings on a swing. Exit before if < 5 days away.'],
+            ].map(([k,v]) => (
+              <div key={k} style={{display:'flex',gap:8,marginBottom:7,fontSize:12}}>
+                <span style={{color:'var(--cyan)',fontWeight:700,minWidth:90,flexShrink:0}}>{k}:</span>
+                <span style={{color:'var(--text2)',lineHeight:1.5}}>{v}</span>
+              </div>
+            ))}
+          </div>
+          {/* Position Setup */}
+          <div style={{background:'var(--bg3)',border:'1px solid rgba(0,230,118,0.3)',borderRadius:5,padding:16}}>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--green)',letterSpacing:2,fontWeight:700,marginBottom:12}}>
+              📈 POSITION TRADE CHECKLIST (3-8 weeks)
+            </div>
+            {[
+              ['Market','SPY above 200MA. Regime = BULL. Not during bear market.'],
+              ['IBD RS','≥ 70, ideally ≥ 75 AND rising for ≥ 4 consecutive weeks.'],
+              ['RS Trend','Best entries: RS crossing from 65→75 (early). RS at 90+ = late, worse R/R.'],
+              ['Price','Above 200MA (uptrend intact). 50MA can be tested as entry.'],
+              ['Entry','Pullback to 50MA in an uptrend = highest R/R position entry.'],
+              ['Stop','2 × ATR below 50MA. Wider stop = smaller position size.'],
+              ['Target','4 × ATR (T1), 6 × ATR (T2). Trail stop to breakeven at T1.'],
+              ['Earnings','OK to hold through if thesis is strong, but reduce size 50% before.'],
+              ['Sizing','1% account risk per trade. Position size = ($ risk) / (entry - stop).'],
+            ].map(([k,v]) => (
+              <div key={k} style={{display:'flex',gap:8,marginBottom:7,fontSize:12}}>
+                <span style={{color:'var(--green)',fontWeight:700,minWidth:90,flexShrink:0}}>{k}:</span>
+                <span style={{color:'var(--text2)',lineHeight:1.5}}>{v}</span>
+              </div>
+            ))}
+          </div>
+          {/* RS interpretation */}
+          <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:16}}>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:12}}>
+              📊 READING IBD RS + TREND TOGETHER
+            </div>
+            {[
+              ['RS 65-79 ▲ Rising','Best swing entry. Catching institutions early. 3:1+ R/R.'],
+              ['RS 80-89 ▲ Rising','Strong leader, momentum confirmed. Primary targets.'],
+              ['RS 90+ ▲ Rising','Extended. Buy only on pullback to 50MA, not breakout.'],
+              ['RS 70+ → Flat','Holding leadership. Fine for positions. Wait for re-acceleration.'],
+              ['RS Any ▼ Falling','Institutional distribution. AVOID regardless of price action.'],
+              ['RS 55-65 ▲ Fast','Emerging leader — add to watchlist. Confirm with volume.'],
+            ].map(([k,v]) => (
+              <div key={k} style={{display:'flex',gap:8,marginBottom:7,fontSize:12}}>
+                <span style={{fontFamily:'var(--font-mono)',color:'var(--amber)',minWidth:140,flexShrink:0,fontSize:11}}>{k}</span>
+                <span style={{color:'var(--text2)',lineHeight:1.5}}>{v}</span>
+              </div>
+            ))}
+          </div>
+          {/* Fundamentals */}
+          <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:16}}>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--purple)',letterSpacing:2,fontWeight:700,marginBottom:12}}>
+              🔍 FUNDAMENTALS THAT MATTER (use Finviz)
+            </div>
+            <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.9,marginBottom:10}}>
+              <strong style={{color:'var(--text)'}}>High impact on swing/position outcome:</strong>
+            </div>
+            {[
+              ['EPS Growth','≥ 20% YoY AND accelerating last 2 quarters. Single most important.'],
+              ['Revenue Growth','≥ 15% confirms earnings are not just cuts/buybacks.'],
+              ['Short Float','> 15% + high RS = short squeeze risk = explosive moves.'],
+              ['Earnings Date','Always check before entry. Never hold swing through earnings.'],
+            ].map(([k,v]) => (
+              <div key={k} style={{display:'flex',gap:8,marginBottom:7,fontSize:12}}>
+                <span style={{color:'var(--purple)',fontWeight:700,minWidth:120,flexShrink:0}}>{k}:</span>
+                <span style={{color:'var(--text2)',lineHeight:1.5}}>{v}</span>
+              </div>
+            ))}
+            <div style={{marginTop:10,padding:'8px 12px',background:'rgba(196,77,255,0.08)',border:'1px solid rgba(196,77,255,0.2)',borderRadius:4,fontSize:11,color:'var(--text3)'}}>
+              💡 Use <strong style={{color:'var(--purple)'}}>Finviz Elite ($40/mo)</strong> for EPS/revenue screens. 
+              Screen: EPS growth &gt;20%, Rev growth &gt;15%, Short Float &gt;10%, then cross-check RS here.
+            </div>
+          </div>
+          {/* AI prompts for Claude.ai */}
+          <div style={{gridColumn:'1/-1',background:'var(--bg3)',border:'1px solid rgba(0,212,255,0.2)',borderRadius:5,padding:16}}>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--cyan)',letterSpacing:2,fontWeight:700,marginBottom:10}}>
+              🤖 USE CLAUDE.AI FOR AI ANALYSIS (FREE WITH $20/MO SUBSCRIPTION)
+            </div>
+            <div style={{fontSize:12,color:'var(--text2)',marginBottom:10}}>
+              The AI Scanner and Thematic Hunt features don't need to run inside this app. 
+              Copy these prompts into <a href="https://claude.ai" target="_blank" style={{color:'var(--cyan)'}}>claude.ai</a> for free:
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+              {[
+                ['Sector Analysis','Which sectors have the strongest relative strength vs SPY this week? Rank them and explain which 2-3 are best for swing trades.'],
+                ['Stock Deep Dive','Analyze [TICKER] for a swing trade. Give me: bull case, bear case, entry zone, stop level, and next earnings date.'],
+                ['Thematic Hunt','Find the best swing trade setups in the [THEME] theme. Include direct plays and less-obvious second-derivative ideas.'],
+                ['Market Regime','What is the current macro regime — VIX, yield curve, SPY trend — and how should I size my swing trades this week?'],
+              ].map(([title, prompt]) => (
+                <div key={title} style={{background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:4,padding:10}}>
+                  <div style={{fontSize:11,color:'var(--cyan)',fontWeight:700,marginBottom:6}}>{title}</div>
+                  <div style={{fontSize:11,color:'var(--text3)',lineHeight:1.6,fontStyle:'italic'}}>"{prompt}"</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ─── SECTOR / INDUSTRY RS TREND COMPONENT ─────────────────────────────────────
+// Reusable for both sectors (/api/rs-history/sectors) and industries (/api/rs-history/industries)
+function SectorIndustryRSTrend({ type, title, api: apiPath }) {
+  const [history,  setHistory]  = useState(null);
+  const [loading,  setLoading]  = useState(false);
+  const [open,     setOpen]     = useState(false);
+  const { sortData: sortSI, SH: SISH } = useSortTable('current', -1);
+
+  async function load() {
+    if (history) return; // already loaded
+    setLoading(true);
+    try { const d = await api(apiPath); setHistory(d); } catch(_) {}
+    setLoading(false);
+  }
+
+  function handleOpen() {
+    setOpen(o => !o);
+    if (!open && !history) load();
+  }
+
+  const dirColor = d => d==='rising'?'var(--green)':d==='falling'?'var(--red)':'var(--text3)';
+  const dirIcon  = d => d==='rising'?'▲':d==='falling'?'▼':'→';
+  const trends   = history?.trends || [];
+
+  return (
+    <div style={{marginTop:20}}>
+      <hr style={{border:'none',borderTop:'1px solid var(--border)',margin:'20px 0'}}/>
+      <button className="btn btn-sm" onClick={handleOpen} style={{marginBottom:10}}>
+        {open?'▼':'▶'} {title} ({trends.length > 0 ? `${trends.length} items, ${history?.totalDays||0} days` : 'click to load'})
+      </button>
+      {open && (
+        <div>
+          {loading && <Loader msg={`Loading ${type} RS history...`}/>}
+          {history?.totalDays === 0 && (
+            <div className="info-box">ℹ No {type} RS history yet. Load the {type} tab to start building history.</div>
+          )}
+          {trends.length > 0 && (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <SISH k="current"   label="IBD RS"/>
+                  <SISH k="direction" label="Trend"/>
+                  <SISH k="vs1w"  label="+/- 1W"  title="RS points vs 7 days ago"/>
+                  <SISH k="vs2w"  label="+/- 2W"  title="RS points vs 14 days ago"/>
+                  <SISH k="vs4w"  label="+/- 4W"  title="RS points vs 28 days ago"/>
+                  <SISH k="vs3m"  label="+/- 3M"  title="RS points vs 90 days ago"/>
+                  <th>Signal</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortSI(trends).map(t => {
+                  const signal =
+                    t.direction==='rising'  && t.current>=80 ? 'Leading — rotate in' :
+                    t.direction==='rising'  && t.current>=60 ? 'Improving — watch' :
+                    t.direction==='falling' && t.current<50  ? 'Lagging — avoid' :
+                    t.direction==='falling'                  ? 'Fading — reduce' :
+                                                               'Neutral — hold';
+                  return (
+                    <tr key={t.ticker}>
+                      <td style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--cyan)'}}>{t.ticker}</td>
+                      <td><RSBar rs={t.current}/></td>
+                      <td style={{color:dirColor(t.direction),fontFamily:'var(--font-mono)',fontWeight:700}}>
+                        {dirIcon(t.direction)} {t.direction}
+                      </td>
+                      <td className={t.vs1w>0?'up':t.vs1w<0?'dn':''}>{t.vs1w!=null?(t.vs1w>0?'+':'')+t.vs1w:'—'}</td>
+                      <td className={t.vs2w>0?'up':t.vs2w<0?'dn':''}>{t.vs2w!=null?(t.vs2w>0?'+':'')+t.vs2w:'—'}</td>
+                      <td className={t.vs4w>0?'up':t.vs4w<0?'dn':''}>{t.vs4w!=null?(t.vs4w>0?'+':'')+t.vs4w:'—'}</td>
+                      <td className={t.vs3m>0?'up':t.vs3m<0?'dn':''}>{t.vs3m!=null?(t.vs3m>0?'+':'')+t.vs3m:'—'}</td>
+                      <td style={{fontSize:11,color:'var(--text3)'}}>{signal}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.render(<App/>, document.getElementById('root'));
+</script>
+</body>
+</html>
