@@ -24,9 +24,21 @@
     "addedAt": "2026-03-18T05:02:25.555Z"
   },
   {
-    "ticker": "MSFT",
-    "note": "",
+    "ticker": "GD",
+    "note": "WATCH — RS approaching 70",
     "stage": "watching",
-    "addedAt": "2026-03-18T05:02:30.755Z"
+    "addedAt": "2026-03-19T04:13:13.982Z"
+  },
+  {
+    "ticker": "ETN",
+    "note": "WATCH — RS approaching 70",
+    "stage": "watching",
+    "addedAt": "2026-03-19T04:13:23.428Z"
+  },
+  {
+    "ticker": "LNG",
+    "note": "1.95xACC    RS - 72 & rising",
+    "stage": "watching",
+    "addedAt": "2026-03-19T04:21:38.465Z"
   }
 ]

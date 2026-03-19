@@ -89,4 +89,34 @@ const INDUSTRY_ETFS = [
   {t:'IAK',  n:'Insurance',            sec:'Financials'},
 ];
 
-module.exports = { FULL_UNIVERSE, INDUSTRY_ETFS };
+
+// ─── Industry ETF → constituent stocks mapping ────────────────────────────────
+// Maps each industry ETF ticker to the stocks in our universe that belong to it.
+// Used for drill-down: click SMH → see NVDA, AMD, AVGO, MU, MRVL, etc.
+const INDUSTRY_STOCKS = {
+  SMH:  ['NVDA','AMD','AVGO','TSM','MRVL','MU','ARM','SMCI'],        // Semiconductors
+  IGV:  ['MSFT','ORCL','CRM','NOW','PLTR','DDOG','TEAM','WDAY'],     // Software
+  HACK: ['CRWD','PANW','NET','ZS','FTNT'],                            // Cybersecurity
+  ROBO: ['AXON','HON','ETN','GEV'],                                   // Robotics/AI
+  ITA:  ['LMT','RTX','NOC','GD','BA'],                               // Aerospace & Defense
+  GRID: ['GEV','PWR','ETN','CEG','VST','NEE'],                       // Power Infrastructure
+  ITB:  ['COST','HD','LOW'],                                          // Homebuilders (proxy)
+  IBB:  ['ABBV','REGN','VRTX','AMGN','MRNA'],                        // Biotech Large
+  XBI:  ['MRNA','DXCM','VRTX','REGN'],                               // Biotech Small/Mid
+  IHF:  ['UNH','ISRG','TMO'],                                        // Managed Care / Health
+  XOP:  ['XOM','CVX','COP','OXY','LNG'],                             // Oil & Gas E&P
+  ICLN: ['FSLR','BE','NEE','ENPH'],                                  // Clean Energy
+  URA:  ['CEG','VST'],                                               // Uranium (proxy)
+  GDX:  ['NEM','FCX','SCCO'],                                        // Gold Miners
+  COPX: ['FCX','SCCO','MP'],                                         // Copper Miners
+  LIT:  ['ALB','MP'],                                                // Lithium/Battery
+  JETS: ['DAL','UAL','AAL','LUV'],                                   // Airlines
+  XRT:  ['AMZN','COST','NKE','LULU','ROST','ORLY'],                  // Retail
+  KRE:  ['JPM','BAC','WFC','COF'],                                   // Regional Banks (proxy)
+  FINX: ['V','MA','COIN','SCHW','HOOD'],                             // Fintech
+  IAK:  ['AXP','COF'],                                               // Insurance (proxy)
+  XHB:  ['HD','LOW','COST'],                                         // Homebuilders equity
+};
+
+module.exports = { FULL_UNIVERSE, INDUSTRY_ETFS, INDUSTRY_STOCKS };
+

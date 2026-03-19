@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { FULL_UNIVERSE, INDUSTRY_ETFS: IND_ETFS } = require('./universe');
+const { FULL_UNIVERSE, INDUSTRY_ETFS: IND_ETFS, INDUSTRY_STOCKS } = require('./universe');
 const express   = require('express');
 const cors      = require('cors');
 const fetch     = require('node-fetch');
@@ -181,6 +181,24 @@ function calcATR(closes) {
   return +(atrSum / 14).toFixed(2);
 }
 
+// Volume trend proxy (poor-man OBV from Yahoo data)
+// Yahoo quote gives us: regularMarketVolume (today) and averageDailyVolume3Month
+// We also have the price direction. A better signal: if price is above 50MA AND
+// volume ratio > 1 = net accumulation. If below 50MA and vol ratio > 1 = distribution.
+// Returns: 'accumulating' | 'distributing' | 'neutral'
+function volumeTrend(q) {
+  if (!q) return 'neutral';
+  const price  = q.regularMarketPrice;
+  const ma50   = q.fiftyDayAverage;
+  const volR   = q.averageDailyVolume3Month
+    ? q.regularMarketVolume / q.averageDailyVolume3Month : 1;
+  if (!ma50) return 'neutral';
+  if (price > ma50 && volR >= 1.2) return 'accumulating';
+  if (price < ma50 && volR >= 1.2) return 'distributing';
+  if (price > ma50 && volR >= 0.8) return 'neutral-up';
+  return 'neutral';
+}
+
 function rankToRS(items, key = 'rawRS') {
   const valid = items.filter(s => s[key] != null);
   valid.sort((a, b) => a[key] - b[key]);
@@ -348,7 +366,7 @@ async function runRSScan() {
   const cached = cacheGet('rs:full', TTL_QUOTE);
   if (cached) return cached;
 
-  const uniq = [...new Set(UNIVERSE)];
+  const uniq = [...new Set([...UNIVERSE, 'SPY'])];
   console.log(`  RS scan: ${uniq.length} stocks...`);
 
   // Fetch quotes
@@ -415,9 +433,10 @@ async function runRSScan() {
       sector: SECTOR_MAP[sym] || 'Unknown',
       mktCap: q.marketCap, fwdPE: q.forwardPE,
       swingMomentum: swingMom,
-      earningsDate,        // Free from Yahoo quote API — no API key needed
-      daysToEarnings,      // Days until next earnings (negative = already reported)
+      earningsDate,
+      daysToEarnings,
       earningsRisk: daysToEarnings != null && daysToEarnings >= 0 && daysToEarnings <= 14,
+      volumeTrend: volumeTrend(q),   // accumulating | distributing | neutral
       rawRS,
     });
   }
@@ -450,7 +469,13 @@ app.get('/api/rs-scan', async (req, res) => {
     const stocks  = await runRSScan();
     const history = loadRSHistory();
     const withTrend = stocks.map(s => ({ ...s, rsTrend: getRSTrend(s.ticker, history) }));
-    res.json({ stocks: withTrend, universeSize: withTrend.length });
+    // vsSPY3m: stock 3M return minus SPY 3M return — true outperformance vs benchmark
+  const spyStock = withTrend.find(s => s.ticker === 'SPY');
+  const spy3m = spyStock?.chg3m ?? null;
+  const final = spy3m != null
+    ? withTrend.map(s => ({ ...s, vsSPY3m: s.chg3m != null ? +(s.chg3m - spy3m).toFixed(2) : null }))
+    : withTrend;
+  res.json({ stocks: final, universeSize: final.length, spy3m });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -904,6 +929,23 @@ app.post('/api/swing-lab/brief', async (req, res) => {
     const regime = await getMarketRegime();
     const briefs = await getBatchTradeBriefs([stock], mode, regime);
     res.json({ ticker: stock.ticker, brief: briefs[0] });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── /api/industry-stocks ────────────────────────────────────────────────────
+// Returns universe stocks that belong to a given industry ETF
+app.get('/api/industry-stocks/:etf', async (req, res) => {
+  try {
+    const etf    = req.params.etf.toUpperCase();
+    const tickers = INDUSTRY_STOCKS[etf] || [];
+    const stocks  = await runRSScan();
+    const history = loadRSHistory();
+    const result  = tickers
+      .map(t => stocks.find(s => s.ticker === t))
+      .filter(Boolean)
+      .map(s => ({ ...s, rsTrend: getRSTrend(s.ticker, history) }))
+      .sort((a,b) => b.rsRank - a.rsRank);
+    res.json({ etf, stocks: result, total: result.length });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
