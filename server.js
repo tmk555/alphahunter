@@ -170,7 +170,200 @@ function calcSwingMomentum(closes, q) {
   return Math.min(99, Math.max(1, Math.round(score)));
 }
 
-// ATR (14-day) — for position sizing
+// ── VCP (Volatility Contraction Pattern) detector ──────────────────────────────
+// Minervini's core setup: 3+ contractions where each price range < prior range
+// Contracting volume on pullbacks = institutional accumulation = coiled spring
+// Returns: vcpForming (bool), vcpContractionsCount, vcpTightness (% of last range)
+function calcVCP(closes) {
+  if (!closes || closes.length < 60) return { vcpForming: false, vcpCount: 0 };
+  const n = closes.length;
+  // Analyze last 8 weeks in 2-week windows
+  const windowSize = 10; // ~2 weeks
+  const windows = [];
+  for (let i = 0; i < 4; i++) {
+    const start = n - (i + 1) * windowSize;
+    const end   = n - i * windowSize;
+    if (start < 0) break;
+    const slice  = closes.slice(start, end);
+    const hi     = Math.max(...slice);
+    const lo     = Math.min(...slice);
+    const range  = (hi - lo) / lo * 100;
+    windows.push(range);
+  }
+  windows.reverse(); // oldest first
+  // Count contractions: each window range < previous
+  let contractions = 0;
+  for (let i = 1; i < windows.length; i++) {
+    if (windows[i] < windows[i-1] * 0.85) contractions++; // >15% tighter
+  }
+  const vcpForming = contractions >= 2;
+  const vcpTightness = windows.length > 0 ? +windows[windows.length - 1].toFixed(1) : null;
+  return { vcpForming, vcpCount: contractions, vcpTightness };
+}
+
+// ── RS Line: stock / SPY ratio. New high = institutional accumulation signal ─────
+// spyCloses: SPY daily closes (same length as stock closes)
+// Returns: rsLineNewHigh (bool), rsLineVsSPY (latest ratio)
+function calcRSLine(closes, spyCloses) {
+  if (!closes || !spyCloses || closes.length < 10 || spyCloses.length < 10) {
+    return { rsLineNewHigh: false, rsLine52wkHigh: false };
+  }
+  const n = Math.min(closes.length, spyCloses.length);
+  // Compute RS line (ratio) for last 252 days
+  const ratios = [];
+  for (let i = Math.max(0, n - 252); i < n; i++) {
+    const spy = spyCloses[i] || spyCloses[spyCloses.length - 1];
+    ratios.push(spy > 0 ? closes[i] / spy : 0);
+  }
+  const currentRatio = ratios[ratios.length - 1];
+  const max52w = Math.max(...ratios);
+  const rsLineNewHigh = currentRatio >= max52w * 0.995; // within 0.5% of 52wk high
+  return { rsLineNewHigh, rsLine52wkHigh: rsLineNewHigh };
+}
+
+// ── Stage Analysis (Weinstein stages) ─────────────────────────────────────────
+// Stage 2 = uptrend: price above rising 30-week MA (150-day MA)
+// Returns: stage (1-4), stageName
+// ── Weinstein Stage Analysis ─────────────────────────────────────────────────
+// Stage 1: Basing  — price near flat 150MA, post-downtrend
+// Stage 2: Uptrend — price above RISING 150MA (the buy zone)
+// Stage 3: Topping — price above 150MA but MA is flattening/declining
+// Stage 4: Decline  — price below declining 150MA (avoid all longs)
+// 150-day MA = Weinstein's 30-week MA (the key dividing line)
+function calcStage(closes, ma150) {
+  if (!closes || closes.length < 160 || !ma150) return { stage: 0, stageName: 'Unknown' };
+  const price  = closes[closes.length - 1];
+  // Compare current 150MA to 10 weeks ago (50 trading days back) to determine direction
+  const ma150_10wkAgo = closes.slice(-200, -150).length >= 40
+    ? closes.slice(-200, -150).reduce((a,b)=>a+b,0)/50 : ma150;
+  const maRising = ma150 > ma150_10wkAgo * 1.001; // >0.1% rise = rising
+  const maFlat   = Math.abs(ma150 - ma150_10wkAgo) / ma150_10wkAgo < 0.001;
+
+  if (price > ma150 && maRising)            return { stage: 2, stageName: 'Stage 2 Uptrend ✓' };
+  if (price > ma150 && (maFlat || !maRising)) return { stage: 3, stageName: 'Stage 3 Topping' };
+  if (price < ma150 && !maRising)           return { stage: 4, stageName: 'Stage 4 Downtrend' };
+  if (price < ma150 && (maFlat || maRising))  return { stage: 1, stageName: 'Stage 1 Basing' };
+  return { stage: 1, stageName: 'Stage 1 Basing' };
+}
+
+// ── EPS/Revenue growth from Yahoo v11 (per-ticker, used only for Swing candidates) ─
+// Helper: Yahoo returns either {raw: N, fmt: str} or plain N depending on endpoint/version
+function raw(field) {
+  if (field == null) return null;
+  if (typeof field === 'object' && 'raw' in field) return field.raw;
+  if (typeof field === 'number') return field;
+  return null;
+}
+
+async function getYahooFundamentals(symbol) {
+  try {
+    const { crumb, cookie } = await getYahooCrumb();
+    // Yahoo v10 is more reliable than v11 for fundamentals
+    const modules = 'financialData,defaultKeyStatistics,incomeStatementHistory';
+    const url = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=${encodeURIComponent(modules)}&crumb=${encodeURIComponent(crumb)}`;
+    const r = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+        'Cookie': cookie,
+        'Accept': 'application/json',
+      }
+    });
+    const d = await r.json();
+    if (r.status === 401 || r.status === 403) {
+      yhCrumb = null; yhCookie = null; // force re-auth
+      throw new Error(`Yahoo auth expired (${r.status}) — retry`);
+    }
+    const result = d?.quoteSummary?.result?.[0];
+    if (!result) {
+      console.warn(`  v11 quoteSummary: no result for ${symbol}. Status: ${r.status}`);
+      return null;
+    }
+
+    const fd  = result.financialData       || {};
+    const ks  = result.defaultKeyStatistics || {};
+    const ish = result.incomeStatementHistory?.incomeStatementHistory || [];
+    const et  = result.earningsTrend?.trend || [];
+
+    // ── C: Current quarterly EPS growth ──────────────────────────────────────
+    const epsGrowthQoQ = raw(fd.earningsGrowth) != null
+      ? +(fd.earningsGrowth.raw * 100).toFixed(1) : null;
+
+    // ── A: Annual EPS from income statement (last 3 years) ───────────────────
+    // Compute YoY EPS growth rate from trailing annual history
+    let epsGrowthYoY = null;
+    if (ish.length >= 2) {
+      const eps0 = raw(ish[0]); // most recent annual
+      const eps1 = raw(ish[1]); // year prior
+      if (eps0 != null && eps1 != null && eps1 > 0) {
+        epsGrowthYoY = +((eps0/eps1 - 1)*100).toFixed(1);
+      }
+    }
+
+    // EPS acceleration: current QoQ > trailing annual growth
+    const epsAccelerating = epsGrowthQoQ != null && epsGrowthYoY != null
+      && epsGrowthQoQ > epsGrowthYoY;
+
+    // ── S: Supply (float, short interest) ────────────────────────────────────
+    const sharesFloat       = raw(ks.floatShares) || null;
+    const sharesShort       = raw(ks.sharesShort) || null;
+    const shortPercentFloat = raw(ks.shortPercentOfFloat) != null
+      ? +(ks.shortPercentOfFloat.raw * 100).toFixed(1) : null;
+    const shortRatio        = raw(ks.shortRatio) || null;  // days to cover
+
+    // ── I: Institutional ownership ────────────────────────────────────────────
+    const institutionPct    = raw(ks.institutionsPercentHeld) != null
+      ? +(ks.institutionsPercentHeld.raw * 100).toFixed(1) : null;
+    const insiderPct        = raw(ks.insidersPercentHeld) != null
+      ? +(ks.insidersPercentHeld.raw * 100).toFixed(1) : null;
+
+    // ── Other quality metrics ─────────────────────────────────────────────────
+    const revenueGrowthYoY  = raw(fd.revenueGrowth) != null
+      ? +(fd.revenueGrowth.raw * 100).toFixed(1) : null;
+    const grossMargins      = raw(fd.grossMargins) != null
+      ? +(fd.grossMargins.raw * 100).toFixed(1) : null;
+    const returnOnEquity    = raw(fd.returnOnEquity) != null
+      ? +(fd.returnOnEquity.raw * 100).toFixed(1) : null;
+    const debtToEquity      = raw(fd.debtToEquity) || null;
+    const forwardPE         = raw(fd.forwardPE) || null;
+
+    // ── CAN SLIM score (0-6, one point per letter: C A S L I M) ─────────────
+    // C: EPS growth >25% (quarterly)
+    // A: Annual EPS growth >25%
+    // S: Short float <30% of shares (not excessive dilution) + float manageable
+    // L: RS > 80 (caller fills this in)
+    // I: Institution pct >10% (some sponsorship) and increasing implied
+    // M: handled by regime in the app
+    const canSlimScore = [
+      epsGrowthQoQ != null && epsGrowthQoQ >= 25,            // C
+      epsGrowthYoY != null && epsGrowthYoY >= 25,            // A
+      revenueGrowthYoY != null && revenueGrowthYoY >= 15,    // N (proxy)
+      shortPercentFloat != null && shortPercentFloat <= 40,   // S (not over-shorted)
+      institutionPct != null && institutionPct >= 10,         // I
+      returnOnEquity != null && returnOnEquity >= 15,         // quality
+    ].filter(Boolean).length;
+
+    return {
+      // C
+      epsGrowthQoQ, epsGrowthYoY, epsAccelerating,
+      // S
+      sharesFloat, sharesShort, shortPercentFloat, shortRatio,
+      // I
+      institutionPct, insiderPct,
+      // Quality
+      revenueGrowthYoY, grossMargins, returnOnEquity, debtToEquity, forwardPE,
+      // Score
+      canSlimScore,
+    };
+  } catch(e) {
+    console.warn('Fundamentals error:', e.message);
+    return null;
+  }
+}
+
+// ─── /api/fundamentals/:ticker ───────────────────────────────────────────────
+// Called on-demand for individual stocks (Swing Lab candidates, Levels panel)
+
+// ── ATR (14-day) — for position sizing
 function calcATR(closes) {
   if (!closes || closes.length < 15) return null;
   const n = closes.length;
@@ -402,7 +595,21 @@ async function runRSScan() {
     const periods = calcPeriodReturns(closes);
     const atr     = calcATR(closes);
     const atrPct  = atr && price ? +(atr/price*100).toFixed(2) : null;
-    const swingMom = calcSwingMomentum(closes, q);
+    const swingMom  = calcSwingMomentum(closes, q);
+    // 150-day MA from price history (Yahoo only provides 50 and 200 day in quote)
+    const ma150     = closes.length >= 150
+      ? closes.slice(-150).reduce((a,b)=>a+b,0)/150 : null;
+    const vsMA150   = ma150 ? +((price-ma150)/ma150*100).toFixed(2) : null;
+    // SEPA Trend Template (Minervini) — all 6 criteria
+    const sepa = {
+      aboveMA200:    vsMA200 != null && vsMA200 > 0,
+      aboveMA150:    vsMA150 != null && vsMA150 > 0,
+      ma150AboveMA200: ma150 && ma200 ? ma150 > ma200 : null,
+      priceNearHigh: distFromHigh != null && distFromHigh <= 0.25,
+      low30pctBelow: q.fiftyTwoWeekLow && price ? (price - q.fiftyTwoWeekLow)/price >= 0.30 : null,
+      aboveMA50:     vsMA50 != null && vsMA50 > 0,
+    };
+    const sepaScore = Object.values(sepa).filter(v => v === true).length; // 0-6
     const rawRS    = calcRS_real(closes);
     const volRatio = q.averageDailyVolume3Month ? +(q.regularMarketVolume/q.averageDailyVolume3Month).toFixed(2) : 1;
 
@@ -419,6 +626,15 @@ async function runRSScan() {
       }
     }
 
+    // Basic CAN SLIM quality from quote (already fetched — zero extra cost)
+    const epsTrailing   = q.epsTrailingTwelveMonths || null;
+    const epsForward    = q.epsForward || null;
+    const epsGrowthEst  = epsTrailing && epsForward && epsTrailing > 0
+      ? +((epsForward/epsTrailing - 1)*100).toFixed(1) : null;
+    const pegRatio      = q.pegRatio || null;
+    const trailingPE    = q.trailingPE || null;
+    const forwardPE2    = q.forwardPE || null;
+
     results.push({
       ticker: sym, name: q.shortName || sym,
       price, chg1d: q.regularMarketChangePercent,
@@ -432,11 +648,20 @@ async function runRSScan() {
       volumeSurge: volRatio >= 2.0 && (distFromHigh || 1) <= 0.05,
       sector: SECTOR_MAP[sym] || 'Unknown',
       mktCap: q.marketCap, fwdPE: q.forwardPE,
+      epsTrailing, epsForward, epsGrowthEst,  // from quote — no extra API call
+      pegRatio, trailingPE,
       swingMomentum: swingMom,
       earningsDate,
       daysToEarnings,
       earningsRisk: daysToEarnings != null && daysToEarnings >= 0 && daysToEarnings <= 14,
-      volumeTrend: volumeTrend(q),   // accumulating | distributing | neutral
+      volumeTrend: volumeTrend(q),
+      ...calcVCP(closes),       // Minervini VCP: contracting volatility before breakout
+      ma150, vsMA150,
+      sepa, sepaScore,   // SEPA Trend Template score (0-6)
+      // RS Line new high: stock outperforming SPY over last 52 weeks
+      ...calcRSLine(closes, histMap['SPY'] || []),
+      // Stage analysis (Weinstein): 2 = uptrend buy zone
+      ...calcStage(closes, ma150),  // uses real 150-day MA computed from closes
       rawRS,
     });
   }
@@ -946,6 +1171,77 @@ app.get('/api/industry-stocks/:etf', async (req, res) => {
       .map(s => ({ ...s, rsTrend: getRSTrend(s.ticker, history) }))
       .sort((a,b) => b.rsRank - a.rsRank);
     res.json({ etf, stocks: result, total: result.length });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── /api/fundamentals/:ticker ──────────────────────────────────────────────────
+// Free from Yahoo v11 quoteSummary — called per-ticker only for Swing Lab candidates
+// Returns: EPS growth, revenue growth, short float %, gross margins, ROE
+app.get('/api/fundamentals/:ticker', async (req, res) => {
+  try {
+    const sym  = req.params.ticker.toUpperCase();
+    console.log(`  Fetching fundamentals for ${sym}...`);
+    const data = await getYahooFundamentals(sym);
+    if (!data) {
+      console.warn(`  Fundamentals: no data for ${sym}`);
+      return res.status(404).json({ error: `No fundamental data for ${sym} — Yahoo v11 may not cover this ticker` });
+    }
+    console.log(`  ✓ Fundamentals ${sym}: EPS=${data.epsGrowthQoQ}% Rev=${data.revenueGrowthYoY}% Short=${data.shortPercentFloat}%`);
+    res.json({ ticker: sym, ...data });
+  } catch(e) {
+    console.error(`  Fundamentals error ${req.params.ticker}:`, e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── /api/daily-picks ────────────────────────────────────────────────────────
+// Auto-ranks candidates by combined conviction score — the app's opinionated picks
+// Score = IBD_RS×0.3 + RS_Accel×0.25 + SwingMom×0.2 + SEPA×0.15 + bonuses
+app.get('/api/daily-picks', async (req, res) => {
+  try {
+    const stocks  = await runRSScan();
+    const history = loadRSHistory();
+    const regime  = await getMarketRegime();
+
+    const scored = stocks
+      .filter(s => s.rsRank >= 60 && s.swingMomentum >= 40)
+      .map(s => {
+        const trend = getRSTrend(s.ticker, history);
+        const accel = trend?.vs4w || 0;
+        const sepa  = s.sepaScore || 0;
+        // Conviction score (0-100)
+        let score = (s.rsRank * 0.30)
+          + (Math.min(accel, 20) * 1.25)    // RS Accel capped at 20pts
+          + (s.swingMomentum * 0.20)
+          + (sepa * 2.5);                    // SEPA 0-6 → 0-15pts
+        // Bonuses
+        if (s.rsLineNewHigh)  score += 8;   // IBD's #1 signal
+        if (s.vcpForming)     score += 6;   // Minervini setup
+        if (s.volumeSurge)    score += 5;   // institutional breakout
+        if (s.earningsRisk)   score -= 15;  // penalty for near earnings
+        if (s.distFromHigh > 0.15) score -= 10; // too far from high for swing
+
+        const reasons = [];
+        if (s.rsRank >= 80 && accel > 5) reasons.push(`RS ${s.rsRank} rising +${accel} pts`);
+        if (s.rsLineNewHigh) reasons.push('RS Line at 52-week high');
+        if (s.vcpForming) reasons.push(`VCP forming (${s.vcpCount} contractions)`);
+        if (s.swingMomentum >= 65) reasons.push(`Strong momentum (${s.swingMomentum})`);
+        if (sepa >= 5) reasons.push(`SEPA ${sepa}/6 — ideal structure`);
+        if (s.earningsRisk) reasons.push(`⚠ Earnings in ${s.daysToEarnings} days`);
+
+        return { ...s, rsTrend: trend, convictionScore: +score.toFixed(1), reasons };
+      })
+      .sort((a, b) => b.convictionScore - a.convictionScore)
+      .slice(0, 7);
+
+    res.json({
+      picks: scored,
+      regime,
+      date: new Date().toISOString().split('T')[0],
+      note: regime.swingOk === false
+        ? 'BEAR REGIME — no new long setups recommended'
+        : `${scored.length} candidates ranked by conviction (RS + Accel + Momentum + SEPA)`,
+    });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
