@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { FULL_UNIVERSE, INDUSTRY_ETFS: IND_ETFS, INDUSTRY_STOCKS } = require('./universe');
+const { FULL_UNIVERSE, SECTOR_ETFS: UNI_SECTOR_ETFS, INDUSTRY_ETFS: IND_ETFS, INDUSTRY_STOCKS } = require('./universe');
 const express   = require('express');
 const cors      = require('cors');
 const fetch     = require('node-fetch');
@@ -175,30 +175,44 @@ function calcSwingMomentum(closes, q) {
 // Contracting volume on pullbacks = institutional accumulation = coiled spring
 // Returns: vcpForming (bool), vcpContractionsCount, vcpTightness (% of last range)
 function calcVCP(closes) {
-  if (!closes || closes.length < 60) return { vcpForming: false, vcpCount: 0 };
+  if (!closes || closes.length < 60) return { vcpForming: false, vcpCount: 0, vcpTightness: null };
   const n = closes.length;
-  // Analyze last 8 weeks in 2-week windows
-  const windowSize = 10; // ~2 weeks
-  const windows = [];
-  for (let i = 0; i < 4; i++) {
+  // 3-week windows (15 days) — captures meaningful pivot swings
+  const windowSize = 15;
+  const windows = [], lows = [], highs = [];
+
+  for (let i = 0; i < 5; i++) {
     const start = n - (i + 1) * windowSize;
     const end   = n - i * windowSize;
     if (start < 0) break;
-    const slice  = closes.slice(start, end);
-    const hi     = Math.max(...slice);
-    const lo     = Math.min(...slice);
-    const range  = (hi - lo) / lo * 100;
-    windows.push(range);
+    const slice = closes.slice(start, end);
+    const hi = Math.max(...slice), lo = Math.min(...slice);
+    windows.push((hi - lo) / lo * 100);
+    lows.push(lo); highs.push(hi);
   }
-  windows.reverse(); // oldest first
-  // Count contractions: each window range < previous
+  windows.reverse(); lows.reverse(); highs.reverse();
+
+  // Count contractions: each range at least 20% tighter than prior (halving ideal)
   let contractions = 0;
   for (let i = 1; i < windows.length; i++) {
-    if (windows[i] < windows[i-1] * 0.85) contractions++; // >15% tighter
+    if (windows[i] < windows[i-1] * 0.80) contractions++;
   }
+  // Higher lows = buyers stepping in earlier = institutional accumulation
+  let higherLows = 0;
+  for (let i = 1; i < lows.length; i++) { if (lows[i] > lows[i-1]) higherLows++; }
+
   const vcpForming = contractions >= 2;
-  const vcpTightness = windows.length > 0 ? +windows[windows.length - 1].toFixed(1) : null;
-  return { vcpForming, vcpCount: contractions, vcpTightness };
+  const vcpTight   = windows.length ? +windows[windows.length-1].toFixed(1) : null;
+  const vcpPivot   = vcpForming ? +(Math.max(...closes.slice(-windowSize))).toFixed(2) : null;
+  const vcpStop    = vcpForming ? +(Math.min(...closes.slice(-windowSize))).toFixed(2) : null;
+
+  return {
+    vcpForming, vcpCount: contractions,
+    vcpTightness: vcpTight,      // % range of last contraction — lower = tighter = better
+    vcpPivot,                     // breakout level: buy above this on volume
+    vcpStop,                      // stop: below last contraction low
+    vcpHigherLows: higherLows >= 2,
+  };
 }
 
 // ── RS Line: stock / SPY ratio. New high = institutional accumulation signal ─────
@@ -259,7 +273,7 @@ async function getYahooFundamentals(symbol) {
   try {
     const { crumb, cookie } = await getYahooCrumb();
     // Yahoo v10 is more reliable than v11 for fundamentals
-    const modules = 'financialData,defaultKeyStatistics,incomeStatementHistory';
+    const modules = 'financialData,defaultKeyStatistics,incomeStatementHistory,incomeStatementHistoryQuarterly,earningsTrend';
     const url = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=${encodeURIComponent(modules)}&crumb=${encodeURIComponent(crumb)}`;
     const r = await fetch(url, {
       headers: {
@@ -282,24 +296,76 @@ async function getYahooFundamentals(symbol) {
     const fd  = result.financialData       || {};
     const ks  = result.defaultKeyStatistics || {};
     const ish = result.incomeStatementHistory?.incomeStatementHistory || [];
+    const ishQ = result.incomeStatementHistoryQuarterly?.incomeStatementHistory || [];
     const et  = result.earningsTrend?.trend || [];
 
-    // ── C: Current quarterly EPS growth ──────────────────────────────────────
-    const epsGrowthQoQ = raw(fd.earningsGrowth) != null
-      ? +(fd.earningsGrowth.raw * 100).toFixed(1) : null;
+    // ── C: Current quarterly EPS — TRUE same-quarter Y/Y from quarterly history ──
+    // IBD definition: compare Q0 vs same quarter prior year (Q4)
+    // ishQ[0] = most recent quarter, ishQ[4] = same quarter 1 year ago
+    let epsGrowthQoQ = null;         // legacy field (trailing QoQ)
+    let epsQ_0 = null, epsQ_1 = null, epsQ_2 = null; // last 3 quarters EPS
+    let revenueQ_0 = null, revenueQ_1 = null, revenueQ_2 = null;
+    let epsGrowth_Q0_yoy = null;     // Q0 vs same qtr prior year (IBD 'C')
+    let epsGrowth_Q1_yoy = null;     // Q-1
+    let epsGrowth_Q2_yoy = null;     // Q-2
+    let revGrowth_Q0_yoy = null;
+    let revGrowth_Q1_yoy = null;
 
-    // ── A: Annual EPS from income statement (last 3 years) ───────────────────
-    // Compute YoY EPS growth rate from trailing annual history
-    let epsGrowthYoY = null;
-    if (ish.length >= 2) {
-      const eps0 = raw(ish[0]); // most recent annual
-      const eps1 = raw(ish[1]); // year prior
-      if (eps0 != null && eps1 != null && eps1 > 0) {
-        epsGrowthYoY = +((eps0/eps1 - 1)*100).toFixed(1);
-      }
+    if (ishQ.length >= 5) {
+      epsQ_0 = raw(ishQ[0]?.netIncome);
+      epsQ_1 = raw(ishQ[1]?.netIncome);
+      epsQ_2 = raw(ishQ[2]?.netIncome);
+      revenueQ_0 = raw(ishQ[0]?.totalRevenue);
+      revenueQ_1 = raw(ishQ[1]?.totalRevenue);
+      revenueQ_2 = raw(ishQ[2]?.totalRevenue);
+      const epsQ_4 = raw(ishQ[4]?.netIncome);   // same qtr prior year
+      const epsQ_5 = raw(ishQ[5]?.netIncome);
+      const epsQ_6 = raw(ishQ[6]?.netIncome);
+      const revQ_4 = raw(ishQ[4]?.totalRevenue);
+      const revQ_5 = raw(ishQ[5]?.totalRevenue);
+
+      if (epsQ_0 != null && epsQ_4 != null && epsQ_4 > 0)
+        epsGrowth_Q0_yoy = +((epsQ_0/epsQ_4 - 1)*100).toFixed(1);
+      if (epsQ_1 != null && epsQ_5 != null && epsQ_5 > 0)
+        epsGrowth_Q1_yoy = +((epsQ_1/epsQ_5 - 1)*100).toFixed(1);
+      if (epsQ_2 != null && epsQ_6 != null && epsQ_6 > 0)
+        epsGrowth_Q2_yoy = +((epsQ_2/epsQ_6 - 1)*100).toFixed(1);
+      if (revenueQ_0 != null && revQ_4 != null && revQ_4 > 0)
+        revGrowth_Q0_yoy = +((revenueQ_0/revQ_4 - 1)*100).toFixed(1);
+      if (revenueQ_1 != null && revQ_5 != null && revQ_5 > 0)
+        revGrowth_Q1_yoy = +((revenueQ_1/revQ_5 - 1)*100).toFixed(1);
     }
+    // Fallback to earningsGrowth from financialData if quarterly history unavailable
+    epsGrowthQoQ = epsGrowth_Q0_yoy ?? (raw(fd.earningsGrowth) != null ? +(fd.earningsGrowth.raw * 100).toFixed(1) : null);
 
-    // EPS acceleration: current QoQ > trailing annual growth
+    // IBD 'C' passes if Q0, Q1, Q2 all ≥ 25% YoY (3 consecutive quarters)
+    const c_pass_q0 = epsGrowth_Q0_yoy != null && epsGrowth_Q0_yoy >= 25;
+    const c_pass_q1 = epsGrowth_Q1_yoy != null && epsGrowth_Q1_yoy >= 25;
+    const c_pass_q2 = epsGrowth_Q2_yoy != null && epsGrowth_Q2_yoy >= 25;
+    // EPS acceleration: each quarter better than the prior one
+    const epsAccelerating_qoq =
+      epsGrowth_Q0_yoy != null && epsGrowth_Q1_yoy != null &&
+      epsGrowth_Q0_yoy > epsGrowth_Q1_yoy;
+
+    // ── A: Annual EPS — 3-year trend for acceleration ─────────────────────────
+    let epsGrowthYoY = null;
+    let epsAnnualGrowth = [];   // [yr0_growth, yr1_growth] — is it accelerating YoY?
+    if (ish.length >= 2) {
+      const eps0 = raw(ish[0]?.netIncome);
+      const eps1 = raw(ish[1]?.netIncome);
+      const eps2 = raw(ish[2]?.netIncome);
+      if (eps0 != null && eps1 != null && eps1 > 0)
+        epsGrowthYoY = +((eps0/eps1 - 1)*100).toFixed(1);
+      if (eps0 != null && eps1 != null && eps1 > 0)
+        epsAnnualGrowth.push(+((eps0/eps1 - 1)*100).toFixed(1));
+      if (eps1 != null && eps2 != null && eps2 > 0)
+        epsAnnualGrowth.push(+((eps1/eps2 - 1)*100).toFixed(1));
+    }
+    // Annual EPS acceleration: each annual rate higher than prior year
+    const annualEpsAccelerating = epsAnnualGrowth.length >= 2 &&
+      epsAnnualGrowth[0] > epsAnnualGrowth[1];
+
+    // EPS acceleration: quarterly rate exceeds annual rate (classic CAN SLIM signal)
     const epsAccelerating = epsGrowthQoQ != null && epsGrowthYoY != null
       && epsGrowthQoQ > epsGrowthYoY;
 
@@ -311,14 +377,17 @@ async function getYahooFundamentals(symbol) {
     const shortRatio        = raw(ks.shortRatio) || null;  // days to cover
 
     // ── I: Institutional ownership ────────────────────────────────────────────
-    const institutionPct    = raw(ks.institutionsPercentHeld) != null
-      ? +(ks.institutionsPercentHeld.raw * 100).toFixed(1) : null;
-    const insiderPct        = raw(ks.insidersPercentHeld) != null
-      ? +(ks.insidersPercentHeld.raw * 100).toFixed(1) : null;
+    // Yahoo Finance v10 defaultKeyStatistics uses heldPercentInstitutions / heldPercentInsiders
+    const _instField = ks.heldPercentInstitutions ?? ks.institutionsPercentHeld;
+    const _insField  = ks.heldPercentInsiders     ?? ks.insidersPercentHeld;
+    const institutionPct = raw(_instField) != null
+      ? +(raw(_instField) * 100).toFixed(1) : null;
+    const insiderPct     = raw(_insField)  != null
+      ? +(raw(_insField)  * 100).toFixed(1) : null;
 
     // ── Other quality metrics ─────────────────────────────────────────────────
-    const revenueGrowthYoY  = raw(fd.revenueGrowth) != null
-      ? +(fd.revenueGrowth.raw * 100).toFixed(1) : null;
+    const revenueGrowthYoY  = revGrowth_Q0_yoy ?? (raw(fd.revenueGrowth) != null
+      ? +(fd.revenueGrowth.raw * 100).toFixed(1) : null);
     const grossMargins      = raw(fd.grossMargins) != null
       ? +(fd.grossMargins.raw * 100).toFixed(1) : null;
     const returnOnEquity    = raw(fd.returnOnEquity) != null
@@ -326,25 +395,31 @@ async function getYahooFundamentals(symbol) {
     const debtToEquity      = raw(fd.debtToEquity) || null;
     const forwardPE         = raw(fd.forwardPE) || null;
 
-    // ── CAN SLIM score (0-6, one point per letter: C A S L I M) ─────────────
-    // C: EPS growth >25% (quarterly)
-    // A: Annual EPS growth >25%
-    // S: Short float <30% of shares (not excessive dilution) + float manageable
-    // L: RS > 80 (caller fills this in)
-    // I: Institution pct >10% (some sponsorship) and increasing implied
-    // M: handled by regime in the app
+    // ── CAN SLIM score (0-7) ──────────────────────────────────────────────────
+    // C: 3 consecutive quarters ≥ 25% YoY EPS (max 3 pts, else 1 pt for Q0 only)
+    // A: Annual EPS ≥ 25% AND accelerating = 1pt
+    // N: Revenue ≥ 15% = 1pt
+    // S: Short float ≤ 40% = 1pt
+    // I: Institutional ≥ 10% = 1pt
     const canSlimScore = [
-      epsGrowthQoQ != null && epsGrowthQoQ >= 25,            // C
-      epsGrowthYoY != null && epsGrowthYoY >= 25,            // A
-      revenueGrowthYoY != null && revenueGrowthYoY >= 15,    // N (proxy)
-      shortPercentFloat != null && shortPercentFloat <= 40,   // S (not over-shorted)
-      institutionPct != null && institutionPct >= 10,         // I
-      returnOnEquity != null && returnOnEquity >= 15,         // quality
+      epsGrowth_Q0_yoy != null && epsGrowth_Q0_yoy >= 25,            // C (Q0)
+      epsGrowthYoY     != null && epsGrowthYoY >= 25,                // A
+      revenueGrowthYoY != null && revenueGrowthYoY >= 15,            // N (proxy)
+      shortPercentFloat != null && shortPercentFloat <= 40,           // S
+      institutionPct   != null && institutionPct >= 10,              // I
+      returnOnEquity   != null && returnOnEquity >= 15,              // quality
     ].filter(Boolean).length;
 
     return {
-      // C
+      // C — per-quarter YoY EPS (true CAN SLIM)
       epsGrowthQoQ, epsGrowthYoY, epsAccelerating,
+      epsGrowth_Q0_yoy, epsGrowth_Q1_yoy, epsGrowth_Q2_yoy,
+      c_pass_q0, c_pass_q1, c_pass_q2,
+      epsAccelerating_qoq,
+      // A — annual trend
+      epsAnnualGrowth, annualEpsAccelerating,
+      // Revenue per quarter
+      revGrowth_Q0_yoy, revGrowth_Q1_yoy,
       // S
       sharesFloat, sharesShort, shortPercentFloat, shortRatio,
       // I
@@ -534,7 +609,7 @@ async function getMarketRegime() {
   }
 }
 
-// Universe from universe.js module (187 S&P 500 names, AAPL included)
+// Universe from universe.js module (~150+ curated names + sector/industry ETFs)
 const SECTOR_MAP = FULL_UNIVERSE;
 const UNIVERSE   = Object.keys(SECTOR_MAP);
 const INDUSTRY_ETFS = IND_ETFS;
@@ -601,15 +676,24 @@ async function runRSScan() {
       ? closes.slice(-150).reduce((a,b)=>a+b,0)/150 : null;
     const vsMA150   = ma150 ? +((price-ma150)/ma150*100).toFixed(2) : null;
     // SEPA Trend Template (Minervini) — all 6 criteria
+    // Minervini SEPA Trend Template — all 8 rules
+    // Rule 5: 50MA must be above BOTH 150MA and 200MA (MAs stacked bullishly)
+    const ma50AboveAll = ma50 && ma150 && ma200 ? (ma50 > ma150 && ma50 > ma200) : null;
     const sepa = {
-      aboveMA200:    vsMA200 != null && vsMA200 > 0,
-      aboveMA150:    vsMA150 != null && vsMA150 > 0,
-      ma150AboveMA200: ma150 && ma200 ? ma150 > ma200 : null,
-      priceNearHigh: distFromHigh != null && distFromHigh <= 0.25,
-      low30pctBelow: q.fiftyTwoWeekLow && price ? (price - q.fiftyTwoWeekLow)/price >= 0.30 : null,
-      aboveMA50:     vsMA50 != null && vsMA50 > 0,
+      aboveMA200:      vsMA200 != null && vsMA200 > 0,           // 1. Price > 200MA
+      aboveMA150:      vsMA150 != null && vsMA150 > 0,           // 2. Price > 150MA
+      ma150AboveMA200: ma150 && ma200 ? ma150 > ma200 : null,    // 3. 150MA > 200MA
+      ma200Rising:     (() => {  // 4. 200MA trending up for 4+ weeks
+        if (closes.length < 252) return null;
+        const ma200_4wAgo = closes.slice(-252,-228).reduce((a,b)=>a+b,0)/24;
+        return ma200 > ma200_4wAgo * 1.001; // must be >0.1% higher
+      })(),
+      ma50AboveAll,            // 5. 50MA > 150MA AND 200MA (often missed!)
+      aboveMA50:       vsMA50 != null && vsMA50 > 0,             // 6. Price > 50MA
+      low30pctBelow:   q.fiftyTwoWeekLow && price ? (price - q.fiftyTwoWeekLow)/price >= 0.30 : null, // 7
+      priceNearHigh:   distFromHigh != null && distFromHigh <= 0.25, // 8. Within 25% of high
     };
-    const sepaScore = Object.values(sepa).filter(v => v === true).length; // 0-6
+    const sepaScore = Object.values(sepa).filter(v => v === true).length; // 0-8
     const rawRS    = calcRS_real(closes);
     const volRatio = q.averageDailyVolume3Month ? +(q.regularMarketVolume/q.averageDailyVolume3Month).toFixed(2) : 1;
 
@@ -745,11 +829,14 @@ app.get('/api/sectors', async (req, res) => {
     const histResults = await pLimit(symbols.map(sym => async () => ({ sym, closes: await yahooHistory(sym) })), 5);
     const histMap = {}; histResults.forEach(r => { if(r) histMap[r.sym] = r.closes; });
 
+    // Fetch SPY closes for RS Line comparison
+    const spyCloses = histMap['SPY'] || (await yahooHistory('SPY').catch(()=>[]));
     const result = quotes.map(q => {
       const meta = SECTOR_ETFS.find(s => s.t === q.symbol) || {};
       const closes = histMap[q.symbol] || [];
       const price = q.regularMarketPrice, ma50 = q.fiftyDayAverage, ma200 = q.twoHundredDayAverage;
       const periods = calcPeriodReturns(closes);
+      const ma150 = closes.length >= 150 ? closes.slice(-150).reduce((a,b)=>a+b,0)/150 : null;
       return {
         symbol: q.symbol, name: meta.n, color: meta.color || '#888',
         price, ma50, ma200,
@@ -759,6 +846,11 @@ app.get('/api/sectors', async (req, res) => {
         chg1w: periods.chg1w, chg1m: periods.chg1m, chg3m: periods.chg3m, chg6m: periods.chg6m,
         w52h: q.fiftyTwoWeekHigh, w52l: q.fiftyTwoWeekLow,
         volume: q.regularMarketVolume, rawRS: calcRS_real(closes),
+        swingMomentum: calcSwingMomentum(closes, q),
+        ...calcVCP(closes),
+        ...calcRSLine(closes, spyCloses),
+        ...calcStage(closes, ma150),
+        ma150,
       };
     });
     rankToRS(result);
@@ -771,7 +863,12 @@ app.get('/api/sectors', async (req, res) => {
     const secSnap  = {};
     for (const r of result) secSnap['SEC_' + r.symbol] = r.rsRank;
     saveHistory(SEC_HISTORY_FILE, secSnap, todaySec);
-    res.json({ sectors: result });
+    // Attach RS Accel (28-day rank change) from sector history
+    const secHist = loadHistory(SEC_HISTORY_FILE);
+    const sectorsOut = result.map(r => ({
+      ...r, rsTrend: getRSTrend('SEC_' + r.symbol, secHist),
+    }));
+    res.json({ sectors: sectorsOut });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -780,8 +877,9 @@ app.get('/api/industries', async (req, res) => {
   try {
     const symbols = INDUSTRY_ETFS.map(i => i.t);
     const quotes  = await yahooQuote(symbols);
-    const histResults = await pLimit(symbols.map(sym => async () => ({ sym, closes: await yahooHistory(sym) })), 5);
+    const histResults = await pLimit([...symbols, 'SPY'].map(sym => async () => ({ sym, closes: await yahooHistory(sym) })), 5);
     const histMap = {}; histResults.forEach(r => { if(r) histMap[r.sym] = r.closes; });
+    const spyCloses = histMap['SPY'] || [];
 
     const result = quotes.map(q => {
       const meta = INDUSTRY_ETFS.find(i => i.t === q.symbol) || {};
@@ -792,6 +890,7 @@ app.get('/api/industries', async (req, res) => {
       const vsMA50  = ma50  ? +((price-ma50) /ma50 *100).toFixed(2) : null;
       const vsMA200 = ma200 ? +((price-ma200)/ma200*100).toFixed(2) : null;
       const periods = calcPeriodReturns(closes);
+      const ma150 = closes.length >= 150 ? closes.slice(-150).reduce((a,b)=>a+b,0)/150 : null;
       return {
         symbol: q.symbol, name: meta.n, sector: meta.sec,
         price, ma50, ma200, vsMA50, vsMA200,
@@ -800,6 +899,11 @@ app.get('/api/industries', async (req, res) => {
         chg3m: periods.chg3m, chg6m: periods.chg6m,
         w52h: q.fiftyTwoWeekHigh, w52l: q.fiftyTwoWeekLow,
         rawRS: calcRS_real(closes),
+        swingMomentum: calcSwingMomentum(closes, q),
+        ...calcVCP(closes),
+        ...calcRSLine(closes, spyCloses),
+        ...calcStage(closes, ma150),
+        ma150,
       };
     });
     rankToRS(result);
@@ -812,7 +916,12 @@ app.get('/api/industries', async (req, res) => {
     const indSnap  = {};
     for (const r of result) indSnap['IND_' + r.symbol] = r.rsRank;
     saveHistory(IND_HISTORY_FILE, indSnap, todayInd);
-    res.json({ industries: result });
+    // Attach RS Accel from industry history
+    const indHist = loadHistory(IND_HISTORY_FILE);
+    const industriesOut = result.map(r => ({
+      ...r, rsTrend: getRSTrend('IND_' + r.symbol, indHist),
+    }));
+    res.json({ industries: industriesOut });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1174,6 +1283,29 @@ app.get('/api/industry-stocks/:etf', async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── /api/news/:ticker ───────────────────────────────────────────────────────
+// Yahoo Finance RSS — completely free, no API key, no crumb needed
+app.get('/api/news/:ticker', async (req, res) => {
+  try {
+    const sym = req.params.ticker.toUpperCase();
+    const url = `https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(sym)}&region=US&lang=en-US`;
+    const r   = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const xml = await r.text();
+    // Parse RSS items
+    const items = [];
+    const re    = /<item>([\s\S]*?)<\/item>/g;
+    let m;
+    while ((m = re.exec(xml)) !== null && items.length < 5) {
+      const item  = m[1];
+      const title = (/<title>([\s\S]*?)<\/title>/.exec(item)||[])[1]?.replace(/<!\[CDATA\[|\]\]>/g,'').trim();
+      const link  = (/<link>([\s\S]*?)<\/link>/.exec(item)||[])[1]?.trim();
+      const date  = (/<pubDate>([\s\S]*?)<\/pubDate>/.exec(item)||[])[1]?.trim();
+      if (title) items.push({ title, link, date });
+    }
+    res.json({ ticker: sym, items, count: items.length });
+  } catch(e) { res.status(500).json({ error: e.message, items: [] }); }
+});
+
 // ─── /api/fundamentals/:ticker ──────────────────────────────────────────────────
 // Free from Yahoo v11 quoteSummary — called per-ticker only for Swing Lab candidates
 // Returns: EPS growth, revenue growth, short float %, gross margins, ROE
@@ -1242,6 +1374,37 @@ app.get('/api/daily-picks', async (req, res) => {
         ? 'BEAR REGIME — no new long setups recommended'
         : `${scored.length} candidates ranked by conviction (RS + Accel + Momentum + SEPA)`,
     });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── /api/news/:ticker (free, no API key) ────────────────────────────────────
+// Yahoo Finance returns news headlines in the quote response
+// Also fetch from Yahoo RSS feed for richer content
+app.get('/api/news/:ticker', async (req, res) => {
+  try {
+    const sym = req.params.ticker.toUpperCase();
+    // Yahoo quote includes news array
+    const quotes = await yahooQuote([sym]);
+    const q = quotes[0];
+    // Also try Yahoo Finance search news
+    const { crumb, cookie } = await getYahooCrumb();
+    const newsUrl = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(sym)}?modules=news&crumb=${encodeURIComponent(crumb)}`;
+    let headlines = [];
+    try {
+      const nr = await fetch(newsUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 'Cookie': cookie }
+      });
+      const nd = await nr.json();
+      const articles = nd?.quoteSummary?.result?.[0]?.news || [];
+      headlines = articles.slice(0, 5).map(a => ({
+        title:     a.title,
+        source:    a.publisher,
+        time:      a.providerPublishTime
+          ? new Date(a.providerPublishTime * 1000).toLocaleDateString() : null,
+        url:       a.link,
+      }));
+    } catch(_) {}
+    res.json({ ticker: sym, headlines, earningsDate: q?.earningsDate });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
