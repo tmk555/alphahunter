@@ -486,11 +486,25 @@ function saveRSSnapshot(scores, d) { saveHistory(RS_HISTORY_FILE, scores, d); }
 // keyFn: how to key the snapshot (e.g. sym => sym, or sym => 'SEC_'+sym)
 // histFile: which file to save to
 // minSnapshots: skip if already have this many
-function preGenerateHistoryFor(histMap, keyFn, histFile, label, minSnapshots = 13) {
+function preGenerateHistoryFor(histMap, keyFn, histFile, label, minSnapshots = 3) {
   const history = loadHistory(histFile);
-  if (Object.keys(history).length >= minSnapshots) return;
+  const existingDates = Object.keys(history).length;
 
-  console.log(`  Pre-generating ${label} RS history from 1-year price data...`);
+  // Check if any current symbols are missing from the most recent snapshot
+  const lastDate = Object.keys(history).sort().pop();
+  const lastSnap = lastDate ? (history[lastDate] || {}) : {};
+  const missingSymbols = Object.keys(histMap).filter(sym => {
+    const k = keyFn(sym);
+    return !(k in lastSnap) && histMap[sym]?.length >= 63;
+  });
+
+  if (existingDates >= minSnapshots && missingSymbols.length === 0) return;
+
+  if (missingSymbols.length > 0) {
+    console.log(`  Backfilling ${label} RS history for ${missingSymbols.length} new symbols: ${missingSymbols.slice(0,5).join(', ')}...`);
+  } else {
+    console.log(`  Pre-generating ${label} RS history from 1-year price data...`);
+  }
   const today = new Date();
 
   for (let weeksBack = 13; weeksBack >= 0; weeksBack--) {
@@ -802,8 +816,15 @@ function makeHistoryEndpoint(file, prefix) {
         return res.json({ ticker, series });
       }
       const last   = history[dates[dates.length-1]] || {};
-      // Only include keys that DON'T have a prefix (stocks endpoint) or DO match (sec/ind endpoints)
-      const keys = Object.keys(last).filter(k =>
+      // Include all keys present in ANY recent snapshot (last 7 days), not just the most recent date
+      // This ensures new stocks that just appeared in a scan aren't silently dropped
+      const recentDates = dates.slice(-7);
+      const allKeys = new Set();
+      for (const d of recentDates) {
+        const snap = history[d] || {};
+        for (const k of Object.keys(snap)) allKeys.add(k);
+      }
+      const keys = [...allKeys].filter(k =>
         prefix ? k.startsWith(prefix) : !k.startsWith('SEC_') && !k.startsWith('IND_')
       );
       const trends = keys.map(k => {
