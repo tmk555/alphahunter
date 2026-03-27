@@ -23,7 +23,7 @@
   --font-sans: 'IBM Plex Sans', sans-serif;
 }
 * { box-sizing:border-box; margin:0; padding:0; }
-body { background:var(--bg); color:var(--text); font-family:var(--font-sans); font-size:15px; }
+body { background:var(--bg); color:var(--text); font-family:var(--font-sans); font-size:16px; }
 ::-webkit-scrollbar { width:4px; height:4px; }
 ::-webkit-scrollbar-thumb { background:var(--border2); border-radius:2px; }
 
@@ -54,7 +54,7 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .neutral { color:var(--text2); }
 
 /* ── Tabs ────────────────────────────────────── */
-.tab { padding:11px 16px; border:none; background:transparent; cursor:pointer; font-family:var(--font-sans); font-weight:600; font-size:11px; letter-spacing:1.5px; color:var(--text3); border-bottom:2px solid transparent; transition:all 0.15s; white-space:nowrap; text-transform:uppercase; }
+.tab { padding:11px 16px; border:none; background:transparent; cursor:pointer; font-family:var(--font-sans); font-weight:600; font-size:12px; letter-spacing:1.5px; color:var(--text3); border-bottom:2px solid transparent; transition:all 0.15s; white-space:nowrap; text-transform:uppercase; }
 .tab:hover { color:var(--text2); }
 .tab.active { color:var(--amber); border-bottom-color:var(--amber); }
 .tab-badge { font-size:8px; padding:1px 5px; background:rgba(0,230,118,0.15); color:var(--green); border-radius:3px; margin-left:5px; vertical-align:1px; }
@@ -67,12 +67,12 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .section-label { font-family:var(--font-mono); font-size:10px; color:var(--text3); letter-spacing:2px; text-transform:uppercase; margin-bottom:10px; }
 
 /* ── Tables ──────────────────────────────────── */
-.data-table { width:100%; border-collapse:collapse; font-size:13px; }
-.data-table th { padding:7px 10px; text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--text3); border-bottom:1px solid var(--border); background:var(--bg3); cursor:pointer; white-space:nowrap; }
+.data-table { width:100%; border-collapse:collapse; font-size:14px; }
+.data-table th { padding:7px 10px; text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:var(--text3); border-bottom:1px solid var(--border); background:var(--bg3); cursor:pointer; white-space:nowrap; }
 .data-table th:hover { color:var(--amber); }
-.data-table td { padding:8px 10px; border-bottom:1px solid var(--border); font-family:var(--font-mono); font-size:13px; white-space:nowrap; }
+.data-table td { padding:8px 10px; border-bottom:1px solid var(--border); font-family:var(--font-mono); font-size:14px; white-space:nowrap; }
 .data-table tr:hover td { background:var(--bg3); }
-.td-name { font-family:var(--font-sans) !important; font-size:12px !important; color:var(--text2); max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.td-name { font-family:var(--font-sans) !important; font-size:13px !important; color:var(--text2); max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .td-ticker { color:var(--cyan); font-weight:600; }
 
 /* ── RS Bar ──────────────────────────────────── */
@@ -295,6 +295,8 @@ function App() {
   const [tab, setTab] = useState('pulse');
   const [tickerData, setTickerData] = useState([]);
   const [isLive, setIsLive] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [selectedSectors, setSelectedSectors] = useState(new Set());
 
   // Shared data cache
   const [rsData,    setRsData]    = useState([]);
@@ -383,10 +385,18 @@ function App() {
           </div>
         </div>
         <div className="header-actions">
-          {isLive && <span style={{fontSize:10,color:'var(--green)',fontFamily:'var(--font-mono)'}}><span className="status-dot status-live"/>LIVE DATA</span>}
+          {isLive && <span style={{fontSize:11,color:'var(--green)',fontFamily:'var(--font-mono)'}}><span className="status-dot status-live"/>LIVE DATA</span>}
+          <button
+            onClick={()=>setGuideOpen(o=>!o)}
+            style={{padding:'7px 14px',background:guideOpen?'rgba(240,165,0,0.15)':'transparent',border:`1px solid ${guideOpen?'var(--amber)':'var(--border)'}`,borderRadius:4,color:guideOpen?'var(--amber)':'var(--text3)',cursor:'pointer',fontSize:12,fontFamily:'var(--font-sans)',fontWeight:600,letterSpacing:1,transition:'all 0.15s'}}>
+            📖 {guideOpen?'▼':'▶'} GUIDE
+          </button>
           <button className="load-btn" onClick={loadAll}>↻ REFRESH ALL</button>
         </div>
       </div>
+
+      {/* GLOBAL TRADING GUIDE — visible on every tab, collapsed by default */}
+      {guideOpen && <GlobalTradingGuide onClose={()=>setGuideOpen(false)}/>}
 
       {/* TABS */}
       <div id="tabs-row">
@@ -402,9 +412,9 @@ function App() {
       {/* CONTENT */}
       <div id="main">
         {tab==='pulse'      && <MarketPulseTab />}
-        {tab==='sectors'    && <SectorsTab />}
+        {tab==='sectors'    && <SectorsTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
         {tab==='industries' && <IndustriesTab />}
-        {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS}/>}
+        {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
         {tab==='leaders'    && <LeadersTab />}
         {tab==='macro'      && <MacroTab />}
         {tab==='swinglab'   && <SwingLabTab rsData={rsData} rsLoaded={rsLoaded} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary}/>}
@@ -412,6 +422,119 @@ function App() {
         {tab==='watchlist'  && <WatchlistTab rsData={rsData} />}
         {tab==='scanner'    && <ScannerTab />}
         {tab==='thematic'   && <ThematicTab />}
+      </div>
+    </div>
+  );
+}
+
+// ─── GLOBAL TRADING GUIDE (header panel — visible on every tab) ────────────────
+function GlobalTradingGuide({ onClose }) {
+  const [section, setSection] = useState('setup');
+  const sections = [
+    {id:'setup',    label:'⚡ Checklists'},
+    {id:'signals',  label:'📊 Signals'},
+    {id:'canslim',  label:'📈 CAN SLIM'},
+    {id:'workflow', label:'🗓 Workflow'},
+  ];
+  return (
+    <div style={{background:'var(--bg2)',borderBottom:'2px solid var(--amber)',flexShrink:0,maxHeight:420,overflowY:'auto'}}>
+      <div style={{padding:'10px 16px',display:'flex',alignItems:'center',gap:10,borderBottom:'1px solid var(--border)',position:'sticky',top:0,background:'var(--bg2)',zIndex:1}}>
+        <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--amber)',letterSpacing:2,fontWeight:700}}>📖 TRADING REFERENCE GUIDE</span>
+        <div style={{display:'flex',gap:5,marginLeft:10,flexWrap:'wrap'}}>
+          {sections.map(s=>(
+            <button key={s.id} onClick={()=>setSection(s.id)}
+              style={{padding:'4px 12px',border:`1px solid ${section===s.id?'var(--amber)':'var(--border)'}`,borderRadius:3,background:section===s.id?'rgba(240,165,0,0.12)':'transparent',color:section===s.id?'var(--amber)':'var(--text3)',cursor:'pointer',fontSize:11,fontWeight:600,letterSpacing:.5}}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+        <button onClick={onClose} style={{marginLeft:'auto',background:'transparent',border:'none',color:'var(--text3)',cursor:'pointer',fontSize:16,padding:'0 4px'}}>✕</button>
+      </div>
+      <div style={{padding:'12px 16px'}}>
+        {section==='setup' && (
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+            <div style={{background:'var(--bg3)',border:'1px solid rgba(0,212,255,0.25)',borderRadius:4,padding:12}}>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--cyan)',letterSpacing:2,fontWeight:700,marginBottom:8}}>⚡ SWING (2-10 days)</div>
+              {[['Regime','BULL or NEUTRAL. VIX < 25. SPY above 50MA.'],['RS','≥70 AND Accel >+5. Avoid RS >95.'],['RS Line','⭐ at 52wk high = earliest signal.'],['Stage','S2 only. S3 = avoid. S4 = no longs.'],['VCP','2+ contractions = coiled spring.'],['Momentum','SwingMom ≥55.'],['Price','Within 5-7% of 52wk high.'],['Volume','≥1.5× avg on breakout.'],['Stop','1.5×ATR below entry. >5% risk = skip.'],['Target','T1=2.5×ATR, T2=4×ATR. Sell 50% at T1.'],['Size','1% acct risk ÷ (entry−stop) = shares.'],['Earnings','⚠ NEVER hold through earnings.']].map(([k,v])=>(
+                <div key={k} style={{display:'flex',gap:8,marginBottom:4,fontSize:12}}>
+                  <span style={{color:'var(--cyan)',fontWeight:700,minWidth:80,flexShrink:0}}>{k}:</span>
+                  <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{background:'var(--bg3)',border:'1px solid rgba(0,230,118,0.25)',borderRadius:4,padding:12}}>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--green)',letterSpacing:2,fontWeight:700,marginBottom:8}}>📈 POSITION (3-8 weeks)</div>
+              {[['Regime','BULL only. SPY above 200MA. VIX <20.'],['RS','≥70 AND rising 4+ weeks.'],['SEPA','5-6/8. All MAs aligned.'],['Stage','S2 confirmed: above RISING 150MA.'],['CAN SLIM','C≥25% EPS growth, A≥25% annual.'],['Short Float','>15% short + rising RS = squeeze fuel.'],['Entry','Pullback to 50MA in uptrend.'],['Stop','2×ATR below 50MA.'],['Target','T1=4×ATR, T2=6×ATR.'],['Earnings','OK to hold. Cut to 50% size before.'],['Size','Never >10% of account in one stock.']].map(([k,v])=>(
+                <div key={k} style={{display:'flex',gap:8,marginBottom:4,fontSize:12}}>
+                  <span style={{color:'var(--green)',fontWeight:700,minWidth:80,flexShrink:0}}>{k}:</span>
+                  <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {section==='signals' && (
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
+              {[['IBD RS (1-99)','Percentile rank vs universe. RS 85 = beats 85% of tracked stocks.'],['RS Accel','Rank change in 28 days. +12 = passed 12% of peers. Sort ↓ to find fastest accumulation.'],['RS Line ⭐','Price÷SPY at 52wk high. Stock outperforming the market itself — not just peers.'],['SwingMom','5/10-day rate of change, 0-99. ≥60=fast now, ≥45=ok, <40=stalling.'],['★ Triple','RS≥70 + Accel>0 + Mom≥60. All three aligned = daily candidate list (~15-25 stocks).'],['↗ EMRG','RS 55-70 + Accel>+5. Emerging before obvious. Add to watchlist.']].map(([k,v])=>(
+                <div key={k} style={{display:'flex',gap:8,marginBottom:7,fontSize:12,borderBottom:'1px solid var(--border)',paddingBottom:5}}>
+                  <span style={{color:'var(--amber)',fontWeight:700,minWidth:100,flexShrink:0,fontFamily:'var(--font-mono)',fontSize:11}}>{k}</span>
+                  <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
+              {[['VCP','Volatility Contraction: 2+ shrinking ranges. Coiled spring. Breakout on volume = entry.'],['S2','Stage 2 uptrend: price above RISING 150MA. Required context for longs.'],['★PEAK','RS≥98 stable. Sustained leadership — trail stops, no new chasing.'],['SEPA 5-6/8','Minervini Trend Template: all MAs aligned, within 25% of high.'],['⚡ Vol Surge','Volume >2× avg near 52wk high. Institutional breakout confirmation.'],['ACC / DIST','ACC = above 50MA + vol >1.2×. DIST = below 50MA + vol >1.2× (selling).']].map(([k,v])=>(
+                <div key={k} style={{display:'flex',gap:8,marginBottom:7,fontSize:12,borderBottom:'1px solid var(--border)',paddingBottom:5}}>
+                  <span style={{color:'var(--amber)',fontWeight:700,minWidth:100,flexShrink:0,fontFamily:'var(--font-mono)',fontSize:11}}>{k}</span>
+                  <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {section==='canslim' && (
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:8}}>CAN SLIM (O'Neil)</div>
+              {[['C — Current EPS','≥25% quarterly growth YoY. Accelerating = best.'],['A — Annual EPS','≥25% for 3+ years. Sustained quality.'],['N — New','New product, CEO, or 52wk high breakout.'],['S — Supply/Demand','Big vol on up days. Accumulation by institutions.'],['L — Leader','RS≥70. Top 1-2 in its industry group.'],['I — Institutional','Rising fund ownership last quarter.'],['M — Market','BULL regime. Never buy longs in BEAR.']].map(([k,v])=>(
+                <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
+                  <span style={{color:'var(--cyan)',fontWeight:700,minWidth:115,flexShrink:0}}>{k}:</span>
+                  <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--green)',letterSpacing:2,fontWeight:700,marginBottom:8}}>SEPA (Minervini Trend Template)</div>
+              {[['Price > 150MA','Above medium-term trend.'],['Price > 200MA','Above long-term trend.'],['150MA > 200MA','Medium > long = uptrend structure.'],['200MA trending up','Long-term trend rising ≥1 month.'],['Price > 50MA','Above short-term trend.'],['50MA > 150MA & 200MA','All MAs stacked bullishly.'],['Price near 52wk high','Within 25% of high.'],['IBD RS ≥70','Top 30% relative strength.']].map(([k,v])=>(
+                <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
+                  <span style={{color:'var(--green)',fontWeight:700,minWidth:160,flexShrink:0}}>{k}:</span>
+                  <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
+                </div>
+              ))}
+              <div style={{marginTop:8,padding:'6px 8px',background:'rgba(0,230,118,0.07)',borderRadius:3,fontSize:11,color:'var(--text3)'}}>5-6/8 = strong setup. 7-8/8 = ideal. &lt;4/8 = skip.</div>
+            </div>
+          </div>
+        )}
+        {section==='workflow' && (
+          <div style={{display:'grid',gap:8,gridTemplateColumns:'1fr 1fr'}}>
+            {[
+              ['1. Market Pulse (2 min)','Regime? BEAR = cash only. CAUTION = half size. BULL = full size. VIX, SPY vs MAs, yield curve.'],
+              ['2. Sectors (2 min)','Top 2-3 sectors by RS Accel? ⭐ on sector ETF = highest confirmation. Pick your hunting ground.'],
+              ['3. RS Dashboard (3 min)','Sort ↓ by RS Accel. Find ★BEST + ⭐ + VCP combos. These are today\'s candidates.'],
+              ['4. Bottom-up Discovery (5 min)','Finviz: EPS>25%, price>200MA, RS>70. Cross-check RS Accel here. ↗EMRG with EPS acceleration?'],
+              ['5. Click Levels (2 min each)','SEPA≥4? CAN SLIM≥4? EPS accelerating? Stage 2? Pass ≥3 of 4 to proceed.'],
+              ['6. Swing Lab (1 min)','AI thesis + ATR levels + earnings check. BUY-rated = enter today.'],
+              ['7. Watchlist','↗EMRG → Candidate when SEPA≥4. → Active Trade when you enter.'],
+              ['Non-negotiable rules','Never hold through earnings. Stop = 1.5×ATR. BEAR = cash. One trade handled right > ten handled wrong.'],
+            ].map(([step,desc])=>(
+              <div key={step} style={{padding:'8px 12px',background:'var(--bg3)',borderRadius:4,borderLeft:'2px solid var(--border)'}}>
+                <div style={{fontSize:12,color:'var(--text)',fontWeight:700,marginBottom:3}}>{step}</div>
+                <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5}}>{desc}</div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -931,7 +1054,7 @@ function useSortTable(defaultKey, defaultDir = -1) {
 }
 
 // ─── SECTORS TAB ──────────────────────────────────────────────────────────────
-function SectorsTab() {
+function SectorsTab({ selectedSectors, setSelectedSectors }) {
   const [data,    setData]   = useState([]);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
@@ -990,17 +1113,20 @@ function SectorsTab() {
                 <SecSH k="chg6m"   label="6M"/>
                 <SecSH k="vsMA50"  label="vs 50MA"/>
                 <SecSH k="vsMA200" label="vs 200MA"/>
+                <th title="Click 🎯 to focus RS Dashboard on this sector — narrows stock universe to that sector only">Focus RS</th>
               </tr>
             </thead>
             <tbody>
-              {sortSec(data).map((s,i) => (
+              {sortSec(data).map((s,i) => {
+                const isFocused = selectedSectors?.has(s.name);
+                return (
                 <tr key={s.symbol}
                   onClick={()=>setSelSector(ss=>ss===s.symbol?null:s.symbol)}
-                  style={{cursor:'pointer',background:selSector===s.symbol?'rgba(240,165,0,0.08)':'',
-                          borderLeft:selSector===s.symbol?'2px solid var(--amber)':''}}>
+                  style={{cursor:'pointer',background:selSector===s.symbol?'rgba(240,165,0,0.08)':isFocused?'rgba(0,230,118,0.04)':'',
+                          borderLeft:isFocused?'2px solid var(--green)':selSector===s.symbol?'2px solid var(--amber)':''}}>
                   <td className="muted">{i+1}</td>
                   <td><RSBar rs={s.rsRank}/></td>
-                  <td style={{fontFamily:'var(--font-mono)',fontSize:12,textAlign:'center'}}>
+                  <td style={{fontFamily:'var(--font-mono)',fontSize:13,textAlign:'center'}}>
                     {s.rsTrend?.vs4w != null
                       ? <span className={s.rsTrend.vs4w>3?'up':s.rsTrend.vs4w<-3?'dn':''}>{s.rsTrend.vs4w>0?'+':''}{s.rsTrend.vs4w}</span>
                       : <span className="muted">—</span>}
@@ -1012,14 +1138,14 @@ function SectorsTab() {
                   </td>
                   <td>
                     <span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:s.color||'#888',marginRight:8,verticalAlign:'middle'}}/>
-                    <strong style={{color:'var(--text)',fontSize:12}}>{s.name}</strong>
-                    <span style={{fontSize:10,color:'var(--text3)',marginLeft:6}}>{s.symbol}</span>
+                    <strong style={{color:'var(--text)',fontSize:13}}>{s.name}</strong>
+                    <span style={{fontSize:11,color:'var(--text3)',marginLeft:6}}>{s.symbol}</span>
                   </td>
-                  <td style={{whiteSpace:'nowrap',fontSize:10}}>
-                    {s.rsLineNewHigh && <span title="RS Line at 52wk high vs SPY — sector ETF outperforming market. Strongest sector confirmation." style={{color:'var(--gold)',fontWeight:700,marginRight:4}}>⭐RS↑H</span>}
-                    {s.vcpForming && <span title={`VCP ${s.vcpCount}× contractions on sector ETF. Price coiling = sector tightening before breakout. Best when combined with S2.`} style={{color:'var(--purple)',fontWeight:700,marginRight:4}}>VCP{s.vcpCount}×</span>}
-                    {s.stage===2 && <span title="Stage 2 Uptrend (Weinstein): ETF above rising 150MA. The context for longs. VCP within S2 = ideal setup." style={{color:'var(--green)',fontWeight:700,marginRight:4}}>S2</span>}
-                    {s.stage===4 && <span title="Stage 4 Downtrend: ETF below declining 150MA. Avoid all longs in this sector." style={{color:'var(--red)',fontWeight:700,marginRight:4}}>S4</span>}
+                  <td style={{whiteSpace:'nowrap',fontSize:11}}>
+                    {s.rsLineNewHigh && <span title="RS Line at 52wk high vs SPY — sector ETF outperforming market." style={{color:'var(--gold)',fontWeight:700,marginRight:4}}>⭐RS↑H</span>}
+                    {s.vcpForming && <span title={`VCP ${s.vcpCount}× contractions on sector ETF.`} style={{color:'var(--purple)',fontWeight:700,marginRight:4}}>VCP{s.vcpCount}×</span>}
+                    {s.stage===2 && <span title="Stage 2 Uptrend: ETF above rising 150MA." style={{color:'var(--green)',fontWeight:700,marginRight:4}}>S2</span>}
+                    {s.stage===4 && <span title="Stage 4 Downtrend: Avoid all longs." style={{color:'var(--red)',fontWeight:700,marginRight:4}}>S4</span>}
                     {!s.rsLineNewHigh && !s.vcpForming && s.stage!==2 && s.stage!==4 && <span className="muted">—</span>}
                   </td>
                   <td className={fmtC(s.chg1d)}>{fmtP(s.chg1d)}</td>
@@ -1029,10 +1155,34 @@ function SectorsTab() {
                   <td className={fmtC(s.chg6m)}>{fmtP(s.chg6m)}</td>
                   <td className={s.vsMA50>0?'up':'dn'}>{fmt(s.vsMA50,1)}%</td>
                   <td className={s.vsMA200>0?'up':'dn'}>{fmt(s.vsMA200,1)}%</td>
+                  <td onClick={e=>e.stopPropagation()} style={{whiteSpace:'nowrap'}}>
+                    <button
+                      onClick={()=>{
+                        if(!setSelectedSectors) return;
+                        setSelectedSectors(prev=>{
+                          const next = new Set(prev);
+                          next.has(s.name) ? next.delete(s.name) : next.add(s.name);
+                          return next;
+                        });
+                      }}
+                      style={{padding:'2px 7px',fontSize:10,border:`1px solid ${isFocused?'var(--green)':'var(--border)'}`,borderRadius:3,background:isFocused?'rgba(0,230,118,0.12)':'transparent',color:isFocused?'var(--green)':'var(--text3)',cursor:'pointer',fontWeight:isFocused?700:400}}
+                      title="Toggle sector focus in RS Dashboard — narrows RS Dashboard to show stocks from this sector">
+                      {isFocused?'🎯 Focused':'🎯'}
+                    </button>
+                  </td>
                 </tr>
-              ))}
+              );})}
             </tbody>
           </table>
+        )}
+        {/* Sector focus summary */}
+        {selectedSectors && selectedSectors.size > 0 && (
+          <div style={{marginTop:10,padding:'8px 12px',background:'rgba(0,230,118,0.07)',border:'1px solid rgba(0,230,118,0.2)',borderRadius:4,display:'flex',alignItems:'center',gap:10,fontSize:12}}>
+            <span style={{color:'var(--green)',fontWeight:700}}>🎯 RS Dashboard focused on:</span>
+            {[...selectedSectors].map(sec=><span key={sec} style={{color:'var(--green)',background:'rgba(0,230,118,0.12)',padding:'1px 8px',borderRadius:3,fontSize:11}}>{sec}</span>)}
+            <span style={{color:'var(--text3)'}}>· Go to RS Dashboard tab to see filtered results.</span>
+            <button onClick={()=>setSelectedSectors(new Set())} style={{marginLeft:'auto',padding:'2px 8px',fontSize:11,border:'1px solid var(--border)',borderRadius:3,background:'transparent',color:'var(--text3)',cursor:'pointer'}}>✕ Clear focus</button>
+          </div>
         )}
         {selSector && (
           <SectorStocks sectorName={data.find(d=>d.symbol===selSector)?.name||selSector} rsData={rsData} onClose={()=>setSelSector(null)}/>
@@ -1380,12 +1530,19 @@ function MacroTab() {
 }
 
 // ─── RS SCANNER TAB ───────────────────────────────────────────────────────────
-function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS }) {
+function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, selectedSectors, setSelectedSectors }) {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   // minRS/setMinRS now from App props — persists across tab switches
   const [expandedTicker, setExpandedTicker] = useState(null);
   const { sortData: sortRS, SH } = useSortTable('rsRank');
+  // Signal filter chips — individual toggles (any active = must have that signal)
+  const [sigFilters, setSigFilters] = useState(new Set());
+  const toggleSig = key => setSigFilters(prev => {
+    const next = new Set(prev);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
 
   async function load() {
     setLoading(true); setError('');
@@ -1408,7 +1565,30 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS }) {
     s2vcp:    s => s.rsRank >= 70 && s.stage === 2 && s.vcpForming,
     rsline:   s => s.rsLineNewHigh && s.rsRank >= 65,
   };
-  const filtered = sortRS(rsData.filter(quickFilters[quickFilter] || quickFilters.all));
+
+  // Signal chip filter — if any chips active, stock must pass ALL of them
+  const sigChecks = {
+    '★':   s => s.rsRank>=70 && (s.rsTrend?.vs4w||0)>0 && s.swingMomentum>=60,
+    '⭐':   s => s.rsLineNewHigh,
+    '↗':   s => s.rsTrend?.vs4w>5 && s.rsRank>=55 && s.rsRank<70,
+    'VCP': s => s.vcpForming,
+    'S2':  s => s.stage===2,
+    'S4':  s => s.stage===4,
+    'ACC': s => s.volumeTrend==='accumulating',
+    '🔥':  s => s.distFromHigh!=null && s.distFromHigh<=0.005,
+    '⚡':  s => s.volumeSurge,
+  };
+
+  const filtered = sortRS(rsData.filter(s => {
+    if (!(quickFilters[quickFilter] || quickFilters.all)(s)) return false;
+    // Sector filter
+    if (selectedSectors && selectedSectors.size > 0 && !selectedSectors.has(s.sector)) return false;
+    // Signal chips (AND logic — stock must have ALL active chips)
+    for (const key of sigFilters) {
+      if (sigChecks[key] && !sigChecks[key](s)) return false;
+    }
+    return true;
+  }));
 
   return (
     <div>
@@ -1416,7 +1596,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS }) {
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14,flexWrap:'wrap',gap:8}}>
           <div>
             <div className="panel-title">RS <span>Scanner</span></div>
-            <div className="panel-sub">IBD RS (12M relative rank) · Accel (28d rank change, relative) · Mom (absolute velocity NOW) · Workflow: ★ Triple → ★★ +S2 → ★★★ +VCP · <strong style={{color:'var(--amber)'}}>Triple</strong> = your daily list (~15-25). <strong style={{color:'var(--amber)'}}>+S2</strong> = uptrend confirmed (eliminate distribution). <strong style={{color:'var(--amber)'}}>+VCP</strong> = ideal entry timing, tightest stop.</div>
+            <div className="panel-sub">IBD RS (12M relative rank) · Accel (28d rank change) · Mom (absolute velocity) · <strong style={{color:'var(--amber)'}}>Bottom-up by default</strong> — the best stocks surface regardless of sector. Use 🎯 Sector Focus (from Sectors tab) to optionally narrow by sector after top-down confirmation.</div>
           </div>
           <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
             <label style={{fontSize:11,color:'var(--text3)'}}>Min RS</label>
@@ -1453,8 +1633,50 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS }) {
               {f.label}
             </button>
           ))}
-          <span style={{fontSize:10,color:'var(--text3)',marginLeft:4}}>{filtered.length} shown</span>
+          <span style={{fontSize:11,color:'var(--text3)',marginLeft:4}}>{filtered.length} shown</span>
         </div>
+
+        {/* Signal chip filters */}
+        <div style={{display:'flex',gap:5,marginBottom:10,flexWrap:'wrap',alignItems:'center'}}>
+          <span style={{fontSize:10,color:'var(--text3)',letterSpacing:1,textTransform:'uppercase',marginRight:2}}>Signals</span>
+          {[
+            {key:'★',   label:'★ Triple',      title:'RS≥70 + Accel>0 + Mom≥60 (same as Triple filter, combinable with others)',col:'var(--green)'},
+            {key:'⭐',   label:'⭐ RS Line High', title:'RS Line at 52wk high — stock outperforming SPY itself',col:'var(--gold)'},
+            {key:'↗',   label:'↗ Emerging',     title:'RS 55-70 rising fast (Accel>+5) — catch leaders early',col:'var(--cyan)'},
+            {key:'VCP', label:'VCP',             title:'Volatility Contraction Pattern — coiling setup',col:'var(--purple)'},
+            {key:'S2',  label:'S2 Uptrend',      title:'Stage 2: price above rising 150MA',col:'var(--green)'},
+            {key:'ACC', label:'ACC',              title:'Accumulation: above 50MA + vol >1.2x (institutional buying)',col:'var(--green)'},
+            {key:'🔥',  label:'🔥 At High',      title:'Within 0.5% of 52wk high right now',col:'var(--amber)'},
+            {key:'⚡',  label:'⚡ Vol Surge',     title:'Volume surge ≥2× average near highs',col:'var(--amber)'},
+          ].map(({key,label,title,col})=>(
+            <button key={key} title={title}
+              onClick={()=>toggleSig(key)}
+              style={{padding:'2px 9px',fontSize:10,border:`1px solid ${sigFilters.has(key)?col:'var(--border)'}`,borderRadius:3,background:sigFilters.has(key)?col+'22':'transparent',color:sigFilters.has(key)?col:'var(--text3)',cursor:'pointer',fontWeight:sigFilters.has(key)?700:400,transition:'all 0.12s'}}>
+              {label}
+            </button>
+          ))}
+          {sigFilters.size>0 && (
+            <button onClick={()=>setSigFilters(new Set())} style={{padding:'2px 8px',fontSize:10,border:'1px solid var(--border)',borderRadius:3,background:'transparent',color:'var(--text3)',cursor:'pointer'}}>
+              ✕ Clear signals
+            </button>
+          )}
+        </div>
+
+        {/* Sector focus filter */}
+        {selectedSectors && selectedSectors.size > 0 && (
+          <div style={{marginBottom:10,padding:'6px 12px',background:'rgba(240,165,0,0.07)',border:'1px solid rgba(240,165,0,0.25)',borderRadius:4,display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',fontSize:11}}>
+            <span style={{color:'var(--amber)',fontWeight:700}}>🎯 Sector focus:</span>
+            {[...selectedSectors].map(sec=>(
+              <span key={sec} style={{padding:'2px 8px',background:'rgba(240,165,0,0.12)',border:'1px solid rgba(240,165,0,0.3)',borderRadius:3,color:'var(--amber)',fontSize:10}}>
+                {sec}
+              </span>
+            ))}
+            <span style={{color:'var(--text3)'}}>· Showing stocks in these sectors only.</span>
+            <button onClick={()=>setSelectedSectors(new Set())} style={{marginLeft:'auto',padding:'2px 8px',fontSize:10,border:'1px solid var(--border)',borderRadius:3,background:'transparent',color:'var(--text3)',cursor:'pointer'}}>
+              ✕ Show all sectors
+            </button>
+          </div>
+        )}
 
         {error && <ErrorBox msg={error}/>}
         {loading ? <Loader msg={`Scanning ${rsData.length||150}+ stocks...`}/> : (
@@ -1497,8 +1719,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS }) {
                 </thead>
                 <tbody>
                   {filtered.map(s => (
-                    <React.Fragment key={s.ticker}>
-                    <tr>
+                    <tr key={s.ticker} style={{background:expandedTicker===s.ticker?'rgba(240,165,0,0.05)':''}}>
                       <td><RSBar rs={s.rsRank}/></td>
                       <td>
                         {s.swingMomentum != null
@@ -1558,26 +1779,36 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS }) {
                         )}
                       </td>
                       <td>
-                        <button className="btn btn-sm" style={{padding:'2px 8px',fontSize:9}}
+                        <button className="btn btn-sm" style={{padding:'2px 8px',fontSize:9,background:expandedTicker===s.ticker?'var(--amber)':'transparent',color:expandedTicker===s.ticker?'#000':'var(--text2)',borderColor:expandedTicker===s.ticker?'var(--amber)':'var(--border)'}}
                           onClick={()=>setExpandedTicker(et=>et===s.ticker?null:s.ticker)}>
-                          {expandedTicker===s.ticker?'▲':'Levels'}
+                          {expandedTicker===s.ticker?'▲ Close':'Levels'}
                         </button>
                       </td>
                     </tr>
-                    {expandedTicker===s.ticker && (
-                      <tr>
-                        <td colSpan={99} style={{padding:0,background:'var(--bg3)',borderBottom:'1px solid var(--border)'}}>
-                          <div style={{padding:'12px 16px',width:'max-content',minWidth:'100%',boxSizing:'border-box'}}>
-                            <InlineLevels stock={s}/>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
                   ))}
                 </tbody>
               </table>
             </div>
+
+            {/* ── Levels panel — OUTSIDE the table so it never distorts column widths ── */}
+            {expandedTicker && (() => {
+              const s = filtered.find(x => x.ticker === expandedTicker);
+              if (!s) return null;
+              return (
+                <div style={{marginTop:2,border:'1px solid var(--amber)',borderTop:'2px solid var(--amber)',borderRadius:'0 0 6px 6px',background:'var(--bg3)',padding:'16px 18px',animation:'fadeUp 0.2s ease'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+                    <div style={{display:'flex',alignItems:'center',gap:10}}>
+                      <span style={{fontFamily:'var(--font-mono)',fontSize:16,fontWeight:700,color:'var(--cyan)'}}>{s.ticker}</span>
+                      <span style={{fontSize:13,color:'var(--text3)'}}>{s.name}</span>
+                      <span style={{fontFamily:'var(--font-mono)',fontSize:13,color:'var(--text)'}}>${fmt(s.price)}</span>
+                      {s.sector && <span style={{fontSize:11,padding:'2px 8px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)'}}>{s.sector}</span>}
+                    </div>
+                    <button onClick={()=>setExpandedTicker(null)} style={{background:'transparent',border:'none',color:'var(--text3)',cursor:'pointer',fontSize:18,padding:'0 4px'}}>✕</button>
+                  </div>
+                  <InlineLevels stock={s}/>
+                </div>
+              );
+            })()}
           </>
         )}
 
@@ -1585,9 +1816,6 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS }) {
         {rsLoaded && (
           <RSTrendSection rsData={rsData} />
         )}
-
-        {/* ── TRADING REFERENCE GUIDE ── */}
-        <TradingGuide />
       </div>
     </div>
   );
@@ -2865,18 +3093,12 @@ function DailyPicksTab({ rsData }) {
               <span><span style={{display:'inline-block',width:8,height:16,background:'var(--amber)',borderRadius:2,marginRight:4,verticalAlign:'middle'}}/>Amber border = Ranks #2-3</span>
               <span>Grey = Supporting candidates</span>
             </div>
-            <div style={{marginTop:8,fontSize:11,color:'var(--text3)',lineHeight:1.8}}>
-              <span style={{color:'var(--green)',fontWeight:700}}>Green border = #1 pick</span> · <span style={{color:'var(--amber)',fontWeight:700}}>Orange = top 3</span> · Grey = additional candidates<br/>
-              <strong style={{color:'var(--text)'}}>What is Conviction Score?</strong> A relative ranking tool — not a precise grade. Focus on gaps of 15+ points, not single-digit differences. 80+ = strong signal alignment. Formula: IBD RS×30% + RS Accel×25% + SwingMom×20% + SEPA×15% + bonuses (⭐RS Line high +8, VCP +6, vol surge +5) − penalties (earnings −15, extended −10).<br/>
-              <strong style={{color:'var(--text)'}}>Bear regime = 0× = zero new trades.</strong> This is correct and intentional. Alpha Hunter is a momentum tool. In a bear (SPY below 200MA or VIX &gt;35), the momentum edge that drives every signal in this app disappears. Swinging longs against a declining market is where accounts get damaged. DCA (dollar-cost averaging) for long-term investing is a completely separate philosophy — it is agnostic to momentum, ignores stops, and belongs in a portfolio management tool, not here. When the regime is BEAR: protect capital, go to cash, and wait.<br/>
-              <strong style={{color:'var(--text)'}}>The Triple → S2 → VCP hierarchy — how to filter daily.</strong>
-              <strong style={{color:'var(--amber)'}}>★ Triple (RS&gt;70 + Accel&gt;0 + Mom&gt;60)</strong>: Your morning candidate list. RS&gt;70 = top-tier institutional quality. Accel&gt;0 = gaining ground vs peers right now. Mom&gt;60 = absolute price velocity is strong. Together these confirm a stock that's been a long-term leader AND is actively being accumulated AND is moving now. ~15-25 stocks. This IS sufficient for swing trading. Many professional momentum traders stop here.
-              <br/><strong style={{color:'var(--amber)'}}>★★ + Stage 2</strong>: Adds Weinstein stage context. Stage 2 = price above a RISING 150-day MA. This eliminates stocks that are Triple-qualifying while in a Stage 3 top (stalling) or Stage 4 decline (distribution). Without S2, you might buy a bouncing stock in a failing uptrend. With S2, you're only entering confirmed uptrends. Reduces list to ~8-15 stocks. Higher quality, fewer false starts.
-              <br/><strong style={{color:'var(--amber)'}}>★★★ + VCP (best entry timing)</strong>: Volatility Contraction Pattern — 2+ contracting price ranges where each pullback is smaller than the prior (ideal: 20%→10%→5%). Higher lows on each contraction = institutions stepping in earlier = the coil before the spring. VCP gives you: a precise pivot entry (buy above the high of the last contraction on volume), the tightest possible stop (just below last contraction low), and the highest-probability R/R. S2 is the context. VCP is the trigger.
-              <br/><strong style={{color:'var(--text3)'}}>Bottom line:</strong> Triple = find it. +S2 = trust it. +VCP = time it.<br/> SwingMOM is absolute price velocity (5/10/21-day ROC from a base of 50). A score of 70 means "this stock is moving fast right now in absolute price terms." It does NOT compare to peers. RS Accel is relative — how many percentile rank points the stock gained vs all universe peers over 28 days. +12 means it passed 12% of the field. Best setups have both: high RS Accel (gaining ground vs peers) AND high SwingMOM (actually moving now).<br/>
-              <strong style={{color:'var(--text)'}}>Pos✓ column in RS Scanner:</strong> A pre-filter for position trades (3-8 week hold). Checks: RS≥70 + above 200MA (uptrend intact) + within 5% of 50MA (pullback zone, not extended) + RS rising 1 month (active accumulation). ✓ means this stock is in a buyable pullback inside a confirmed uptrend. Does not replace chart confirmation.<br/>
-              <strong style={{color:'var(--text)'}}>Institution % &gt;100%:</strong> Not an error. When shares are lent for short selling, both the original institutional holder AND the short seller's broker report those shares in 13F filings — the numerator (reported holdings) exceeds the denominator (total float). 103% typically = high conviction + heavy short interest = potential short squeeze fuel if RS is rising and volume surges.<br/>
-              Always confirm with a TradingView chart before entering. This is a screening tool, not a trade recommendation.
+            <div style={{marginTop:8,fontSize:12,color:'var(--text3)',lineHeight:1.8}}>
+              <strong style={{color:'var(--text)'}}>Conviction Score</strong> — relative ranking, not a grade. Focus on gaps ≥15 pts. 80+ = strong alignment. Formula: RS×30% + Accel×25% + Mom×20% + SEPA×15% + bonuses (⭐+8, VCP+6, vol surge+5) − penalties (earnings −15, extended −10).<br/>
+              <strong style={{color:'var(--text)'}}>Bear regime = 0× size.</strong> Intentional. Momentum edge vanishes in a bear market. Protect capital, go to cash, wait.<br/>
+              <strong style={{color:'var(--text)'}}>Triple → +S2 → +VCP:</strong> Triple = find it (RS>70 + Accel + Mom≥60). S2 = trust it (confirmed uptrend). VCP = time it (tightest stop, best R/R).<br/>
+              <strong style={{color:'var(--text)'}}>Institution % &gt;100%:</strong> Both the holder AND the short-seller's broker file 13F — denominator can exceed float. High conviction + heavy short interest = squeeze potential when RS rises.<br/>
+              <span style={{color:'var(--text3)'}}>Always confirm on TradingView chart before entering. Screening tool, not a trade recommendation.</span>
             </div>
           </div>
         )}
