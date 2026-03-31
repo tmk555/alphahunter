@@ -16,7 +16,7 @@
 :root {
   --bg:    #03030b; --bg2: #07071a; --bg3: #0b0b22;
   --border:#14142e; --border2:#1e1e40;
-  --text:  #e0e0f4; --text2:#b8b8dc; --text3:#8888bb;
+  --text:  #d8d8f0; --text2:#9999cc; --text3:#6666aa;
   --green: #00e676; --red: #ff3d57; --amber: #f0a500;
   --cyan:  #00d4ff; --purple:#c44dff; --gold:#ffd700;
   --font-mono: 'IBM Plex Mono', monospace;
@@ -63,12 +63,12 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .panel { background:var(--bg2); border:1px solid var(--border); border-radius:6px; padding:18px; margin-bottom:16px; }
 .panel-title { font-family:var(--font-mono); font-size:14px; font-weight:600; color:var(--text); letter-spacing:2px; margin-bottom:4px; }
 .panel-title span { color:var(--amber); }
-.panel-sub { font-size:13px; color:var(--text2); margin-bottom:14px; }
-.section-label { font-family:var(--font-mono); font-size:11px; color:var(--text2); letter-spacing:2px; text-transform:uppercase; margin-bottom:10px; }
+.panel-sub { font-size:11px; color:var(--text3); margin-bottom:14px; }
+.section-label { font-family:var(--font-mono); font-size:10px; color:var(--text3); letter-spacing:2px; text-transform:uppercase; margin-bottom:10px; }
 
 /* ── Tables ──────────────────────────────────── */
 .data-table { width:100%; border-collapse:collapse; font-size:14px; }
-.data-table th { padding:7px 10px; text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:var(--text2); border-bottom:1px solid var(--border); background:var(--bg3); cursor:pointer; white-space:nowrap; }
+.data-table th { padding:7px 10px; text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:var(--text3); border-bottom:1px solid var(--border); background:var(--bg3); cursor:pointer; white-space:nowrap; }
 .data-table th:hover { color:var(--amber); }
 .data-table td { padding:8px 10px; border-bottom:1px solid var(--border); font-family:var(--font-mono); font-size:14px; white-space:nowrap; }
 .data-table tr:hover td { background:var(--bg3); }
@@ -754,15 +754,15 @@ function InlineLevels({ stock: s }) {
                   </div>
                 )}
                 {[
-                  {label:'N — Rev Growth YoY',   val:funds.revenueGrowthYoY, unit:'%', pass:funds.revenueGrowthYoY>=15, threshold:'≥15%', tip:'Revenue growing ≥15% YoY = "N" (New product/growth). Confirms EPS is real, not from cost cuts.'},
-                  {label:'S — Short Float',       val:funds.shortPercentFloat, unit:'%', pass:funds.shortPercentFloat!=null&&funds.shortPercentFloat<=40, threshold:'≤40%', tip:'Short float ≤40% = manageable. >15% short + rising RS = SHORT SQUEEZE fuel. Shorts panic-buying = explosive upside.'},
-                  {label:'I — Institution %',     val:funds.institutionPct, unit:'%', pass:funds.institutionPct>=10, threshold:'≥10%', tip:'≥10% institutional ownership = "I" (Institutional sponsorship). Smart money owns it. Rising % QoQ = accumulation phase. >100% = short-seller double-counting.', note: funds.institutionPct>100 ? '⚡ >100% = short-seller double-counting. High conviction + squeeze fuel.' : null},
-                  {label:'I — Insider %',         val:funds.insiderPct, unit:'%', pass:null, threshold:'', tip:'Insider ownership >5% = management has skin in the game. Insider buying (Form 4 filings) is a bullish signal.'},
-                  {label:'ROE',                   val:funds.returnOnEquity, unit:'%', pass:funds.returnOnEquity>=15, threshold:'≥15%', tip:'Return on Equity ≥15% = efficient business (annual EPS). <15% = capital-intensive, marginal. High ROE + accelerating EPS = compound growth candidate. Use in position trades, not quick swings.'},
-                  {label:'Gross Margin',          val:funds.grossMargins, unit:'%', pass:funds.grossMargins>=40, threshold:'≥40%', tip:'Gross margin ≥40% = pricing power and defensible moat. Software/biotech ~70-80%. <40% = commodity business, vulnerable to cost shocks. High margin = earnings durability across cycles.'},
-                  {label:'Short Ratio (days)',    val:funds.shortRatio, unit:'d', pass:null, threshold:'', tip:'Days to cover = short interest ÷ avg daily volume. >5 days = heavily shorted. >10 days = extreme — if news is positive, shorts need MANY days to exit, causing violent squeeze. Combine with rising RS for max squeeze signal.'},
-                ].map(({label,val,unit,pass,threshold,note,tip}) => (
-                  <div key={label} title={tip} style={{padding:'6px 8px',background:'var(--bg3)',borderRadius:3,cursor:'help',
+                  {label:'N — Rev Growth YoY',   val:funds.revenueGrowthYoY, unit:'%', pass:funds.revenueGrowthYoY>=15, threshold:'≥15%'},
+                  {label:'S — Short Float',       val:funds.shortPercentFloat, unit:'%', pass:funds.shortPercentFloat!=null&&funds.shortPercentFloat<=40, threshold:'≤40%'},
+                  {label:'I — Institution %',     val:funds.institutionPct, unit:'%', pass:funds.institutionPct>=10, threshold:'≥10%', note: funds.institutionPct>100 ? '⚡ >100% = short-seller double-counting. High conviction + squeeze fuel.' : null},
+                  {label:'I — Insider %',         val:funds.insiderPct, unit:'%', pass:null, threshold:''},
+                  {label:'ROE',                   val:funds.returnOnEquity, unit:'%', pass:funds.returnOnEquity>=15, threshold:'≥15%'},
+                  {label:'Gross Margin',          val:funds.grossMargins, unit:'%', pass:funds.grossMargins>=40, threshold:'≥40%'},
+                  {label:'Short Ratio (days)',    val:funds.shortRatio, unit:'d', pass:null, threshold:''},
+                ].map(({label,val,unit,pass,threshold,note}) => (
+                  <div key={label} style={{padding:'6px 8px',background:'var(--bg3)',borderRadius:3,
                     borderLeft:`2px solid ${pass===true?'var(--green)':pass===false?'var(--red)':'var(--border)'}`}}>
                     <div style={{fontSize:9,color:'var(--text3)',marginBottom:3}}>{label}</div>
                     <div style={{fontFamily:'var(--font-mono)',fontSize:13,color:pass===true?'var(--green)':pass===false?'var(--red)':'var(--text)',fontWeight:pass!==null?700:400}}>
@@ -1113,6 +1113,7 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
                 <SecSH k="chg6m"   label="6M"/>
                 <SecSH k="vsMA50"  label="vs 50MA"/>
                 <SecSH k="vsMA200" label="vs 200MA"/>
+                <th title="Click 🎯 to focus RS Dashboard on this sector — narrows stock universe to that sector only">Focus RS</th>
               </tr>
             </thead>
             <tbody>
@@ -1139,12 +1140,6 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
                     <span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:s.color||'#888',marginRight:8,verticalAlign:'middle'}}/>
                     <strong style={{color:'var(--text)',fontSize:13}}>{s.name}</strong>
                     <span style={{fontSize:11,color:'var(--text3)',marginLeft:6}}>{s.symbol}</span>
-                    <button
-                      onClick={e=>{e.stopPropagation();if(!setSelectedSectors)return;setSelectedSectors(prev=>{const next=new Set(prev);next.has(s.name)?next.delete(s.name):next.add(s.name);return next;});}}
-                      title="Focus RS Dashboard on this sector"
-                      style={{marginLeft:10,padding:'1px 6px',fontSize:10,border:`1px solid ${isFocused?'var(--green)':'var(--border2)'}`,borderRadius:3,background:isFocused?'rgba(0,230,118,0.12)':'transparent',color:isFocused?'var(--green)':'var(--text3)',cursor:'pointer'}}>
-                      {isFocused?'🎯 focused':'🎯'}
-                    </button>
                   </td>
                   <td style={{whiteSpace:'nowrap',fontSize:11}}>
                     {s.rsLineNewHigh && <span title="RS Line at 52wk high vs SPY — sector ETF outperforming market." style={{color:'var(--gold)',fontWeight:700,marginRight:4}}>⭐RS↑H</span>}
@@ -1160,6 +1155,21 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
                   <td className={fmtC(s.chg6m)}>{fmtP(s.chg6m)}</td>
                   <td className={s.vsMA50>0?'up':'dn'}>{fmt(s.vsMA50,1)}%</td>
                   <td className={s.vsMA200>0?'up':'dn'}>{fmt(s.vsMA200,1)}%</td>
+                  <td onClick={e=>e.stopPropagation()} style={{whiteSpace:'nowrap'}}>
+                    <button
+                      onClick={()=>{
+                        if(!setSelectedSectors) return;
+                        setSelectedSectors(prev=>{
+                          const next = new Set(prev);
+                          next.has(s.name) ? next.delete(s.name) : next.add(s.name);
+                          return next;
+                        });
+                      }}
+                      style={{padding:'2px 7px',fontSize:10,border:`1px solid ${isFocused?'var(--green)':'var(--border)'}`,borderRadius:3,background:isFocused?'rgba(0,230,118,0.12)':'transparent',color:isFocused?'var(--green)':'var(--text3)',cursor:'pointer',fontWeight:isFocused?700:400}}
+                      title="Toggle sector focus in RS Dashboard — narrows RS Dashboard to show stocks from this sector">
+                      {isFocused?'🎯 Focused':'🎯'}
+                    </button>
+                  </td>
                 </tr>
               );})}
             </tbody>
@@ -1724,13 +1734,8 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                 </thead>
                 <tbody>
                   {filtered.map(s => (
-                    <React.Fragment key={s.ticker}>
-                    <tr ref={el => rowRefs.current[s.ticker] = el}
-                      style={{
-                        background:expandedTicker===s.ticker?'rgba(240,165,0,0.12)':'',
-                        borderLeft:expandedTicker===s.ticker?'3px solid var(--amber)':'3px solid transparent',
-                        transition:'background 0.15s',
-                      }}>
+                    <tr key={s.ticker} ref={el => rowRefs.current[s.ticker] = el}
+                      style={{background:expandedTicker===s.ticker?'rgba(240,165,0,0.05)':''}}>
                       <td><RSBar rs={s.rsRank}/></td>
                       <td>
                         {s.swingMomentum != null
@@ -1796,29 +1801,30 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                         </button>
                       </td>
                     </tr>
-                    {expandedTicker===s.ticker && (
-                      <tr ref={levelsRef}>
-                        <td colSpan={14} style={{padding:0,background:'var(--bg)',borderLeft:'3px solid var(--amber)',borderBottom:'2px solid var(--amber)'}}>
-                          <div style={{padding:'16px 20px',animation:'fadeUp 0.2s ease'}}>
-                            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-                              <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
-                                <span style={{fontFamily:'var(--font-mono)',fontSize:16,fontWeight:700,color:'var(--amber)'}}>▶ {s.ticker}</span>
-                                <span style={{fontSize:13,color:'var(--text2)'}}>{s.name}</span>
-                                <span style={{fontFamily:'var(--font-mono)',fontSize:14,color:'var(--text)',fontWeight:600}}>${fmt(s.price)}</span>
-                                {s.sector && <span style={{fontSize:11,padding:'2px 8px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text2)'}}>{s.sector}</span>}
-                              </div>
-                              <button onClick={closeLevels} style={{background:'var(--bg3)',border:'1px solid var(--border)',color:'var(--text2)',cursor:'pointer',fontSize:13,padding:'3px 10px',borderRadius:4,fontWeight:700}}>✕ Close</button>
-                            </div>
-                            <InlineLevels stock={s}/>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                    </React.Fragment>
                   ))}
                 </tbody>
               </table>
             </div>
+
+            {/* ── Levels panel — OUTSIDE the table so it never distorts column widths ── */}
+            {expandedTicker && (() => {
+              const s = filtered.find(x => x.ticker === expandedTicker);
+              if (!s) return null;
+              return (
+                <div ref={levelsRef} style={{marginTop:2,border:'1px solid var(--amber)',borderTop:'2px solid var(--amber)',borderRadius:'0 0 6px 6px',background:'var(--bg3)',padding:'16px 18px',animation:'fadeUp 0.2s ease'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+                    <div style={{display:'flex',alignItems:'center',gap:10}}>
+                      <span style={{fontFamily:'var(--font-mono)',fontSize:16,fontWeight:700,color:'var(--cyan)'}}>{s.ticker}</span>
+                      <span style={{fontSize:13,color:'var(--text3)'}}>{s.name}</span>
+                      <span style={{fontFamily:'var(--font-mono)',fontSize:13,color:'var(--text)'}}>${fmt(s.price)}</span>
+                      {s.sector && <span style={{fontSize:11,padding:'2px 8px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)'}}>{s.sector}</span>}
+                    </div>
+                    <button onClick={closeLevels} style={{background:'transparent',border:'none',color:'var(--text3)',cursor:'pointer',fontSize:18,padding:'0 4px'}}>✕</button>
+                  </div>
+                  <InlineLevels stock={s}/>
+                </div>
+              );
+            })()}
           </>
         )}
 
@@ -3103,12 +3109,12 @@ function DailyPicksTab({ rsData }) {
               <span><span style={{display:'inline-block',width:8,height:16,background:'var(--amber)',borderRadius:2,marginRight:4,verticalAlign:'middle'}}/>Amber border = Ranks #2-3</span>
               <span>Grey = Supporting candidates</span>
             </div>
-            <div style={{marginTop:12,fontSize:12,color:'var(--text)',lineHeight:1.8}}>
-              <strong style={{color:'var(--text)'}}>Conviction Score</strong> <span style={{color:'var(--text2)'}}>— relative ranking, not a grade. Focus on gaps ≥15 pts. 80+ = strong alignment. Formula: RS×30% + Accel×25% + Mom×20% + SEPA×15% + bonuses (⭐+8, VCP+6, vol surge+5) − penalties (earnings −15, extended −10).</span><br/>
-              <strong style={{color:'var(--red)'}}>Bear regime = 0× size.</strong> <span style={{color:'var(--text2)'}}>Intentional. Momentum edge vanishes in a bear market. Protect capital, go to cash, wait.</span><br/>
-              <strong style={{color:'var(--amber)'}}>Triple → +S2 → +VCP:</strong> <span style={{color:'var(--text2)'}}>Triple = find it (RS>70 + Accel + Mom≥60). S2 = trust it (confirmed uptrend). VCP = time it (tightest stop, best R/R).</span><br/>
-              <strong style={{color:'var(--cyan)'}}>Institution % &gt;100%:</strong> <span style={{color:'var(--text2)'}}>Both the holder AND the short-seller's broker file 13F — denominator can exceed float. High conviction + heavy short interest = squeeze potential when RS rises.</span><br/>
-              <span style={{color:'var(--text3)',fontSize:11}}>Always confirm on TradingView chart before entering. Screening tool, not a trade recommendation.</span>
+            <div style={{marginTop:8,fontSize:12,color:'var(--text3)',lineHeight:1.8}}>
+              <strong style={{color:'var(--text)'}}>Conviction Score</strong> — relative ranking, not a grade. Focus on gaps ≥15 pts. 80+ = strong alignment. Formula: RS×30% + Accel×25% + Mom×20% + SEPA×15% + bonuses (⭐+8, VCP+6, vol surge+5) − penalties (earnings −15, extended −10).<br/>
+              <strong style={{color:'var(--text)'}}>Bear regime = 0× size.</strong> Intentional. Momentum edge vanishes in a bear market. Protect capital, go to cash, wait.<br/>
+              <strong style={{color:'var(--text)'}}>Triple → +S2 → +VCP:</strong> Triple = find it (RS>70 + Accel + Mom≥60). S2 = trust it (confirmed uptrend). VCP = time it (tightest stop, best R/R).<br/>
+              <strong style={{color:'var(--text)'}}>Institution % &gt;100%:</strong> Both the holder AND the short-seller's broker file 13F — denominator can exceed float. High conviction + heavy short interest = squeeze potential when RS rises.<br/>
+              <span style={{color:'var(--text3)'}}>Always confirm on TradingView chart before entering. Screening tool, not a trade recommendation.</span>
             </div>
           </div>
         )}
@@ -3119,261 +3125,204 @@ function DailyPicksTab({ rsData }) {
 
 function TradingGuide() {
   const [open, setOpen] = useState(false);
-  const [activeSection, setActiveSection] = useState('workflow');
+  const [activeSection, setActiveSection] = useState('setup');
 
   const sections = [
-    {id:'workflow', label:'Daily Workflow'},
     {id:'setup',    label:'Setup Checklists'},
-    {id:'signals',  label:'Signal Glossary'},
+    {id:'signals',  label:'Signal Definitions'},
     {id:'canslim',  label:'CAN SLIM + SEPA'},
-    {id:'sizing',   label:'Position Sizing'},
-    {id:'rules',    label:'Non-Negotiables'},
+    {id:'workflow', label:'Daily Workflow'},
   ];
 
   return (
     <div style={{marginTop:20}}>
       <hr style={{border:'none',borderTop:'1px solid var(--border)',margin:'20px 0'}}/>
       <button className="btn btn-sm" onClick={()=>setOpen(o=>!o)} style={{marginBottom:12}}>
-        {open?'▼':'▶'} Trading Reference Guide — Workflow · Checklists · Signals · CAN SLIM · Sizing · Rules
+        {open?'▼':'▶'} Trading Reference Guide — Setup checklists, signal definitions, CAN SLIM workflow
       </button>
       {open && (
         <div>
           <div style={{display:'flex',gap:6,marginBottom:16,flexWrap:'wrap'}}>
             {sections.map(s => (
               <button key={s.id} className={`mode-btn ${activeSection===s.id?'active':''}`}
-                onClick={()=>setActiveSection(s.id)} style={{fontSize:12,padding:'6px 14px'}}>
+                onClick={()=>setActiveSection(s.id)} style={{fontSize:11,padding:'5px 12px'}}>
                 {s.label}
               </button>
             ))}
           </div>
 
-          {activeSection==='workflow' && (
-            <div style={{display:'grid',gap:10,gridTemplateColumns:'1fr 1fr'}}>
-              {[
-                ['1. Market Pulse (2 min)','Check regime first — BEAR = no new longs, go to cash (0× size). CAUTION = half size only. BULL = full size.\n\nVIX: <15 calm, 15–20 normal, 20–28 elevated (reduce size), >28 fear (stay out).\n\nYield curve (10Y−3M): >+100bps = healthy. 0 to +100bps = late-cycle caution. Negative = INVERTED — historically 80% recession signal within 12–18 months, but markets often rally for months after first inversion. Do NOT short on inversion alone.\n\nSPY above both 50MA AND 200MA = confirmed bull trend. SPY below 200MA = position trades off.'],
-                ['2. Sectors Tab (2 min)','Which 2–3 sectors are leading by RS Accel? Sort Accel column descending.\n\n⭐RS↑H on a sector ETF = the ENTIRE sector is outperforming SPY — strongest top-down confirmation. VCP on a sector ETF = whole sector coiling.\n\nMoney flows sector-first, stock-second. ⭐ on sector + ⭐ on stock = highest-conviction combination. Never fight a sector in Stage 4.'],
-                ['3. RS Dashboard (3 min)','Sort ↓ by RS Accel. Fastest-accelerating stocks = most institutional accumulation RIGHT NOW.\n\nLook for ★BEST (Triple: RS>70 + Accel>0 + Mom≥60) + ⭐RS↑H + VCP combinations.\n\nTriple = Find it. S2 = Trust it. VCP = Time it. All three = the complete setup.\n\nCheck 52wkH% column — sort ascending for stocks nearest breakout.'],
-                ['4. Daily Picks Tab (2 min)','Auto-ranked by conviction score. Gap of ≥15 pts is meaningful. Focus on #1 pick.\n\nConviction formula: RS×30% + Accel×25% + Mom×20% + SEPA×15% + bonuses (⭐+8, VCP+6, VolSurge+5) − penalties (earnings <14d: −15, extended >15% above 50MA: −10).\n\nIf #1 pick has earnings in <5 days, skip to #2. Never override the earnings penalty.'],
-                ['5. Click Levels on candidates (2 min each)','SEPA score ≥ 4/8? CAN SLIM score ≥ 4/6? EPS accelerating? Stage 2 confirmed? Short float >15%?\n\nHover over ROE, Gross Margin, Short Ratio for trade interpretation. ROE ≥15% + Gross Margin ≥40% = durable business — position trades viable. Short Ratio >5d + rising RS = squeeze setup.\n\nOnly proceed if ≥ 3 of 4 criteria pass.'],
-                ['6. Swing Lab (1 min)','Use after Levels confirms the setup. Adds AI thesis + earnings date + news context.\n\nBUY-rated = candidates for today. ATR levels calculated without API key. Does the AI thesis align with your own read? Disagreement = wait.'],
-                ['7. Execute & manage','Enter at breakout on elevated volume (≥1.5× avg). Do NOT chase if >3% past pivot.\n\nSet hard stop immediately. At T1: sell 50%, move stop to breakeven. Let the runner go to T2.\n\nMove to Watchlist → Active Trade. If stock fails to hold 50MA for 2 consecutive days, exit.'],
-                ['Non-Negotiable Rules','NEVER hold swing through earnings — exit if <5 days to earnings.\nNEVER move stop wider — accept the 1% loss.\nBEAR regime = 0 new longs, period.\nNEVER add to a loser — cut, find a better setup.\nMax 1% account risk per trade. Max 10% in one stock.'],
-              ].map(([step, desc]) => (
-                <div key={step} style={{padding:'12px 14px',background:'var(--bg2)',borderRadius:5,borderLeft:'3px solid var(--border2)'}}>
-                  <div style={{fontSize:13,color:'var(--amber)',fontWeight:700,marginBottom:6,fontFamily:'var(--font-mono)',letterSpacing:1}}>{step}</div>
-                  <div style={{fontSize:12,color:'var(--text)',lineHeight:1.7,whiteSpace:'pre-wrap'}}>{desc}</div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {activeSection==='setup' && (
+          {activeSection === 'setup' && (
             <div style={{display:'grid',gap:12,gridTemplateColumns:'1fr 1fr'}}>
               <div style={{background:'var(--bg3)',border:'1px solid rgba(0,212,255,0.3)',borderRadius:5,padding:16}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--cyan)',letterSpacing:2,fontWeight:700,marginBottom:12}}>⚡ SWING TRADE CHECKLIST (2–10 days)</div>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--cyan)',letterSpacing:2,fontWeight:700,marginBottom:12}}>⚡ SWING TRADE CHECKLIST (2-10 days)</div>
                 {[
-                  ['Market regime','BULL or CAUTION (half size). VIX below 25. SPY above 50MA. BEAR = skip all new longs.'],
-                  ['IBD RS','≥ 70 AND RS Accel > +5. Avoid chasing RS > 95 (climax risk).'],
-                  ['RS Line (⭐)','RS Line at 52-week high = stock outperforming SPY itself. Priority entry.'],
-                  ['SEPA Score','≥ 4/8. Price above 50MA + 150MA + 200MA. 150MA above 200MA.'],
-                  ['Stage','Stage 2 ONLY. Stage 3 = no new entries. Stage 4 = no longs ever.'],
-                  ['VCP','2+ volatility contractions. Tightest stop = best R/R.'],
-                  ['SwingMomentum','≥ 55. Price moving NOW. <45 = wait — no energy.'],
-                  ['Price location','Within 5–7% of 52-week high OR breaking to new high on elevated volume.'],
-                  ['Volume','≥ 1.5× average on breakout day. ⚡ surge (≥2×) = institutional confirmation.'],
-                  ['Entry timing','At the base breakout or tight flag. NOT extended >7% past pivot.'],
-                  ['Stop loss','1.5 × ATR below entry. Stop >5% risk = skip trade.'],
-                  ['Target','T1 = 2.5×ATR (sell 50%). T2 = 4×ATR (trail the rest).'],
-                  ['Position sizing','1% account risk ÷ (entry − stop) = shares. Apply regime multiplier.'],
-                  ['Earnings','⚠ NEVER hold swing through earnings. <5 days to earnings = skip.'],
-                  ['CAN SLIM quick check','EPS ≥25% YoY and accelerating QoQ = highest conviction. EPS flat or declining = skip.'],
+                  ['Market','BULL or NEUTRAL regime. VIX below 25. SPY above 50MA.'],
+                  ['IBD RS','≥ 70 AND RS Accel > +5 (gaining rank, not just high). Avoid chasing RS > 95.'],
+                  ['RS Line','⭐ RS Line making new 52-week high = earliest institutional signal. Enter here.'],
+                  ['SEPA Score','≥ 4/6. Price above 50MA+150MA+200MA. 150MA above 200MA (Stage 2 confirmed).'],
+                  ['Stage','Stage 2 only. Stage 3 = avoid new entries. Stage 4 = no longs.'],
+                  ['VCP','VCP badge = 2+ volatility contractions. Tight base = coiled spring. Best entries.'],
+                  ['SwingMomentum','≥ 55. Confirms price is moving right now. Low SwingMom = wait for trigger.'],
+                  ['Price','Within 5-7% of 52-week high OR breaking to new high on elevated volume.'],
+                  ['Volume','≥ 1.5x average on breakout. ⚡ surge = institutional participation confirmed.'],
+                  ['Entry','At base breakout or intraday tight consolidation. Not extended.'],
+                  ['Stop','1.5 × ATR below entry. If stop > 5% away, skip — too risky.'],
+                  ['Target','T1 = 2.5×ATR, T2 = 4×ATR. Exit 50% at T1, trail the rest.'],
+                  ['Sizing','1% account risk ÷ (entry − stop) = shares. Regime multiplier applies.'],
+                  ['Earnings','⚠ NEVER hold swing through earnings. Exit if < 5 days away.'],
                 ].map(([k,v]) => (
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:7,fontSize:12,borderBottom:'1px solid var(--border)',paddingBottom:5}}>
-                    <span style={{color:'var(--cyan)',fontWeight:700,minWidth:130,flexShrink:0,fontSize:11}}>{k}:</span>
-                    <span style={{color:'var(--text)',lineHeight:1.5}}>{v}</span>
+                  <div key={k} style={{display:'flex',gap:8,marginBottom:6,fontSize:11}}>
+                    <span style={{color:'var(--cyan)',fontWeight:700,minWidth:110,flexShrink:0}}>{k}:</span>
+                    <span style={{color:'var(--text2)',lineHeight:1.5}}>{v}</span>
                   </div>
                 ))}
               </div>
+
               <div style={{background:'var(--bg3)',border:'1px solid rgba(0,230,118,0.3)',borderRadius:5,padding:16}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--green)',letterSpacing:2,fontWeight:700,marginBottom:12}}>📈 POSITION TRADE CHECKLIST (3–8 weeks)</div>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--green)',letterSpacing:2,fontWeight:700,marginBottom:12}}>📈 POSITION TRADE CHECKLIST (3-8 weeks)</div>
                 {[
-                  ['Market regime','BULL ONLY. SPY above 200MA. VIX below 20.'],
+                  ['Market','BULL regime only. SPY above 200MA. VIX below 20.'],
                   ['IBD RS','≥ 70 AND rising for 4+ consecutive weeks (sustained accumulation).'],
-                  ['RS Line (⭐)','At or near 52-week high = optimal entry zone.'],
-                  ['SEPA Score','5–6/8 = strong. 7–8/8 = ideal. All MAs stacked.'],
-                  ['Stage','Stage 2 confirmed: price above RISING 150-day MA.'],
-                  ['CAN SLIM — C','EPS ≥25% QoQ YoY AND accelerating. 3-quarter streak = highest conviction.'],
-                  ['CAN SLIM — A','Annual EPS ≥25% for 3+ consecutive years.'],
-                  ['CAN SLIM — I','Rising institutional ownership QoQ. ≥3 quality funds added.'],
-                  ['Short Float bonus','>15% short float + rising RS = SQUEEZE potential. Best position candidates.'],
-                  ['ROE','≥15% = efficient capital deployment. Positions can be held weeks. Low ROE = swing only.'],
-                  ['Gross Margin','≥40% = pricing power. Durable across cycles. <40% = commodity risk.'],
-                  ['Entry','Pullback to 50MA in confirmed uptrend. Volume drying up on pullback = perfect.'],
-                  ['Stop loss','50MA − 1.5×ATR. Max 7–8% from entry.'],
-                  ['Target','T1 = 4×ATR (raise stop to break-even). T2 = 6×ATR. Trail stop to 50MA.'],
-                  ['Earnings','OK to hold if strong thesis. Reduce to 50% size before earnings.'],
-                  ['Sizing','1% account risk ÷ (entry − stop). Max 10% of account in one stock.'],
+                  ['RS Line','⭐ RS Line at or near 52-week high is the optimal entry zone.'],
+                  ['SEPA Score','5-6/6. Full Minervini Trend Template: all MAs aligned, within 25% of high.'],
+                  ['Stage','Stage 2 confirmed: price above RISING 150-day MA (30-week MA).'],
+                  ['CAN SLIM','C ≥ 25% EPS growth, A ≥ 25% annual growth, EPS accelerating = highest conviction.'],
+                  ['Short Float','> 15% short float + rising RS = squeeze potential. Best position candidates.'],
+                  ['Entry','Pullback to 50MA in confirmed uptrend = highest R/R entry.'],
+                  ['Stop','2 × ATR below 50MA. Wider stop = smaller position.'],
+                  ['Target','T1 = 4×ATR, T2 = 6×ATR. Trail stop to breakeven at T1.'],
+                  ['Earnings','OK to hold if thesis is strong. Reduce to 50% size before earnings.'],
+                  ['Sizing','1% account risk ÷ (entry − stop). Never more than 10% of account in one position.'],
                 ].map(([k,v]) => (
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:7,fontSize:12,borderBottom:'1px solid var(--border)',paddingBottom:5}}>
-                    <span style={{color:'var(--green)',fontWeight:700,minWidth:130,flexShrink:0,fontSize:11}}>{k}:</span>
-                    <span style={{color:'var(--text)',lineHeight:1.5}}>{v}</span>
+                  <div key={k} style={{display:'flex',gap:8,marginBottom:6,fontSize:11}}>
+                    <span style={{color:'var(--green)',fontWeight:700,minWidth:110,flexShrink:0}}>{k}:</span>
+                    <span style={{color:'var(--text2)',lineHeight:1.5}}>{v}</span>
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {activeSection==='signals' && (
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-              <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:14}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:10}}>RELATIVE STRENGTH SIGNALS</div>
-                {[
-                  ['IBD RS (1-99)','Percentile rank vs universe over 12M (3M×40%+6M×20%+9M×20%+12M×20%). ≥70 = top 30% institutional quality. ≥90 = elite. Below 50 = underperformer — avoid new longs. Starting filter, not the whole story.'],
-                  ['RS Accel (28d)','RS rank change vs 28 days ago. +12 = gained 12 percentile points. Measures HOW FAST institutional money is rotating IN. Sort descending to find fastest accumulation. RS 55–70 rising fast = ↗ emerging leader — catch early.'],
-                  ['⭐ RS Line High','Price ÷ SPY at 52-week high. Stock outperforming the MARKET ITSELF, not just peers. IBD\'s #1 earliest institutional signal — often leads price breakout by 1–3 weeks. When big money quietly buys.'],
-                  ['★ Triple','RS≥70 + Accel>0 + SwingMom≥60. Three-dimensional: leader (RS) + gaining ground (Accel) + moving now (Mom). Daily candidate list. Start here every morning.'],
-                  ['↗ Emerging','RS 55–70 AND Accel>+5. Not a leader yet but rising fast. Add to watchlist. Cross to RS>70 = upgrade to candidate immediately.'],
-                  ['★PEAK','RS≥98 AND Accel ≤2. Sustained extreme leadership. Trail stops — don\'t add, don\'t chase. These correct violently.'],
-                  ['SwingMomentum','Absolute price velocity NOW (5/10/21-day ROC). Score 50 = flat. 60 = moving fast. 45 = ok. <40 = stalling. NOT vs peers — measures if the stock is actually moving right now.'],
-                ].map(([k,v])=>(
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:8,fontSize:12,borderBottom:'1px solid var(--border)',paddingBottom:6}}>
-                    <span style={{color:'var(--amber)',fontWeight:700,minWidth:120,flexShrink:0,fontFamily:'var(--font-mono)',fontSize:11}}>{k}</span>
-                    <span style={{color:'var(--text)',lineHeight:1.5}}>{v}</span>
-                  </div>
-                ))}
-              </div>
-              <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:14}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:10}}>SETUP & STRUCTURE SIGNALS</div>
-                {[
-                  ['VCP','Volatility Contraction Pattern: 2+ progressively shrinking ranges. Each = weak hands shaken out, supply drying. Breakout on volume above pivot = entry. Tightest stop of any pattern. VCP + S2 + ⭐ = complete Minervini setup.'],
-                  ['S2 — Stage 2','Price above RISING 150-day MA. Confirmed uptrend structure. Stage 1 = basing, Stage 2 = markup (BUY), Stage 3 = distribution (SELL), Stage 4 = decline (AVOID). Never buy Stage 3 or 4.'],
-                  ['SEPA /8','Minervini Trend Template: 8 criteria. Price > 150MA, Price > 200MA, 150MA > 200MA, 200MA trending up, Price > 50MA, 50MA > 150MA & 200MA, within 25% of 52wk high, RS ≥ 70. 7-8/8 = ideal. 5-6/8 = strong. ≤4/8 = skip.'],
-                  ['⚡ Vol Surge','Volume ≥2× average near 52wk high. Funds must buy large size over days/weeks — a surge near the high = breakout being absorbed by new buyers. Not just sellers escaping.'],
-                  ['ACC / DIST','Accumulation: above 50MA + vol >1.2× avg = institutions buying. Distribution: below 50MA + vol >1.2× avg = institutions selling. 13-week up-volume vs down-volume count.'],
-                  ['🔥 At High','Within 0.5% of 52-week high. Breakout imminent. Combine with VCP and volume for trigger. Only meaningful for RS>70 leaders — random stocks at highs are not setups.'],
-                  ['S — Short Float','Short float >15% + rising RS = short squeeze fuel. Shorts panic-buying = explosive upside. Short Ratio >5d = heavily shorted. >10d = extreme squeeze potential.'],
-                ].map(([k,v])=>(
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:8,fontSize:12,borderBottom:'1px solid var(--border)',paddingBottom:6}}>
-                    <span style={{color:'var(--amber)',fontWeight:700,minWidth:120,flexShrink:0,fontFamily:'var(--font-mono)',fontSize:11}}>{k}</span>
-                    <span style={{color:'var(--text)',lineHeight:1.5}}>{v}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {activeSection==='canslim' && (
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-              <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:14}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:10}}>CAN SLIM (O'Neil) — What each letter requires</div>
-                {[
-                  ['C — Current EPS','≥25% quarterly EPS growth YoY (same Q last year). Accelerating QoQ = strongest signal. 3-quarter streak ≥25% = ★ highest conviction. EPS acceleration = quarterly growth exceeds annual rate.'],
-                  ['A — Annual EPS','≥25% EPS growth for 3+ consecutive years. Sustained, not lumpy. Check ROE ≥15% — confirms efficient growth, not cost-cutting.'],
-                  ['N — New','New product, CEO, or 52-week high breakout. The catalyst WHY earnings will be big NEXT quarter. Cannot be screened — check earnings transcripts and news. This is the story behind C and A.'],
-                  ['S — Supply/Demand','Big volume on up days, quiet volume on down days. ACC pattern = smart money building. Short float >15% + rising RS = squeeze candidate. Smaller float = more explosive moves.'],
-                  ['L — Leader','RS ≥ 70. Top 1–2 stocks in its industry group — NOT the whole sector. If the group leader is weak, the group is weak. Do not settle for the 5th-best name.'],
-                  ['I — Institutional','Rising fund ownership QoQ. 10–80% institutional = ideal zone. <10% = too undiscovered. >90% = over-owned, limited new buyers. ≥3 quality funds added last quarter.'],
-                  ['M — Market','BULL regime confirmed. O\'Neil rule: 3 of 4 stocks follow the general market. Never fight the tide. BEAR = cash. CAUTION = half size.'],
-                  ['Rev Growth','Quarterly sales ≥15–20% YoY. Confirms EPS from real demand, not cost-cutting. EPS up but revenue flat = accounting, not business.'],
-                ].map(([k,v])=>(
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:8,fontSize:12,borderBottom:'1px solid var(--border)',paddingBottom:6}}>
-                    <span style={{color:'var(--cyan)',fontWeight:700,minWidth:130,flexShrink:0,fontSize:11}}>{k}:</span>
-                    <span style={{color:'var(--text)',lineHeight:1.5}}>{v}</span>
-                  </div>
-                ))}
-              </div>
-              <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:14}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--green)',letterSpacing:2,fontWeight:700,marginBottom:8}}>SEPA (Minervini Trend Template) — 8 criteria</div>
-                <div style={{fontSize:12,color:'var(--text2)',marginBottom:10}}>All 8 required for ideal setup. Enter when SEPA ≥ 6 AND VCP forming on a confirmed Stage 2 uptrend.</div>
-                {[
-                  ['Price > 150MA','Above medium-term trend. Removes Stage 3/4 stocks immediately.'],
-                  ['Price > 200MA','Above long-term trend. Without this, no position trade.'],
-                  ['150MA > 200MA','Medium trend above long trend = bullish MA structure intact.'],
-                  ['200MA trending up','Rising ≥1 month (4–5 months ideal). Sustained institutional buying — not a bounce.'],
-                  ['Price > 50MA','Short-term trend intact. Pullbacks TO 50MA in S2 = buy-the-dip.'],
-                  ['50MA > 150MA & 200MA','All moving averages stacked bullishly — full Minervini alignment.'],
-                  ['Within 25% of 52wk high','Not in Stage 4 decline. Within 10% = near breakout. Within 5% = coiling.'],
-                  ['IBD RS ≥ 70','Top 30% relative strength. Without this, skip the trade.'],
-                ].map(([k,v])=>(
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:6,fontSize:12,borderBottom:'1px solid var(--border)',paddingBottom:5}}>
-                    <span style={{color:'var(--green)',fontWeight:700,minWidth:160,flexShrink:0,fontSize:11}}>{k}:</span>
-                    <span style={{color:'var(--text)',lineHeight:1.5}}>{v}</span>
-                  </div>
-                ))}
-                <div style={{marginTop:10,padding:'8px 10px',background:'rgba(0,230,118,0.07)',borderRadius:3,fontSize:12,color:'var(--text)'}}>
-                  <strong style={{color:'var(--green)'}}>VCP within SEPA:</strong> Stage 2 (SEPA) = context. VCP = timing. Textbook VCP has 2–5 contractions where each pullback roughly halves (20%→10%→5%). Higher lows = buyers stepping in earlier = coiling. Entry: break above pivot on ≥40% above-avg volume. Stop: just below last contraction low. Tightest possible risk.
-                </div>
-                <div style={{marginTop:6,padding:'6px 8px',background:'rgba(0,230,118,0.07)',borderRadius:3,fontSize:12,color:'var(--text)'}}>7–8/8 = ideal. 5–6/8 = strong. 4/8 = marginal (only with ⭐ + VCP). ≤3/8 = skip the trade.</div>
-              </div>
-            </div>
-          )}
-
-          {activeSection==='sizing' && (
+          {activeSection === 'signals' && (
             <div style={{display:'grid',gap:12,gridTemplateColumns:'1fr 1fr'}}>
-              <div style={{background:'var(--bg3)',border:'1px solid rgba(240,165,0,0.3)',borderRadius:5,padding:16}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:12}}>POSITION SIZING FORMULA</div>
+              <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:16}}>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:12}}>📊 SIGNAL DEFINITIONS</div>
                 {[
-                  ['Core rule','Risk exactly 1% of total account per trade. This is the only math you need.'],
-                  ['Formula','Shares = (Account × 0.01) ÷ (Entry − Stop). Do this BEFORE entering.'],
-                  ['Example','$100k × 1% = $1,000 max risk. Entry $50, Stop $48 → Risk = $2/share. Shares = 500. Position = $25,000.'],
-                  ['Max per stock','Never more than 10% of total account, regardless of conviction.'],
-                  ['Regime multiplier','BULL = 1.0× (full size). CAUTION = 0.5× (half size). BEAR = 0× (cash only).'],
-                  ['Full conviction','BULL + ★Triple + ⭐ + VCP + S2 = 1.0×. This is the highest-conviction combination.'],
-                  ['Reduce size when','Earnings <14 days (−50%). Extended >15% above 50MA (−30%). VIX > 25 (−30%).'],
-                  ['Conviction stacking','Do NOT increase size because you love the trade. Size consistency > size maximization.'],
+                  ['IBD RS (1-99)','Percentile rank vs your universe peers. RS 85 = beats 85% of other stocks you track. Updated daily via 12-month weighted performance formula.'],
+                  ['RS Accel','RS rank gained/lost in 28 days. +12 = rose 12 percentile points this month. Sort ↓ to find fastest-accelerating stocks (Minervini discovery).'],
+                  ['RS Line ⭐','Stock price ÷ SPY price, 52-week high. Means the stock is outperforming the actual market — not just peers. IBD earliest accumulation signal.'],
+                  ['SwingMomentum','5/10-day rate of change, scored 0-99. ≥ 60 = accelerating right now. ≥ 45 = neutral. < 40 = weakening. Use with IBD RS for timing.'],
+                  ['★BEST','IBD RS ≥ 70 + RS Accel rising + SwingMomentum ≥ 55. All three confirm simultaneously.'],
+                  ['↗EMRG','RS 55-70 AND RS Accel > +5 in 28 days. Emerging leader before it becomes obvious. Add to watchlist.'],
+                  ['VCP','Volatility Contraction Pattern: 2+ contracting price ranges. Stock is coiling. Breakout on volume = Minervini entry signal.'],
+                  ['★PEAK','RS ≥ 98 with near-zero change. Stock has been dominating for months — sustained leadership, not declining.'],
+                  ['SEPA 5-6/6','Minervini Trend Template: 5-6 criteria pass. Ideal institutional accumulation structure.'],
+                  ['Stage 2 ✓','Price above rising 150-day MA. The uptrend buy zone. Stage 3 = topping, Stage 4 = downtrend, Stage 1 = basing.'],
+                  ['⚡ Vol Surge','Volume > 2× average AND within 5% of 52-week high. Institutional breakout signal.'],
+                  ['ACC / DIST','Volume trend: ACC = price above 50MA + volume > 1.2× avg (buying). DIST = opposite (selling).'],
+                  ['🔥 NEW HIGH','Stock at or within 0.5% of 52-week high right now. IBD breakout zone.'],
                 ].map(([k,v]) => (
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:8,fontSize:12,borderBottom:'1px solid var(--border)',paddingBottom:6}}>
-                    <span style={{color:'var(--amber)',fontWeight:700,minWidth:130,flexShrink:0,fontFamily:'var(--font-mono)',fontSize:11}}>{k}:</span>
-                    <span style={{color:'var(--text)',lineHeight:1.6}}>{v}</span>
+                  <div key={k} style={{display:'flex',gap:8,marginBottom:8,fontSize:11,borderBottom:'1px solid var(--border)',paddingBottom:6}}>
+                    <span style={{color:'var(--amber)',fontWeight:700,minWidth:130,flexShrink:0,fontFamily:'var(--font-mono)',fontSize:10}}>{k}</span>
+                    <span style={{color:'var(--text2)',lineHeight:1.5}}>{v}</span>
                   </div>
                 ))}
               </div>
-              <div style={{background:'var(--bg3)',border:'1px solid rgba(0,212,255,0.3)',borderRadius:5,padding:16}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--cyan)',letterSpacing:2,fontWeight:700,marginBottom:12}}>ATR-BASED STOP & TARGET LOGIC</div>
+              <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:16}}>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:12}}>📊 READING RS + TREND TOGETHER</div>
                 {[
-                  ['ATR','Average True Range (14-day). Each stock\'s own volatility. $5 stock ATR $0.30 = 6% = same as $100 stock ATR $6. Calibrates to the stock\'s rhythm, not arbitrary %.'],
-                  ['Swing stop','50MA − 0.5×ATR. Just below the MA. Fast exit if MA breaks. If 50MA >15% away: price − 1.5×ATR.'],
-                  ['Position stop','50MA − 1.5×ATR. More room for noise. Exit only on decisive breakdown, not intraday dips.'],
-                  ['Swing T1','Entry + 2.5×ATR. Sell 50% here. First area of expected resistance.'],
-                  ['Swing T2','Entry + 4.0×ATR. Trail stop to breakeven after T1.'],
-                  ['Position T1','Entry + 3.0×ATR. Raise stop to breakeven.'],
-                  ['Position T2','Entry + 5.0×ATR. Trail stop to 50MA.'],
-                  ['Why ATR, not %','A 3% stop on a high-volatility stock stops you out every week. A 3% stop on a utility is too wide. ATR accounts for each stock\'s own noise level.'],
+                  ['RS 65-79 ▲ RS Accel +10+','Best swing entry. Catching institutional accumulation early. ★EMRG watch.'],
+                  ['RS 80-89 ▲ RS Accel +5+','Strong leader confirmed. Primary swing and position target zone.'],
+                  ['RS 90+ ▲ RS Accel +3+','★PEAK zone. Add on pullbacks to 50MA only. Not chasing breakouts here.'],
+                  ['RS 70+ → Accel ~0','Holding leadership. Fine for positions. Wait for re-acceleration trigger.'],
+                  ['RS Any ▼ Accel -5+','Distribution. Institutions selling. AVOID regardless of price action.'],
+                  ['RS 55-65 ▲ Accel +8+ (EMRG)','Rough diamond. Add to watchlist. Confirm with VCP + volume before entry.'],
+                  ['⭐ RS Line NEW HIGH','The signal. Stock outperforming SPY. Enter on this regardless of absolute RS level.'],
                 ].map(([k,v]) => (
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:8,fontSize:12,borderBottom:'1px solid var(--border)',paddingBottom:6}}>
-                    <span style={{color:'var(--cyan)',fontWeight:700,minWidth:130,flexShrink:0,fontFamily:'var(--font-mono)',fontSize:11}}>{k}:</span>
-                    <span style={{color:'var(--text)',lineHeight:1.6}}>{v}</span>
+                  <div key={k} style={{display:'flex',gap:8,marginBottom:8,fontSize:11}}>
+                    <span style={{fontFamily:'var(--font-mono)',color:'var(--amber)',minWidth:150,flexShrink:0,fontSize:10}}>{k}</span>
+                    <span style={{color:'var(--text2)',lineHeight:1.5}}>{v}</span>
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {activeSection==='rules' && (
-            <div style={{display:'grid',gap:10,gridTemplateColumns:'1fr 1fr'}}>
-              {[
-                {title:'🚫 NEVER hold a swing through earnings',color:'var(--red)',body:'Earnings = binary event. You have no edge. Even if you are right on direction, the gap can be 10–20% against you overnight. Exit before earnings or don\'t enter. If the setup returns after earnings, re-evaluate from scratch.'},
-                {title:'🚫 NEVER move your stop wider',color:'var(--red)',body:'If price approaches your stop, the trade is wrong. Moving the stop "just this once" is how accounts blow up. Accept the 1% loss. There are always more setups. Capital preservation IS the edge.'},
-                {title:'🚫 NEVER average down on a loser',color:'var(--red)',body:'Adding to a losing position is not conviction — it\'s hope. Hope kills accounts. If the stock is down from entry and not acting right, cut it. Find something that IS acting right.'},
-                {title:'🚫 NEVER trade in BEAR regime',color:'var(--red)',body:'Momentum edge requires institutional money flowing in. In a bear market, even the best setups fail. 3 of 4 stocks follow the general market. BEAR = cash is your position. Protect capital.'},
-                {title:'✅ Always let winners run to T1 before trimming',color:'var(--green)',body:'Selling at the first sign of profit kills your R/R math. Trust the ATR targets. At T1, sell 50% and move stop to breakeven. This creates a free trade on the remainder — your risk is zero.'},
-                {title:'✅ 1% rule applies to every trade',color:'var(--green)',body:'Never change position size because you "love" the trade. Consistency in sizing = consistency in results. One oversized winner doesn\'t compensate for one oversized loser that destroys the account.'},
-                {title:'✅ Confirm on chart before entering',color:'var(--green)',body:'Alpha Hunter is a screening tool, not a trade recommendation. Always confirm the setup on TradingView before executing. Visual confirmation of VCP, volume pattern, and price location is mandatory.'},
-                {title:'✅ Keep a trade log',color:'var(--green)',body:'Log every trade: entry, stop, target, thesis, outcome, lesson. Review weekly. The patterns in your losses are more valuable than wins. Track R-multiples. Target: avg win > 2R.'},
-              ].map(({title,color,body}) => (
-                <div key={title} style={{padding:'12px 14px',background:'var(--bg2)',borderRadius:5,borderLeft:`3px solid ${color}`}}>
-                  <div style={{fontSize:13,color,fontWeight:700,marginBottom:6}}>{title}</div>
-                  <div style={{fontSize:12,color:'var(--text)',lineHeight:1.7}}>{body}</div>
+          {activeSection === 'canslim' && (
+            <div style={{display:'grid',gap:12,gridTemplateColumns:'1fr 1fr'}}>
+              <div style={{background:'var(--bg3)',border:'1px solid rgba(196,77,255,0.3)',borderRadius:5,padding:16}}>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--purple)',letterSpacing:2,fontWeight:700,marginBottom:12}}>CAN SLIM — All Criteria (click Levels for live data)</div>
+                {[
+                  ['C — Current EPS','Quarterly EPS growth ≥ 25% AND accelerating. Acceleration (quarterly rate exceeds annual rate) = the gold standard. Most predictive single factor.'],
+                  ['A — Annual EPS','Annual EPS growth ≥ 25% for 3+ consecutive years. Rules out one-quarter wonders. ROE ≥ 17% confirms efficient growth, not just revenue stuffing.'],
+                  ['N — New Catalyst','New product, management, or market condition. Cannot be computed — check earnings transcripts and news. This is the WHY behind the C and A.'],
+                  ['S — Supply/Demand','Smaller float = more explosive moves. Short float > 15% + rising RS = squeeze candidate. Quarterly volume trend should be rising — confirms institutional buying.'],
+                  ['L — Leader','IBD RS > 80 AND top 1-2 stocks in its industry group. If the group leader is weak, the group is weak. Do not settle for the 5th-best name in a sector.'],
+                  ['I — Institutional','Rising institutional sponsor count quarter-over-quarter. 10-80% institutional = ideal zone. Under 10% = too undiscovered. Over 90% = over-owned, limited new buyers.'],
+                  ['M — Market','Regime filter. Do not fight a BEAR market — cash is a position. 3 of 4 major indexes in confirmed uptrend = go. Mixed = half size. Bear = sideline.'],
+                  ['Revenue Growth','Quarterly sales growth ≥ 20-25%. Confirms earnings growth comes from real demand, not cost-cutting. EPS up but revenue flat = accounting trick, not a business.'],
+                ].map(([k,v]) => (
+                  <div key={k} style={{display:'flex',gap:8,marginBottom:10,fontSize:12,borderBottom:'1px solid var(--border)',paddingBottom:8}}>
+                    <span style={{color:'var(--purple)',fontWeight:700,minWidth:140,flexShrink:0,lineHeight:1.5}}>{k}</span>
+                    <span style={{color:'var(--text2)',lineHeight:1.7}}>{v}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{background:'var(--bg3)',border:'1px solid rgba(196,77,255,0.3)',borderRadius:5,padding:16}}>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--purple)',letterSpacing:2,fontWeight:700,marginBottom:6}}>SEPA TREND TEMPLATE — All 8 Rules (Minervini)</div>
+                <div style={{fontSize:11,color:'var(--text3)',marginBottom:10}}>All 8 required for ideal setup. App scores 0-8 (criteria 3+4 each split). Enter when SEPA ≥ 6 AND VCP forming.</div>
+                {[
+                  ['Rule 1','Price above 200-day MA. Long-term uptrend confirmed.'],
+                  ['Rule 2','Price above 150-day MA (30-week). Medium-term uptrend confirmed.'],
+                  ['Rule 3','150-day MA above 200-day MA. Moving averages aligned bullishly.'],
+                  ['Rule 4','200-day MA trending UP for ≥ 1 month (4-5 months ideal). A long rising 200MA = sustained institutional buying — not a short-term bounce.'],
+                  ['Rule 5','50-day MA above BOTH 150-day AND 200-day MAs. Full bullish MA stack. Short-term trend confirms long-term structure.'],
+                  ['Rule 6','Current price above 50-day MA. Short-term trend intact.'],
+                  ['Rule 7','Price ≥ 30% above 52-week low. Stock has proven upward mobility — not just bouncing from a bottom.'],
+                  ['Rule 8','Price within 25% of 52-week high. Near highs = institutional sponsorship ongoing. Far from high = accumulation not confirmed.'],
+                  ['Rule +RS','IBD RS ≥ 70 (ideally ≥ 80). Confirms outperformance vs peers. Shown in RS column of app.'],
+                ].map(([k,v]) => (
+                  <div key={k} style={{display:'flex',gap:8,marginBottom:8,fontSize:12}}>
+                    <span style={{color:k.includes('+') ? 'var(--gold)' : 'var(--purple)',fontWeight:700,minWidth:70,flexShrink:0}}>{k}</span>
+                    <span style={{color:'var(--text2)',lineHeight:1.6}}>{v}</span>
+                  </div>
+                ))}
+                <div style={{marginTop:12,padding:'10px 12px',background:'rgba(196,77,255,0.08)',borderRadius:4,fontSize:12,lineHeight:1.8}}>
+                  <strong style={{color:'var(--purple)'}}>VCP within SEPA — The Complete Setup:</strong><br/>
+                  Stage 2 (SEPA passing) is the context. VCP is the timing. Textbook VCP has 2-5 contractions where each pullback range roughly halves (e.g., 20%→10%→5%). Higher lows on each contraction = buyers stepping in earlier = coiling. Entry: break above the pivot (high of last contraction) on ≥40-50% above-average volume. Stop: just below the last contraction low — tightest possible risk. This is Minervini primary setup.
                 </div>
-              ))}
+              </div>
             </div>
           )}
 
+          {activeSection === 'workflow' && (
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:16}}>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--text3)',letterSpacing:2,fontWeight:700,marginBottom:14}}>🔄 DAILY TRADING WORKFLOW</div>
+              <div style={{display:'grid',gap:10,gridTemplateColumns:'1fr 1fr'}}>
+                {[
+                  ['1. Market Pulse (2 min)','Check regime. BEAR = no new longs, go to cash. CAUTION = half size. BULL = full size. Yield curve (10Y−3M): >+100bps = healthy, 0 to +100bps = late-cycle caution, negative = INVERTED (historically 80% recession signal within 12-18 months — but markets can still rally for months after first inversion, so do not short on inversion alone — tighten stops and reduce leverage). UUP = US Dollar ETF (tracks DXY basket).'],
+                  ['2. Sectors Tab (2 min)','Which 2-3 sectors are leading by RS Accel? Check the Signals column directly — ⭐RS↑H means the sector ETF is outperforming SPY (strongest confirmation). VCP on a sector ETF = entire sector coiling. S2 = Stage 2 uptrend. Money flows sector-first: ⭐ on sector + ⭐ on stock = highest conviction.'],
+                  ['3. RS Dashboard — Sort by RS Accel (3 min)','Sort ↓ by RS Accel. Fastest-accelerating stocks rise to top. Look for ★BEST + ⭐RS↑H + VCP combinations. These are your candidates.'],
+                  ['4. Bottom-up Discovery (5 min)','Finviz.com free screen: EPS growth > 25%, price above 200MA, RS > 70. Cross-reference with RS Accel column here. Any ↗EMRG stocks with EPS acceleration?'],
+                  ['5. Click Levels on candidates (2 min each)','SEPA score ≥ 4? CAN SLIM score ≥ 4? EPS accelerating? Stage 2? Short float > 15% = bonus. Only proceed if ≥ 3 of 4 pass.'],
+                  ['6. Swing Lab (1 min)','Run scan for ATR-based entry/stop/target. Regime-adjusted sizing. Earnings warning check. BUY-rated = candidates for today.'],
+                  ['7. Watchlist (ongoing)','Move ↗EMRG stocks from Watching → Candidate when SEPA ≥ 4. Move to Active Trade when you enter.'],
+                  ['Non-negotiable rules','Never hold swing through earnings. Stop = 1.5×ATR, no exceptions. Regime BEAR = cash only. One bad trade handled correctly > ten good trades handled poorly.'],
+                ].map(([step, desc]) => (
+                  <div key={step} style={{padding:'10px 12px',background:'var(--bg2)',borderRadius:4,borderLeft:'2px solid var(--border)'}}>
+                    <div style={{fontSize:11,color:'var(--text)',fontWeight:700,marginBottom:4}}>{step}</div>
+                    <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>{desc}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
+
 
 function SectorIndustryRSTrend({ type, title, api: apiPath }) {
   const [history,  setHistory]  = useState(null);
@@ -3442,7 +3391,7 @@ function SectorIndustryRSTrend({ type, title, api: apiPath }) {
                       <td className={t.vs1m>0?'up':t.vs1m<0?'dn':''}>{t.vs1m!=null?(t.vs1m>0?'+':'')+t.vs1m:'—'}</td>
                       <td className={t.vs2m>0?'up':t.vs2m<0?'dn':''}>{t.vs2m!=null?(t.vs2m>0?'+':'')+t.vs2m:'—'}</td>
                       <td className={t.vs3m>0?'up':t.vs3m<0?'dn':''}>{t.vs3m!=null?(t.vs3m>0?'+':'')+t.vs3m:'—'}</td>
-                      <td style={{fontSize:12,color:'var(--text2)'}}>{signal}</td>
+                      <td style={{fontSize:11,color:'var(--text3)'}}>{signal}</td>
                     </tr>
                   );
                 })}
