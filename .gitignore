@@ -27,3 +27,4 @@ Thumbs.db
 data/*.db
 data/*.db-wal
 data/*.db-shm
+backup/
