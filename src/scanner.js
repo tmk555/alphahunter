@@ -1,0 +1,199 @@
+// ─── Core RS Scan Orchestrator ────────────────────────────────────────────────
+// Fetches quotes + history for entire universe, computes all signals, returns ranked results.
+
+const { cacheGet, cacheSet, TTL_QUOTE } = require('./data/cache');
+const { loadHistory, saveHistory, RS_HISTORY_FILE, SEC_HISTORY_FILE, IND_HISTORY_FILE } = require('./data/store');
+const { yahooQuote, yahooHistory, pLimit } = require('./data/providers/yahoo');
+const { calcRS, rankToRS, getRSTrend, preGenerateHistoryFor } = require('./signals/rs');
+const { calcSwingMomentum, calcPeriodReturns, calcATR, volumeTrend } = require('./signals/momentum');
+const { calcVCP }    = require('./signals/vcp');
+const { calcRSLine } = require('./signals/rsline');
+const { calcStage }  = require('./signals/stage');
+
+// ─── Core RS scan (shared, cached) ──────────────────────────────────────────
+async function runRSScan(UNIVERSE, SECTOR_MAP) {
+  const cached = cacheGet('rs:full', TTL_QUOTE);
+  if (cached) return cached;
+
+  const uniq = [...new Set([...UNIVERSE, 'SPY'])];
+  console.log(`  RS scan: ${uniq.length} stocks...`);
+
+  // Fetch quotes
+  const allQuotes = {};
+  for (let i = 0; i < uniq.length; i += 20) {
+    const batch = await yahooQuote(uniq.slice(i, i + 20));
+    for (const q of batch) allQuotes[q.symbol] = q;
+  }
+
+  // Fetch history (concurrent, 5 at a time)
+  const histMap = {};
+  await pLimit(uniq.map(sym => async () => {
+    try {
+      const c = await yahooHistory(sym);
+      if (c.length >= 63) histMap[sym] = c;
+    } catch(_) {}
+  }), 5);
+
+  // Pre-generate history on first run
+  preGenerateHistoryFor(histMap, sym => sym, RS_HISTORY_FILE, 'stock');
+
+  const results = [];
+  for (const sym of uniq) {
+    const q = allQuotes[sym];
+    if (!q?.regularMarketPrice) continue;
+    const closes = histMap[sym] || [];
+    const price  = q.regularMarketPrice;
+    const ma50   = q.fiftyDayAverage;
+    const ma200  = q.twoHundredDayAverage;
+    const vsMA50  = ma50  ? +((price-ma50) /ma50 *100).toFixed(2) : null;
+    const vsMA200 = ma200 ? +((price-ma200)/ma200*100).toFixed(2) : null;
+    const distFromHigh = q.fiftyTwoWeekHigh ? +((q.fiftyTwoWeekHigh-price)/q.fiftyTwoWeekHigh).toFixed(4) : null;
+    const periods = calcPeriodReturns(closes);
+    const atr     = calcATR(closes);
+    const atrPct  = atr && price ? +(atr/price*100).toFixed(2) : null;
+    const swingMom  = calcSwingMomentum(closes, q);
+    const ma150     = closes.length >= 150
+      ? closes.slice(-150).reduce((a,b)=>a+b,0)/150 : null;
+    const vsMA150   = ma150 ? +((price-ma150)/ma150*100).toFixed(2) : null;
+
+    // SEPA Trend Template (Minervini) — all 8 rules
+    const ma50AboveAll = ma50 && ma150 && ma200 ? (ma50 > ma150 && ma50 > ma200) : null;
+    const sepa = {
+      aboveMA200:      vsMA200 != null && vsMA200 > 0,
+      aboveMA150:      vsMA150 != null && vsMA150 > 0,
+      ma150AboveMA200: ma150 && ma200 ? ma150 > ma200 : null,
+      ma200Rising:     (() => {
+        if (closes.length < 252) return null;
+        const ma200_4wAgo = closes.slice(-252,-228).reduce((a,b)=>a+b,0)/24;
+        return ma200 > ma200_4wAgo * 1.001;
+      })(),
+      ma50AboveAll,
+      aboveMA50:       vsMA50 != null && vsMA50 > 0,
+      low30pctBelow:   q.fiftyTwoWeekLow && price ? (price - q.fiftyTwoWeekLow)/price >= 0.30 : null,
+      priceNearHigh:   distFromHigh != null && distFromHigh <= 0.25,
+    };
+    const sepaScore = Object.values(sepa).filter(v => v === true).length;
+    const rawRS    = calcRS(closes);
+    const volRatio = q.averageDailyVolume3Month ? +(q.regularMarketVolume/q.averageDailyVolume3Month).toFixed(2) : 1;
+
+    // Parse earnings date
+    let earningsDate = null;
+    let daysToEarnings = null;
+    const ts = q.earningsTimestamp || q.earningsTimestampStart;
+    if (ts && ts > 0) {
+      const ed = new Date(ts * 1000);
+      const now2 = new Date();
+      daysToEarnings = Math.round((ed - now2) / (1000 * 60 * 60 * 24));
+      if (daysToEarnings >= -5 && daysToEarnings <= 90) {
+        earningsDate = ed.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+      }
+    }
+
+    const epsTrailing   = q.epsTrailingTwelveMonths || null;
+    const epsForward    = q.epsForward || null;
+    const epsGrowthEst  = epsTrailing && epsForward && epsTrailing > 0
+      ? +((epsForward/epsTrailing - 1)*100).toFixed(1) : null;
+    const pegRatio      = q.pegRatio || null;
+    const trailingPE    = q.trailingPE || null;
+
+    results.push({
+      ticker: sym, name: q.shortName || sym,
+      price, chg1d: q.regularMarketChangePercent,
+      chg1w: periods.chg1w, chg1m: periods.chg1m,
+      chg3m: periods.chg3m, chg6m: periods.chg6m,
+      vsMA50, vsMA200, distFromHigh,
+      w52h: q.fiftyTwoWeekHigh, w52l: q.fiftyTwoWeekLow,
+      ma50, ma200, atr, atrPct,
+      volume: q.regularMarketVolume, avgVol: q.averageDailyVolume3Month,
+      volumeRatio: volRatio,
+      volumeSurge: volRatio >= 2.0 && (distFromHigh || 1) <= 0.05,
+      sector: SECTOR_MAP[sym] || 'Unknown',
+      mktCap: q.marketCap, fwdPE: q.forwardPE,
+      epsTrailing, epsForward, epsGrowthEst,
+      pegRatio, trailingPE,
+      swingMomentum: swingMom,
+      earningsDate,
+      daysToEarnings,
+      earningsRisk: daysToEarnings != null && daysToEarnings >= 0 && daysToEarnings <= 14,
+      volumeTrend: volumeTrend(q),
+      ...calcVCP(closes),
+      ma150, vsMA150,
+      sepa, sepaScore,
+      ...calcRSLine(closes, histMap['SPY'] || []),
+      ...calcStage(closes, ma150),
+      rawRS,
+    });
+  }
+
+  rankToRS(results);
+  results.sort((a,b) => b.rsRank - a.rsRank);
+
+  // Save today's snapshot
+  const today = new Date().toISOString().split('T')[0];
+  const snap  = {};
+  for (const s of results) snap[s.ticker] = s.rsRank;
+  saveHistory(RS_HISTORY_FILE, snap, today);
+  console.log(`  ✓ RS scan: ${results.length} stocks, snapshot saved ${today}`);
+
+  cacheSet('rs:full', results);
+  return results;
+}
+
+// ─── Sector/Industry scan helper ─────────────────────────────────────────────
+async function runETFScan(etfs, histFile, prefix, extraMap) {
+  const symbols = etfs.map(s => s.t);
+  const quotes  = await yahooQuote(symbols);
+  const histResults = await pLimit([...symbols, 'SPY'].map(sym => async () => ({ sym, closes: await yahooHistory(sym) })), 5);
+  const histMap = {}; histResults.forEach(r => { if(r) histMap[r.sym] = r.closes; });
+  const spyCloses = histMap['SPY'] || [];
+
+  const result = quotes.map(q => {
+    const meta = etfs.find(s => s.t === q.symbol) || {};
+    const closes = histMap[q.symbol] || [];
+    const price = q.regularMarketPrice;
+    const ma50  = q.fiftyDayAverage;
+    const ma200 = q.twoHundredDayAverage;
+    const vsMA50  = ma50  ? +((price-ma50) /ma50 *100).toFixed(2) : null;
+    const vsMA200 = ma200 ? +((price-ma200)/ma200*100).toFixed(2) : null;
+    const periods = calcPeriodReturns(closes);
+    const ma150 = closes.length >= 150 ? closes.slice(-150).reduce((a,b)=>a+b,0)/150 : null;
+    return {
+      symbol: q.symbol,
+      name: meta.n,
+      color: meta.color || undefined,
+      sector: meta.sec || undefined,
+      price, ma50, ma200, vsMA50, vsMA200,
+      chg1d: q.regularMarketChangePercent,
+      chg1w: periods.chg1w, chg1m: periods.chg1m,
+      chg3m: periods.chg3m, chg6m: periods.chg6m,
+      w52h: q.fiftyTwoWeekHigh, w52l: q.fiftyTwoWeekLow,
+      volume: q.regularMarketVolume,
+      rawRS: calcRS(closes),
+      swingMomentum: calcSwingMomentum(closes, q),
+      ...calcVCP(closes),
+      ...calcRSLine(closes, spyCloses),
+      ...calcStage(closes, ma150),
+      ma150,
+    };
+  });
+
+  rankToRS(result);
+  result.sort((a,b) => b.rsRank - a.rsRank);
+
+  // Pre-generate history
+  preGenerateHistoryFor(histMap, sym => prefix + sym, histFile, prefix.replace('_','').toLowerCase() || 'stock');
+
+  // Save today's snapshot
+  const todayStr = new Date().toISOString().split('T')[0];
+  const snap = {};
+  for (const r of result) snap[prefix + r.symbol] = r.rsRank;
+  saveHistory(histFile, snap, todayStr);
+
+  // Attach RS trends
+  const hist = loadHistory(histFile);
+  return result.map(r => ({
+    ...r, rsTrend: getRSTrend(prefix + r.symbol, hist),
+  }));
+}
+
+module.exports = { runRSScan, runETFScan };

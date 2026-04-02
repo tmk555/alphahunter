@@ -22,3 +22,8 @@ pnpm-debug.log*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Database (generated on first run)
+data/*.db
+data/*.db-wal
+data/*.db-shm
