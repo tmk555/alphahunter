@@ -340,11 +340,13 @@ function App() {
     { id:'sectors',   label:'🔄 Sectors' },
     { id:'industries',label:'🏭 Industries' },
     { id:'rs',        label:'📊 RS Dashboard' },
-    { id:'swinglab',  label:'🎯 Swing Lab', badge:'AI' },
-
+    { id:'swinglab',  label:'🎯 Swing Lab' },
     { id:'picks',     label:'🎯 Daily Picks' },
     { id:'watchlist', label:'⭐ Watchlist' },
-    { id:'cycle',     label:'🔁 Cycle Engine', badge:'NEW' },
+    { id:'cycle',     label:'🔄 Cycle Engine' },
+    { id:'portfolio', label:'💼 Portfolio',     badge:'NEW' },
+    { id:'trades',    label:'📒 Trade Journal', badge:'NEW' },
+    { id:'performance',label:'📈 Performance',  badge:'NEW' },
   ];
 
   return (
@@ -416,14 +418,13 @@ function App() {
         {tab==='sectors'    && <SectorsTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
         {tab==='industries' && <IndustriesTab />}
         {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
-        {tab==='leaders'    && <LeadersTab />}
-        {tab==='macro'      && <MacroTab />}
         {tab==='swinglab'   && <SwingLabTab rsData={rsData} rsLoaded={rsLoaded} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary}/>}
         {tab==='picks'      && <DailyPicksTab rsData={rsData}/>}
         {tab==='watchlist'  && <WatchlistTab rsData={rsData} />}
-        {tab==='cycle'      && <CycleEngineTab rsData={rsData} rsLoaded={rsLoaded}/>}
-        {tab==='scanner'    && <ScannerTab />}
-        {tab==='thematic'   && <ThematicTab />}
+        {tab==='cycle'      && <CycleEngineTab />}
+        {tab==='portfolio'  && <PortfolioTab />}
+        {tab==='trades'     && <TradeJournalTab />}
+        {tab==='performance'&& <PerformanceTab />}
       </div>
     </div>
   );
@@ -437,8 +438,6 @@ function GlobalTradingGuide({ onClose }) {
     {id:'signals',  label:'📊 Signals'},
     {id:'canslim',  label:'📈 CAN SLIM'},
     {id:'workflow', label:'🗓 Workflow'},
-    {id:'cycle',    label:'🔁 Cycle Engine'},
-    {id:'intel',    label:'📡 Market Intel'},
   ];
   return (
     <div style={{background:'var(--bg2)',borderBottom:'2px solid var(--amber)',flexShrink:0,maxHeight:420,overflowY:'auto'}}>
@@ -539,220 +538,12 @@ function GlobalTradingGuide({ onClose }) {
             ))}
           </div>
         )}
-        {section==='cycle' && (
-          <div style={{display:'grid',gap:10,gridTemplateColumns:'1fr 1fr'}}>
-            {/* Left column */}
-            <div style={{display:'flex',flexDirection:'column',gap:10}}>
-              <div style={{background:'var(--bg3)',border:'1px solid rgba(0,212,255,0.25)',borderRadius:4,padding:12}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--cyan)',letterSpacing:2,fontWeight:700,marginBottom:8}}>7 MARKET CONDITIONS — WHAT EACH MEANS</div>
-                {[
-                  ['📈 UPTREND','SPY above rising 50MA + 200MA. VIX <20. ≤2 dist days. Full deployment. Concentrate in RS leaders.'],
-                  ['⚠️ UPTREND PRESSURE','4-5 dist days in 4 weeks. Still above 50MA. Tighten all stops. No new buys. Trim weakest.'],
-                  ['🔍 RALLY ATTEMPT','Bouncing from lows. Day 1-7 counter running. Build watchlist. Do NOT buy — wait for FTD.'],
-                  ['⚡ FTD CONFIRMED','Follow-Through Day fired. Wave 1 deploy begins. 1-week confirmation window. Watch for failure.'],
-                  ['🔻 CORRECTION','Below 50MA + 3+ dist days or 4+ down weeks. 70%+ cash. Screen for base-holders only.'],
-                  ['🐻 BEAR','VIX >35 or SPY >15% below 200MA. 95%+ cash. No long bias. Capital preservation mode.'],
-                  ['↔️ CHOPPY','Mixed signals, no clear trend. 60% cash. Only cleanest RS setups. Smaller size, tighter stops.'],
-                ].map(([k,v])=>(
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:11,borderBottom:'1px solid var(--border)',paddingBottom:4}}>
-                    <span style={{color:'var(--text)',fontWeight:700,minWidth:140,flexShrink:0,fontSize:10}}>{k}</span>
-                    <span style={{color:'var(--text2)',lineHeight:1.5}}>{v}</span>
-                  </div>
-                ))}
-              </div>
-              <div style={{background:'var(--bg3)',border:'1px solid rgba(240,165,0,0.25)',borderRadius:4,padding:12}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:8}}>FTD RULES (O'NEIL — BACKTESTED)</div>
-                {[
-                  ['Day 1','Index closes UP from a recent low. Rally attempt begins. Do nothing.'],
-                  ['Days 2-3','Index may be up or down. Still do nothing. Patience.'],
-                  ['Days 4-7','The FTD window. Index must gain ≥1.25% on volume > prior session.'],
-                  ['FTD fired','Start 5-session confirmation. Watch for distribution days.'],
-                  ['Confirm week','≤1 dist day. Leaders breaking out cleanly. Then deploy Wave 1.'],
-                  ['FTD failure','High-vol reversal Day 8+. Sell all new positions to stops. Go cash.'],
-                  ['New low reset','If index undercuts rally attempt low before FTD — counter resets to Day 1.'],
-                  ['Base rate','~75% of FTDs lead to sustained uptrends. ~25% fail. Hence the confirm week.'],
-                ].map(([k,v])=>(
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:4,fontSize:11}}>
-                    <span style={{color:'var(--amber)',fontWeight:700,minWidth:90,flexShrink:0,fontFamily:'var(--font-mono)',fontSize:10}}>{k}</span>
-                    <span style={{color:'var(--text2)',lineHeight:1.5}}>{v}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            {/* Right column */}
-            <div style={{display:'flex',flexDirection:'column',gap:10}}>
-              <div style={{background:'var(--bg3)',border:'1px solid rgba(0,230,118,0.25)',borderRadius:4,padding:12}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--green)',letterSpacing:2,fontWeight:700,marginBottom:8}}>BASE QUALITY — WHAT TO HUNT IN CORRECTION</div>
-                {[
-                  ['RS Line rising','RS line (price÷SPY) trending UP while price pulls back = stock beating market even on down days. Best signal.'],
-                  ['Volume dry-up','Down weeks on 40-60% below-avg volume = sellers exhausted. No panic distribution.'],
-                  ['Base lows intact','Prior base lows NEVER violated. Price found support and held. Structure intact.'],
-                  ['VCP tightening','Each contraction narrower than prior. Sellers giving up. Buyers absorbing. Coiled spring.'],
-                  ['Stage 2 intact','Price above rising 150-day MA. Lose this = structure broken, disqualified.'],
-                  ['RS÷Price diverge','RS line making new highs while price is down 10-15%. This is the premium signal.'],
-                  ['AVOID: EXOG','RS spiked >12pts in 1 month in Energy/Defense = war premium, not fundamental. Reversal risk.'],
-                  ['AVOID: Broken base','Price closed below prior base lows on volume = disqualified regardless of story.'],
-                ].map(([k,v])=>(
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:11,borderBottom:'1px solid var(--border)',paddingBottom:4}}>
-                    <span style={{color:'var(--green)',fontWeight:700,minWidth:120,flexShrink:0,fontSize:10}}>{k}</span>
-                    <span style={{color:'var(--text2)',lineHeight:1.5}}>{v}</span>
-                  </div>
-                ))}
-              </div>
-              <div style={{background:'var(--bg3)',border:'1px solid rgba(196,77,255,0.25)',borderRadius:4,padding:12}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--purple)',letterSpacing:2,fontWeight:700,marginBottom:8}}>3-WAVE DEPLOYMENT SYSTEM</div>
-                {[
-                  ['Wave 1','BQ≥80, RS≥90, NO exogenous flag, at pivot. Half position. Set 7-8% stop immediately.'],
-                  ['Wave 2','BQ 60-79, EPS accelerating, Stage 2 intact. Full position. Add on 10wk MA pullback.'],
-                  ['Wave 3','RS≥90, 3-5 wk tight base, sector momentum. 8-10% size. 5-6% stop. Swing only.'],
-                  ['Max positions','6-8 positions maximum. Diversifying into 20 names kills returns.'],
-                  ['Cash discipline','Go to 70-95% cash in corrections. Cash is a position. Opportunity preservation.'],
-                  ['FTD failure','Any position ≥7% below entry: sell same session. No exceptions. No averaging down.'],
-                  ['Sector filter','Wave 1: NOT war-premium pumps. Fundamentally-held bases only. Check EXOG flag.'],
-                  ['Beat S&P by','Raising cash when wrong. Concentrating when right. 6-8 leaders > 50 diversified names.'],
-                ].map(([k,v])=>(
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:4,fontSize:11}}>
-                    <span style={{color:'var(--purple)',fontWeight:700,minWidth:100,flexShrink:0,fontFamily:'var(--font-mono)',fontSize:10}}>{k}</span>
-                    <span style={{color:'var(--text2)',lineHeight:1.5}}>{v}</span>
-                  </div>
-                ))}
-              </div>
-              <div style={{background:'var(--bg3)',border:'1px solid rgba(255,61,87,0.2)',borderRadius:4,padding:10}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--red)',letterSpacing:2,fontWeight:700,marginBottom:6}}>RULE SOURCE & HISTORICAL BASIS</div>
-                <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.8}}>
-                  <strong style={{color:'var(--text)'}}>FTD, distribution days, breadth:</strong> O'Neil / IBD — backtested on every US market cycle 1880s→present. Every major bull market began with a FTD.<br/>
-                  <strong style={{color:'var(--text)'}}>VCP, stops, wave sizing:</strong> Minervini SEPA — live-traded 30+ years. US Investing Championship winner (avg ~220%/yr).<br/>
-                  <strong style={{color:'var(--text)'}}>Stage analysis, 150MA:</strong> Weinstein — documented in "Secrets for Profiting in Bull and Bear Markets" (1988) with decades of examples.<br/>
-                  <strong style={{color:'var(--amber)'}}>BQ Score weights:</strong> Alpha Hunter interpretation of the above — validate against your own trade outcomes over 6-12 months.
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-        {section==='intel' && (
-          <div style={{display:'grid',gap:10,gridTemplateColumns:'1fr 1fr'}}>
-            <div style={{display:'flex',flexDirection:'column',gap:10}}>
-              {/* Fear & Greed */}
-              <div style={{background:'var(--bg3)',border:'1px solid rgba(240,165,0,0.25)',borderRadius:4,padding:12}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:8}}>CNN FEAR &amp; GREED INDEX (0–100)</div>
-                {[['0–25','EXTREME FEAR','Historically best forward returns. Contrarian buy signal. Institutions have sold; retail has panicked.'],
-                  ['25–45','FEAR','Caution but opportunity. Look for RS leaders holding bases. Begin watchlist building.'],
-                  ['45–55','NEUTRAL','No edge from sentiment. Focus purely on technicals and RS leadership.'],
-                  ['55–75','GREED','Trend is friend. Ride winners. Tighten stops as you approach 75+.'],
-                  ['75–100','EXTREME GREED','Contrarian caution. Stops tighter. No new full-size entries. Distribution risk elevated.'],
-                  ['—','Week/Month changes','Rapid move from Fear→Greed = fuel burning fast. Greed→Fear = regime change incoming.'],
-                ].map(([zone,label,desc])=>(
-                  <div key={zone} style={{display:'flex',gap:8,marginBottom:5,fontSize:11,borderBottom:'1px solid var(--border)',paddingBottom:4}}>
-                    <span style={{fontFamily:'var(--font-mono)',color:'var(--amber)',minWidth:50,fontSize:10}}>{zone}</span>
-                    <span style={{color:'var(--text)',fontWeight:700,minWidth:110,fontSize:10}}>{label}</span>
-                    <span style={{color:'var(--text2)',lineHeight:1.5}}>{desc}</span>
-                  </div>
-                ))}
-              </div>
-              {/* Put/Call */}
-              <div style={{background:'var(--bg3)',border:'1px solid rgba(0,212,255,0.25)',borderRadius:4,padding:12}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--cyan)',letterSpacing:2,fontWeight:700,marginBottom:8}}>CBOE PUT/CALL RATIO</div>
-                {[['> 1.2','Extreme fear — put buyers dominant. Historically strong contrarian buy. Expect snap-back.'],
-                  ['1.0–1.2','Elevated fear — put protection heavy. Market likely oversold short-term.'],
-                  ['0.8–1.0','Neutral zone — balanced options flow. No strong contrarian signal.'],
-                  ['0.7–0.8','Complacency building — call buyers dominant. Reduce new entries.'],
-                  ['< 0.7','Extreme greed — very low hedging. Historically precedes pullbacks. Tighten all stops.'],
-                  ['5D Avg','Smooths daily noise. Most reliable signal is 5-day avg breaching 1.0 from below (fear building).'],
-                  ['Equity vs Total','Equity P/C more pure (excludes index hedging). Total P/C includes institutional portfolio insurance.'],
-                ].map(([k,v])=>(
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:4,fontSize:11}}>
-                    <span style={{fontFamily:'var(--font-mono)',color:'var(--cyan)',minWidth:75,flexShrink:0,fontSize:10}}>{k}</span>
-                    <span style={{color:'var(--text2)',lineHeight:1.5}}>{v}</span>
-                  </div>
-                ))}
-              </div>
-              {/* NAAIM */}
-              <div style={{background:'var(--bg3)',border:'1px solid rgba(0,230,118,0.25)',borderRadius:4,padding:12}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--green)',letterSpacing:2,fontWeight:700,marginBottom:8}}>NAAIM EXPOSURE INDEX (weekly, Wednesday)</div>
-                <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.7,marginBottom:8}}>
-                  National Association of Active Investment Managers. Measures how much equity exposure professional active managers actually have — not what they say, but what they do.
-                </div>
-                {[['0–25%','Managers heavily underweight / short. Contrarian BULLISH. Massive dry powder to re-enter.'],
-                  ['25–50%','Defensive positioning. Cautious. Bull signals here = significant upside as they re-add.'],
-                  ['50–75%','Neutral to bullish. Normal operating range. No contrarian edge.'],
-                  ['75–100%','Fully invested. Limited buying power left. Advances become harder to sustain.'],
-                  ['> 100%','Leveraged long. Extreme. Any bad news triggers forced selling cascade.'],
-                  ['Trend','Falling rapidly from 100→50 = smart money distributing. Rising from 25→50 = accumulation phase.'],
-                ].map(([k,v])=>(
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:4,fontSize:11}}>
-                    <span style={{fontFamily:'var(--font-mono)',color:'var(--green)',minWidth:75,flexShrink:0,fontSize:10}}>{k}</span>
-                    <span style={{color:'var(--text2)',lineHeight:1.5}}>{v}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div style={{display:'flex',flexDirection:'column',gap:10}}>
-              {/* VIX Term Structure */}
-              <div style={{background:'var(--bg3)',border:'1px solid rgba(196,77,255,0.25)',borderRadius:4,padding:12}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--purple)',letterSpacing:2,fontWeight:700,marginBottom:8}}>VIX TERM STRUCTURE (9D → 30D → 3M → 6M)</div>
-                {[['CONTANGO (normal)','9D < 30D < 3M — near-term calmer than far-term. Healthy for uptrends. VIX futures in normal carry.'],
-                  ['FLAT','All tenors compressed. Uncertainty about time horizon. Transition — watch for direction.'],
-                  ['BACKWARDATION','9D > 30D > 3M — near-term panic exceeds long-term fear. ACUTE crisis. Historically near bottoms when VIX >30. Watch for reversal when 9D starts falling.'],
-                  ['3M/30D ratio > 1.10','Extreme contango. Market very complacent about near term. Potential volatility underpricing.'],
-                  ['3M/30D ratio < 0.90','Backwardation confirmed. Acute fear. Prepare shopping list.'],
-                  ['VVIX > 120','VIX of VIX — volatility of volatility spiking. Expect wild daily swings in both directions.'],
-                  ['VVIX > 100','Elevated hedging demand. Institutions buying protection. Risk-off bias.'],
-                  ['VIX < 15','Calm — historically low. Complacency risk. Options cheap — consider buying protection.'],
-                  ['VIX 15–20','Normal range. Full position sizing acceptable. Trend strategies work well.'],
-                  ['VIX 20–25','Elevated. 25% size reduction. Intraday volatility demands wider stops.'],
-                  ['VIX 25–30','High fear. 50% cash. Only highest conviction setups. Defined risk preferred.'],
-                  ['VIX 30–40','Panic zone. 70%+ cash. Contrarian signals forming. Watch breadth.'],
-                  ['VIX > 40','Historic panic. 90%+ cash. Contrarian buy zone — highest forward returns historically.'],
-                ].map(([k,v])=>(
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:4,fontSize:11,borderBottom:'1px solid var(--border)',paddingBottom:3}}>
-                    <span style={{fontFamily:'var(--font-mono)',color:'var(--purple)',minWidth:120,flexShrink:0,fontSize:9}}>{k}</span>
-                    <span style={{color:'var(--text2)',lineHeight:1.5}}>{v}</span>
-                  </div>
-                ))}
-              </div>
-              {/* Credit & Breadth */}
-              <div style={{background:'var(--bg3)',border:'1px solid rgba(255,61,87,0.2)',borderRadius:4,padding:12}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--red)',letterSpacing:2,fontWeight:700,marginBottom:8}}>CREDIT HEALTH + BREADTH INDICATORS</div>
-                {[['HYG (High Yield)','Rising = credit market healthy, risk appetite strong. Falling BEFORE stocks = early warning. HYG leads equities by 2–5 days at turns.'],
-                  ['LQD (Inv Grade)','Investment grade spreads. Falling LQD + falling HYG = systemic stress, not just risk-off rotation.'],
-                  ['RSP vs SPY ratio','Equal-weight vs cap-weight S&P. Rising = broad participation (healthy bull). Falling = narrow leadership (fragile, top-heavy).'],
-                  ['HYG + RSP both up','Risk-on confirmed across credit AND breadth. Highest conviction environment for longs.'],
-                  ['HYG down + RSP down','Double warning. Credit AND breadth deteriorating. Reduce exposure immediately.'],
-                  ['% above 200MA > 65%','Broad bull market. Most stocks in uptrends. High probability of sustained advances.'],
-                  ['% above 200MA 50–65%','Healthy but selective. Focus on RS leaders. Some sectors weakening.'],
-                  ['% above 200MA < 50%','Correction confirmed broad-based. This is what happened mid-March 2026. Raise cash.'],
-                  ['% above 200MA < 30%','Bear market internals. Deeply oversold. Contrarian positioning only.'],
-                  ['Yield curve (10Y–3M)','Normal > +1%. Flat 0–1%. Inverted < 0%. Every US recession since WW2 was preceded by inversion (except COVID). Markets rally 6–18 months after first inversion, then top.'],
-                ].map(([k,v])=>(
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:4,fontSize:11}}>
-                    <span style={{fontFamily:'var(--font-mono)',color:'var(--red)',minWidth:120,flexShrink:0,fontSize:9}}>{k}</span>
-                    <span style={{color:'var(--text2)',lineHeight:1.5}}>{v}</span>
-                  </div>
-                ))}
-              </div>
-              {/* Synthesis rules */}
-              <div style={{background:'var(--bg3)',border:'1px solid rgba(240,165,0,0.25)',borderRadius:4,padding:12}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:8}}>SYNTHESIS — HOW TO COMBINE ALL INDICATORS</div>
-                {[['All green','F&G Fear + P/C > 1.0 + NAAIM < 50 + VIX backwardation + HYG down = MAXIMUM contrarian buy setup. Rare. Act on it.'],
-                  ['All red','F&G Greed + P/C < 0.7 + NAAIM > 90 + VIX contango + HYG up = crowded. Tighten stops. No new longs.'],
-                  ['Divergence','VIX rising but F&G still neutral? Quiet distribution. Watch HYG for confirmation.'],
-                  ['NAAIM lag','NAAIM updates weekly. Use as background context, not real-time timing. Best combined with VIX term structure.'],
-                  ['P/C spikes','Daily P/C can spike on large index hedges. Use 5-day average. Single-day >1.5 = genuine panic.'],
-                  ['Breadth leads','% above 200MA breaks 50% BEFORE the index makes new lows. Use as early warning. Happened mid-March 2026.'],
-                ].map(([k,v])=>(
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:11}}>
-                    <span style={{fontFamily:'var(--font-mono)',color:'var(--amber)',minWidth:90,flexShrink:0,fontSize:10,fontWeight:700}}>{k}</span>
-                    <span style={{color:'var(--text2)',lineHeight:1.5}}>{v}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
 }
+
+// ─── InlineLevels: shows ATR trade levels for any stock row ──────────────────
 function InlineLevels({ stock: s }) {
   const [funds, setFunds] = useState(null);
   const [fLoad, setFLoad] = useState(false);
@@ -1528,209 +1319,6 @@ function IndustriesTab() {
   );
 }
 
-// ─── LEADERS / LAGGARDS ───────────────────────────────────────────────────────
-function LeadersTab() {
-  const [data,    setData]    = useState({ leaders:[], laggards:[] });
-  const [loading, setLoading] = useState(false);
-  const [error,   setError]   = useState('');
-  const [sel,     setSel]     = useState(null);
-  const [aiText,  setAiText]  = useState('');
-  const [aiLoad,  setAiLoad]  = useState(false);
-
-  useEffect(() => { load(); }, []);
-
-  async function load() {
-    setLoading(true); setError('');
-    try { const d = await api('/api/leaders-laggards'); setData(d); }
-    catch(e) { setError(e.message); }
-    setLoading(false);
-  }
-
-  async function analyze(stock) {
-    setSel(stock.ticker); setAiLoad(true); setAiText('');
-    const ctx = `Price:$${fmt(stock.price)} 1d:${fmtP(stock.chg1d)} RS:${stock.rsRank} Vol ratio:${fmt(stock.volRatio,2)}x`;
-    const t = await askClaude(
-      `Quick analysis of ${stock.ticker} (${stock.name}). Data: ${ctx}\n\n## WHY IT'S ${stock.rsRank>60?'LEADING':'LAGGING'}\n2-3 sentences with specific data.\n\n## TRADE SETUP\n- Entry · Stop · Target · R/R · Hold period\n\n## TOP RISK\nWhat kills this setup.`,
-      'Elite hedge fund analyst. ## headers, - bullets. Max 350 words.',
-      true
-    );
-    setAiText(t); setAiLoad(false);
-  }
-
-  const StockRow = ({ s, rc }) => (
-    <tr onClick={() => analyze(s)} style={{cursor:'pointer',background:sel===s.ticker?'var(--bg3)':''}}>
-      <td><span className="td-ticker">{s.ticker}</span></td>
-      <td className="td-name">{s.name}</td>
-      <td className={fmtC(s.chg1d)} style={{fontWeight:700}}>{fmtP(s.chg1d)}</td>
-      <td>${fmt(s.price)}</td>
-      <td><RSBar rs={s.rsRank}/></td>
-      <td className={s.volRatio>1.5?'up':s.volRatio<0.7?'dn':''}>{fmt(s.volRatio,2)}x</td>
-      <td className="muted" style={{fontSize:11}}>{s.sector}</td>
-    </tr>
-  );
-
-  return (
-    <div>
-      <div className="panel">
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14}}>
-          <div>
-            <div className="panel-title">Leaders <span>/</span> Laggards</div>
-            <div className="panel-sub">Today's biggest movers — click any stock for instant AI trade setup</div>
-          </div>
-          <button className="btn btn-sm" onClick={load}>↻ Refresh</button>
-        </div>
-        {error && <ErrorBox msg={error}/>}
-        {loading ? <Loader msg="Scanning universe..."/> : (
-          <div className="grid-2">
-            <div>
-              <div className="section-label" style={{color:'var(--green)',marginBottom:8}}>⬆ LEADERS — Top 15 Movers</div>
-              <table className="data-table">
-                <thead><tr><th title="Ticker symbol">Ticker</th><th title="Company name">Name</th><th title="Today's % price change">1D Chg</th><th title="Current price">Price</th><th title="IBD RS percentile rank 1-99 vs universe">RS</th><th title="Volume vs 3-month average">Vol</th><th title="GICS sector">Sector</th></tr></thead>
-                <tbody>{data.leaders.map(s => <StockRow key={s.ticker} s={s} rc="var(--green)"/>)}</tbody>
-              </table>
-            </div>
-            <div>
-              <div className="section-label" style={{color:'var(--red)',marginBottom:8}}>⬇ LAGGARDS — Bottom 15 Movers</div>
-              <table className="data-table">
-                <thead><tr><th title="Ticker symbol">Ticker</th><th title="Company name">Name</th><th title="Today's % price change">1D Chg</th><th title="Current price">Price</th><th title="IBD RS percentile rank 1-99 vs universe">RS</th><th title="Volume vs 3-month average">Vol</th><th title="GICS sector">Sector</th></tr></thead>
-                <tbody>{data.laggards.map(s => <StockRow key={s.ticker} s={s} rc="var(--red)"/>)}</tbody>
-              </table>
-            </div>
-          </div>
-        )}
-        {(aiLoad || aiText) && (
-          <div style={{marginTop:14}}>
-            <div className="section-label" style={{marginBottom:8}}>AI ANALYSIS — {sel}</div>
-            <AIOutput text={aiText} loading={aiLoad}/>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ─── MACRO TAB ────────────────────────────────────────────────────────────────
-function MacroTab() {
-  const [data,    setData]   = useState([]);
-  const [spread,  setSpread] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error,   setError]   = useState('');
-  const [aiText,  setAiText]  = useState('');
-  const [aiLoad,  setAiLoad]  = useState(false);
-
-  useEffect(() => { load(); }, []);
-
-  async function load() {
-    setLoading(true); setError('');
-    try {
-      const d = await api('/api/macro');
-      setData(d.macro || []);
-      setSpread(d.yieldSpread);
-    } catch(e) { setError(e.message); }
-    setLoading(false);
-  }
-
-  async function analyze() {
-    setAiLoad(true); setAiText('');
-    const rows = data.map(m => `${m.name}(${m.symbol}): ${m.symbol==='^TNX'||m.symbol==='^IRX'?fmt(m.price,2)+'%':'$'+fmt(m.price)} chg:${fmtP(m.chg1d)}`).join(' | ');
-    const t = await askClaude(
-      `Macro data: ${rows}. Yield spread: ${spread!=null?spread+'%':'unknown'}.\n\n## MARKET REGIME\nRisk-on or risk-off? What does the full picture imply?\n\n## YIELD CURVE SIGNAL\nWhat growth/recession probability and Fed path does this price?\n\n## FED OUTLOOK\nCuts/holds/hikes? Next likely move and timing.\n\n## 3 ACTIONABLE MACRO TRADES\nSpecific instruments, direction, and rationale.\n\n## TOP 3 RISKS NEXT 30 DAYS\nSpecific events that could shift regime.`,
-      'Elite macro strategist. ## headers, - bullets. Max 600 words.',
-      true
-    );
-    setAiText(t); setAiLoad(false);
-  }
-
-  const get = sym => data.find(m => m.symbol === sym);
-  const vix  = get('^VIX');
-  const t10  = get('^TNX');
-  const t3m  = get('^IRX');
-  const inv  = spread != null && spread < 0;
-  const vixLevel = vix?.price < 15 ? {label:'CALM',col:'var(--green)'} :
-                   vix?.price < 20 ? {label:'NORMAL',col:'var(--cyan)'} :
-                   vix?.price < 28 ? {label:'ELEVATED',col:'var(--amber)'} :
-                                     {label:'FEAR',col:'var(--red)'};
-
-  return (
-    <div>
-      <div className="panel">
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14,flexWrap:'wrap',gap:8}}>
-          <div>
-            <div className="panel-title">Macro <span>Dashboard</span></div>
-            <div className="panel-sub">VIX · Yields · Dollar · Gold · Oil · Bitcoin — live Yahoo Finance data</div>
-          </div>
-          <div style={{display:'flex',gap:8}}>
-            <button className="btn btn-sm" onClick={load}>↻ Refresh</button>
-            <button className="btn btn-primary btn-sm" onClick={analyze} disabled={aiLoad||!data.length}>🧠 Macro Interpretation</button>
-          </div>
-        </div>
-        {error && <ErrorBox msg={error}/>}
-        {loading ? <Loader msg="Fetching macro indicators..."/> : (
-          <>
-            <div className="macro-grid">
-              {data.map(m => (
-                <div className="macro-card" key={m.symbol}>
-                  <div className="macro-label">{m.name}</div>
-                  <div className="macro-price">
-                    {m.symbol==='^TNX'||m.symbol==='^IRX' ? `${fmt(m.price,2)}%` :
-                     m.symbol==='USO'||m.symbol==='GLD'   ? `$${fmt(m.price,2)}` :
-                     m.symbol='^VIX'                       ? fmt(m.price,1) :
-                     `$${m.price>1000?(m.price/1000).toFixed(1)+'K':fmt(m.price,2)}`}
-                  </div>
-                  <div className={`macro-chg ${fmtC(m.chg1d)}`}>{fmtP(m.chg1d)}</div>
-                </div>
-              ))}
-            </div>
-
-            {vix && (
-              <div className="grid-2" style={{marginBottom:14}}>
-                <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:14}}>
-                  <div className="section-label" style={{marginBottom:10}}>VIX FEAR GAUGE</div>
-                  <div style={{display:'flex',gap:6}}>
-                    {[['CALM','<15','var(--green)'],['NORMAL','15-20','var(--cyan)'],['ELEVATED','20-28','var(--amber)'],['FEAR','>28','var(--red)']].map(([l,r,c])=>(
-                      <div key={l} style={{flex:1,padding:'7px 4px',background:vixLevel.label===l?c+'22':'transparent',border:`1px solid ${vixLevel.label===l?c:'var(--border)'}`,borderRadius:4,textAlign:'center'}}>
-                        <div style={{fontSize:8,color:c,fontFamily:'var(--font-mono)',fontWeight:700}}>{l}</div>
-                        <div style={{fontSize:8,color:'var(--text3)',marginTop:2}}>{r}</div>
-                      </div>
-                    ))}
-                  </div>
-                  <div style={{textAlign:'center',marginTop:12}}>
-                    <span style={{fontFamily:'var(--font-mono)',fontSize:28,color:vixLevel.col}}>{fmt(vix.price,1)}</span>
-                    <span style={{fontSize:10,color:'var(--text3)',marginLeft:6}}>— {vixLevel.label}</span>
-                  </div>
-                </div>
-                <div style={{background:'var(--bg3)',border:`1px solid ${inv?'rgba(255,61,87,0.3)':'var(--border)'}`,borderRadius:5,padding:14}}>
-                  <div className="section-label" style={{marginBottom:10}}>YIELD CURVE</div>
-                  {t3m && t10 && (
-                    <div>
-                      <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
-                        <span style={{fontSize:11,color:'var(--text3)'}}>3M yield</span>
-                        <span style={{fontFamily:'var(--font-mono)',fontSize:13}}>{fmt(t3m.price,2)}%</span>
-                      </div>
-                      <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
-                        <span style={{fontSize:11,color:'var(--text3)'}}>10Y yield</span>
-                        <span style={{fontFamily:'var(--font-mono)',fontSize:13}}>{fmt(t10.price,2)}%</span>
-                      </div>
-                      <div style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderTop:'1px solid var(--border)'}}>
-                        <span style={{fontSize:11,color:'var(--text3)'}}>Spread (10Y-3M)</span>
-                        <span style={{fontFamily:'var(--font-mono)',fontSize:13,color:inv?'var(--red)':'var(--green)',fontWeight:700}}>
-                          {spread!=null?`${spread>0?'+':''}${spread}%`:'—'}
-                          {inv ? ' ⚠ INVERTED' : ' ✓ NORMAL'}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </>
-        )}
-        <AIOutput text={aiText} loading={aiLoad}/>
-      </div>
-    </div>
-  );
-}
-
 // ─── RS SCANNER TAB ───────────────────────────────────────────────────────────
 function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, selectedSectors, setSelectedSectors }) {
   const [loading, setLoading] = useState(false);
@@ -2087,8 +1675,7 @@ function SwingLabTab({ rsData, rsLoaded, results, setResults, regime, setRegime,
           <div>
             <div className="panel-title">Swing <span>Lab</span></div>
             <div className="panel-sub">
-              Use <strong style={{color:'var(--cyan)'}}>Daily Picks</strong> first to get your candidate list (algo, free, fast). Then use <strong style={{color:'var(--amber)'}}>Swing Lab</strong> to generate AI thesis + verified earnings dates + news context on your shortlist.<br/>
-              <span style={{color:'var(--text3)'}}>Swing Lab requires Anthropic API key · Filter: RS≥70 + SwingMom≥55 + within 7% of high + vol≥1.1x</span>
+              ATR-based entry/stop/target levels — no API key needed. Filter: RS≥70 + SwingMom≥55 + within 7% of high + vol≥1.1x
             </div>
           </div>
         </div>
@@ -2122,10 +1709,6 @@ function SwingLabTab({ rsData, rsLoaded, results, setResults, regime, setRegime,
             ℹ RS data not loaded yet — go to <strong>RS Dashboard</strong> tab and click ⟳ Scan, or click <strong>↻ REFRESH ALL</strong>.
           </div>
         )}
-        <div style={{padding:'8px 12px',background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)',marginBottom:10,fontSize:11,color:'var(--text3)'}}>
-          💡 <strong style={{color:'var(--green)'}}>No API key needed</strong> — ATR-based entry/stop/target calculated automatically.
-          &nbsp;<strong style={{color:'var(--amber)'}}>API key optional</strong> — adds AI trade thesis + earnings date.
-        </div>
         {error && <ErrorBox msg={error}/>}
         {summary && !results.length && (
           <div className="info-box">ℹ {summary}</div>
@@ -2191,59 +1774,29 @@ function SwingLabTab({ rsData, rsLoaded, results, setResults, regime, setRegime,
                   </div>
                 </div>
                 <div className="sl-card-body">
-                  {b.thesis && <div className="sl-thesis">{b.thesis}</div>}
-                  {/* Algorithmic levels (no API key needed) */}
-                {s.algoSetup && (
-                  <div style={{marginBottom:10}}>
-                    <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>
-                      CALCULATED LEVELS (ATR-based, no AI needed)
-                    </div>
-                    <div className="sl-levels">
-                      <div className="sl-level">
-                        <div className="sl-level-label">Entry</div>
-                        <div className="sl-level-val up">{s.algoSetup.entryZone||'—'}</div>
+                  {/* Algorithmic levels — always shown, no API key needed */}
+                  {s.algoSetup && (
+                    <div style={{marginBottom:10}}>
+                      <div className="sl-levels">
+                        <div className="sl-level">
+                          <div className="sl-level-label">Entry</div>
+                          <div className="sl-level-val up">{s.algoSetup.entryZone||'—'}</div>
+                        </div>
+                        <div className="sl-level">
+                          <div className="sl-level-label">Stop</div>
+                          <div className="sl-level-val dn">{s.algoSetup.stopLevel||'—'}</div>
+                        </div>
+                        <div className="sl-level">
+                          <div className="sl-level-label">T1 ({s.algoSetup.riskReward} R/R)</div>
+                          <div className="sl-level-val" style={{color:'var(--cyan)'}}>{s.algoSetup.target1||'—'}</div>
+                        </div>
                       </div>
-                      <div className="sl-level">
-                        <div className="sl-level-label">Stop</div>
-                        <div className="sl-level-val dn">{s.algoSetup.stopLevel||'—'}</div>
+                      <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>
+                        ATR: ${s.algoSetup.atrUsed} ({s.atrPct}% of price) · Stop: {s.algoSetup.stopPct}% from entry
                       </div>
-                      <div className="sl-level">
-                        <div className="sl-level-label">T1 ({s.algoSetup.riskReward} R/R)</div>
-                        <div className="sl-level-val" style={{color:'var(--cyan)'}}>{s.algoSetup.target1||'—'}</div>
-                      </div>
-                    </div>
-                    <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>
-                      ATR: ${s.algoSetup.atrUsed} ({s.atrPct}% of price) · Stop: {s.algoSetup.stopPct}% from entry
-                    </div>
-                  </div>
-                )}
-                {/* AI levels (only when API key is set) */}
-                {b && b.entryZone && (
-                  <div style={{marginBottom:10}}>
-                    <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>
-                      AI ANALYSIS
-                    </div>
-                    <div className="sl-levels">
-                      <div className="sl-level">
-                        <div className="sl-level-label">AI Entry</div>
-                        <div className="sl-level-val up">{b.entryZone}</div>
-                      </div>
-                      <div className="sl-level">
-                        <div className="sl-level-label">AI Stop</div>
-                        <div className="sl-level-val dn">{b.stopLevel}</div>
-                      </div>
-                      <div className="sl-level">
-                        <div className="sl-level-label">AI T1</div>
-                        <div className="sl-level-val" style={{color:'var(--cyan)'}}>{b.target1||'—'}</div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                  {b.positionSize && (
-                    <div style={{fontSize:11,padding:'4px 8px',background:'rgba(0,212,255,0.08)',borderRadius:3,marginTop:6,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>
-                      📐 Size: {b.positionSize} {s.atrPct?`· ATR: ${s.atrPct}% of price`:''}
                     </div>
                   )}
+                  {/* Earnings warning — high priority */}
                   {(s.earningsDate || b?.earningsDate) && (
                     <div className="sl-earnings" style={{
                       background: (s.daysToEarnings||99)<=7?'rgba(255,61,87,0.15)':'rgba(240,165,0,0.08)',
@@ -2255,20 +1808,19 @@ function SwingLabTab({ rsData, rsLoaded, results, setResults, regime, setRegime,
                         <strong style={{color:'var(--red)',marginLeft:6}}>DO NOT HOLD</strong>}
                     </div>
                   )}
-                  {b.rsTrendNote && (
-                    <div style={{fontSize:11,color:'var(--cyan)',marginTop:8}}>
-                      📈 RS: {b.rsTrendNote}
-                    </div>
-                  )}
-                  {b.recentNews && (
-                    <div style={{fontSize:11,color:'var(--text3)',marginTop:6,fontStyle:'italic'}}>
-                      📰 {b.recentNews}
-                    </div>
-                  )}
+                  {/* Catalysts and risk flags */}
                   {(b.catalysts?.length > 0 || b.riskFlags?.length > 0) && (
-                    <div className="sl-tags" style={{marginTop:10}}>
+                    <div className="sl-tags" style={{marginTop:8}}>
                       {(b.catalysts||[]).slice(0,2).map(c => <span key={c} className="sl-tag sl-tag-catalyst">⬆ {c}</span>)}
                       {(b.riskFlags||[]).slice(0,2).map(r => <span key={r} className="sl-tag sl-tag-risk">⚠ {r}</span>)}
+                    </div>
+                  )}
+                  {/* AI analysis — secondary, only when API key is set */}
+                  {b.thesis && (
+                    <div style={{marginTop:10,padding:'8px 10px',background:'rgba(196,77,255,0.06)',border:'1px solid rgba(196,77,255,0.15)',borderRadius:4}}>
+                      <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:4}}>AI THESIS</div>
+                      <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5}}>{b.thesis}</div>
+                      {b.recentNews && <div style={{fontSize:10,color:'var(--text3)',marginTop:4,fontStyle:'italic'}}>{b.recentNews}</div>}
                     </div>
                   )}
                 </div>
@@ -2277,225 +1829,6 @@ function SwingLabTab({ rsData, rsLoaded, results, setResults, regime, setRegime,
           })}
         </div>
       )}
-    </div>
-  );
-}
-
-// ─── TRADE SIGNALS ────────────────────────────────────────────────────────────
-function SignalsTab({ rsData }) {
-  const [loading, setLoading] = useState(false);
-  const [result,  setResult]  = useState('');
-  const [error,   setError]   = useState('');
-  const [ticker,  setTicker]  = useState('');
-  const [mode,    setMode]    = useState('swing');
-
-  async function generate() {
-    const sym = ticker.trim().toUpperCase(); if (!sym) return;
-    setLoading(true); setResult(''); setError('');
-
-    // Always get algorithmic levels first (no API key needed)
-    try {
-      const ad = await api('/api/trade-setup', { method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ ticker: sym, mode }) });
-      if (ad?.setup) {
-        const ss = ad.setup;
-        setResult('## ' + sym + ' — ' + mode.toUpperCase() + ' LEVELS (ATR-based, no API key)\n\n' +
-          '- **IBD RS:** ' + ad.ibdRS + '/99  · **SwingMom:** ' + ad.swingMomentum + '  · **RS Trend:** ' + (ad.rsTrend||'—') + '\n' +
-          '- **vs 50MA:** ' + fmt(ad.vsMA50,1) + '%  · **vs 200MA:** ' + fmt(ad.vsMA200,1) + '%  · **ATR:** $' + ad.atr + ' (' + ad.atrPct + '% of price)\n\n' +
-          '**Entry Zone:** ' + ss.entryZone + '\n' +
-          '**Stop Level:** ' + ss.stopLevel + '\n' +
-          '**Target 1:** ' + ss.target1 + '  · **Target 2:** ' + ss.target2 + '\n' +
-          '**Risk/Reward:** ' + ss.riskReward + '  · **Stop risk:** ' + ss.stopPct + '% per share\n\n' +
-          '_Position size = (1% of account) ÷ (entry − stop)_\n\n---\n' +
-          '_Set ANTHROPIC_API_KEY in .env for AI thesis, news, and earnings date._');
-      }
-    } catch(algoErr) {
-      console.warn('Algo levels failed:', algoErr.message);
-    }
-
-    // Step 2: AI analysis (appends below algo levels, requires API key)
-    const stock = rsData.find(s => s.ticker === sym);
-    const ctx = stock
-      ? `Price:$${fmt(stock.price)} RS:${stock.rsRank}/99 vs50MA:${fmt(stock.vsMA50,1)}% vs200MA:${fmt(stock.vsMA200,1)}% volRatio:${fmt(stock.volumeRatio,2)}x distFromHigh:-${((stock.distFromHigh||0)*100).toFixed(1)}% sector:${stock.sector}`
-      : 'search for current data';
-    try {
-      const t = await askClaude(
-        `Generate ${mode==='swing'?'SWING TRADE (2-10 day)':'POSITION TRADE (3-8 week)'} signal for ${sym}. Data: ${ctx}\n\n## SETUP THESIS\nWhat makes this tradeable right now? (3-4 sentences)\n\n## MOMENTUM & RS CHECK\n- RS vs sector and SPY: improving or deteriorating?\n- Price cycle position: early breakout / mid-trend / extended / climax?\n\n## ENTRY CRITERIA\n- Ideal entry zone (specific price range)\n- Entry trigger / confirmation needed\n- Volume requirement\n\n## RISK MANAGEMENT\n- Stop loss level with specific rationale\n- Maximum position size (% of portfolio)\n\n## PRICE TARGETS\n- Target 1 (conservative)\n- Target 2 (bull case)\n- Risk/Reward Ratio\n\n## SIGNAL RATING: ★★★★★\nRate 1-5 with one sentence justification.`,
-        'Elite hedge fund analyst. ## headers, - bullets. Max 600 words.',
-        true
-      );
-      setResult(prev => prev
-        ? prev + '\n\n---\n\n## AI ANALYSIS\n\n' + t
-        : t);
-    } catch(e) {
-      // API key not set or error — algo levels already shown, that is fine
-      if (!e.message.includes('ANTHROPIC')) setError(e.message);
-    }
-    setLoading(false);
-  }
-
-  const TOP_EXAMPLES = rsData.slice(0,10).map(s=>s.ticker);
-  const EXAMPLES = TOP_EXAMPLES.length ? TOP_EXAMPLES : ['NVDA','PLTR','MSTR','LLY','AXON','GEV','COIN','CEG','CRWD','TSM'];
-
-  return (
-    <div>
-      <div className="panel">
-        <div className="panel-title" style={{marginBottom:4}}>Trade <span>Signals</span></div>
-        <div className="panel-sub">ATR-based trade levels computed from price data — <strong>no API key needed</strong> · API key adds AI thesis and news</div>
-
-        <div style={{marginBottom:12,padding:'10px 14px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,fontSize:12}}>
-        <div style={{color:'var(--amber)',fontWeight:700,marginBottom:6}}>Free Theme Discovery (no API key needed):</div>
-        <div style={{color:'var(--text2)',lineHeight:1.8}}>
-          Check these free sources daily for emerging themes before opening the app:<br/>
-          <strong style={{color:'var(--text)'}}>finviz.com/screener.ashx</strong> → News tab → filter by sectors gaining RS<br/>
-          <strong style={{color:'var(--text)'}}>finance.yahoo.com/topic/trending-tickers</strong> → real-time trending<br/>
-          <strong style={{color:'var(--text)'}}>seekingalpha.com/market-news</strong> → sector rotation commentary<br/>
-          Copy any ticker or theme into the prompt below to get Claude analysis.
-        </div>
-      </div>
-      <div className="tag-row">
-          {EXAMPLES.map(t => (
-            <button key={t} className="preset-pill" onClick={() => setTicker(t)}>{t}</button>
-          ))}
-        </div>
-
-        <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap'}}>
-          <input value={ticker} onChange={e=>setTicker(e.target.value.toUpperCase())}
-            onKeyDown={e=>e.key==='Enter'&&generate()} placeholder="Enter ticker..."
-            style={{flex:1,minWidth:140,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',padding:'10px 14px',fontSize:14,fontFamily:'var(--font-mono)',outline:'none',letterSpacing:2}}/>
-          {['swing','position'].map(m => (
-            <button key={m} className={`mode-btn ${mode===m?'active':''}`}
-              onClick={() => setMode(m)}>{m}</button>
-          ))}
-          <button className="btn btn-primary" onClick={generate} disabled={loading||!ticker}>
-            {loading ? 'Generating...' : 'Generate Signal'}
-          </button>
-        </div>
-
-        {error && <ErrorBox msg={error}/>}
-        <AIOutput text={result} loading={loading}/>
-      </div>
-    </div>
-  );
-}
-
-// ─── AI SCANNER ───────────────────────────────────────────────────────────────
-function ScannerTab() {
-  const [query,   setQuery]   = useState('');
-  const [loading, setLoading] = useState(false);
-  const [result,  setResult]  = useState('');
-  const [error,   setError]   = useState('');
-
-  async function run(q) {
-    const text = q || query; if (!text.trim()) return;
-    setQuery(text); setLoading(true); setResult(''); setError('');
-    try {
-      const t = await askClaude(text, 'You are an elite hedge fund analyst and trader. Use ## section headers and - bullets. Max 700 words.', true);
-      setResult(prev => prev
-        ? prev + '\n\n---\n\n## AI ANALYSIS\n\n' + t
-        : t);
-    } catch(e) {
-      // API key not set or error — algo levels already shown, that is fine
-      if (!e.message.includes('ANTHROPIC')) setError(e.message);
-    }
-    setLoading(false);
-  }
-
-  const PRESETS = [
-    ["Sector RS ranking",        "Which sectors have the strongest relative strength vs SPY this week? Give me a ranked list with thesis for the top 2."],
-    ["Top breakouts today",      "What are the top 5 stocks breaking out today with strong volume and RS above 85? Include current price and entry levels."],
-    ["Macro environment",        "What is the current macro environment — VIX level, yield curve status, Fed stance — and how should I position swing trades this week?"],
-    ["Risk events this week",    "What are the key macro risk events (Fed, CPI, earnings, geopolitical) this week that could disrupt swing trades?"],
-    ["Semis vs Software RS",     "Compare semiconductors vs software right now — which group has better relative strength and momentum, and why?"],
-    ["Best swing setup today",   "What is the single best swing trade setup in the market today? Give me ticker, entry, stop, target, and thesis."],
-  ];
-
-  return (
-    <div>
-      <div className="panel">
-        <div className="panel-title" style={{marginBottom:4}}>AI <span>Scanner</span></div>
-        <div className="panel-sub">Ask anything about current market conditions — Claude searches the web for live context</div>
-
-        <div className="tag-row">
-          {PRESETS.map(([label, q]) => (
-            <button key={label} className="preset-pill" onClick={() => run(q)}>{label}</button>
-          ))}
-        </div>
-
-        <div className="ai-input-row">
-          <textarea className="ai-textarea" value={query} onChange={e=>setQuery(e.target.value)}
-            placeholder="Ask a market question… e.g. 'Analyze NVDA for a swing trade right now'"
-            onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();run();}}}/>
-          <button className="btn btn-primary" onClick={()=>run()} disabled={loading||!query.trim()}>
-            {loading ? '...' : 'Ask'}
-          </button>
-        </div>
-
-        {error && <ErrorBox msg={error} style={{marginTop:12}}/>}
-        {result || loading ? <div style={{marginTop:12}}><AIOutput text={result} loading={loading}/></div> : null}
-      </div>
-    </div>
-  );
-}
-
-// ─── THEMATIC HUNT ────────────────────────────────────────────────────────────
-function ThematicTab() {
-  const [theme,   setTheme]  = useState('');
-  const [loading, setLoading] = useState(false);
-  const [result,  setResult]  = useState('');
-  const [error,   setError]   = useState('');
-
-  const THEMES = [
-    'AI Power Infrastructure', 'Nuclear Energy Revival', 'Defense & Geopolitics',
-    'Quantum Computing', 'Crypto/Bitcoin Infrastructure', 'GLP-1 Supply Chain',
-    'Reshoring & US Industrials', 'Robotics & Automation', 'Critical Minerals',
-    'Data Center Buildout', 'Grid Modernization', 'Space Economy',
-  ];
-
-  async function hunt(t) {
-    const tgt = t || theme; if (!tgt.trim()) return;
-    setTheme(tgt); setLoading(true); setResult(''); setError('');
-    try {
-      const r = await askClaude(
-        `Find investable alpha in the "${tgt}" theme.\n\n## WHY NOW\nWhat makes this theme timely? Current catalysts with data. (3-4 sentences)\n\n## DIRECT PURE-PLAYS (4 stocks)\nTicker · Why it is the best pure-play · Stage (EARLY/MID/LATE) · Key risk.\n\n## HIDDEN GEMS — SECOND DERIVATIVE (3 stocks)\nLess crowded, better R/R, indirect beneficiaries that most people miss.\n\n## BEST ETF PROXY\n1-2 ETFs that capture this theme, which is better and why.\n\n## TIMING & CONFIRMATION\nEarly/mid/late stage? What catalyst confirms full rotation? What kills the thesis?\n\n## CONVICTION RANKING\nRank all 7 stocks: ticker, one-line rationale, entry range.`,
-        'Elite hedge fund thematic analyst. ## headers, - bullets. Max 650 words.',
-        true
-      );
-      setResult(r);
-    } catch(e) { setError(e.message); }
-    setLoading(false);
-  }
-
-  return (
-    <div>
-      <div className="panel">
-        <div className="panel-title" style={{marginBottom:4}}>Thematic <span>Alpha Hunt</span></div>
-        <div className="panel-sub">Find direct plays AND second-derivative hidden gems with live news context</div>
-
-        <div className="tag-row">
-          {THEMES.map(t => (
-            <button key={t} className="preset-pill"
-              onClick={() => hunt(t)}
-              onMouseEnter={e=>{e.target.style.borderColor='var(--green)';e.target.style.color='var(--green)';}}
-              onMouseLeave={e=>{e.target.style.borderColor='var(--border)';e.target.style.color='var(--text2)';}}
-            >{t}</button>
-          ))}
-        </div>
-
-        <div className="ai-input-row">
-          <input value={theme} onChange={e=>setTheme(e.target.value)}
-            onKeyDown={e=>e.key==='Enter'&&hunt()}
-            placeholder="Custom theme… e.g. 'Longevity / anti-aging biotech'"
-            style={{flex:1,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',padding:'10px 14px',fontSize:13,fontFamily:'var(--font-sans)',outline:'none'}}/>
-          <button className="btn btn-primary" onClick={() => hunt()} disabled={loading||!theme.trim()}>
-            {loading ? 'Hunting...' : 'Hunt Alpha'}
-          </button>
-        </div>
-
-        {error && <ErrorBox msg={error} style={{marginTop:12}}/>}
-        {result || loading ? <div style={{marginTop:12}}><AIOutput text={result} loading={loading}/></div> : null}
-      </div>
     </div>
   );
 }
@@ -2642,435 +1975,8 @@ function MarketPulseTab() {
   const [llLoad,   setLlLoad]   = useState(false);
   const [aiText,   setAiText]   = useState('');
   const [aiLoad,   setAiLoad]   = useState(false);
-  const [intel,    setIntel]    = useState(null);
-  const [intelLoad,setIntelLoad]= useState(false);
 
-  useEffect(() => { load(); loadIntel(); }, []);
-
-  async function load() {
-    setLoading(true);
-    try {
-      const [rd, md] = await Promise.all([api('/api/regime'), api('/api/macro')]);
-      setRegime(rd); setMacro(md.macro || []); setSpread(md.yieldSpread);
-    } catch(_) {}
-    setLoading(false);
-    setLlLoad(true);
-    try { const ld = await api('/api/leaders-laggards'); setLeaders(ld.leaders||[]); setLaggards(ld.laggards||[]); } catch(_) {}
-    setLlLoad(false);
-  }
-
-  async function loadIntel() {
-    setIntelLoad(true);
-    try { const d = await api('/api/market-intelligence'); setIntel(d); } catch(_) {}
-    setIntelLoad(false);
-  }
-
-  async function interpret() {
-    setAiLoad(true); setAiText('');
-    const rows = macro.map(m => `${m.name}: ${m.price?.toFixed?.(m.symbol?.includes('TNX')||m.symbol?.includes('IRX')?2:1)||m.price} (${fmtP(m.chg1d)})`).join(' | ');
-    const fg  = intel?.fearGreed ? `Fear&Greed: ${intel.fearGreed.score} (${intel.fearGreed.rating})` : '';
-    const naaim = intel?.naaim ? `NAAIM: ${intel.naaim.exposure}%` : '';
-    const pc  = intel?.putCall ? `Put/Call: ${intel.putCall.total} (5d avg: ${intel.putCall.avg5d})` : '';
-    const vix = intel?.vixCurve ? `VIX term: ${intel.vixCurve.vix30}→${intel.vixCurve.vix3m}→${intel.vixCurve.vix6m} (${intel.vixCurve.tsShape})` : '';
-    const t = await askClaude(
-      `Market data: ${rows}. Yield spread: ${spread}%. Regime: ${regime?.regime}. ${fg}. ${naaim}. ${pc}. ${vix}.\n\n## TODAY'S TRADING PLAN\nIs today a swing-long day, defensive day, or avoid day? Why in 2 sentences.\n\n## 3 SECTORS TO FOCUS ON\nBased on current regime and sentiment, where should I be looking?\n\n## 3 SECTORS TO AVOID\nWhere is risk highest today?\n\n## KEY RISK TODAY\nOne specific thing that could change regime in next 48 hours.`,
-      'Elite trading strategist. ## headers, - bullets. Max 400 words.', true
-    );
-    setAiText(t); setAiLoad(false);
-  }
-
-  const g = sym => macro.find(m => m.symbol === sym);
-  const spy = g('SPY'), vix = g('^VIX'), qqq = g('QQQ'), iwm = g('IWM');
-  const t10 = g('^TNX'), t3m = g('^IRX'), gld = g('GLD'), tlt = g('TLT');
-
-  // ── Helper: delta chip (1W / 1M / 1Y) ──────────────────────────────────
-  const Chg = ({v, label}) => {
-    if (v == null) return <span style={{fontSize:9,color:'var(--text3)',marginRight:3}}>{label}—</span>;
-    const col = v >= 0 ? 'var(--green)' : 'var(--red)';
-    return (
-      <span style={{fontSize:9,color:col,marginRight:4,fontFamily:'var(--font-mono)'}}>
-        {label}<span style={{fontWeight:700}}>{v > 0 ? '+' : ''}{v}%</span>
-      </span>
-    );
-  };
-
-  // Fear & Greed gauge color + label
-  const fgColor = s => s <= 25 ? '#ff3d57' : s <= 45 ? '#ff8c00' : s <= 55 ? '#8888bb' : s <= 75 ? '#69f0ae' : '#00e676';
-  const fgLabel = s => s <= 25 ? 'Extreme Fear' : s <= 45 ? 'Fear' : s <= 55 ? 'Neutral' : s <= 75 ? 'Greed' : 'Extreme Greed';
-
-  // P/C ratio color + signal
-  const pcColor = v => v >= 1.2 ? 'var(--green)' : v >= 1.0 ? '#69f0ae' : v >= 0.8 ? 'var(--text2)' : v >= 0.7 ? '#ff8c00' : 'var(--red)';
-  const pcSignal = v => v >= 1.2 ? '🟢 Extreme Fear — contrarian BUY signal' : v >= 1.0 ? '🟡 Fear zone — put buyers dominant' : v >= 0.8 ? '⚪ Neutral' : v >= 0.7 ? '🟠 Complacency building' : '🔴 Extreme greed — contrarian CAUTION';
-
-  // NAAIM color
-  const naaimColor = v => v <= 25 ? 'var(--green)' : v <= 50 ? '#69f0ae' : v <= 75 ? 'var(--amber)' : 'var(--red)';
-  const naaimSignal = v => v <= 25 ? '🟢 Managers heavily underweight — contrarian bullish' : v <= 50 ? '🟡 Cautious — room to add exposure' : v <= 75 ? '⚪ Neutral to bullish' : '🔴 Fully invested — limited buying power remaining';
-
-  // VIX term structure color
-  const tsColor = { contango:'var(--green)', normal:'var(--green)', flat:'var(--amber)', inverted:'var(--red)' };
-  const vc = intel?.vixCurve;
-
-  if (loading) return <div className="panel"><div className="loader"><div className="spinner"/>Loading market pulse...</div></div>;
-
-  return (
-    <div>
-      {/* ── REGIME BANNER ────────────────────────────────────────────────── */}
-      {regime && (
-        <div style={{padding:'20px 24px',background:regime.color+'18',border:`2px solid ${regime.color}55`,borderRadius:8,marginBottom:14}}>
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
-            <div>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:22,fontWeight:700,color:regime.color,letterSpacing:3}}>{regime.regime}</div>
-              {regime.warning && <div style={{fontSize:13,color:'var(--text2)',marginTop:6}}>{regime.warning}</div>}
-            </div>
-            <div style={{textAlign:'right'}}>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:13,color:'var(--text3)'}}>Position size multiplier</div>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:28,color:regime.color,fontWeight:700}}>{regime.sizeMultiplier}x</div>
-            </div>
-          </div>
-          <div style={{display:'flex',gap:8,marginTop:14,flexWrap:'wrap'}}>
-            {(regime.riskOnSignals||[]).map(s => <span key={s} style={{fontSize:11,padding:'3px 10px',background:'rgba(0,230,118,0.12)',border:'1px solid rgba(0,230,118,0.3)',borderRadius:3,color:'var(--green)'}}>{s}</span>)}
-            {(regime.riskOffSignals||[]).map(s => <span key={s} style={{fontSize:11,padding:'3px 10px',background:'rgba(255,61,87,0.12)',border:'1px solid rgba(255,61,87,0.3)',borderRadius:3,color:'var(--red)'}}>{s}</span>)}
-          </div>
-        </div>
-      )}
-
-      {/* ── CORE MACRO CARDS — with 1W / 1M / 1Y ────────────────────────── */}
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(148px,1fr))',gap:10,marginBottom:14}}>
-        {(intel?.macroFull || []).map(m => {
-          if (!m.price) return null;
-          const isYield = m.type === 'yield';
-          const dispPrice = isYield ? `${fmt(m.price,2)}%` : m.price > 200 ? `$${fmt(m.price,0)}` : `$${fmt(m.price,2)}`;
-          const col = m.type==='vix' ? (m.price<15?'var(--green)':m.price<20?'var(--text)':m.price<25?'var(--amber)':m.price<35?'#ff8c00':'var(--red)')
-            : m.type==='credit' ? (m.chg1d>=0?'var(--green)':'var(--red)')
-            : m.chg1d>=0?'var(--cyan)':'var(--red)';
-          return (
-            <div key={m.sym} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:'10px 12px'}}>
-              <div style={{fontSize:8,color:'var(--text3)',letterSpacing:2,textTransform:'uppercase',marginBottom:4}}>{m.label}</div>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:15,color:col,fontWeight:600,marginBottom:2}}>{dispPrice}</div>
-              <div style={{fontSize:10,color:m.chg1d>=0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)',marginBottom:5}}>
-                {fmtP(m.chg1d)} 1D
-              </div>
-              <div style={{display:'flex',flexWrap:'wrap',gap:0}}>
-                <Chg v={m.chg1w} label="1W "/>
-                <Chg v={m.chg1m} label="1M "/>
-                <Chg v={m.chg1y} label="1Y "/>
-              </div>
-              {m.pctFromHigh != null && (
-                <div style={{fontSize:9,color:'var(--text3)',marginTop:3,fontFamily:'var(--font-mono)'}}>
-                  52wkH: <span style={{color:m.pctFromHigh<-10?'var(--red)':'var(--text3)'}}>{m.pctFromHigh}%</span>
-                </div>
-              )}
-            </div>
-          );
-        })}
-        {/* Yield Curve card */}
-        {spread != null && (
-          <div style={{background:'var(--bg3)',border:`1px solid ${spread<0?'rgba(255,61,87,0.35)':'var(--border)'}`,borderRadius:5,padding:'10px 12px'}}>
-            <div style={{fontSize:8,color:'var(--text3)',letterSpacing:2,textTransform:'uppercase',marginBottom:4}}>Yield Curve</div>
-            <div style={{fontFamily:'var(--font-mono)',fontSize:15,color:spread<0?'var(--red)':spread<0.5?'var(--amber)':'var(--green)',fontWeight:600,marginBottom:2}}>
-              {spread>0?'+':''}{spread}%
-            </div>
-            <div style={{fontSize:10,color:'var(--text3)',lineHeight:1.5}}>
-              {spread<0?'⚠ INVERTED':spread<0.5?'Flat':'Normal'}<br/>10Y minus 3M
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* ── SPY TREND STATUS ─────────────────────────────────────────────── */}
-      {regime && spy && (
-        <div className="panel" style={{marginBottom:14}}>
-          <div className="section-label" style={{marginBottom:10}}>SPY TREND STATUS</div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10}}>
-            <div style={{textAlign:'center',padding:'10px',background:'var(--bg)',borderRadius:4,border:`1px solid ${regime.above50?'rgba(0,230,118,0.3)':'rgba(255,61,87,0.3)'}`}}>
-              <div style={{fontSize:10,color:'var(--text3)',marginBottom:6}}>vs 50-DAY MA</div>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:14,color:regime.above50?'var(--green)':'var(--red)',fontWeight:700}}>{regime.above50?'ABOVE ✓':'BELOW ✗'}</div>
-              {regime.spy50 && <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>MA: ${regime.spy50?.toFixed(1)}</div>}
-            </div>
-            <div style={{textAlign:'center',padding:'10px',background:'var(--bg)',borderRadius:4,border:`1px solid ${regime.above200?'rgba(0,230,118,0.3)':'rgba(255,61,87,0.3)'}`}}>
-              <div style={{fontSize:10,color:'var(--text3)',marginBottom:6}}>vs 200-DAY MA</div>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:14,color:regime.above200?'var(--green)':'var(--red)',fontWeight:700}}>{regime.above200?'ABOVE ✓':'BELOW ✗'}</div>
-              {regime.spy200 && <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>MA: ${regime.spy200?.toFixed(1)}</div>}
-            </div>
-            <div style={{textAlign:'center',padding:'10px',background:'var(--bg)',borderRadius:4,border:`1px solid ${regime.vixLevel<20?'rgba(0,230,118,0.3)':regime.vixLevel<28?'rgba(240,165,0,0.3)':'rgba(255,61,87,0.3)'}`}}>
-              <div style={{fontSize:10,color:'var(--text3)',marginBottom:6}}>VIX REGIME</div>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:700,color:regime.vixLevel<20?'var(--green)':regime.vixLevel<28?'var(--amber)':'var(--red)'}}>
-                {regime.vixLevel<15?'CALM':regime.vixLevel<20?'NORMAL':regime.vixLevel<28?'ELEVATED':'FEAR'}
-              </div>
-              <div style={{fontSize:13,color:'var(--text)',fontFamily:'var(--font-mono)',marginTop:4}}>{regime.vixLevel?.toFixed(1)}</div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── VIX TERM STRUCTURE ───────────────────────────────────────────── */}
-      {vc && (
-        <div className="panel" style={{marginBottom:14}}>
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10,flexWrap:'wrap',gap:8}}>
-            <div className="panel-title">VIX Term Structure <span>— Fear Curve</span></div>
-            {intelLoad && <div style={{fontSize:10,color:'var(--text3)'}}>Loading...</div>}
-          </div>
-          {/* Curve visualization */}
-          <div style={{display:'flex',alignItems:'flex-end',gap:6,marginBottom:12,height:80,padding:'0 4px'}}>
-            {[
-              {label:'9D',val:vc.vix9d,color:'var(--purple)'},
-              {label:'30D',val:vc.vix30,color:'var(--amber)'},
-              {label:'3M', val:vc.vix3m,color:'var(--cyan)'},
-              {label:'6M', val:vc.vix6m,color:'var(--text2)'},
-            ].filter(p=>p.val).map(p => {
-              const maxV = Math.max(vc.vix9d||0, vc.vix30||0, vc.vix3m||0, vc.vix6m||0);
-              const h    = maxV > 0 ? Math.round((p.val / maxV) * 68) : 40;
-              return (
-                <div key={p.label} style={{display:'flex',flexDirection:'column',alignItems:'center',flex:1}}>
-                  <div style={{fontFamily:'var(--font-mono)',fontSize:12,fontWeight:700,color:p.color,marginBottom:3}}>{p.val.toFixed(1)}</div>
-                  <div style={{width:'100%',height:h,background:p.color+'55',border:`1px solid ${p.color}`,borderRadius:'3px 3px 0 0',display:'flex',alignItems:'center',justifyContent:'center'}}>
-                    <span style={{fontSize:9,color:p.color,fontWeight:700}}>{p.label}</span>
-                  </div>
-                </div>
-              );
-            })}
-            <div style={{flex:2,paddingLeft:12,paddingBottom:4}}>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:11,fontWeight:700,color:tsColor[vc.tsShape]||'var(--text)',marginBottom:4,letterSpacing:1}}>
-                {vc.tsShape?.toUpperCase()}
-                {vc.ts3m1Ratio && <span style={{fontSize:10,fontWeight:400,marginLeft:8,color:'var(--text3)'}}>3M/30D ratio: {vc.ts3m1Ratio}</span>}
-              </div>
-              <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.7,marginBottom:6}}>{vc.tsInterpretation}</div>
-              <div style={{fontSize:11,color:'var(--text3)',lineHeight:1.5}}>{vc.vixRegime}</div>
-            </div>
-          </div>
-          {/* VIX period changes */}
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-            <div style={{background:'var(--bg3)',borderRadius:4,padding:'8px 10px',border:'1px solid var(--border)'}}>
-              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:5}}>VIX 30D CHANGES</div>
-              <div style={{display:'flex',gap:10}}>
-                <Chg v={vc.vix30Changes?.chg1w} label="1W "/>
-                <Chg v={vc.vix30Changes?.chg1m} label="1M "/>
-                <Chg v={vc.vix30Changes?.chg1y} label="1Y "/>
-              </div>
-              <div style={{fontSize:9,color:'var(--text3)',marginTop:4,fontFamily:'var(--font-mono)'}}>
-                52wk: {vc.vix30Changes?.w52l?.toFixed(1)} — {vc.vix30Changes?.w52h?.toFixed(1)}
-              </div>
-            </div>
-            <div style={{background:'var(--bg3)',borderRadius:4,padding:'8px 10px',border:'1px solid var(--border)'}}>
-              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:5}}>VVIX (VIX-of-VIX): {vc.vvix}</div>
-              <div style={{fontSize:10,color:'var(--text2)',lineHeight:1.6}}>{vc.vvixInterp}</div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── SENTIMENT DASHBOARD ──────────────────────────────────────────── */}
-      <div className="panel" style={{marginBottom:14}}>
-        <div className="panel-title" style={{marginBottom:12}}>Sentiment Intelligence <span>— Contrarian Signals</span></div>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:10}}>
-
-          {/* Fear & Greed */}
-          {intel?.fearGreed && (
-            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:'12px 14px'}}>
-              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:2,marginBottom:6}}>CNN FEAR &amp; GREED</div>
-              <div style={{display:'flex',alignItems:'baseline',gap:8,marginBottom:4}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:28,fontWeight:700,color:fgColor(intel.fearGreed.score)}}>{intel.fearGreed.score}</div>
-                <div style={{fontSize:12,color:fgColor(intel.fearGreed.score),fontWeight:700}}>{fgLabel(intel.fearGreed.score)}</div>
-              </div>
-              {/* Mini gauge bar */}
-              <div style={{height:6,background:'linear-gradient(to right,#ff3d57,#ff8c00,#8888bb,#69f0ae,#00e676)',borderRadius:3,marginBottom:6,position:'relative'}}>
-                <div style={{position:'absolute',top:-3,left:`${intel.fearGreed.score}%`,width:4,height:12,background:'var(--text)',borderRadius:2,transform:'translateX(-50%)'}}/>
-              </div>
-              <div style={{display:'flex',gap:8,fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>
-                {intel.fearGreed.oneWeekAgo!=null && <span>1W ago: <span style={{color:'var(--text)'}}>{intel.fearGreed.oneWeekAgo}</span></span>}
-                {intel.fearGreed.oneMonthAgo!=null && <span>1M ago: <span style={{color:'var(--text)'}}>{intel.fearGreed.oneMonthAgo}</span></span>}
-              </div>
-              <div style={{fontSize:10,color:'var(--text3)',marginTop:5,lineHeight:1.5}}>
-                {intel.fearGreed.score <= 25 ? '★ Contrarian buy zone — historically strong forward returns' :
-                 intel.fearGreed.score <= 45 ? 'Fear — consider adding on dips' :
-                 intel.fearGreed.score >= 75 ? '⚠ Extreme greed — reduce risk, tighten stops' : 'Neutral zone'}
-              </div>
-            </div>
-          )}
-          {!intel?.fearGreed && intelLoad && <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:12}}><div className="loader" style={{padding:4}}><div className="spinner"/>Fear &amp; Greed...</div></div>}
-
-          {/* Put/Call Ratio */}
-          {intel?.putCall && (
-            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:'12px 14px'}}>
-              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:2,marginBottom:6}}>CBOE PUT/CALL RATIO</div>
-              <div style={{display:'flex',alignItems:'baseline',gap:8,marginBottom:4}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:28,fontWeight:700,color:pcColor(intel.putCall.total)}}>{intel.putCall.total}</div>
-                <div style={{fontSize:10,color:'var(--text3)'}}>total</div>
-              </div>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--text2)',marginBottom:6}}>
-                Equity: {intel.putCall.equity} · 5D avg: <span style={{color:pcColor(intel.putCall.avg5d),fontWeight:700}}>{intel.putCall.avg5d}</span>
-              </div>
-              <div style={{fontSize:10,color:'var(--text2)',lineHeight:1.5}}>{pcSignal(intel.putCall.total)}</div>
-              <div style={{fontSize:9,color:'var(--text3)',marginTop:4}}>As of: {intel.putCall.date}</div>
-            </div>
-          )}
-          {!intel?.putCall && !intelLoad && intel && (
-            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:'12px 14px'}}>
-              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:2,marginBottom:6}}>CBOE PUT/CALL RATIO</div>
-              <div style={{fontSize:11,color:'var(--text3)',lineHeight:1.7}}>
-                Unavailable — CBOE CSV format may have changed.<br/>
-                <strong style={{color:'var(--text2)'}}>Manually:</strong> Check cboe.com/market_statistics/daily<br/>
-                <strong style={{color:'var(--amber)'}}>Signal:</strong> &gt;1.0 = fear (buy signal). &lt;0.7 = complacency (caution).
-              </div>
-            </div>
-          )}
-
-          {/* NAAIM Exposure */}
-          {intel?.naaim && (
-            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:'12px 14px'}}>
-              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:2,marginBottom:6}}>NAAIM EXPOSURE INDEX</div>
-              <div style={{display:'flex',alignItems:'baseline',gap:8,marginBottom:4}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:28,fontWeight:700,color:naaimColor(intel.naaim.exposure)}}>{intel.naaim.exposure?.toFixed(1)}</div>
-                <div style={{fontSize:10,color:'var(--text3)'}}>%</div>
-              </div>
-              <div style={{height:4,background:'var(--border2)',borderRadius:2,marginBottom:6,position:'relative'}}>
-                <div style={{width:`${Math.min(100,intel.naaim.exposure/2)}%`,height:'100%',borderRadius:2,background:naaimColor(intel.naaim.exposure)}}/>
-              </div>
-              <div style={{fontSize:10,color:'var(--text2)',lineHeight:1.5}}>{naaimSignal(intel.naaim.exposure)}</div>
-              <div style={{fontSize:9,color:'var(--text3)',marginTop:4}}>Weekly (Wed) · 0%=fully short · 100%=fully long · 200%=max leveraged</div>
-            </div>
-          )}
-          {!intel?.naaim && !intelLoad && intel && (
-            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:'12px 14px'}}>
-              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:2,marginBottom:6}}>NAAIM EXPOSURE INDEX</div>
-              <div style={{fontSize:11,color:'var(--text3)',lineHeight:1.7}}>
-                Weekly data — check naaim.org<br/>
-                <strong style={{color:'var(--amber)'}}>Signal:</strong> &lt;25% = contrarian buy. &gt;80% = limited upside fuel.
-              </div>
-            </div>
-          )}
-
-          {/* Breadth */}
-          {intel?.breadth && (
-            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:'12px 14px'}}>
-              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:2,marginBottom:6}}>INTERNAL BREADTH</div>
-              <div style={{marginBottom:8}}>
-                <div style={{display:'flex',justifyContent:'space-between',marginBottom:3}}>
-                  <span style={{fontSize:11,color:'var(--text2)'}}>Above 200MA</span>
-                  <span style={{fontFamily:'var(--font-mono)',fontSize:13,fontWeight:700,color:intel.breadth.above200Pct>=50?'var(--green)':'var(--red)'}}>{intel.breadth.above200Pct}%</span>
-                </div>
-                <div style={{height:4,background:'var(--border2)',borderRadius:2,marginBottom:6}}>
-                  <div style={{width:`${intel.breadth.above200Pct}%`,height:'100%',borderRadius:2,background:intel.breadth.above200Pct>=50?'var(--green)':'var(--red)'}}/>
-                </div>
-                <div style={{display:'flex',justifyContent:'space-between',marginBottom:3}}>
-                  <span style={{fontSize:11,color:'var(--text2)'}}>Above 50MA</span>
-                  <span style={{fontFamily:'var(--font-mono)',fontSize:13,fontWeight:700,color:intel.breadth.above50Pct>=50?'var(--green)':'var(--red)'}}>{intel.breadth.above50Pct}%</span>
-                </div>
-                <div style={{height:4,background:'var(--border2)',borderRadius:2}}>
-                  <div style={{width:`${intel.breadth.above50Pct}%`,height:'100%',borderRadius:2,background:intel.breadth.above50Pct>=50?'var(--cyan)':'var(--amber)'}}/>
-                </div>
-              </div>
-              <div style={{fontSize:10,color:'var(--text3)',lineHeight:1.5}}>
-                {intel.breadth.above200Pct < 40 ? '⚠ Weak breadth — correction broad-based' :
-                 intel.breadth.above200Pct < 50 ? 'Breadth deteriorating — selectivity critical' :
-                 intel.breadth.above200Pct < 65 ? 'Healthy breadth — participation adequate' :
-                 '★ Strong breadth — broad participation. Bull market confirmed.'}
-                <br/>Universe: {intel.breadth.total} stocks (Alpha Hunter universe)
-              </div>
-            </div>
-          )}
-
-          {/* Credit / Breadth */}
-          {intel?.credit && (
-            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:'12px 14px'}}>
-              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:2,marginBottom:8}}>CREDIT &amp; BREADTH</div>
-              {[
-                {label:'HYG (High Yield)', v:intel.macroFull?.find(m=>m.sym==='HYG'), tip:'Rising = risk-on. Falling = credit stress = stocks follow.'},
-                {label:'LQD (Inv. Grade)',  v:intel.macroFull?.find(m=>m.sym==='LQD'), tip:'Investment grade credit health. Falling = spread widening.'},
-                {label:'RSP vs SPY (1M)',   v:null, custom: intel.credit.rspSpyChg1m != null ? (intel.credit.rspSpyChg1m>0?'+':'')+intel.credit.rspSpyChg1m+'%' : '—',
-                 customCol: intel.credit.rspSpyChg1m>0?'var(--green)':'var(--red)',
-                 tip:'Equal-weight vs cap-weight. Rising RSP/SPY = broad participation (healthy). Falling = narrow leadership (fragile).'},
-              ].map(({label,v,tip,custom,customCol})=>(
-                <div key={label} title={tip} style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5,cursor:'help',padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
-                  <span style={{fontSize:10,color:'var(--text2)'}}>{label}</span>
-                  <div style={{textAlign:'right'}}>
-                    {custom ? <span style={{fontFamily:'var(--font-mono)',fontSize:11,fontWeight:700,color:customCol}}>{custom}</span>
-                    : v ? (
-                      <span style={{fontFamily:'var(--font-mono)',fontSize:10}}>
-                        <span style={{color:v.chg1d>=0?'var(--green)':'var(--red)'}}>{fmtP(v.chg1d)}</span>
-                        <span style={{color:'var(--text3)',marginLeft:4,fontSize:9}}>1M:<Chg v={v.chg1m} label=""/></span>
-                      </span>
-                    ) : '—'}
-                  </div>
-                </div>
-              ))}
-              <div style={{fontSize:9,color:'var(--text3)',marginTop:4,lineHeight:1.5}}>
-                HYG falling + RSP/SPY falling = double warning. Both rising = strong risk appetite.
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ── AI TRADING PLAN ──────────────────────────────────────────────── */}
-      <div style={{display:'flex',gap:8,marginBottom:14}}>
-        <button className="btn btn-sm" onClick={load}>↻ Refresh</button>
-        <button className="btn btn-sm" onClick={loadIntel} disabled={intelLoad}>{intelLoad?'⏳ Loading...':'↻ Refresh Intel'}</button>
-        <button className="btn btn-primary btn-sm" onClick={interpret} disabled={aiLoad||!macro.length}>🧠 Today's Trading Plan</button>
-      </div>
-      <AIOutput text={aiText} loading={aiLoad}/>
-
-      {/* ── LEADERS / LAGGARDS ───────────────────────────────────────────── */}
-      <div style={{marginTop:20}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-          <div>
-            <div className="panel-title" style={{fontSize:15}}>Leaders <span>/</span> Laggards</div>
-            <div style={{fontSize:11,color:'var(--text3)'}}>Top/bottom RS stocks · sorted by IBD RS rank</div>
-          </div>
-        </div>
-        {llLoad ? <div className="loader"><div className="spinner"/>Loading RS ranks...</div> : (
-          <div className="grid-2">
-            <div>
-              <div className="section-label" style={{color:'var(--green)',marginBottom:8}}>⬆ LEADERS — Highest IBD RS, above 50MA</div>
-              {leaders.length===0 && <div className="muted" style={{fontSize:12,padding:'10px 0'}}>Run RS Scanner first to populate</div>}
-              <table className="data-table">
-                <thead><tr><th>RS</th><th>Trend</th><th>Ticker</th><th>1D</th><th>1W</th><th>1M</th><th>vs 50MA</th></tr></thead>
-                <tbody>
-                  {leaders.slice(0,12).map(s => (
-                    <tr key={s.ticker}>
-                      <td>
-                        <RSBar rs={s.rsRank}/>
-                        {(s.rsRank>=70&&s.rsTrend?.direction==='rising'&&s.swingMomentum>=55)&&<span style={{fontSize:10,color:'var(--green)',fontWeight:700,display:'block',letterSpacing:.5}}>★BEST</span>}
-                        {s.rsLineNewHigh&&<span title="RS Line new 52-week high" style={{fontSize:10,color:'var(--gold)',fontWeight:700,display:'block',letterSpacing:.5}}>⭐ RS↑H</span>}
-                        {s.vcpForming&&<span title={`VCP: ${s.vcpCount} contractions`} style={{fontSize:10,color:'var(--purple)',fontWeight:700,display:'block',letterSpacing:.5}}>VCP</span>}
-                      </td>
-                      <td><RSTrendBadge trend={s.rsTrend} rs={s.rsRank}/></td>
-                      <td><span className="td-ticker">{s.ticker}</span></td>
-                      <td className={fmtC(s.chg1d)}>{fmtP(s.chg1d)}</td>
-                      <td className={fmtC(s.chg1w)}>{fmtP(s.chg1w)}</td>
-                      <td className={fmtC(s.chg1m)}>{fmtP(s.chg1m)}</td>
-                      <td className={s.vsMA50>0?'up':'dn'}>{fmt(s.vsMA50,1)}%</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div>
-              <div className="section-label" style={{color:'var(--red)',marginBottom:8}}>⬇ LAGGARDS — Lowest IBD RS (avoid/short)</div>
-              {laggards.length===0 && <div className="muted" style={{fontSize:12,padding:'10px 0'}}>Run RS Scanner first to populate</div>}
-              <table className="data-table">
-                <thead><tr><th>RS</th><th>Trend</th><th>Ticker</th><th>1D</th><th>1W</th><th>1M</th><th>vs 50MA</th></tr></thead>
-                <tbody>
-                  {laggards.slice(0,12).map(s => (
-                    <tr key={s.ticker}>
-                      <td><RSBar rs={s.rsRank}/></td>
-                      <td><RSTrendBadge trend={s.rsTrend} rs={s.rsRank}/></td>
-                      <td><span className="td-ticker">{s.ticker}</span></td>
-                      <td className={fmtC(s.chg1d)}>{fmtP(s.chg1d)}</td>
-                      <td className={fmtC(s.chg1w)}>{fmtP(s.chg1w)}</td>
-                      <td className={fmtC(s.chg1m)}>{fmtP(s.chg1m)}</td>
-                      <td className={s.vsMA50>0?'up':'dn'}>{fmt(s.vsMA50,1)}%</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
+  useEffect(() => { load(); }, []);
 
   async function load() {
     setLoading(true);
@@ -3112,6 +2018,184 @@ One specific thing that could change regime in next 48 hours.`,
     );
     setAiText(t); setAiLoad(false);
   }
+
+  const g = sym => macro.find(m => m.symbol === sym);
+  const spy = g('SPY'), vix = g('^VIX'), qqq = g('QQQ'), iwm = g('IWM');
+  const t10 = g('^TNX'), t3m = g('^IRX'), gld = g('GLD'), tlt = g('TLT');
+
+  if (loading) return <div className="panel"><Loader msg="Loading market pulse..."/></div>;
+
+  return (
+    <div>
+      {/* REGIME BANNER — most prominent element on the page */}
+      {regime && (
+        <div style={{padding:'20px 24px',background:regime.color+'18',border:`2px solid ${regime.color}55`,borderRadius:8,marginBottom:18}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
+            <div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:22,fontWeight:700,color:regime.color,letterSpacing:3}}>{regime.regime}</div>
+              {regime.warning && <div style={{fontSize:13,color:'var(--text2)',marginTop:6}}>{regime.warning}</div>}
+            </div>
+            <div style={{textAlign:'right'}}>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:13,color:'var(--text3)'}}>Position size multiplier</div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:28,color:regime.color,fontWeight:700}}>{regime.sizeMultiplier}x</div>
+            </div>
+          </div>
+          <div style={{display:'flex',gap:8,marginTop:14,flexWrap:'wrap'}}>
+            {(regime.riskOnSignals||[]).map(s => <span key={s} style={{fontSize:11,padding:'3px 10px',background:'rgba(0,230,118,0.12)',border:'1px solid rgba(0,230,118,0.3)',borderRadius:3,color:'var(--green)'}}>{s}</span>)}
+            {(regime.riskOffSignals||[]).map(s => <span key={s} style={{fontSize:11,padding:'3px 10px',background:'rgba(255,61,87,0.12)',border:'1px solid rgba(255,61,87,0.3)',borderRadius:3,color:'var(--red)'}}>{s}</span>)}
+          </div>
+        </div>
+      )}
+
+      {/* Key market levels */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:10,marginBottom:18}}>
+        {[
+          {l:'S&P 500',  q:spy,  big:true,  col:'var(--cyan)'},
+          {l:'Nasdaq',   q:qqq,  big:false, col:'var(--purple)'},
+          {l:'Russell',  q:iwm,  big:false, col:'var(--amber)'},
+          {l:'VIX',      q:vix,  big:true,  col: vix?.price<15?'var(--green)':vix?.price<25?'var(--amber)':'var(--red)'},
+          {l:'10Y Yield',q:t10,  big:false, col:'var(--cyan)', pct:false, sfx:'%'},
+          {l:'Yield Curve', q:null, big:false, col:spread&&spread<0?'var(--red)':'var(--green)',
+            customVal: spread!=null ? (spread > 0 ? `+${spread}%` : `${spread}%`) : '—',
+            customSub: spread&&spread<0 ? '⚠ INVERTED (10Y < 3M)' : spread&&spread===0 ? 'Flat' : `10Y minus 3M = ${spread}%`,
+            title: 'Yield Curve = 10Y Treasury minus 3M Treasury. Normal: +100 to +250bps. 0 to +100bps = late-cycle caution. Negative = INVERTED: historically 80% recession signal within 12-18 months. Markets often rally 12-18 months after first inversion — do not short on inversion alone. Sustained -50bps for 3+ months = high conviction recession signal.'},
+          {l:'Gold',     q:gld,  big:false, col:'var(--gold)'},
+          {l:'Bonds TLT',q:tlt,  big:false, col:'var(--text2)'},
+          {l:'US Dollar', q:g('UUP'), big:false, col:'var(--cyan)',   title:'UUP ETF tracks US Dollar Index'},
+          {l:'Crude Oil',  q:g('USO'), big:false, col:'var(--amber)',  title:'USO ETF tracks WTI crude'},
+        ].map(({l,q,big,col,customVal,customSub,sfx,title}) => (
+          <div key={l} title={title||''} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:12}}>
+            <div style={{fontSize:8,color:'var(--text3)',letterSpacing:2,textTransform:'uppercase',marginBottom:5}}>{l}</div>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:big?18:15,color:col,fontWeight:big?700:400}}>
+              {customVal || (q ? (sfx ? `${fmt(q.price,2)}${sfx}` : q.price>1000?`$${fmt(q.price,0)}`:`$${fmt(q.price,2)}`) : '—')}
+            </div>
+            <div style={{fontSize:10,color:q?.chg1d>=0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)',marginTop:3}}>
+              {customSub || (q ? fmtP(q.chg1d) : '')}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* SPY MA status */}
+      {regime && spy && (
+        <div className="panel" style={{marginBottom:14}}>
+          <div className="section-label" style={{marginBottom:10}}>SPY TREND STATUS</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10}}>
+            <div style={{textAlign:'center',padding:'10px',background:'var(--bg)',borderRadius:4,border:`1px solid ${regime.above50?'rgba(0,230,118,0.3)':'rgba(255,61,87,0.3)'}`}}>
+              <div style={{fontSize:10,color:'var(--text3)',marginBottom:6}}>vs 50-DAY MA</div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:14,color:regime.above50?'var(--green)':'var(--red)',fontWeight:700}}>{regime.above50?'ABOVE ✓':'BELOW ✗'}</div>
+              {regime.spy50 && <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>MA: ${regime.spy50?.toFixed(1)}</div>}
+            </div>
+            <div style={{textAlign:'center',padding:'10px',background:'var(--bg)',borderRadius:4,border:`1px solid ${regime.above200?'rgba(0,230,118,0.3)':'rgba(255,61,87,0.3)'}`}}>
+              <div style={{fontSize:10,color:'var(--text3)',marginBottom:6}}>vs 200-DAY MA</div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:14,color:regime.above200?'var(--green)':'var(--red)',fontWeight:700}}>{regime.above200?'ABOVE ✓':'BELOW ✗'}</div>
+              {regime.spy200 && <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>MA: ${regime.spy200?.toFixed(1)}</div>}
+            </div>
+            <div style={{textAlign:'center',padding:'10px',background:'var(--bg)',borderRadius:4,border:`1px solid ${regime.vixLevel<20?'rgba(0,230,118,0.3)':regime.vixLevel<28?'rgba(240,165,0,0.3)':'rgba(255,61,87,0.3)'}`}}>
+              <div style={{fontSize:10,color:'var(--text3)',marginBottom:6}}>VIX REGIME</div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:700,color:regime.vixLevel<20?'var(--green)':regime.vixLevel<28?'var(--amber)':'var(--red)'}}>
+                {regime.vixLevel<15?'CALM':regime.vixLevel<20?'NORMAL':regime.vixLevel<28?'ELEVATED':'FEAR'}
+              </div>
+              <div style={{fontSize:13,color:'var(--text)',fontFamily:'var(--font-mono)',marginTop:4}}>{regime.vixLevel?.toFixed(1)}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{display:'flex',gap:8,marginBottom:14}}>
+        <button className="btn btn-sm" onClick={load}>↻ Refresh</button>
+        <button className="btn btn-primary btn-sm" onClick={interpret} disabled={aiLoad||!macro.length}>🧠 Today's Trading Plan</button>
+      </div>
+      <AIOutput text={aiText} loading={aiLoad}/>
+
+      {/* Leaders / Laggards inline */}
+      <div style={{marginTop:20}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <div>
+            <div className="panel-title" style={{fontSize:15}}>Leaders <span>/</span> Laggards</div>
+            <div style={{fontSize:11,color:'var(--text3)'}}>Top/bottom RS stocks · sorted by IBD RS rank · click for AI analysis</div>
+          </div>
+        </div>
+        {llLoad ? <Loader msg="Loading RS ranks..."/> : (
+          <div className="grid-2">
+            <div>
+              <div className="section-label" style={{color:'var(--green)',marginBottom:8}}>
+                ⬆ LEADERS — Highest IBD RS, above 50MA
+              </div>
+              {leaders.length===0 && <div className="muted" style={{fontSize:12,padding:'10px 0'}}>Run RS Scanner first to populate</div>}
+              <table className="data-table">
+                <thead><tr><th>RS</th><th>Trend</th><th>Ticker</th><th>1D</th><th>1W</th><th>1M</th><th>vs 50MA</th></tr></thead>
+                <tbody>
+                  {leaders.slice(0,12).map(s => (
+                    <tr key={s.ticker}>
+                      <td>
+                        <RSBar rs={s.rsRank}/>
+                        {(s.rsRank>=70 && s.rsTrend?.direction==='rising' && s.swingMomentum>=55) && (
+                          <span style={{fontSize:10,color:'var(--green)',fontWeight:700,display:'block',letterSpacing:.5}}>★BEST</span>
+                        )}
+                        {s.rsLineNewHigh && (
+                          <span title="RS Line new 52-week high — stock outperforming SPY. IBD's #1 early signal." style={{fontSize:10,color:'var(--gold)',fontWeight:700,display:'block',letterSpacing:.5}}>⭐ RS↑H</span>
+                        )}
+                        {(s.rsTrend?.vs4w>5 && s.rsRank>=55 && s.rsRank<70) && (
+                          <span title="Emerging leader: RS 55-70 rising fast" style={{fontSize:10,color:'var(--cyan)',fontWeight:700,display:'block',letterSpacing:.5}}>↗EMRG</span>
+                        )}
+                        {s.vcpForming && (
+                          <span title={`VCP: ${s.vcpCount} volatility contractions — Minervini coiling spring setup`} style={{fontSize:10,color:'var(--purple)',fontWeight:700,display:'block',letterSpacing:.5}}>VCP</span>
+                        )}
+                      </td>
+                      <td><RSTrendBadge trend={s.rsTrend} rs={s.rsRank}/></td>
+                      <td><span className="td-ticker">{s.ticker}</span></td>
+                      <td className={fmtC(s.chg1d)}>{fmtP(s.chg1d)}</td>
+                      <td className={fmtC(s.chg1w)}>{fmtP(s.chg1w)}</td>
+                      <td className={fmtC(s.chg1m)}>{fmtP(s.chg1m)}</td>
+                      <td className={s.vsMA50>0?'up':'dn'}>{fmt(s.vsMA50,1)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div>
+              <div className="section-label" style={{color:'var(--red)',marginBottom:8}}>
+                ⬇ LAGGARDS — Lowest IBD RS (avoid/short)
+              </div>
+              {laggards.length===0 && <div className="muted" style={{fontSize:12,padding:'10px 0'}}>Run RS Scanner first to populate</div>}
+              <table className="data-table">
+                <thead><tr><th>RS</th><th>Trend</th><th>Ticker</th><th>1D</th><th>1W</th><th>1M</th><th>vs 50MA</th></tr></thead>
+                <tbody>
+                  {laggards.slice(0,12).map(s => (
+                    <tr key={s.ticker}>
+                      <td>
+                        <RSBar rs={s.rsRank}/>
+                        {(s.rsRank>=70 && s.rsTrend?.direction==='rising' && s.swingMomentum>=55) && (
+                          <span style={{fontSize:10,color:'var(--green)',fontWeight:700,display:'block',letterSpacing:.5}}>★BEST</span>
+                        )}
+                        {s.rsLineNewHigh && (
+                          <span title="RS Line new 52-week high — stock outperforming SPY. IBD's #1 early signal." style={{fontSize:10,color:'var(--gold)',fontWeight:700,display:'block',letterSpacing:.5}}>⭐ RS↑H</span>
+                        )}
+                        {(s.rsTrend?.vs4w>5 && s.rsRank>=55 && s.rsRank<70) && (
+                          <span title="Emerging leader: RS 55-70 rising fast" style={{fontSize:10,color:'var(--cyan)',fontWeight:700,display:'block',letterSpacing:.5}}>↗EMRG</span>
+                        )}
+                        {s.vcpForming && (
+                          <span title={`VCP: ${s.vcpCount} volatility contractions — Minervini coiling spring setup`} style={{fontSize:10,color:'var(--purple)',fontWeight:700,display:'block',letterSpacing:.5}}>VCP</span>
+                        )}
+                      </td>
+                      <td><RSTrendBadge trend={s.rsTrend} rs={s.rsRank}/></td>
+                      <td><span className="td-ticker">{s.ticker}</span></td>
+                      <td className={fmtC(s.chg1d)}>{fmtP(s.chg1d)}</td>
+                      <td className={fmtC(s.chg1w)}>{fmtP(s.chg1w)}</td>
+                      <td className={fmtC(s.chg1m)}>{fmtP(s.chg1m)}</td>
+                      <td className={s.vsMA50>0?'up':'dn'}>{fmt(s.vsMA50,1)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ─── WATCHLIST TAB ────────────────────────────────────────────────────────────
 function WatchlistTab({ rsData }) {
@@ -3916,610 +3000,633 @@ function SectorIndustryRSTrend({ type, title, api: apiPath }) {
   );
 }
 
-function CycleEngineTab({ rsData, rsLoaded }) {
-  const [state,      setState]    = useState(null);
-  const [loading,    setLoading]  = useState(true);
-  const [saving,     setSaving]   = useState(false);
-  const [autoData,   setAutoData] = useState(null);   // auto-detection result
-  const [autoLoad,   setAutoLoad] = useState(false);
-  const [bqData,     setBqData]   = useState([]);
-  const [bqLoading,  setBqLoading]= useState(false);
-  const [wlTickers,  setWlTickers]= useState([]);
-  const [posForm,    setPosForm]  = useState({ ticker:'', entryPrice:'', stopPrice:'', wave:'WAVE1', exogenousFlag:false });
-  const [addingPos,  setAddingPos]= useState(false);
-  const [noteEdit,   setNoteEdit] = useState(false);
-  const [noteDraft,  setNoteDraft]= useState('');
+// ─── CYCLE ENGINE TAB ──────────────────────────────────────────────────────
+function CycleEngineTab() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  useEffect(() => {
-    loadState();
-    loadWL();
-    runAutoDetect(); // auto-run on mount
-  }, []);
-
-  async function loadState() {
-    setLoading(true);
-    try { const d = await api('/api/cycle-state'); setState(d); setNoteDraft(d.notes||''); } catch(_){}
+  async function detect() {
+    setLoading(true); setError('');
+    try {
+      const d = await api('/api/cycle-auto-detect');
+      setData(d);
+    } catch(e) { setError(e.message); }
     setLoading(false);
   }
 
-  async function loadWL() {
-    try { const d = await api('/api/watchlist'); setWlTickers((d.watchlist||[]).map(w=>w.ticker)); } catch(_){}
-  }
+  useEffect(() => { detect(); }, []);
 
-  async function runAutoDetect() {
-    setAutoLoad(true);
-    try {
-      const d = await api('/api/cycle-auto-detect');
-      setAutoData(d);
-      // If auto-applied, reload state
-      if (d.autoApplied) await loadState();
-    } catch(_) {}
-    setAutoLoad(false);
-  }
+  const modeColor = m => ({
+    UPTREND:'#00e676', UPTREND_PRESSURE:'#f0a500', FTD_CONFIRMED:'#69f0ae',
+    RALLY_ATTEMPT:'#80d8ff', CORRECTION:'#ff8c00', BEAR:'#ff3d57', CHOPPY:'#888',
+  }[m] || '#888');
 
-  async function applyAutoDetection() {
-    if (!autoData) return;
-    setSaving(true);
-    try {
-      const patch = {
-        mode: autoData.mode,
-        source: 'manual', // user explicitly clicked apply
-        autoConfidence: autoData.confidence,
-        autoSignals: autoData.signals,
-      };
-      if (autoData.mode === 'RALLY_ATTEMPT' && autoData.recentLowDate) {
-        patch.rallyAttemptStartDate = autoData.recentLowDate;
-        patch.rallyAttemptDay = autoData.rallyAttemptDay;
-      }
-      if (autoData.mode === 'FTD_CONFIRMED' && autoData.recentFTDday) {
-        patch.ftdDate = autoData.recentFTDday;
-        patch.waveDeployment = state?.waveDeployment || 'wave1';
-      }
-      const d = await api('/api/cycle-state', { method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ ...state, ...patch }) });
-      setState(d);
-    } catch(_) {}
-    setSaving(false);
-  }
-
-  async function save(patch) {
-    setSaving(true);
-    try {
-      const d = await api('/api/cycle-state', { method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ ...state, ...patch, source:'manual' }) });
-      setState(d);
-    } catch(_){}
-    setSaving(false);
-  }
-
-  async function scoreWatchlist() {
-    if (!wlTickers.length) return;
-    setBqLoading(true);
-    try {
-      const d = await api('/api/base-quality', { method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ tickers: wlTickers }) });
-      setBqData(d.scores || []);
-    } catch(_){}
-    setBqLoading(false);
-  }
-
-  function startRallyAttempt() {
-    save({ mode:'RALLY_ATTEMPT', rallyAttemptStartDate: new Date().toISOString(), rallyAttemptDay: 1,
-           ftdDate: null, ftdFailed: false, ftdConfirmWeek: false, waveDeployment:'none' });
-  }
-  function confirmFTD() {
-    save({ mode:'FTD_CONFIRMED', ftdDate: new Date().toISOString(), ftdFailed: false,
-           waveDeployment:'wave1', rallyAttemptDay: 0 });
-  }
-  function ftdFail() {
-    save({ mode:'CORRECTION', ftdFailed: true, ftdDate: null, ftdConfirmWeek: false,
-           waveDeployment:'none', rallyAttemptDay: 0, rallyAttemptStartDate: null });
-  }
-  function confirmFTDWeek() { save({ ftdConfirmWeek: true }); }
-
-  function addPosition() {
-    if (!posForm.ticker || !posForm.entryPrice || !posForm.stopPrice) return;
-    const pos = { ticker:posForm.ticker.toUpperCase(), entryPrice:parseFloat(posForm.entryPrice),
-      stopPrice:parseFloat(posForm.stopPrice), wave:posForm.wave, exogenousFlag:posForm.exogenousFlag,
-      entryDate:new Date().toISOString().split('T')[0] };
-    save({ activePositions: [...(state?.activePositions||[]), pos] });
-    setPosForm({ ticker:'', entryPrice:'', stopPrice:'', wave:'WAVE1', exogenousFlag:false });
-    setAddingPos(false);
-  }
-  function removePosition(ticker) {
-    save({ activePositions: (state?.activePositions||[]).filter(p=>p.ticker!==ticker) });
-  }
-  function setMode(mode) {
-    const patch = { mode, source:'manual' };
-    if (['CORRECTION','BEAR','CHOPPY'].includes(mode)) {
-      patch.rallyAttemptDay = 0; patch.rallyAttemptStartDate = null;
-      patch.ftdDate = null; patch.waveDeployment = 'none'; patch.ftdFailed = false;
-    }
-    save(patch);
-  }
-
-  const MODE_CONFIG = {
-    UPTREND:          { label:'Confirmed Uptrend',      color:'#00e676', bg:'rgba(0,230,118,0.08)',  icon:'📈', cashPct:10,
-                        action:'Fully deployed. Concentrate in RS leaders. Add to winners. Ride.',
-                        dont:'Don\'t over-diversify. Don\'t take profits early on leaders.' },
-    UPTREND_PRESSURE: { label:'Uptrend Under Pressure', color:'#69f0ae', bg:'rgba(105,240,174,0.07)',icon:'⚠️', cashPct:35,
-                        action:'Tighten all stops. No new buys. Trim weakest 1-2 positions.',
-                        dont:'Don\'t add exposure. 4-5 distribution days in 4 weeks = danger.' },
-    RALLY_ATTEMPT:    { label:'Rally Attempt',          color:'#f0a500', bg:'rgba(240,165,0,0.08)',  icon:'🔍', cashPct:80,
-                        action:'Build watchlist aggressively. Score every base. Wait for Day 4-7 FTD.',
-                        dont:'Do NOT buy yet. No new positions until FTD confirmed + 1-week check.' },
-    FTD_CONFIRMED:    { label:'FTD Confirmed',          color:'#00d4ff', bg:'rgba(0,212,255,0.08)',  icon:'⚡', cashPct:30,
-                        action:'Deploy Wave 1: highest BQ-score, RS≥90, no exogenous flag, at pivot.',
-                        dont:'Don\'t buy exogenous-pumped stocks (energy/defense war premium).' },
-    CORRECTION:       { label:'Confirmed Correction',   color:'#ff8c00', bg:'rgba(255,140,0,0.08)',  icon:'🔻', cashPct:70,
-                        action:'Raise cash to 70%+. Screen for base-builders. Score stocks daily.',
-                        dont:'Don\'t average down. Don\'t fight the tape. Honor all stops.' },
-    BEAR:             { label:'Bear Market',            color:'#ff3d57', bg:'rgba(255,61,87,0.08)',   icon:'🐻', cashPct:95,
-                        action:'95%+ cash. Only the best 1-2 setups if any. Preserve capital.',
-                        dont:'No long biases. Short only if experienced. Protect what you have.' },
-    CHOPPY:           { label:'Choppy / Directionless', color:'#8888bb', bg:'rgba(136,136,187,0.07)',icon:'↔️', cashPct:60,
-                        action:'Reduce size. Only the cleanest setups. Shorter hold intentions.',
-                        dont:'Don\'t trade failed FTDs. Chop eats capital through friction.' },
-    UNKNOWN:          { label:'Unknown',                color:'#8888bb', bg:'rgba(136,136,187,0.07)',icon:'?',  cashPct:70,
-                        action:'Gathering data — refresh to auto-detect.',
-                        dont:'Don\'t deploy until mode is confirmed.' },
-  };
-  const WAVE_CONFIG = {
-    none:  { label:'No Deployment',    color:'var(--text3)', desc:'' },
-    wave1: { label:'Wave 1 — Deploy',  color:'var(--green)', desc:'RS≥90, BQ≥80, no exogenous flag, at pivot. Half size.' },
-    wave2: { label:'Wave 2 — Expand',  color:'var(--cyan)',  desc:'Quality base-builders confirmed by earnings. Full size.' },
-    wave3: { label:'Wave 3 — Swing',   color:'var(--purple)',desc:'RS momentum ≥90, tight 3-5wk base. Smaller size, tighter stops.' },
-  };
-
-  const mode = state?.mode || 'CORRECTION';
-  const mc   = MODE_CONFIG[mode] || MODE_CONFIG.CORRECTION;
-  const wc   = WAVE_CONFIG[state?.waveDeployment || 'none'];
-  const rallyDay  = state?.rallyAttemptDay || 0;
-  const positions = state?.activePositions || [];
-  const ftdWindow = mode === 'RALLY_ATTEMPT' && rallyDay >= 4 && rallyDay <= 7;
-  const ftdMissed = mode === 'RALLY_ATTEMPT' && rallyDay > 7;
-
-  const wave1  = bqData.filter(b=>b.wave==='WAVE1').sort((a,b)=>b.score-a.score);
-  const wave2  = bqData.filter(b=>b.wave==='WAVE2').sort((a,b)=>b.score-a.score);
-  const wave3  = bqData.filter(b=>b.wave==='WAVE3').sort((a,b)=>(b.rsRank||0)-(a.rsRank||0));
-  const exogen = bqData.filter(b=>b.flags?.includes('EXOGENOUS_RS'));
-
-  const bqColor = s => s>=80?'var(--green)':s>=60?'var(--cyan)':s>=40?'var(--amber)':'var(--red)';
-  const confColor = c => c>=80?'var(--green)':c>=65?'var(--cyan)':c>=50?'var(--amber)':'var(--text3)';
-
-  const flagBadge = (flags=[]) => (
-    <span style={{display:'inline-flex',gap:4,flexWrap:'wrap'}}>
-      {flags.includes('EXOGENOUS_RS') && (
-        <span title="War/event-driven RS spike — reversal risk on resolution. NOT a Wave 1 buy."
-          style={{fontSize:9,padding:'1px 5px',borderRadius:2,background:'rgba(255,61,87,0.15)',color:'var(--red)',border:'1px solid rgba(255,61,87,0.3)',fontWeight:700}}>⚠ EXOG</span>
-      )}
-      {flags.includes('RS_PRICE_DIVERGE') && (
-        <span title="RS Line rising while price is down — stock beating the market in a correction. Best base-holder signal."
-          style={{fontSize:9,padding:'1px 5px',borderRadius:2,background:'rgba(0,230,118,0.12)',color:'var(--green)',border:'1px solid rgba(0,230,118,0.3)',fontWeight:700}}>★ RS÷P</span>
-      )}
-    </span>
-  );
-
-  if (loading) return <div className="panel"><div className="loader"><div className="spinner"/>Loading Cycle Engine...</div></div>;
+  const actionLabel = a => ({
+    FULL_DEPLOY: {text:'FULL DEPLOY',color:'#00e676',desc:'All systems go — full position sizing'},
+    TIGHTEN:     {text:'TIGHTEN',color:'#f0a500',desc:'Tighten stops, reduce new entries'},
+    WATCH_ONLY:  {text:'WATCH ONLY',color:'#ff8c00',desc:'No new entries — observe and prepare'},
+    CASH:        {text:'GO TO CASH',color:'#ff3d57',desc:'Exit longs, preserve capital'},
+  }[a] || {text:a||'—',color:'#888',desc:''});
 
   return (
     <div>
-      {/* ── AUTO-DETECTION PANEL ───────────────────────────────────────────── */}
-      <div style={{padding:'14px 18px',background:'var(--bg2)',border:'1px solid var(--border2)',borderRadius:6,marginBottom:14}}>
-        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:autoData?10:0,flexWrap:'wrap'}}>
-          <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--text3)',letterSpacing:1,fontWeight:700}}>🤖 AUTO-DETECTION ENGINE</span>
-          <span style={{fontSize:10,color:'var(--text3)'}}>O'Neil FTD + Weinstein Stage + Distribution Day count — runs from live SPY data</span>
-          <button className="btn btn-sm" onClick={runAutoDetect} disabled={autoLoad}
-            style={{marginLeft:'auto',borderColor:'var(--cyan)',color:'var(--cyan)'}}>
-            {autoLoad ? '⏳ Detecting...' : '↻ Run Now'}
+      <div className="panel" style={{marginBottom:14}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <div>
+            <div className="panel-title">Cycle <span>Engine</span></div>
+            <div className="panel-sub">O'Neil market cycle detection — distribution days, FTD, rally attempts</div>
+          </div>
+          <button className="btn btn-primary" onClick={detect} disabled={loading}>
+            {loading ? '⟳ Detecting...' : '⟳ Detect Cycle'}
           </button>
         </div>
+        {error && <ErrorBox msg={error}/>}
+      </div>
 
-        {autoLoad && <div className="loader" style={{padding:'8px 0'}}><div className="spinner"/>Analyzing SPY history — distribution days, rally attempt, FTD...</div>}
+      {loading && <div className="panel"><Loader msg="Analyzing SPY OHLCV data for distribution days and follow-through days..."/></div>}
 
-        {autoData && !autoLoad && (
-          <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:14,alignItems:'start'}}>
-            <div>
-              {/* Detected mode */}
-              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8,flexWrap:'wrap'}}>
-                <span style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:700,
-                  color:(MODE_CONFIG[autoData.mode]||MODE_CONFIG.CHOPPY).color}}>
-                  {(MODE_CONFIG[autoData.mode]||MODE_CONFIG.CHOPPY).icon} {(MODE_CONFIG[autoData.mode]||MODE_CONFIG.CHOPPY).label}
-                </span>
-                <div style={{display:'flex',alignItems:'center',gap:6}}>
-                  <div style={{width:60,height:4,background:'var(--border2)',borderRadius:2}}>
-                    <div style={{width:`${autoData.confidence}%`,height:'100%',borderRadius:2,background:confColor(autoData.confidence)}}/>
+      {data && (
+        <div>
+          {/* Mode + Action Banner */}
+          <div className="panel" style={{marginBottom:14,background:'var(--bg2)',border:`2px solid ${modeColor(data.mode)}`}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12}}>
+              <div>
+                <div style={{fontSize:28,fontWeight:800,color:modeColor(data.mode),fontFamily:'var(--font-mono)',letterSpacing:2}}>
+                  {data.mode?.replace(/_/g,' ')}
+                </div>
+                <div style={{fontSize:12,color:'var(--text3)',marginTop:2}}>
+                  Confidence: <strong style={{color:data.confidence>=80?'var(--green)':data.confidence>=60?'var(--amber)':'var(--red)'}}>{data.confidence}%</strong>
+                </div>
+              </div>
+              <div style={{textAlign:'right'}}>
+                {(() => { const a = actionLabel(data.action); return (
+                  <div>
+                    <div style={{fontSize:18,fontWeight:800,color:a.color,fontFamily:'var(--font-mono)',letterSpacing:2}}>{a.text}</div>
+                    <div style={{fontSize:11,color:'var(--text3)',marginTop:2}}>{a.desc}</div>
                   </div>
-                  <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:confColor(autoData.confidence),fontWeight:700}}>
-                    {autoData.confidence}% confident
+                );})()}
+              </div>
+            </div>
+          </div>
+
+          {/* Key Metrics Grid */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12,marginBottom:14}}>
+            {/* Distribution Days */}
+            <div className="panel" style={{padding:14}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>DISTRIBUTION DAYS (25-SESSION)</div>
+              <div style={{fontSize:36,fontWeight:800,color:data.distributionDays?.count>=4?'var(--red)':data.distributionDays?.count>=3?'var(--amber)':'var(--green)',fontFamily:'var(--font-mono)'}}>
+                {data.distributionDays?.count ?? '—'}
+              </div>
+              <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
+                {data.distributionDays?.count>=5 ? 'DANGER — correction likely' :
+                 data.distributionDays?.count>=4 ? 'Elevated — tighten stops' :
+                 data.distributionDays?.count>=3 ? 'Watch closely' : 'Healthy market'}
+              </div>
+              {data.distributionDays?.dates?.length > 0 && (
+                <div style={{marginTop:8,fontSize:10,color:'var(--text3)'}}>
+                  {data.distributionDays.dates.slice(-5).map((d,i) => (
+                    <div key={i}>{d} <span style={{color:'var(--red)'}}>{typeof d === 'object' ? `${d.chg}%` : ''}</span></div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* FTD Status */}
+            <div className="panel" style={{padding:14}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>FOLLOW-THROUGH DAY</div>
+              <div style={{fontSize:20,fontWeight:800,color:data.ftd?.confirmed?'var(--green)':data.ftd?.fired?'var(--amber)':'var(--text3)',fontFamily:'var(--font-mono)'}}>
+                {data.ftd?.confirmed ? 'CONFIRMED' : data.ftd?.fired ? 'FIRED (unconfirmed)' : 'NOT DETECTED'}
+              </div>
+              {data.ftd?.date && <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>Date: {data.ftd.date}</div>}
+              <div style={{fontSize:10,color:'var(--text3)',marginTop:6}}>
+                FTD = 1.25%+ gain on higher vol, days 4-7 of rally
+              </div>
+            </div>
+
+            {/* Rally Attempt */}
+            <div className="panel" style={{padding:14}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>RALLY ATTEMPT</div>
+              <div style={{fontSize:36,fontWeight:800,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>
+                Day {data.rallyAttempt?.day ?? '—'}
+              </div>
+              <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
+                From low on {data.rallyAttempt?.startDate || '—'}
+              </div>
+              <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>
+                {data.rallyAttempt?.day >= 4 && data.rallyAttempt?.day <= 7 ? 'FTD WINDOW — watch for confirmation' :
+                 data.rallyAttempt?.day > 7 ? 'Past FTD window' : 'Too early for FTD'}
+              </div>
+            </div>
+
+            {/* SPY Technical */}
+            <div className="panel" style={{padding:14}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>SPY TECHNICAL</div>
+              <div style={{fontSize:20,fontWeight:800,color:'var(--text)',fontFamily:'var(--font-mono)'}}>
+                ${data.spy?.price?.toFixed(2) || '—'}
+              </div>
+              <div style={{fontSize:11,marginTop:6}}>
+                <div style={{marginBottom:3}}>
+                  <span style={{color:data.spy?.above50?'var(--green)':'var(--red)'}}>
+                    {data.spy?.above50 ? '✓' : '✗'} 50MA
+                  </span>
+                  <span style={{color:'var(--text3)',marginLeft:8}}>${data.spy?.ma50?.toFixed(2) || '—'}</span>
+                </div>
+                <div style={{marginBottom:3}}>
+                  <span style={{color:data.spy?.above200?'var(--green)':'var(--red)'}}>
+                    {data.spy?.above200 ? '✓' : '✗'} 200MA
+                  </span>
+                  <span style={{color:'var(--text3)',marginLeft:8}}>${data.spy?.ma200?.toFixed(2) || '—'}</span>
+                </div>
+                <div>
+                  <span style={{color:data.spy?.ma200Rising?'var(--green)':'var(--red)'}}>
+                    {data.spy?.ma200Rising ? '✓ 200MA rising' : '✗ 200MA flat/falling'}
                   </span>
                 </div>
-                {autoData.autoApplied && (
-                  <span style={{fontSize:10,padding:'2px 8px',background:'rgba(0,230,118,0.12)',border:'1px solid rgba(0,230,118,0.3)',borderRadius:3,color:'var(--green)'}}>
-                    ✓ Auto-applied
-                  </span>
-                )}
-                {autoData.manualOverrideActive && (
-                  <span style={{fontSize:10,padding:'2px 8px',background:'rgba(240,165,0,0.12)',border:'1px solid rgba(240,165,0,0.3)',borderRadius:3,color:'var(--amber)'}}>
-                    ⊘ Manual override active (&lt; 6h)
-                  </span>
-                )}
-                {state?.source === 'manual' && !autoData.manualOverrideActive && (
-                  <span style={{fontSize:10,color:'var(--text3)'}}>Current: manual override</span>
-                )}
               </div>
+            </div>
+          </div>
 
-              {/* Signals */}
-              <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}}>
-                {(autoData.signals||[]).map((s,i)=>(
-                  <span key={i} style={{fontSize:10,padding:'2px 8px',borderRadius:3,
-                    background:'rgba(0,212,255,0.08)',border:'1px solid rgba(0,212,255,0.2)',color:'var(--cyan)'}}>
-                    {s}
-                  </span>
+          {/* Signals */}
+          {data.signals?.length > 0 && (
+            <div className="panel" style={{padding:14}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>ACTIVE SIGNALS</div>
+              <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+                {data.signals.map((s,i) => (
+                  <span key={i} style={{padding:'4px 10px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,fontSize:11,color:'var(--text2)'}}>{s}</span>
                 ))}
               </div>
-              {(autoData.warnings||[]).map((w,i)=>(
-                <div key={i} style={{fontSize:11,color:'var(--amber)',marginBottom:2}}>⚠ {w}</div>
-              ))}
-
-              {/* Key metrics */}
-              <div style={{display:'flex',gap:12,flexWrap:'wrap',marginTop:8,fontSize:10,fontFamily:'var(--font-mono)',color:'var(--text3)'}}>
-                <span>SPY ${autoData.spyPrice} · vs50MA <span style={{color:autoData.spyVs50>=0?'var(--green)':'var(--red)'}}>{autoData.spyVs50>0?'+':''}{autoData.spyVs50}%</span></span>
-                <span>· vs200MA <span style={{color:autoData.spyVs200>=0?'var(--green)':'var(--red)'}}>{autoData.spyVs200>0?'+':''}{autoData.spyVs200}%</span></span>
-                <span>· VIX {autoData.vixLevel?.toFixed(1)}</span>
-                <span>· Dist days: <span style={{color:autoData.distDays>=4?'var(--red)':autoData.distDays>=2?'var(--amber)':'var(--green)'}}>{autoData.distDays}</span>/25</span>
-                <span>· Down weeks: <span style={{color:autoData.downWeeks>=4?'var(--red)':'var(--text)'}}>{autoData.downWeeks}</span></span>
-                <span>· Breadth: {autoData.breadthPct}%</span>
-                {autoData.rallyAttemptDay > 0 && <span>· Rally Day <span style={{color:'var(--cyan)',fontWeight:700}}>{autoData.rallyAttemptDay}</span></span>}
-                {autoData.todayIsFTD && <span style={{color:'var(--green)',fontWeight:700}}>· ⚡ FTD TODAY +{autoData.todayRet}%</span>}
-              </div>
-              <div style={{fontSize:9,color:'var(--text3)',marginTop:4}}>Analyzed: {autoData.analyzedDate} · SPY 200MA ${autoData.ma200} ({autoData.ma200Rising?'▲ rising':'→ flat/declining'})</div>
             </div>
-
-            {/* Apply button */}
-            {!autoData.autoApplied && autoData.mode !== state?.mode && (
-              <button className="btn btn-primary btn-sm" onClick={applyAutoDetection} disabled={saving}
-                style={{whiteSpace:'nowrap',alignSelf:'center'}}>
-                Apply Detection
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* ── GLOBAL MODE BANNER ─────────────────────────────────────────────── */}
-      <div style={{padding:'20px 24px',background:mc.bg,border:`2px solid ${mc.color}55`,borderRadius:8,marginBottom:16}}>
-        <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
-          <div>
-            <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:4}}>
-              <span style={{fontSize:22}}>{mc.icon}</span>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:20,fontWeight:700,color:mc.color,letterSpacing:3}}>{mc.label}</div>
-              {state?.source === 'auto' && (
-                <span style={{fontSize:9,padding:'2px 6px',background:'rgba(0,212,255,0.12)',border:'1px solid rgba(0,212,255,0.3)',borderRadius:3,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>
-                  🤖 AUTO {state.autoConfidence}%
-                </span>
-              )}
-              {state?.source === 'manual' && (
-                <span style={{fontSize:9,padding:'2px 6px',background:'rgba(240,165,0,0.12)',border:'1px solid rgba(240,165,0,0.3)',borderRadius:3,color:'var(--amber)',fontFamily:'var(--font-mono)'}}>
-                  ✍ MANUAL
-                </span>
-              )}
-            </div>
-            <div style={{fontSize:12,color:'var(--text2)',marginBottom:4,maxWidth:500}}>
-              <strong style={{color:'var(--green)'}}>DO: </strong>{mc.action}
-            </div>
-            <div style={{fontSize:12,color:'var(--text3)',maxWidth:500}}>
-              <strong style={{color:'var(--red)'}}>DON'T: </strong>{mc.dont}
-            </div>
-          </div>
-          <div style={{textAlign:'center'}}>
-            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:2,marginBottom:4}}>TARGET CASH</div>
-            <div style={{fontFamily:'var(--font-mono)',fontSize:32,fontWeight:700,color:mc.color}}>{mc.cashPct}%</div>
-            <div style={{fontSize:10,color:'var(--text3)'}}>{100-mc.cashPct}% deployed</div>
-          </div>
-        </div>
-
-        {mode === 'RALLY_ATTEMPT' && (
-          <div style={{marginTop:14,padding:'10px 14px',background:'rgba(240,165,0,0.06)',borderRadius:4,border:'1px solid rgba(240,165,0,0.2)'}}>
-            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6,flexWrap:'wrap',gap:6}}>
-              <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--amber)',fontWeight:700,letterSpacing:1}}>
-                RALLY ATTEMPT — DAY {rallyDay} OF 7
-              </span>
-              {ftdWindow && <span style={{fontSize:11,padding:'3px 10px',background:'rgba(0,212,255,0.15)',border:'1px solid rgba(0,212,255,0.4)',borderRadius:3,color:'var(--cyan)',fontWeight:700,animation:'pulse 1.5s infinite'}}>⚡ FTD WINDOW — Need ≥1.25% on higher vol</span>}
-              {ftdMissed && <span style={{fontSize:11,padding:'3px 10px',background:'rgba(255,61,87,0.12)',border:'1px solid rgba(255,61,87,0.3)',borderRadius:3,color:'var(--red)',fontWeight:700}}>✗ Day 7+ — Watching for new low or next attempt</span>}
-            </div>
-            <div style={{display:'flex',gap:4}}>
-              {[1,2,3,4,5,6,7].map(d => (
-                <div key={d} style={{flex:1,height:6,borderRadius:3,background:d<=rallyDay?(d>=4&&d<=7?'var(--cyan)':'var(--amber)'):'var(--border2)'}}/>
-              ))}
-            </div>
-            <div style={{display:'flex',justifyContent:'space-between',marginTop:4,fontSize:9,color:'var(--text3)'}}>
-              <span>Day 1</span><span style={{color:'var(--cyan)'}}>FTD window: Day 4–7</span><span>Day 7</span>
-            </div>
-            <div style={{marginTop:8,fontSize:11,color:'var(--text3)',lineHeight:1.8}}>
-              <strong style={{color:'var(--amber)'}}>FTD Conditions (Day 4-7):</strong> Index gains ≥1.25% on volume higher than prior session.{' '}
-              <strong style={{color:'var(--text)'}}>Then wait 5 more sessions</strong> — no distribution days, leading stocks breaking out → confirm before deploying.
-            </div>
-          </div>
-        )}
-        {mode === 'FTD_CONFIRMED' && (
-          <div style={{marginTop:14,padding:'10px 14px',background:'rgba(0,212,255,0.06)',borderRadius:4,border:'1px solid rgba(0,212,255,0.2)'}}>
-            <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
-              <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--cyan)',fontWeight:700}}>
-                ⚡ FTD CONFIRMED {state?.ftdDate?.split('T')[0]}
-              </span>
-              {state?.ftdConfirmWeek
-                ? <span style={{fontSize:11,padding:'2px 8px',background:'rgba(0,230,118,0.12)',border:'1px solid rgba(0,230,118,0.3)',borderRadius:3,color:'var(--green)'}}>✓ Confirmation week passed</span>
-                : <span style={{fontSize:11,color:'var(--amber)'}}>⏳ In 5-session confirmation window</span>
-              }
-            </div>
-            <div style={{marginTop:6,fontSize:11,color:'var(--text3)'}}>
-              <strong style={{color:'var(--cyan)'}}>Current wave:</strong>{' '}
-              <span style={{color:wc.color,fontWeight:700}}>{wc.label}</span>{wc.desc ? ` — ${wc.desc}` : ''}
-            </div>
-          </div>
-        )}
-        {state?.ftdFailed && (
-          <div style={{marginTop:10,padding:'10px 14px',background:'rgba(255,61,87,0.08)',borderRadius:4,border:'1px solid rgba(255,61,87,0.3)'}}>
-            <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--red)',fontWeight:700}}>
-              ✗ LAST FTD FAILED — High-volume reversal. Cash raised. Rally attempt counter reset.
-            </span>
-          </div>
-        )}
-      </div>
-
-      {/* ── MODE CONTROLS ──────────────────────────────────────────────────── */}
-      <div className="panel" style={{marginBottom:14}}>
-        <div className="panel-title" style={{marginBottom:6}}>Manual Override <span>— Click to force a mode if auto-detection is wrong</span></div>
-        <div style={{fontSize:11,color:'var(--text3)',marginBottom:10}}>
-          Auto-detection runs every time you open this tab and auto-applies if confidence ≥75% and no manual override in last 6 hours.
-          Use manual override when you have context the algorithm can't see (e.g. a FTD that just happened today).
-        </div>
-        <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:12}}>
-          {Object.entries(MODE_CONFIG).filter(([m])=>m!=='UNKNOWN').map(([m, cfg]) => (
-            <button key={m} onClick={()=>setMode(m)} disabled={saving}
-              style={{padding:'6px 12px',border:`1px solid ${mode===m?cfg.color:'var(--border)'}`,borderRadius:4,
-                background:mode===m?cfg.color+'22':'transparent',color:mode===m?cfg.color:'var(--text3)',
-                cursor:'pointer',fontSize:10,fontFamily:'var(--font-mono)',fontWeight:mode===m?700:400,letterSpacing:.5,transition:'all 0.15s'}}>
-              {cfg.icon} {cfg.label}
-            </button>
-          ))}
-        </div>
-        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-          {mode==='CORRECTION' && <button className="btn btn-sm" onClick={startRallyAttempt} style={{borderColor:'var(--amber)',color:'var(--amber)'}}>🔍 Start Rally Attempt (Day 1)</button>}
-          {mode==='RALLY_ATTEMPT' && ftdWindow && <button className="btn btn-sm btn-primary" onClick={confirmFTD} style={{background:'var(--cyan)',borderColor:'var(--cyan)'}}>⚡ Confirm FTD</button>}
-          {mode==='RALLY_ATTEMPT' && <button className="btn btn-sm" onClick={()=>save({mode:'CORRECTION',rallyAttemptDay:0,rallyAttemptStartDate:null})} style={{borderColor:'var(--red)',color:'var(--red)'}}>✗ New Low — Reset</button>}
-          {mode==='FTD_CONFIRMED' && !state?.ftdConfirmWeek && <button className="btn btn-sm" onClick={confirmFTDWeek} style={{borderColor:'var(--green)',color:'var(--green)'}}>✓ Confirm Week Passed</button>}
-          {mode==='FTD_CONFIRMED' && <button className="btn btn-sm" onClick={ftdFail} style={{borderColor:'var(--red)',color:'var(--red)'}}>✗ FTD Failed</button>}
-          {mode==='FTD_CONFIRMED' && ['wave1','wave2','wave3'].map(w=>(
-            <button key={w} className="btn btn-sm" onClick={()=>save({waveDeployment:w})}
-              style={{borderColor:state?.waveDeployment===w?WAVE_CONFIG[w].color:'var(--border)',color:state?.waveDeployment===w?WAVE_CONFIG[w].color:'var(--text3)'}}>
-              {WAVE_CONFIG[w].label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:14}}>
-        {/* ── WATCHLIST BASE QUALITY SCORES ──────────────────────────────── */}
-        <div className="panel">
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
-            <div>
-              <div className="panel-title">Base Quality Scores <span>— Watchlist</span></div>
-              <div style={{fontSize:11,color:'var(--text3)'}}>Score 0-100 · RS line + vol dry-up + VCP + Stage 2 · hover ℹ for breakdown</div>
-            </div>
-            <button className="btn btn-sm btn-primary" onClick={scoreWatchlist} disabled={bqLoading||!wlTickers.length}>
-              {bqLoading?'⏳':'↻'} Score All
-            </button>
-          </div>
-          {wlTickers.length===0 && <div className="info-box">Add stocks to your Watchlist tab first — they'll appear here for scoring.</div>}
-          {bqLoading && <div className="loader"><div className="spinner"/>Scoring watchlist stocks...</div>}
-          {!bqLoading && bqData.length>0 && (
-            <table className="data-table">
-              <thead><tr>
-                <th title="Ticker">Ticker</th>
-                <th title="Base Quality Score 0-100. Higher = better base during the correction. Hover ℹ for breakdown.">BQ Score</th>
-                <th title="Wave 1/2/3 assignment based on BQ score + RS rank + flags">Wave</th>
-                <th title="IBD RS rank">RS</th>
-                <th title="Weinstein Stage">Stage</th>
-                <th title="EXOG = war-premium RS. RS÷P = RS rising while price fell (best signal).">Flags</th>
-              </tr></thead>
-              <tbody>
-                {[...bqData].sort((a,b)=>(b.score||0)-(a.score||0)).map(b => {
-                  const wCfg = {WAVE1:{...WAVE_CONFIG.wave1},WAVE2:{...WAVE_CONFIG.wave2},WAVE3:{...WAVE_CONFIG.wave3},WATCH:{label:'WATCH',color:'var(--amber)'},AVOID:{label:'AVOID',color:'var(--red)'}};
-                  const wc2 = wCfg[b.wave]||wCfg.WATCH;
-                  return (
-                    <tr key={b.ticker}>
-                      <td><span className="td-ticker">{b.ticker}</span></td>
-                      <td>
-                        <div style={{display:'flex',alignItems:'center',gap:6}}>
-                          <div style={{width:36,height:4,background:'var(--border2)',borderRadius:2}}>
-                            <div style={{width:`${b.score||0}%`,height:'100%',borderRadius:2,background:bqColor(b.score||0)}}/>
-                          </div>
-                          <span style={{fontFamily:'var(--font-mono)',fontSize:12,fontWeight:700,color:bqColor(b.score||0)}}>{b.score??'—'}</span>
-                        </div>
-                        <div style={{fontSize:9,color:'var(--text3)',marginTop:1,cursor:'help'}}
-                          title={`RS↑:+${b.breakdown?.rsLineUp||0} | Vol:+${b.breakdown?.volumeDryup||0} | VCP:+${b.breakdown?.vcpForming||0} | S2:+${b.breakdown?.stage2||0} | RShi:+${b.breakdown?.rsLineNewHigh||0} | Stage pen:${b.breakdown?.stagePenalty||0} | RSfall:${b.breakdown?.rsFalling||0}`}>
-                          ℹ breakdown
-                        </div>
-                      </td>
-                      <td>
-                        <span style={{fontSize:10,fontWeight:700,fontFamily:'var(--font-mono)',color:wc2.color,padding:'2px 6px',borderRadius:2,border:`1px solid ${wc2.color}44`,background:`${wc2.color}11`}}>
-                          {b.wave}
-                        </span>
-                      </td>
-                      <td><RSBar rs={b.rsRank}/></td>
-                      <td style={{fontSize:11,color:b.stage===2?'var(--green)':b.stage===4?'var(--red)':'var(--amber)'}}>{b.stageName||'—'}</td>
-                      <td>{flagBadge(b.flags||[])}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
           )}
         </div>
-
-        {/* ── WAVE ASSIGNMENT PANEL ───────────────────────────────────────── */}
-        <div className="panel">
-          <div className="panel-title" style={{marginBottom:4}}>Wave Assignment <span>— After FTD Confirmed</span></div>
-          <div style={{fontSize:11,color:'var(--text3)',marginBottom:12,lineHeight:1.8}}>
-            Score your watchlist first. Stocks auto-sort by BQ score, RS rank, and flags.
-            {mode!=='FTD_CONFIRMED' && <span style={{color:'var(--amber)'}}>{' '}Wave deployment active after FTD confirmed.</span>}
-          </div>
-          {bqData.length===0
-            ? <div className="info-box">Score your Watchlist to populate Wave assignments.</div>
-            : <>
-                {[{title:'WAVE 1 — First Strike',color:'var(--green)',bg:'rgba(0,230,118,0.05)',border:'rgba(0,230,118,0.15)',items:wave1,desc:'BQ≥80, RS≥90, no EXOG, at pivot. Half position.'},
-                  {title:'WAVE 2 — Quality Expansion',color:'var(--cyan)',bg:'rgba(0,212,255,0.05)',border:'rgba(0,212,255,0.15)',items:wave2,desc:'BQ 60-79, Stage 2, earnings confirming. Full size.'},
-                  {title:'WAVE 3 — Swing Momentum',color:'var(--purple)',bg:'rgba(196,77,255,0.05)',border:'rgba(196,77,255,0.15)',items:wave3,desc:'RS≥90, 3-5wk base. Smaller size, tighter stops.'},
-                ].map(({title,color,bg,border,items,desc})=>(
-                  <div key={title} style={{marginBottom:12}}>
-                    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:5}}>
-                      <span style={{fontFamily:'var(--font-mono)',fontSize:10,fontWeight:700,color,letterSpacing:1}}>{title}</span>
-                      <span style={{fontSize:10,color:'var(--text3)'}}>{desc}</span>
-                    </div>
-                    {items.length===0
-                      ? <div style={{fontSize:11,color:'var(--text3)',fontStyle:'italic',paddingLeft:4}}>None qualifying yet.</div>
-                      : items.map(b=>(
-                          <div key={b.ticker} style={{display:'flex',alignItems:'center',gap:8,padding:'4px 8px',background:bg,borderRadius:3,marginBottom:2,border:`1px solid ${border}`}}>
-                            <span className="td-ticker" style={{minWidth:48}}>{b.ticker}</span>
-                            <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:bqColor(b.score),fontWeight:700,minWidth:24}}>{b.score}</span>
-                            <RSBar rs={b.rsRank}/>
-                            <span style={{fontSize:10,color:'var(--text3)',flex:1}}>{b.stageName}</span>
-                            {flagBadge(b.flags)}
-                          </div>
-                        ))
-                    }
-                  </div>
-                ))}
-                {exogen.length>0 && (
-                  <div style={{padding:'8px 12px',background:'rgba(255,61,87,0.06)',borderRadius:4,border:'1px solid rgba(255,61,87,0.25)'}}>
-                    <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--red)',fontWeight:700,marginBottom:4}}>⚠ EXOGENOUS RS — NOT Wave 1 buys</div>
-                    <div style={{fontSize:10,color:'var(--text3)',marginBottom:5}}>War-premium RS (energy/defense). Reversal risk on ceasefire. Monitor only.</div>
-                    <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-                      {exogen.map(b=><span key={b.ticker} style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--red)',fontWeight:700}}>{b.ticker}</span>)}
-                    </div>
-                  </div>
-                )}
-              </>
-          }
-        </div>
-      </div>
-
-      {/* ── POSITION RISK MONITOR ──────────────────────────────────────────── */}
-      <div className="panel">
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
-          <div>
-            <div className="panel-title">Position Risk Monitor <span>— Active Trades</span></div>
-            <div style={{fontSize:11,color:'var(--text3)'}}>Stop proximity alerts. FTD failure triggers full review banner.</div>
-          </div>
-          <button className="btn btn-sm" onClick={()=>setAddingPos(v=>!v)} style={{borderColor:'var(--cyan)',color:'var(--cyan)'}}>
-            {addingPos?'✕ Cancel':'+ Add Position'}
-          </button>
-        </div>
-        {state?.ftdFailed && positions.length>0 && (
-          <div style={{padding:'10px 14px',background:'rgba(255,61,87,0.1)',border:'1px solid rgba(255,61,87,0.4)',borderRadius:5,marginBottom:12,fontFamily:'var(--font-mono)',fontSize:11,color:'var(--red)',fontWeight:700}}>
-            ⚠ FTD FAILED — Any position ≥7% below entry: SELL TODAY. No exceptions.
-          </div>
-        )}
-        {addingPos && (
-          <div style={{padding:'12px 14px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,marginBottom:12,display:'flex',gap:8,flexWrap:'wrap',alignItems:'flex-end'}}>
-            {[{key:'ticker',placeholder:'TICKER',width:80,mono:true,upper:true},{key:'entryPrice',placeholder:'Entry $',width:90,mono:true},{key:'stopPrice',placeholder:'Stop $',width:90,mono:true}].map(f=>(
-              <div key={f.key}>
-                <div style={{fontSize:9,color:'var(--text3)',marginBottom:3,letterSpacing:1,textTransform:'uppercase'}}>{f.placeholder}</div>
-                <input value={posForm[f.key]} onChange={e=>setPosForm(p=>({...p,[f.key]:f.upper?e.target.value.toUpperCase():e.target.value}))}
-                  style={{width:f.width,background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',padding:'6px 8px',fontFamily:f.mono?'var(--font-mono)':'var(--font-sans)',fontSize:12,outline:'none'}}/>
-              </div>
-            ))}
-            <div>
-              <div style={{fontSize:9,color:'var(--text3)',marginBottom:3}}>WAVE</div>
-              <select value={posForm.wave} onChange={e=>setPosForm(p=>({...p,wave:e.target.value}))}
-                style={{background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',padding:'6px 8px',fontSize:11,outline:'none'}}>
-                <option value="WAVE1">Wave 1</option><option value="WAVE2">Wave 2</option><option value="WAVE3">Wave 3</option>
-              </select>
-            </div>
-            <div style={{display:'flex',alignItems:'center',gap:5,paddingBottom:2}}>
-              <input type="checkbox" id="exogChk" checked={posForm.exogenousFlag} onChange={e=>setPosForm(p=>({...p,exogenousFlag:e.target.checked}))}/>
-              <label htmlFor="exogChk" style={{fontSize:11,color:'var(--red)',cursor:'pointer'}}>⚠ Exogenous</label>
-            </div>
-            <button className="btn btn-sm btn-primary" onClick={addPosition} disabled={!posForm.ticker||!posForm.entryPrice||!posForm.stopPrice}>Add</button>
-          </div>
-        )}
-        {positions.length===0 && !addingPos && <div className="empty" style={{padding:'16px'}}>No active positions. Add them above after opening a trade.</div>}
-        {positions.length>0 && (
-          <table className="data-table">
-            <thead><tr>
-              <th>Ticker</th><th>Wave</th><th>Entry</th><th>Stop</th>
-              <th title="Risk per share (entry - stop)">Risk/Sh</th>
-              <th>Current</th><th>P&amp;L%</th>
-              <th title="% distance from stop. Red = within 1% of stop.">vs Stop</th>
-              <th>Status</th><th></th>
-            </tr></thead>
-            <tbody>
-              {positions.map(pos => {
-                const rs = rsData?.find(s=>s.ticker===pos.ticker);
-                const cur = rs?.price ?? null;
-                const pnlPct = cur ? +((cur-pos.entryPrice)/pos.entryPrice*100).toFixed(2) : null;
-                const vsStop = cur ? +((cur-pos.stopPrice)/pos.stopPrice*100).toFixed(2) : null;
-                const riskSh = +(pos.entryPrice-pos.stopPrice).toFixed(2);
-                const stopPct = +((pos.entryPrice-pos.stopPrice)/pos.entryPrice*100).toFixed(1);
-                let status='—', statusCol='var(--text3)', statusBg='transparent';
-                if (vsStop!==null) {
-                  if (cur<=pos.stopPrice)  { status='🔴 AT STOP — SELL';  statusCol='var(--red)';  statusBg='rgba(255,61,87,0.15)'; }
-                  else if (vsStop<1)       { status='🟠 NEAR STOP';        statusCol='#ff8c00';     statusBg='rgba(255,140,0,0.10)'; }
-                  else if (vsStop<3)       { status='🟡 Caution';          statusCol='var(--amber)'; }
-                  else if (pnlPct>=20)     { status='🟢 Eval Trim';        statusCol='var(--green)'; }
-                  else                     { status='✓ Safe';              statusCol='var(--green)'; }
-                }
-                if (state?.ftdFailed && pnlPct!==null && pnlPct<=-7) {
-                  status='⚠ FTD EXIT'; statusCol='var(--red)'; statusBg='rgba(255,61,87,0.2)';
-                }
-                const wCol = {WAVE1:'var(--green)',WAVE2:'var(--cyan)',WAVE3:'var(--purple)'};
-                return (
-                  <tr key={pos.ticker} style={{background:statusBg}}>
-                    <td><span className="td-ticker">{pos.ticker}</span>{pos.exogenousFlag&&<span style={{fontSize:9,marginLeft:3,color:'var(--red)'}}>⚠EXOG</span>}<div style={{fontSize:9,color:'var(--text3)'}}>{pos.entryDate}</div></td>
-                    <td><span style={{fontSize:10,fontWeight:700,color:wCol[pos.wave]||'var(--text3)'}}>{pos.wave}</span></td>
-                    <td style={{fontFamily:'var(--font-mono)'}}>${pos.entryPrice.toFixed(2)}</td>
-                    <td style={{fontFamily:'var(--font-mono)',color:'var(--red)'}}>${pos.stopPrice.toFixed(2)}</td>
-                    <td style={{fontFamily:'var(--font-mono)',color:'var(--red)'}}>${Math.abs(riskSh).toFixed(2)}<div style={{fontSize:9,color:'var(--text3)'}}>{stopPct}%</div></td>
-                    <td style={{fontFamily:'var(--font-mono)'}}>{cur?`$${cur.toFixed(2)}`:'—'}</td>
-                    <td className={pnlPct!=null?(pnlPct>=0?'up':'dn'):''}>{pnlPct!=null?`${pnlPct>0?'+':''}${pnlPct}%`:'—'}</td>
-                    <td style={{fontFamily:'var(--font-mono)',color:vsStop!=null&&vsStop<3?'var(--red)':'var(--text2)'}}>{vsStop!=null?`${vsStop>0?'+':''}${vsStop}%`:'—'}</td>
-                    <td style={{fontSize:11,fontWeight:700,color:statusCol}}>{status}</td>
-                    <td><button onClick={()=>removePosition(pos.ticker)} style={{padding:'2px 8px',background:'transparent',border:'1px solid rgba(255,61,87,0.3)',borderRadius:2,color:'var(--red)',fontSize:10,cursor:'pointer'}}>✕</button></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {/* ── STRATEGY NOTES ─────────────────────────────────────────────────── */}
-      <div className="panel">
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
-          <div className="panel-title">Cycle Notes <span>— Persisted</span></div>
-          {!noteEdit
-            ? <button className="btn btn-sm" onClick={()=>setNoteEdit(true)}>✏ Edit</button>
-            : <div style={{display:'flex',gap:6}}>
-                <button className="btn btn-sm btn-primary" onClick={()=>{save({notes:noteDraft});setNoteEdit(false);}}>✓ Save</button>
-                <button className="btn btn-sm" onClick={()=>setNoteEdit(false)}>✕</button>
-              </div>
-          }
-        </div>
-        {noteEdit
-          ? <textarea value={noteDraft} onChange={e=>setNoteDraft(e.target.value)} rows={4}
-              placeholder="E.g. FTD Day 5 on 2026-04-08. SPY +1.4% on vol above prior day. Wave 1 targets: XYZ, ABC. Watching for 10wk pullback on MNST..."
-              style={{width:'100%',background:'var(--bg2)',border:'1px solid var(--amber)',borderRadius:4,color:'var(--text)',padding:'10px',fontSize:12,fontFamily:'var(--font-sans)',outline:'none',resize:'vertical',lineHeight:1.8}}/>
-          : <div style={{fontSize:12,color:state?.notes?'var(--text2)':'var(--text3)',lineHeight:1.9,whiteSpace:'pre-wrap',minHeight:32}}>
-              {state?.notes || <em>No notes. Click Edit to log your cycle observations.</em>}
-            </div>
-        }
-        {state?.updatedAt && <div style={{fontSize:10,color:'var(--text3)',marginTop:5}}>Last saved: {new Date(state.updatedAt).toLocaleString()}</div>}
-      </div>
+      )}
     </div>
   );
 }
+
+// ─── PORTFOLIO DASHBOARD TAB ───────────────────────────────────────────────
+function PortfolioTab() {
+  const [status, setStatus]   = useState(null);
+  const [config, setConfig]   = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
+  const [sizing, setSizing]   = useState(null);
+  const [sizeEntry, setSizeEntry] = useState('');
+  const [sizeStop, setSizeStop]   = useState('');
+  const [editConfig, setEditConfig] = useState(false);
+  const [cfgForm, setCfgForm] = useState({});
+
+  async function loadStatus() {
+    setLoading(true); setError('');
+    try {
+      const [s, c] = await Promise.all([api('/api/portfolio/status'), api('/api/portfolio/config')]);
+      setStatus(s); setConfig(c); setCfgForm(c);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  useEffect(() => { loadStatus(); }, []);
+
+  async function calcSize() {
+    if (!sizeEntry || !sizeStop) return;
+    try {
+      const d = await api('/api/portfolio/size', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ entryPrice: +sizeEntry, stopPrice: +sizeStop }),
+      });
+      setSizing(d);
+    } catch(e) { setError(e.message); }
+  }
+
+  async function saveConfig() {
+    try {
+      const c = await api('/api/portfolio/config', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(cfgForm),
+      });
+      setConfig(c); setEditConfig(false); loadStatus();
+    } catch(e) { setError(e.message); }
+  }
+
+  const heatColor = h => h >= 8 ? 'var(--red)' : h >= 5 ? 'var(--amber)' : 'var(--green)';
+  const ddColor  = d => d >= 10 ? 'var(--red)' : d >= 5 ? 'var(--amber)' : 'var(--green)';
+
+  return (
+    <div>
+      <div className="panel" style={{marginBottom:14}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <div>
+            <div className="panel-title">Portfolio <span>Dashboard</span></div>
+            <div className="panel-sub">Risk management — portfolio heat, sector exposure, drawdown circuit breaker</div>
+          </div>
+          <div style={{display:'flex',gap:8}}>
+            <button className="btn btn-primary" onClick={()=>setEditConfig(!editConfig)}>
+              {editConfig ? '✕ Cancel' : '⚙ Config'}
+            </button>
+            <button className="btn btn-primary" onClick={loadStatus} disabled={loading}>⟳ Refresh</button>
+          </div>
+        </div>
+        {error && <ErrorBox msg={error}/>}
+      </div>
+
+      {loading && <div className="panel"><Loader msg="Loading portfolio status..."/></div>}
+
+      {/* Config Editor */}
+      {editConfig && config && (
+        <div className="panel" style={{marginBottom:14}}>
+          <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>PORTFOLIO CONFIGURATION</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:10}}>
+            {[
+              {key:'accountSize',label:'Account Size ($)',type:'number'},
+              {key:'riskPerTrade',label:'Risk Per Trade (%)',type:'number',step:'0.1'},
+              {key:'maxPositionPct',label:'Max Position (%)',type:'number'},
+              {key:'maxPortfolioHeat',label:'Max Portfolio Heat (%)',type:'number'},
+              {key:'maxSectorPct',label:'Max Sector Exposure (%)',type:'number'},
+              {key:'maxIndustryPositions',label:'Max Same-Industry',type:'number'},
+            ].map(f => (
+              <div key={f.key}>
+                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>{f.label}</label>
+                <input type={f.type} step={f.step||'1'} value={cfgForm[f.key]||''} onChange={e=>setCfgForm({...cfgForm,[f.key]:+e.target.value})}
+                  style={{width:'100%',padding:'6px 8px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
+              </div>
+            ))}
+          </div>
+          <button className="btn btn-primary" onClick={saveConfig} style={{marginTop:10}}>Save Config</button>
+        </div>
+      )}
+
+      {status && (
+        <div>
+          {/* Top Metrics Row */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12,marginBottom:14}}>
+            {/* Portfolio Heat */}
+            <div className="panel" style={{padding:14}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>PORTFOLIO HEAT</div>
+              <div style={{fontSize:36,fontWeight:800,color:heatColor(status.heat?.totalHeatPct||0),fontFamily:'var(--font-mono)'}}>
+                {fmt(status.heat?.totalHeatPct||0,1)}%
+              </div>
+              <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
+                of {fmt(config?.maxPortfolioHeat||8,0)}% max · {status.heat?.positionsAtRisk||0} positions at risk
+              </div>
+              <div style={{marginTop:8,height:6,background:'var(--bg3)',borderRadius:3,overflow:'hidden'}}>
+                <div style={{height:'100%',width:`${Math.min((status.heat?.totalHeatPct||0)/(config?.maxPortfolioHeat||8)*100,100)}%`,background:heatColor(status.heat?.totalHeatPct||0),borderRadius:3,transition:'width 0.3s'}}/>
+              </div>
+            </div>
+
+            {/* Drawdown */}
+            <div className="panel" style={{padding:14}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>DRAWDOWN STATUS</div>
+              <div style={{fontSize:36,fontWeight:800,color:ddColor(Math.abs(status.drawdown?.drawdownPct||0)),fontFamily:'var(--font-mono)'}}>
+                {fmt(status.drawdown?.drawdownPct||0,1)}%
+              </div>
+              <div style={{fontSize:11,color:ddColor(Math.abs(status.drawdown?.drawdownPct||0)),marginTop:4,fontWeight:700}}>
+                {status.drawdown?.action || 'Normal'}
+              </div>
+            </div>
+
+            {/* Regime */}
+            <div className="panel" style={{padding:14}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>MARKET REGIME</div>
+              <div style={{fontSize:20,fontWeight:800,color:status.regime?.mode==='BULL / RISK ON'?'var(--green)':status.regime?.mode==='NEUTRAL'?'var(--amber)':'var(--red)',fontFamily:'var(--font-mono)'}}>
+                {status.regime?.mode || '—'}
+              </div>
+              <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
+                Size multiplier: <strong>{status.regime?.sizeMultiplier || 1}x</strong>
+              </div>
+            </div>
+
+            {/* Open Positions */}
+            <div className="panel" style={{padding:14}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>OPEN POSITIONS</div>
+              <div style={{fontSize:36,fontWeight:800,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>
+                {status.openPositions || 0}
+              </div>
+              <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
+                Account: ${(config?.accountSize||100000).toLocaleString()}
+              </div>
+            </div>
+          </div>
+
+          {/* Sector Exposure */}
+          {status.exposure && Object.keys(status.exposure).length > 0 && (
+            <div className="panel" style={{marginBottom:14,padding:14}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>SECTOR EXPOSURE</div>
+              <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+                {Object.entries(status.exposure).sort((a,b)=>b[1]-a[1]).map(([sec,pct]) => (
+                  <div key={sec} style={{padding:'6px 12px',background:'var(--bg3)',border:`1px solid ${pct>25?'var(--red)':'var(--border)'}`,borderRadius:4,fontSize:12}}>
+                    <span style={{color:'var(--text2)'}}>{sec}</span>
+                    <span style={{color:pct>25?'var(--red)':'var(--cyan)',fontWeight:700,marginLeft:8,fontFamily:'var(--font-mono)'}}>{fmt(pct,1)}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Position Sizer */}
+          <div className="panel" style={{padding:14}}>
+            <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>POSITION SIZER</div>
+            <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap'}}>
+              <div>
+                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Entry Price</label>
+                <input type="number" value={sizeEntry} onChange={e=>setSizeEntry(e.target.value)} placeholder="0.00"
+                  style={{width:120,padding:'6px 8px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
+              </div>
+              <div>
+                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Stop Price</label>
+                <input type="number" value={sizeStop} onChange={e=>setSizeStop(e.target.value)} placeholder="0.00"
+                  style={{width:120,padding:'6px 8px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
+              </div>
+              <button className="btn btn-primary" onClick={calcSize}>Calculate</button>
+            </div>
+            {sizing && (
+              <div style={{marginTop:12,display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:8}}>
+                {[
+                  {label:'Shares',val:sizing.shares,color:'var(--cyan)'},
+                  {label:'Position $',val:'$'+Number(sizing.positionValue||0).toLocaleString(),color:'var(--text)'},
+                  {label:'Risk $',val:'$'+fmt(sizing.dollarRisk,0),color:'var(--red)'},
+                  {label:'Portfolio %',val:fmt(sizing.portfolioPct,1)+'%',color:'var(--amber)'},
+                  {label:'Risk/Trade %',val:fmt(sizing.riskPct,2)+'%',color:'var(--amber)'},
+                  {label:'Regime',val:sizing.regime||'—',color:'var(--green)'},
+                ].map(m => (
+                  <div key={m.label} style={{padding:'8px',background:'var(--bg3)',borderRadius:3,textAlign:'center'}}>
+                    <div style={{fontSize:10,color:'var(--text3)',marginBottom:3}}>{m.label}</div>
+                    <div style={{fontSize:16,fontWeight:700,color:m.color,fontFamily:'var(--font-mono)'}}>{m.val}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── TRADE JOURNAL TAB ─────────────────────────────────────────────────────
+function TradeJournalTab() {
+  const [trades, setTrades]     = useState([]);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState('');
+  const [filter, setFilter]     = useState('all');
+  const [showEntry, setShowEntry] = useState(false);
+  const [showExit, setShowExit] = useState(null);
+  const [form, setForm]         = useState({symbol:'',entry_price:'',stop_price:'',target1:'',shares:'',side:'long',sector:'',notes:''});
+  const [exitForm, setExitForm] = useState({exit_price:'',exit_reason:'stop',notes:''});
+
+  async function loadTrades() {
+    setLoading(true); setError('');
+    try {
+      const d = await api(`/api/trades?status=${filter}&limit=100`);
+      setTrades(d.trades || []);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  useEffect(() => { loadTrades(); }, [filter]);
+
+  async function logEntry() {
+    if (!form.symbol || !form.entry_price) return;
+    try {
+      await api('/api/trades', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({...form, entry_price:+form.entry_price, stop_price:+form.stop_price||undefined, target1:+form.target1||undefined, shares:+form.shares||undefined}),
+      });
+      setForm({symbol:'',entry_price:'',stop_price:'',target1:'',shares:'',side:'long',sector:'',notes:''});
+      setShowEntry(false); loadTrades();
+    } catch(e) { setError(e.message); }
+  }
+
+  async function logExit(id) {
+    if (!exitForm.exit_price) return;
+    try {
+      await api(`/api/trades/${id}`, {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({...exitForm, exit_price:+exitForm.exit_price}),
+      });
+      setShowExit(null); setExitForm({exit_price:'',exit_reason:'stop',notes:''}); loadTrades();
+    } catch(e) { setError(e.message); }
+  }
+
+  const pnlColor = v => v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text3)';
+
+  return (
+    <div>
+      <div className="panel" style={{marginBottom:14}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
+          <div>
+            <div className="panel-title">Trade <span>Journal</span></div>
+            <div className="panel-sub">Log entries and exits — track R-multiples and P&L</div>
+          </div>
+          <div style={{display:'flex',gap:8}}>
+            <div className="btn-group">
+              {['all','open','closed'].map(f => (
+                <button key={f} className={`mode-btn ${filter===f?'active':''}`} onClick={()=>setFilter(f)}>
+                  {f.charAt(0).toUpperCase()+f.slice(1)}
+                </button>
+              ))}
+            </div>
+            <button className="btn btn-primary" onClick={()=>setShowEntry(!showEntry)}>
+              {showEntry ? '✕ Cancel' : '+ New Trade'}
+            </button>
+          </div>
+        </div>
+        {error && <ErrorBox msg={error}/>}
+      </div>
+
+      {/* Entry Form */}
+      {showEntry && (
+        <div className="panel" style={{marginBottom:14}}>
+          <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>LOG NEW ENTRY</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:8}}>
+            {[
+              {key:'symbol',label:'Symbol',ph:'NVDA'},
+              {key:'entry_price',label:'Entry Price',ph:'0.00',type:'number'},
+              {key:'stop_price',label:'Stop Price',ph:'0.00',type:'number'},
+              {key:'target1',label:'Target 1',ph:'0.00',type:'number'},
+              {key:'shares',label:'Shares',ph:'100',type:'number'},
+              {key:'sector',label:'Sector',ph:'Technology'},
+            ].map(f => (
+              <div key={f.key}>
+                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>{f.label}</label>
+                <input type={f.type||'text'} value={form[f.key]} onChange={e=>setForm({...form,[f.key]:e.target.value})} placeholder={f.ph}
+                  style={{width:'100%',padding:'6px 8px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
+              </div>
+            ))}
+          </div>
+          <div style={{marginTop:8}}>
+            <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Notes</label>
+            <input value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="Trade thesis, setup type..."
+              style={{width:'100%',padding:'6px 8px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13}}/>
+          </div>
+          <button className="btn btn-primary" onClick={logEntry} style={{marginTop:10}}>Log Entry</button>
+        </div>
+      )}
+
+      {loading && <div className="panel"><Loader msg="Loading trades..."/></div>}
+
+      {/* Trades Table */}
+      {trades.length > 0 && (
+        <div className="panel" style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+            <thead>
+              <tr style={{borderBottom:'1px solid var(--border)'}}>
+                {['Symbol','Side','Entry','Stop','Target','Shares','Entry Date','Exit','P&L %','R-Multiple','Reason',''].map(h =>
+                  <th key={h} style={{padding:'8px 6px',textAlign:'left',fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {trades.map(t => (
+                <tr key={t.id} style={{borderBottom:'1px solid var(--border)'}}>
+                  <td style={{padding:'8px 6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{t.symbol}</td>
+                  <td style={{padding:'8px 6px',color:t.side==='long'?'var(--green)':'var(--red)'}}>{t.side}</td>
+                  <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>${fmt(t.entry_price)}</td>
+                  <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--red)'}}>{t.stop_price?'$'+fmt(t.stop_price):'—'}</td>
+                  <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--green)'}}>{t.target1?'$'+fmt(t.target1):'—'}</td>
+                  <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{t.shares||'—'}</td>
+                  <td style={{padding:'8px 6px',color:'var(--text3)'}}>{t.entry_date}</td>
+                  <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>
+                    {t.exit_price ? '$'+fmt(t.exit_price) : <span style={{color:'var(--cyan)'}}>OPEN</span>}
+                  </td>
+                  <td style={{padding:'8px 6px',fontWeight:700,color:pnlColor(t.pnl_percent),fontFamily:'var(--font-mono)'}}>
+                    {t.pnl_percent != null ? (t.pnl_percent>0?'+':'')+fmt(t.pnl_percent,1)+'%' : '—'}
+                  </td>
+                  <td style={{padding:'8px 6px',fontWeight:700,color:pnlColor(t.r_multiple),fontFamily:'var(--font-mono)'}}>
+                    {t.r_multiple != null ? (t.r_multiple>0?'+':'')+fmt(t.r_multiple,2)+'R' : '—'}
+                  </td>
+                  <td style={{padding:'8px 6px',color:'var(--text3)',fontSize:10}}>{t.exit_reason||''}</td>
+                  <td style={{padding:'8px 6px'}}>
+                    {!t.exit_date && (
+                      showExit === t.id ? (
+                        <div style={{display:'flex',gap:4,alignItems:'center'}}>
+                          <input type="number" value={exitForm.exit_price} onChange={e=>setExitForm({...exitForm,exit_price:e.target.value})} placeholder="Exit $"
+                            style={{width:80,padding:'3px 5px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+                          <select value={exitForm.exit_reason} onChange={e=>setExitForm({...exitForm,exit_reason:e.target.value})}
+                            style={{padding:'3px 5px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:11}}>
+                            {['stop','target1','target2','manual','regime_change'].map(r=><option key={r} value={r}>{r}</option>)}
+                          </select>
+                          <button onClick={()=>logExit(t.id)} style={{padding:'3px 8px',background:'var(--red)',border:'none',borderRadius:3,color:'#fff',fontSize:10,cursor:'pointer'}}>Exit</button>
+                          <button onClick={()=>setShowExit(null)} style={{padding:'3px 6px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:10,cursor:'pointer'}}>x</button>
+                        </div>
+                      ) : (
+                        <button onClick={()=>setShowExit(t.id)} style={{padding:'3px 8px',background:'rgba(255,61,87,0.15)',border:'1px solid rgba(255,61,87,0.3)',borderRadius:3,color:'var(--red)',fontSize:10,cursor:'pointer'}}>Close</button>
+                      )
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {!loading && trades.length === 0 && (
+        <div className="panel" style={{textAlign:'center',padding:30,color:'var(--text3)'}}>
+          No trades yet — click <strong>+ New Trade</strong> to log your first entry
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── PERFORMANCE TAB ───────────────────────────────────────────────────────
+function PerformanceTab() {
+  const [perf, setPerf]       = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
+
+  async function loadPerf() {
+    setLoading(true); setError('');
+    try {
+      const d = await api('/api/trades/performance');
+      setPerf(d);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  useEffect(() => { loadPerf(); }, []);
+
+  return (
+    <div>
+      <div className="panel" style={{marginBottom:14}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <div>
+            <div className="panel-title">Trading <span>Performance</span></div>
+            <div className="panel-sub">Win rate, profit factor, R-multiples, Kelly criterion — track your edge</div>
+          </div>
+          <button className="btn btn-primary" onClick={loadPerf} disabled={loading}>⟳ Refresh</button>
+        </div>
+        {error && <ErrorBox msg={error}/>}
+      </div>
+
+      {loading && <div className="panel"><Loader msg="Loading performance data..."/></div>}
+
+      {perf && !perf.totalTrades && (
+        <div className="panel" style={{textAlign:'center',padding:40,color:'var(--text3)'}}>
+          <div style={{fontSize:18,marginBottom:8}}>No closed trades yet</div>
+          <div style={{fontSize:12}}>Log trades in the <strong>Trade Journal</strong> tab, then close them to see performance metrics here.</div>
+        </div>
+      )}
+
+      {perf && perf.totalTrades > 0 && (
+        <div>
+          {/* Key Metrics */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))',gap:12,marginBottom:14}}>
+            {[
+              {label:'Win Rate',val:`${fmt(perf.winRate,1)}%`,color:perf.winRate>=50?'var(--green)':'var(--red)',sub:`${perf.wins}W / ${perf.losses}L`},
+              {label:'Profit Factor',val:perf.profitFactor===Infinity?'∞':fmt(perf.profitFactor,2),color:perf.profitFactor>=1.5?'var(--green)':perf.profitFactor>=1?'var(--amber)':'var(--red)',sub:'gross wins / gross losses'},
+              {label:'Avg R-Multiple',val:(perf.avgRMultiple>0?'+':'')+fmt(perf.avgRMultiple,2)+'R',color:perf.avgRMultiple>0?'var(--green)':'var(--red)',sub:`W: +${fmt(perf.avgWinR,2)}R / L: ${fmt(perf.avgLossR,2)}R`},
+              {label:'Total P&L',val:'$'+Number(perf.totalPnl).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0}),color:perf.totalPnl>=0?'var(--green)':'var(--red)',sub:`${perf.totalTrades} closed trades`},
+              {label:'Avg Win',val:`+${fmt(perf.avgWinPct,1)}%`,color:'var(--green)',sub:'per winning trade'},
+              {label:'Avg Loss',val:`${fmt(perf.avgLossPct,1)}%`,color:'var(--red)',sub:'per losing trade'},
+              {label:'Kelly Optimal',val:`${fmt(perf.kellyOptimalPct,1)}%`,color:'var(--cyan)',sub:'optimal risk per trade'},
+              {label:'Gross Wins',val:'$'+Number(perf.grossWins).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0}),color:'var(--green)',sub:'total winning $'},
+            ].map(m => (
+              <div key={m.label} className="panel" style={{padding:14,textAlign:'center'}}>
+                <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>{m.label.toUpperCase()}</div>
+                <div style={{fontSize:24,fontWeight:800,color:m.color,fontFamily:'var(--font-mono)'}}>{m.val}</div>
+                <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>{m.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Recent Trades */}
+          {perf.recentTrades?.length > 0 && (
+            <div className="panel" style={{overflowX:'auto'}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>RECENT CLOSED TRADES</div>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                <thead>
+                  <tr style={{borderBottom:'1px solid var(--border)'}}>
+                    {['Symbol','Entry','Exit','P&L %','R-Multiple','Reason'].map(h =>
+                      <th key={h} style={{padding:'6px',textAlign:'left',fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {perf.recentTrades.map((t,i) => (
+                    <tr key={i} style={{borderBottom:'1px solid var(--border)'}}>
+                      <td style={{padding:'6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{t.symbol}</td>
+                      <td style={{padding:'6px',color:'var(--text3)'}}>{t.entry_date}</td>
+                      <td style={{padding:'6px',color:'var(--text3)'}}>{t.exit_date}</td>
+                      <td style={{padding:'6px',fontWeight:700,color:t.pnl_percent>0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)'}}>
+                        {t.pnl_percent>0?'+':''}{fmt(t.pnl_percent,1)}%
+                      </td>
+                      <td style={{padding:'6px',fontWeight:700,color:t.r_multiple>0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)'}}>
+                        {t.r_multiple>0?'+':''}{fmt(t.r_multiple,2)}R
+                      </td>
+                      <td style={{padding:'6px',color:'var(--text3)',fontSize:10}}>{t.exit_reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 ReactDOM.render(<App/>, document.getElementById('root'));
 </script>
 </body>
