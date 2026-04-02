@@ -35,13 +35,18 @@ function computeTradeSetup(stock, mode) {
   let entryLow, entryHigh, stopLevel, target1, target2;
 
   if (mode === 'swing') {
+    // Swing: enter near current price, tight stop
     entryLow  = +(price * 0.998).toFixed(2);
     entryHigh = +(price * 1.005).toFixed(2);
     stopLevel = +(entryLow - 1.5 * atr).toFixed(2);
     target1   = +(entryLow + 2.5 * atr).toFixed(2);
     target2   = +(entryLow + 4.0 * atr).toFixed(2);
   } else {
-    const pivotEntry = ma50 ? Math.max(price, ma50 * 1.002) : price;
+    // Position: entry on pullback to 50MA area, not at current price
+    // If price is already near 50MA (within 3%), use current price
+    // Otherwise, the ideal entry is a pullback to the 50MA zone
+    const nearMA50 = ma50 && Math.abs(price - ma50) / price < 0.03;
+    const pivotEntry = nearMA50 ? price : (ma50 ? +(ma50 * 1.002).toFixed(2) : price);
     entryLow  = +(pivotEntry * 0.995).toFixed(2);
     entryHigh = +(pivotEntry * 1.010).toFixed(2);
     stopLevel = ma50 ? +Math.min(ma50 * 0.975, entryLow - 2 * atr).toFixed(2)
