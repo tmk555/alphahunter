@@ -1698,17 +1698,8 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
         <div style={{marginBottom:20}}>
           <div style={{display:'grid',gap:10}}>
             {picks.map((s, rank) => {
-              const atr = s.atr || (s.price * 0.02);
-              const ma50buf = s.ma50 && s.ma50 > s.price * 0.85 ? s.ma50 : null;
-              // Position entry: pullback to 50MA area, not current price
-              const posEntry = ma50buf ? +(ma50buf * 1.002).toFixed(2) : +(s.price * 0.97).toFixed(2);
-              const swStop = ma50buf ? +(ma50buf - 0.5*atr).toFixed(2) : +(s.price - 1.5*atr).toFixed(2);
-              const posStop = ma50buf ? +(ma50buf * 0.975).toFixed(2) : +(s.price - 2*atr).toFixed(2);
-              const swRisk = +(s.price - swStop).toFixed(2);
-              const t1 = +(s.price + 2.5*atr).toFixed(2);
-              const posT1 = +(posEntry + 3*atr).toFixed(2);
-              const rr = swRisk > 0 ? +((t1-s.price)/swRisk).toFixed(1) : 0;
-              const posRR = (posEntry - posStop) > 0 ? +((posT1-posEntry)/(posEntry-posStop)).toFixed(1) : 0;
+              const sw = s.swingSetup || {};
+              const pos = s.positionSetup || {};
               return (
                 <div key={s.ticker} style={{
                   background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:'14px 16px',
@@ -1744,22 +1735,24 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                       <div style={{background:'var(--bg2)',borderRadius:4,padding:10,border:'1px solid rgba(0,212,255,0.2)'}}>
                         <div style={{fontSize:9,color:'var(--cyan)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>SWING (2-10d)</div>
                         <div style={{display:'flex',gap:12,flexWrap:'wrap',fontSize:12}}>
-                          <div><span style={{color:'var(--text3)'}}>Entry </span><span style={{color:'var(--green)',fontWeight:700,fontFamily:'var(--font-mono)'}}>${s.price?.toFixed(2)}</span></div>
-                          <div><span style={{color:'var(--text3)'}}>Stop </span><span style={{color:'var(--red)',fontWeight:700,fontFamily:'var(--font-mono)'}}>${swStop}</span></div>
-                          <div><span style={{color:'var(--text3)'}}>T1 </span><span style={{color:'var(--cyan)',fontWeight:700,fontFamily:'var(--font-mono)'}}>${t1}</span></div>
-                          <div><span style={{color:'var(--text3)'}}>R/R </span><span style={{color:'var(--green)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{rr}:1</span></div>
+                          <div><span style={{color:'var(--text3)'}}>Entry </span><span style={{color:'var(--green)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{sw.entryZone||'—'}</span></div>
+                          <div><span style={{color:'var(--text3)'}}>Stop </span><span style={{color:'var(--red)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{sw.stopLevel||'—'}</span></div>
+                          <div><span style={{color:'var(--text3)'}}>T1 </span><span style={{color:'var(--cyan)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{sw.target1||'—'}</span></div>
+                          <div><span style={{color:'var(--text3)'}}>R/R </span><span style={{color:'var(--green)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{sw.riskReward||'—'}</span></div>
                         </div>
+                        <div style={{fontSize:10,color:'var(--text3)',marginTop:3}}>ATR: ${sw.atrUsed} · Stop: {sw.stopPct}%</div>
                       </div>
                     )}
                     {(mode==='position' || mode==='both') && (
                       <div style={{background:'var(--bg2)',borderRadius:4,padding:10,border:'1px solid rgba(0,230,118,0.2)'}}>
                         <div style={{fontSize:9,color:'var(--green)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>POSITION (3-8w) — pullback to 50MA</div>
                         <div style={{display:'flex',gap:12,flexWrap:'wrap',fontSize:12}}>
-                          <div><span style={{color:'var(--text3)'}}>Entry </span><span style={{color:'var(--green)',fontWeight:700,fontFamily:'var(--font-mono)'}}>${posEntry}</span></div>
-                          <div><span style={{color:'var(--text3)'}}>Stop </span><span style={{color:'var(--red)',fontWeight:700,fontFamily:'var(--font-mono)'}}>${posStop}</span></div>
-                          <div><span style={{color:'var(--text3)'}}>T1 </span><span style={{color:'var(--cyan)',fontWeight:700,fontFamily:'var(--font-mono)'}}>${posT1}</span></div>
-                          <div><span style={{color:'var(--text3)'}}>R/R </span><span style={{color:'var(--green)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{posRR}:1</span></div>
+                          <div><span style={{color:'var(--text3)'}}>Entry </span><span style={{color:'var(--green)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{pos.entryZone||'—'}</span></div>
+                          <div><span style={{color:'var(--text3)'}}>Stop </span><span style={{color:'var(--red)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{pos.stopLevel||'—'}</span></div>
+                          <div><span style={{color:'var(--text3)'}}>T1 </span><span style={{color:'var(--cyan)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{pos.target1||'—'}</span></div>
+                          <div><span style={{color:'var(--text3)'}}>R/R </span><span style={{color:'var(--green)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{pos.riskReward||'—'}</span></div>
                         </div>
+                        <div style={{fontSize:10,color:'var(--text3)',marginTop:3}}>ATR: ${pos.atrUsed} · Stop: {pos.stopPct}% · 50MA: ${s.ma50?.toFixed(2)||'—'}</div>
                       </div>
                     )}
                   </div>
