@@ -1,5 +1,5 @@
 // ─── IBD Relative Strength calculations ──────────────────────────────────────
-const { loadHistory, saveHistory } = require('../data/store');
+const { loadHistory, saveHistory, RS_HISTORY } = require('../data/store');
 
 // Real IBD RS: weighted 12-month performance
 function calcRS(closes) {
@@ -49,8 +49,8 @@ function getRSTrend(ticker, history) {
 }
 
 // Pre-generate RS history from 1-year price data (no extra API calls)
-function preGenerateHistoryFor(histMap, keyFn, histFile, label, minSnapshots = 3) {
-  const history = loadHistory(histFile);
+function preGenerateHistoryFor(histMap, keyFn, histType, label, minSnapshots = 3) {
+  const history = loadHistory(histType);
   const existingDates = Object.keys(history).length;
 
   const lastDate = Object.keys(history).sort().pop();
@@ -88,7 +88,7 @@ function preGenerateHistoryFor(histMap, keyFn, histFile, label, minSnapshots = 3
     rankToRS(tempItems);
     const snap = {};
     for (const item of tempItems) snap[keyFn(item.ticker)] = item.rsRank;
-    saveHistory(histFile, snap, dateStr);
+    saveHistory(histType, snap, dateStr);
   }
   console.log(`  ✓ ${label} RS history pre-generated (13 weekly snapshots)`);
 }

@@ -23,8 +23,9 @@ pnpm-debug.log*
 .DS_Store
 Thumbs.db
 
-# Database (generated on first run)
+# Data files (generated on first run, rebuilt from Yahoo Finance)
 data/*.db
 data/*.db-wal
 data/*.db-shm
+data/*.json
 backup/

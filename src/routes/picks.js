@@ -5,13 +5,13 @@ const router  = express.Router();
 const { getRSTrend } = require('../signals/rs');
 const { calcConviction } = require('../signals/conviction');
 const { getMarketRegime } = require('../risk/regime');
-const { loadHistory, RS_HISTORY_FILE } = require('../data/store');
+const { loadHistory, RS_HISTORY } = require('../data/store');
 
 module.exports = function(runRSScanFn) {
   router.get('/daily-picks', async (req, res) => {
     try {
       const stocks  = await runRSScanFn();
-      const history = loadHistory(RS_HISTORY_FILE);
+      const history = loadHistory(RS_HISTORY);
       const regime  = await getMarketRegime();
 
       const scored = stocks

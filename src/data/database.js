@@ -120,67 +120,47 @@ function initSchema() {
   `);
 }
 
-// Migrate existing JSON data into SQLite on first run
+// One-time migration from legacy JSON files into SQLite
 function migrateFromJSON() {
-  const store = require('./store');
+  const fs   = require('fs');
+  const path = require('path');
+  const DATA_DIR = path.join(__dirname, '..', '..', 'data');
 
-  // Migrate RS history (stocks)
-  const rsHistory = store.loadHistory(store.RS_HISTORY_FILE);
-  const insertRS = db.prepare(
-    `INSERT OR IGNORE INTO rs_snapshots (date, symbol, type, rs_rank) VALUES (?, ?, 'stock', ?)`
-  );
-  const txnRS = db.transaction(() => {
-    for (const [date, snapshot] of Object.entries(rsHistory)) {
-      for (const [symbol, rank] of Object.entries(snapshot)) {
-        if (!symbol.startsWith('SEC_') && !symbol.startsWith('IND_')) {
-          insertRS.run(date, symbol, rank);
-        }
-      }
-    }
-  });
-
-  // Migrate sector RS history
-  const secHistory = store.loadHistory(store.SEC_HISTORY_FILE);
-  const insertSec = db.prepare(
-    `INSERT OR IGNORE INTO rs_snapshots (date, symbol, type, rs_rank) VALUES (?, ?, 'sector', ?)`
-  );
-  const txnSec = db.transaction(() => {
-    for (const [date, snapshot] of Object.entries(secHistory)) {
-      for (const [key, rank] of Object.entries(snapshot)) {
-        const symbol = key.replace('SEC_', '');
-        insertSec.run(date, symbol, rank);
-      }
-    }
-  });
-
-  // Migrate industry RS history
-  const indHistory = store.loadHistory(store.IND_HISTORY_FILE);
-  const insertInd = db.prepare(
-    `INSERT OR IGNORE INTO rs_snapshots (date, symbol, type, rs_rank) VALUES (?, ?, 'industry', ?)`
-  );
-  const txnInd = db.transaction(() => {
-    for (const [date, snapshot] of Object.entries(indHistory)) {
-      for (const [key, rank] of Object.entries(snapshot)) {
-        const symbol = key.replace('IND_', '');
-        insertInd.run(date, symbol, rank);
-      }
-    }
-  });
-
-  // Check if migration is needed
   const count = db.prepare('SELECT COUNT(*) as cnt FROM rs_snapshots').get();
-  if (count.cnt === 0) {
-    console.log('  Migrating RS history from JSON to SQLite...');
-    txnRS();
-    txnSec();
-    txnInd();
-    const newCount = db.prepare('SELECT COUNT(*) as cnt FROM rs_snapshots').get();
-    console.log(`  ✓ Migrated ${newCount.cnt} RS snapshot records to SQLite`);
-  }
+  if (count.cnt > 0) return; // Already have data
 
-  // Migrate watchlist
-  const wlCount = db.prepare("SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='watchlist_v2'").get();
-  // Using trades table instead — watchlist stays as JSON for now (simple CRUD)
+  const files = [
+    { file: 'rs-history.json',            type: 'stock',    prefix: '' },
+    { file: 'rs-history-sectors.json',     type: 'sector',   prefix: 'SEC_' },
+    { file: 'rs-history-industries.json',  type: 'industry', prefix: 'IND_' },
+  ];
+
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO rs_snapshots (date, symbol, type, rs_rank) VALUES (?, ?, ?, ?)`
+  );
+
+  let total = 0;
+  const txn = db.transaction(() => {
+    for (const { file, type, prefix } of files) {
+      const fp = path.join(DATA_DIR, file);
+      if (!fs.existsSync(fp)) continue;
+      try {
+        const history = JSON.parse(fs.readFileSync(fp, 'utf8'));
+        for (const [date, snapshot] of Object.entries(history)) {
+          for (const [key, rank] of Object.entries(snapshot)) {
+            const symbol = prefix ? key.replace(prefix, '') : key;
+            if (!prefix && (key.startsWith('SEC_') || key.startsWith('IND_'))) continue;
+            insert.run(date, symbol, type, rank);
+            total++;
+          }
+        }
+      } catch(_) {}
+    }
+  });
+
+  console.log('  Migrating RS history from JSON to SQLite...');
+  txn();
+  console.log(`  ✓ Migrated ${total} RS snapshot records to SQLite`);
 }
 
 module.exports = { getDB, migrateFromJSON, DB_PATH };

@@ -2,7 +2,7 @@
 // Fetches quotes + history for entire universe, computes all signals, returns ranked results.
 
 const { cacheGet, cacheSet, TTL_QUOTE } = require('./data/cache');
-const { loadHistory, saveHistory, RS_HISTORY_FILE, SEC_HISTORY_FILE, IND_HISTORY_FILE } = require('./data/store');
+const { loadHistory, saveHistory, RS_HISTORY, SEC_HISTORY, IND_HISTORY } = require('./data/store');
 const { yahooQuote, yahooHistory, pLimit } = require('./data/providers/yahoo');
 const { calcRS, rankToRS, getRSTrend, preGenerateHistoryFor } = require('./signals/rs');
 const { calcSwingMomentum, calcPeriodReturns, calcATR, volumeTrend } = require('./signals/momentum');
@@ -35,7 +35,7 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
   }), 5);
 
   // Pre-generate history on first run
-  preGenerateHistoryFor(histMap, sym => sym, RS_HISTORY_FILE, 'stock');
+  preGenerateHistoryFor(histMap, sym => sym, RS_HISTORY, 'stock');
 
   const results = [];
   for (const sym of uniq) {
@@ -132,7 +132,7 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
   const today = new Date().toISOString().split('T')[0];
   const snap  = {};
   for (const s of results) snap[s.ticker] = s.rsRank;
-  saveHistory(RS_HISTORY_FILE, snap, today);
+  saveHistory(RS_HISTORY, snap, today);
   console.log(`  ✓ RS scan: ${results.length} stocks, snapshot saved ${today}`);
 
   cacheSet('rs:full', results);
@@ -140,7 +140,7 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
 }
 
 // ─── Sector/Industry scan helper ─────────────────────────────────────────────
-async function runETFScan(etfs, histFile, prefix, extraMap) {
+async function runETFScan(etfs, histType, prefix, extraMap) {
   const symbols = etfs.map(s => s.t);
   const quotes  = await yahooQuote(symbols);
   const histResults = await pLimit([...symbols, 'SPY'].map(sym => async () => ({ sym, closes: await yahooHistory(sym) })), 5);
@@ -181,16 +181,16 @@ async function runETFScan(etfs, histFile, prefix, extraMap) {
   result.sort((a,b) => b.rsRank - a.rsRank);
 
   // Pre-generate history
-  preGenerateHistoryFor(histMap, sym => prefix + sym, histFile, prefix.replace('_','').toLowerCase() || 'stock');
+  preGenerateHistoryFor(histMap, sym => prefix + sym, histType, prefix.replace('_','').toLowerCase() || 'stock');
 
   // Save today's snapshot
   const todayStr = new Date().toISOString().split('T')[0];
   const snap = {};
   for (const r of result) snap[prefix + r.symbol] = r.rsRank;
-  saveHistory(histFile, snap, todayStr);
+  saveHistory(histType, snap, todayStr);
 
   // Attach RS trends
-  const hist = loadHistory(histFile);
+  const hist = loadHistory(histType);
   return result.map(r => ({
     ...r, rsTrend: getRSTrend(prefix + r.symbol, hist),
   }));
