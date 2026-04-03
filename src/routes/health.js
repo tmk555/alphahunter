@@ -2,11 +2,11 @@
 const express = require('express');
 const router  = express.Router();
 
-const { loadHistory, RS_HISTORY_FILE } = require('../data/store');
+const { loadHistory, RS_HISTORY } = require('../data/store');
 
 module.exports = function(UNIVERSE, SECTOR_MAP, anthropic) {
   router.get('/health', async (_, res) => {
-    const h = loadHistory(RS_HISTORY_FILE), dates = Object.keys(h).sort();
+    const h = loadHistory(RS_HISTORY), dates = Object.keys(h).sort();
     res.json({
       ok: true,
       claude: !!anthropic,

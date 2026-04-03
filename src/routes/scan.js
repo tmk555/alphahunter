@@ -4,9 +4,9 @@ const router  = express.Router();
 
 const { runRSScan } = require('../scanner');
 const { getRSTrend } = require('../signals/rs');
-const { loadHistory, RS_HISTORY_FILE } = require('../data/store');
+const { loadHistory, RS_HISTORY } = require('../data/store');
 
-function loadRSHistory() { return loadHistory(RS_HISTORY_FILE); }
+function loadRSHistory() { return loadHistory(RS_HISTORY); }
 
 module.exports = function(UNIVERSE, SECTOR_MAP) {
   // /api/rs-scan

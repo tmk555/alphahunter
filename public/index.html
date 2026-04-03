@@ -414,7 +414,7 @@ function App() {
       <div id="main">
         {tab==='pulse'      && <MarketPulseTab />}
         {tab==='sectors'    && <SectorsTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
-        {tab==='industries' && <IndustriesTab />}
+        {tab==='industries' && <IndustriesTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
         {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
         {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary}/>}
         {tab==='watchlist'  && <WatchlistTab rsData={rsData} />}
@@ -518,13 +518,13 @@ function GlobalTradingGuide({ onClose }) {
         {section==='workflow' && (
           <div style={{display:'grid',gap:8,gridTemplateColumns:'1fr 1fr'}}>
             {[
-              ['1. Market Pulse (2 min)','Regime? BEAR = cash only. CAUTION = half size. BULL = full size. VIX, SPY vs MAs, yield curve.'],
-              ['2. Sectors (2 min)','Top 2-3 sectors by RS Accel? ⭐ on sector ETF = highest confirmation. Pick your hunting ground.'],
-              ['3. RS Dashboard (3 min)','Sort ↓ by RS Accel. Find ★BEST + ⭐ + VCP combos. These are today\'s candidates.'],
-              ['4. Bottom-up Discovery (5 min)','Finviz: EPS>25%, price>200MA, RS>70. Cross-check RS Accel here. ↗EMRG with EPS acceleration?'],
+              ['1. Market Pulse (2 min)','Regime? BEAR = cash only. CAUTION = half size. BULL = full size. Check VIX, SPY vs MAs, breadth.'],
+              ['2. Sectors → 🎯 Focus (2 min)','Top 2-3 sectors by RS Accel? Click 🎯 to focus Industries + RS Dashboard on those sectors.'],
+              ['3. Industries (2 min)','Filtered by sector focus. Which industry ETFs lead? S2 + VCP = best. Click row for stocks.'],
+              ['4. RS Dashboard (3 min)','Filtered by sector focus. Sort by RS Accel. Find ★Triple + ⭐RS Line + VCP combos. Click for levels.'],
               ['5. Click Levels (2 min each)','SEPA≥4? CAN SLIM≥4? EPS accelerating? Stage 2? Pass ≥3 of 4 to proceed.'],
-              ['6. Swing Lab (1 min)','AI thesis + ATR levels + earnings check. BUY-rated = enter today.'],
-              ['7. Watchlist','↗EMRG → Candidate when SEPA≥4. → Active Trade when you enter.'],
+              ['6. Trade Setups (1 min)','ATR levels + earnings check. BUY-rated = enter today.'],
+              ['7. Portfolio → Size (1 min)','Enter price + stop → get exact shares. Check sector heat. Log the trade.'],
               ['Non-negotiable rules','Never hold through earnings. Stop = 1.5×ATR. BEAR = cash. One trade handled right > ten handled wrong.'],
             ].map(([step,desc])=>(
               <div key={step} style={{padding:'8px 12px',background:'var(--bg3)',borderRadius:4,borderLeft:'2px solid var(--border)'}}>
@@ -1058,8 +1058,6 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   const { sortData: sortSec, SH: SecSH } = useSortTable('rsRank');
-  const [aiText,  setAiText]  = useState('');
-  const [aiLoading,setAiLoad] = useState(false);
   const [selSector, setSelSector] = useState(null);
   const rsData = window._rsData || [];
 
@@ -1072,15 +1070,6 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
     setLoading(false);
   }
 
-  async function analyze() {
-    setAiLoad(true); setAiText('');
-    const rows = data.map(s => `${s.name}: RS=${s.rsRank} 1W=${fmtP(s.chg1w)} 1M=${fmtP(s.chg1m)} 3M=${fmtP(s.chg3m)} vs50MA=${fmt(s.vsMA50,1)}%`).join('\n');
-    const t = await askClaude(
-      `Sector performance data:\n${rows}\n\n## ROTATION NARRATIVE\nMoney flowing FROM→TO? What macro regime does this signal?\n\n## TOP 3 SECTORS TO OWN NOW\nFor each: why it is leading, best sub-industry play, one stock idea.\n\n## 2 SECTORS TO AVOID\nDistribution signals.`,
-      'Elite sector rotation strategist. ## headers, - bullets. Max 500 words.', true);
-    setAiText(t); setAiLoad(false);
-  }
-
   return (
     <div>
       <div className="panel">
@@ -1091,7 +1080,6 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
           </div>
           <div style={{display:'flex',gap:8}}>
             <button className="btn btn-sm" onClick={load}>↻ Refresh</button>
-            <button className="btn btn-primary btn-sm" onClick={analyze} disabled={aiLoading||!data.length}>🧠 Rotation Analysis</button>
           </div>
         </div>
         {error && <ErrorBox msg={error}/>}
@@ -1140,7 +1128,7 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
                     <span style={{fontSize:11,color:'var(--text3)',marginLeft:6}}>{s.symbol}</span>
                     <button
                       onClick={e=>{e.stopPropagation();if(!setSelectedSectors)return;setSelectedSectors(prev=>{const next=new Set(prev);next.has(s.name)?next.delete(s.name):next.add(s.name);return next;});}}
-                      title="Focus RS Dashboard on this sector"
+                      title="Focus Industries + RS Dashboard on this sector"
                       style={{marginLeft:10,padding:'1px 6px',fontSize:10,border:`1px solid ${isFocused?'var(--green)':'var(--border2)'}`,borderRadius:3,background:isFocused?'rgba(0,230,118,0.12)':'transparent',color:isFocused?'var(--green)':'var(--text3)',cursor:'pointer'}}>
                       {isFocused?'🎯 focused':'🎯'}
                     </button>
@@ -1169,18 +1157,12 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
           <div style={{marginTop:10,padding:'8px 12px',background:'rgba(0,230,118,0.07)',border:'1px solid rgba(0,230,118,0.2)',borderRadius:4,display:'flex',alignItems:'center',gap:10,fontSize:12}}>
             <span style={{color:'var(--green)',fontWeight:700}}>🎯 RS Dashboard focused on:</span>
             {[...selectedSectors].map(sec=><span key={sec} style={{color:'var(--green)',background:'rgba(0,230,118,0.12)',padding:'1px 8px',borderRadius:3,fontSize:11}}>{sec}</span>)}
-            <span style={{color:'var(--text3)'}}>· Go to RS Dashboard tab to see filtered results.</span>
+            <span style={{color:'var(--text3)'}}>· Industries + RS Dashboard tabs are now filtered.</span>
             <button onClick={()=>setSelectedSectors(new Set())} style={{marginLeft:'auto',padding:'2px 8px',fontSize:11,border:'1px solid var(--border)',borderRadius:3,background:'transparent',color:'var(--text3)',cursor:'pointer'}}>✕ Clear focus</button>
           </div>
         )}
         {selSector && (
           <SectorStocks sectorName={data.find(d=>d.symbol===selSector)?.name||selSector} rsData={rsData} onClose={()=>setSelSector(null)}/>
-        )}
-        {(aiLoading || aiText) && (
-          <div style={{marginTop:14}}>
-            <div className="section-label" style={{marginBottom:8}}>SECTOR ROTATION ANALYSIS</div>
-            <AIOutput text={aiText} loading={aiLoading}/>
-          </div>
         )}
         <SectorIndustryRSTrend type="sectors" title="Sector RS Trend History" api="/api/rs-history/sectors"/>
       </div>
@@ -1189,18 +1171,13 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
 }
 
 
-function IndustriesTab() {
+function IndustriesTab({ selectedSectors, setSelectedSectors }) {
   const [data,    setData]   = useState([]);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   const { sortData, SH: IndSH } = useSortTable('rsRank');
   const [selInd2, setSelInd2] = useState(null);
   const rsData = window._rsData || [];
-  const [aiText,  setAiText]  = useState('');
-  const [aiLoading,setAiLoad] = useState(false);
-  const [selInd, setSelInd]   = useState(null);
-  const [drillText, setDrillT] = useState('');
-  const [drillLoad, setDrillL] = useState(false);
 
   useEffect(() => { load(); }, []);
 
@@ -1211,20 +1188,11 @@ function IndustriesTab() {
     setLoading(false);
   }
 
-    // AI drill removed — use stock drill-down below
-
-  async function analyzeAll() {
-    setAiLoad(true); setAiText('');
-    const rows = data.map(e =>
-      `${e.name}(${e.symbol},${e.sector}): RS=${e.rsRank} 1d=${fmtP(e.chg1d)} 1m=${fmtP(e.chg1m)} 3m=${fmtP(e.chg3m)}`
-    ).join('\n');
-    const t = await askClaude(
-      `Industry ETF data:\n${rows}\n\n## HOTTEST INDUSTRIES (4)\nEach: why leading, 2 stock names, stage (EARLY/MID/LATE).\n\n## COLD INDUSTRIES (3)\nWhy money is leaving.\n\n## HIDDEN ROTATION\nLess obvious industry gaining strength.\n\n## 2 BEST ETF TRADES\nEntry, stop, target, R/R.`,
-      'You are an elite industry rotation strategist. ## headers, - bullets. Max 600 words.',
-      true
-    );
-    setAiText(t); setAiLoad(false);
-  }
+  // Filter by sector focus
+  const filtered = data.filter(e => {
+    if (selectedSectors && selectedSectors.size > 0 && e.sector && !selectedSectors.has(e.sector)) return false;
+    return true;
+  });
 
   return (
     <div>
@@ -1232,13 +1200,29 @@ function IndustriesTab() {
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14,flexWrap:'wrap',gap:8}}>
           <div>
             <div className="panel-title">Industry <span>Rotation</span></div>
-            <div className="panel-sub">IBD RS: same formula as stocks · Ranked within 22 industry ETFs · Note: sector RS 85 ≠ stock RS 85 (different universes)</div>
+            <div className="panel-sub">IBD RS: same formula as stocks · Ranked within 22 industry ETFs · Use 🎯 Sector Focus (from Sectors tab) to filter by sector</div>
           </div>
           <div style={{display:'flex',gap:8}}>
             <button className="btn btn-sm" onClick={load}>↻ Refresh</button>
-            <button className="btn btn-primary btn-sm" onClick={analyzeAll} disabled={aiLoading||!data.length}>🧠 Full Analysis</button>
           </div>
         </div>
+
+        {/* Sector focus filter */}
+        {selectedSectors && selectedSectors.size > 0 && (
+          <div style={{marginBottom:10,padding:'6px 12px',background:'rgba(240,165,0,0.07)',border:'1px solid rgba(240,165,0,0.25)',borderRadius:4,display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',fontSize:11}}>
+            <span style={{color:'var(--amber)',fontWeight:700}}>🎯 Sector focus:</span>
+            {[...selectedSectors].map(sec=>(
+              <span key={sec} style={{padding:'2px 8px',background:'rgba(240,165,0,0.12)',border:'1px solid rgba(240,165,0,0.3)',borderRadius:3,color:'var(--amber)',fontSize:10}}>
+                {sec}
+              </span>
+            ))}
+            <span style={{color:'var(--text3)'}}>· Showing industries in these sectors only ({filtered.length}/{data.length}).</span>
+            <button onClick={()=>setSelectedSectors(new Set())} style={{marginLeft:'auto',padding:'2px 8px',fontSize:10,border:'1px solid var(--border)',borderRadius:3,background:'transparent',color:'var(--text3)',cursor:'pointer'}}>
+              ✕ Show all sectors
+            </button>
+          </div>
+        )}
+
         {error && <ErrorBox msg={error}/>}
         {loading ? <Loader msg="Fetching industry ETFs..."/> : (
           <table className="data-table">
@@ -1262,9 +1246,9 @@ function IndustriesTab() {
               </tr>
             </thead>
             <tbody>
-              {sortData(data).map((e,i) => (
+              {sortData(filtered).map((e,i) => (
                 <tr key={e.symbol} onClick={()=>setSelInd2(si=>si===e.symbol?null:e.symbol)}
-                  style={{cursor:'pointer', background:selInd===e.symbol?'var(--bg3)':''}}>
+                  style={{cursor:'pointer', background:selInd2===e.symbol?'var(--bg3)':''}}>
                   <td className="muted">{i+1}</td>
                   <td><RSBar rs={e.rsRank}/></td>
                   <td style={{fontFamily:'var(--font-mono)',fontSize:12,textAlign:'center'}}>
@@ -1300,12 +1284,6 @@ function IndustriesTab() {
           </table>
         )}
 
-        {(aiLoading || aiText) && (
-          <div style={{marginTop:14}}>
-            <div className="section-label" style={{marginBottom:8}}>FULL INDUSTRY ROTATION ANALYSIS</div>
-            <AIOutput text={aiText} loading={aiLoading}/>
-          </div>
-        )}
         {selInd2 && (
           <IndustryStockDrill etf={selInd2} etfName={data.find(d=>d.symbol===selInd2)?.name} rsData={rsData} onClose={()=>setSelInd2(null)}/>
         )}

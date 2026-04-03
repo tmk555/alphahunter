@@ -3,12 +3,12 @@ const express = require('express');
 const router  = express.Router();
 
 const { getRSTrend } = require('../signals/rs');
-const { loadHistory, RS_HISTORY_FILE, SEC_HISTORY_FILE, IND_HISTORY_FILE } = require('../data/store');
+const { loadHistory, RS_HISTORY, SEC_HISTORY, IND_HISTORY } = require('../data/store');
 
-function makeHistoryEndpoint(file, prefix) {
+function makeHistoryEndpoint(histType, prefix) {
   return async (req, res) => {
     try {
-      const history = loadHistory(file);
+      const history = loadHistory(histType);
       const dates   = Object.keys(history).sort();
       const ticker  = req.query.ticker?.toUpperCase();
       if (ticker) {
@@ -38,8 +38,8 @@ function makeHistoryEndpoint(file, prefix) {
   };
 }
 
-router.get('/rs-history',            makeHistoryEndpoint(RS_HISTORY_FILE,  null));
-router.get('/rs-history/sectors',    makeHistoryEndpoint(SEC_HISTORY_FILE, 'SEC_'));
-router.get('/rs-history/industries', makeHistoryEndpoint(IND_HISTORY_FILE, 'IND_'));
+router.get('/rs-history',            makeHistoryEndpoint(RS_HISTORY,  null));
+router.get('/rs-history/sectors',    makeHistoryEndpoint(SEC_HISTORY, 'SEC_'));
+router.get('/rs-history/industries', makeHistoryEndpoint(IND_HISTORY, 'IND_'));
 
 module.exports = router;
