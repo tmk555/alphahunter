@@ -52,6 +52,9 @@ const claudeRoutes        = require('./src/routes/claude')(anthropic);
 const historyRoutes       = require('./src/routes/history');
 const healthRoutes        = require('./src/routes/health')(UNIVERSE, SECTOR_MAP, anthropic);
 const portfolioRoutes     = require('./src/routes/portfolio')(db);
+const brokerRoutes        = require('./src/routes/broker')(db);
+const stagingRoutes       = require('./src/routes/staging')(db, runScan);
+const alertRoutes         = require('./src/routes/alerts')(db);
 
 app.use('/api', scanRoutes);
 app.use('/api', sectorRoutes);
@@ -64,9 +67,16 @@ app.use('/api', claudeRoutes);
 app.use('/api', historyRoutes);
 app.use('/api', healthRoutes);
 app.use('/api', portfolioRoutes);
+app.use('/api', brokerRoutes);
+app.use('/api', stagingRoutes);
+app.use('/api', alertRoutes);
 
 // ─── SPA fallback ────────────────────────────────────────────────────────────
 app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+
+// ─── Broker Monitor ─────────────────────────────────────────────────────────
+const { startStopMonitor } = require('./src/broker/monitor');
+const alpacaConfig = require('./src/broker/alpaca').getConfig();
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
@@ -78,5 +88,9 @@ app.listen(PORT, () => {
   console.log(`   Risk Engine: Position sizing + Portfolio heat + Drawdown circuit breaker`);
   console.log(`   Market Cycle: O'Neil distribution days + FTD detection`);
   console.log(`   Claude: ${anthropic?'✓ sonnet-4-6 / haiku-4-5':'⚠ Set ANTHROPIC_API_KEY'}`);
+  console.log(`   Broker: ${alpacaConfig.configured ? '✓ Alpaca' + (alpacaConfig.base.includes('paper') ? ' (paper)' : ' (LIVE)') : '⚠ Set ALPACA_API_KEY'}`);
   console.log(`   Sectors: ${JSON.stringify(counts)}\n`);
+
+  // Start stop monitor (works with or without Alpaca — uses Yahoo for prices)
+  startStopMonitor();
 });

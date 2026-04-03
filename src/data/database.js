@@ -110,6 +110,45 @@ function initSchema() {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- Staged bracket orders (ready for one-click submission to broker)
+    CREATE TABLE IF NOT EXISTS staged_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      symbol TEXT NOT NULL,
+      side TEXT NOT NULL DEFAULT 'buy',
+      order_type TEXT NOT NULL DEFAULT 'limit',
+      qty INTEGER NOT NULL,
+      entry_price REAL NOT NULL,
+      stop_price REAL NOT NULL,
+      target1_price REAL,
+      target2_price REAL,
+      time_in_force TEXT DEFAULT 'day',
+      source TEXT,
+      conviction_score REAL,
+      risk_check JSON,
+      status TEXT DEFAULT 'staged',
+      alpaca_order_id TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      submitted_at TEXT,
+      filled_at TEXT,
+      notes TEXT
+    );
+
+    -- Price alert subscriptions
+    CREATE TABLE IF NOT EXISTS alert_subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      symbol TEXT NOT NULL,
+      alert_type TEXT NOT NULL,
+      trigger_price REAL NOT NULL,
+      direction TEXT NOT NULL,
+      trade_id INTEGER,
+      webhook_url TEXT,
+      message TEXT,
+      active BOOLEAN DEFAULT 1,
+      triggered_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (trade_id) REFERENCES trades(id)
+    );
+
     -- Create indexes for common queries
     CREATE INDEX IF NOT EXISTS idx_rs_snapshots_date ON rs_snapshots(date);
     CREATE INDEX IF NOT EXISTS idx_rs_snapshots_symbol ON rs_snapshots(symbol);
@@ -117,6 +156,8 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
     CREATE INDEX IF NOT EXISTS idx_trades_open ON trades(exit_date) WHERE exit_date IS NULL;
     CREATE INDEX IF NOT EXISTS idx_alerts_type ON alerts(type);
+    CREATE INDEX IF NOT EXISTS idx_staged_status ON staged_orders(status);
+    CREATE INDEX IF NOT EXISTS idx_alert_subs_active ON alert_subscriptions(active) WHERE active = 1;
   `);
 }
 

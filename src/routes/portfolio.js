@@ -10,6 +10,7 @@ const {
   getDrawdownStatus, preTradeCheck,
 } = require('../risk/portfolio');
 const { getMarketRegime } = require('../risk/regime');
+const { createStopAlert, deactivateAlertsForTrade } = require('../broker/alerts');
 
 module.exports = function(db) {
   // ─── Portfolio Config ──────────────────────────────────────────────────────
@@ -99,6 +100,11 @@ module.exports = function(db) {
         entry_price, stop_price, target1, target2,
         shares, entry_rs, entry_sepa, entry_regime, wave, sector, notes,
       );
+      // Auto-create stop alert if stop_price is set
+      if (stop_price) {
+        try { createStopAlert(result.lastInsertRowid); } catch (_) {}
+      }
+
       res.json({ ok: true, id: result.lastInsertRowid });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
@@ -127,6 +133,10 @@ module.exports = function(db) {
         exit_price, exit_reason, pnl_dollars, pnl_percent, r_multiple,
         notes, req.params.id,
       );
+
+      // Deactivate any stop alerts for this trade
+      try { deactivateAlertsForTrade(+req.params.id); } catch (_) {}
+
       res.json({ ok: true, pnl_dollars, pnl_percent, r_multiple });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
