@@ -3,9 +3,10 @@
   "configurations": [
     {
       "name": "alphahunter",
-      "runtimeExecutable": "node",
+      "runtimeExecutable": "/opt/homebrew/bin/node",
       "runtimeArgs": ["server.js"],
-      "port": 3000
+      "env": { "PORT": "3099" },
+      "port": 3099
     }
   ]
 }

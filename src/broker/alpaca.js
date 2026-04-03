@@ -8,7 +8,9 @@ const TTL_ACCOUNT = 30 * 1000; // 30 seconds
 function getConfig() {
   const key    = process.env.ALPACA_API_KEY;
   const secret = process.env.ALPACA_API_SECRET;
-  const base   = process.env.ALPACA_BASE_URL || 'https://paper-api.alpaca.markets';
+  // Strip trailing /v2 if user included it — we add /v2/ in our paths
+  const raw    = process.env.ALPACA_BASE_URL || 'https://paper-api.alpaca.markets';
+  const base   = raw.replace(/\/v2\/?$/, '');
   return { key, secret, base, configured: !!(key && secret) };
 }
 
