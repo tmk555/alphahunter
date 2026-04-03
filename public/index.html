@@ -343,6 +343,7 @@ function App() {
     { id:'setups',    label:'🎯 Trade Setups' },
     { id:'watchlist', label:'⭐ Watchlist' },
     { id:'portfolio', label:'💼 Portfolio' },
+    { id:'execution', label:'🔗 Execution' },
     { id:'trades',    label:'📒 Trade Journal' },
     { id:'performance',label:'📈 Performance' },
   ];
@@ -419,6 +420,7 @@ function App() {
         {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary}/>}
         {tab==='watchlist'  && <WatchlistTab rsData={rsData} />}
         {tab==='portfolio'  && <PortfolioTab />}
+        {tab==='execution'  && <ExecutionTab />}
         {tab==='trades'     && <TradeJournalTab />}
         {tab==='performance'&& <PerformanceTab />}
       </div>
@@ -2512,6 +2514,595 @@ function SectorIndustryRSTrend({ type, title, api: apiPath }) {
 }
 
 // ─── PORTFOLIO DASHBOARD TAB ───────────────────────────────────────────────
+// ─── EXECUTION TAB — Broker, Staged Orders, Alerts ───────────────────────────
+function ExecutionTab() {
+  const [section, setSection] = useState('overview');
+  const [broker, setBroker]     = useState(null);
+  const [positions, setPositions] = useState([]);
+  const [orders, setOrders]     = useState([]);
+  const [staged, setStaged]     = useState([]);
+  const [subs, setSubs]         = useState([]);
+  const [firedAlerts, setFired] = useState([]);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState('');
+  // Alert form
+  const [alertForm, setAlertForm] = useState({symbol:'',trigger_price:'',direction:'above',message:''});
+  // Stage form
+  const [stageForm, setStageForm] = useState({symbol:'',entry_price:'',stop_price:'',target1_price:'',qty:'',notes:''});
+  const [showStageForm, setShowStageForm] = useState(false);
+  const [showAlertForm, setShowAlertForm] = useState(false);
+
+  async function loadAll() {
+    setLoading(true); setError('');
+    try {
+      const [b, p, o, s, al, fa] = await Promise.all([
+        api('/api/broker/status').catch(()=>null),
+        api('/api/broker/positions').catch(()=>({positions:[]})),
+        api('/api/broker/orders').catch(()=>({orders:[]})),
+        api('/api/staging').catch(()=>({orders:[]})),
+        api('/api/alerts/subscriptions').catch(()=>({subscriptions:[]})),
+        api('/api/alerts?limit=20').catch(()=>({alerts:[]})),
+      ]);
+      setBroker(b); setPositions(p.positions||[]); setOrders(o.orders||[]);
+      setStaged(s.orders||[]); setSubs(al.subscriptions||[]); setFired(fa.alerts||[]);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  useEffect(() => { loadAll(); }, []);
+
+  async function submitStaged(id) {
+    try {
+      await api(`/api/staging/${id}/submit`, {method:'POST'});
+      loadAll();
+    } catch(e) { setError(e.message); }
+  }
+
+  async function cancelStaged(id) {
+    try {
+      await api(`/api/staging/${id}/cancel`, {method:'POST'});
+      loadAll();
+    } catch(e) { setError(e.message); }
+  }
+
+  async function cancelOrder(id) {
+    try {
+      await api(`/api/broker/orders/${id}`, {method:'DELETE'});
+      loadAll();
+    } catch(e) { setError(e.message); }
+  }
+
+  async function createAlert() {
+    if (!alertForm.symbol || !alertForm.trigger_price) return;
+    try {
+      await api('/api/alerts/subscriptions', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({...alertForm, trigger_price:+alertForm.trigger_price}),
+      });
+      setAlertForm({symbol:'',trigger_price:'',direction:'above',message:''});
+      setShowAlertForm(false); loadAll();
+    } catch(e) { setError(e.message); }
+  }
+
+  async function deactivateAlert(id) {
+    try {
+      await api(`/api/alerts/subscriptions/${id}`, {method:'DELETE'});
+      loadAll();
+    } catch(e) { setError(e.message); }
+  }
+
+  async function checkAlertsNow() {
+    try {
+      const r = await api('/api/alerts/check', {method:'POST'});
+      if (r.fired > 0) setError(''); // clear old errors
+      loadAll();
+    } catch(e) { setError(e.message); }
+  }
+
+  async function stageOrder() {
+    if (!stageForm.symbol || !stageForm.entry_price || !stageForm.stop_price || !stageForm.qty) return;
+    try {
+      await api('/api/staging', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({...stageForm, entry_price:+stageForm.entry_price, stop_price:+stageForm.stop_price, target1_price:+stageForm.target1_price||undefined, qty:+stageForm.qty}),
+      });
+      setStageForm({symbol:'',entry_price:'',stop_price:'',target1_price:'',qty:'',notes:''});
+      setShowStageForm(false); loadAll();
+    } catch(e) { setError(e.message); }
+  }
+
+  async function acknowledgeAlert(id) {
+    try {
+      await api(`/api/alerts/${id}/acknowledge`, {method:'PUT'});
+      loadAll();
+    } catch(e) { setError(e.message); }
+  }
+
+  const sections = [
+    {id:'overview',  label:'Overview'},
+    {id:'staged',    label:`Staged Orders (${staged.filter(s=>s.status==='staged').length})`},
+    {id:'positions', label:`Positions (${positions.length})`},
+    {id:'alerts',    label:`Alerts (${subs.length})`},
+    {id:'orders',    label:`Broker Orders (${orders.length})`},
+  ];
+
+  const statusColor = s => s==='filled'?'var(--green)':s==='submitted'?'var(--cyan)':s==='staged'?'var(--amber)':s==='cancelled'||s==='expired'?'var(--text3)':'var(--text)';
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="panel" style={{marginBottom:14}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
+          <div>
+            <div className="panel-title">Execution <span>Bridge</span></div>
+            <div className="panel-sub">Alpaca broker integration — stage orders, monitor stops, manage alerts</div>
+          </div>
+          <div style={{display:'flex',gap:8}}>
+            <button className="btn btn-primary" onClick={loadAll} disabled={loading}>
+              {loading ? '...' : '⟳ Refresh'}
+            </button>
+          </div>
+        </div>
+        {error && <ErrorBox msg={error}/>}
+
+        {/* Section tabs */}
+        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+          {sections.map(s => (
+            <button key={s.id} className={`mode-btn ${section===s.id?'active':''}`}
+              onClick={()=>setSection(s.id)} style={{fontSize:11}}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading && <div className="panel"><Loader msg="Loading execution data..."/></div>}
+
+      {/* ─── OVERVIEW ─────────────────────────────── */}
+      {section==='overview' && broker && (
+        <div>
+          {/* Connection + Account */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:12,marginBottom:14}}>
+            <div className="panel" style={{padding:14}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>BROKER STATUS</div>
+              <div style={{fontSize:20,fontWeight:800,color:broker.broker?.connected?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)'}}>
+                {broker.broker?.connected ? 'CONNECTED' : 'DISCONNECTED'}
+              </div>
+              <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
+                {broker.broker?.paper ? 'Paper Trading' : 'LIVE Trading'} · {broker.broker?.status || '—'}
+              </div>
+            </div>
+
+            <div className="panel" style={{padding:14}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>EQUITY</div>
+              <div style={{fontSize:28,fontWeight:800,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>
+                ${broker.broker?.equity ? Number(broker.broker.equity).toLocaleString() : '—'}
+              </div>
+              <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
+                Buying Power: ${broker.broker?.buyingPower ? Number(broker.broker.buyingPower).toLocaleString() : '—'}
+              </div>
+            </div>
+
+            <div className="panel" style={{padding:14}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>CASH</div>
+              <div style={{fontSize:28,fontWeight:800,color:'var(--green)',fontFamily:'var(--font-mono)'}}>
+                ${broker.broker?.cash ? Number(broker.broker.cash).toLocaleString() : '—'}
+              </div>
+              <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
+                PDT: {broker.broker?.patternDayTrader ? 'Yes' : 'No'}
+              </div>
+            </div>
+
+            <div className="panel" style={{padding:14}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>STOP MONITOR</div>
+              <div style={{fontSize:20,fontWeight:800,color:broker.monitor?.running?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)'}}>
+                {broker.monitor?.running ? 'ACTIVE' : 'STOPPED'}
+              </div>
+              <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
+                Checks: {broker.monitor?.totalChecks || 0} · Alerts: {broker.monitor?.activeAlerts || 0}
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Stats */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12}}>
+            <div className="panel" style={{padding:14,cursor:'pointer'}} onClick={()=>setSection('positions')}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div>
+                  <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:4}}>BROKER POSITIONS</div>
+                  <div style={{fontSize:24,fontWeight:800,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{positions.length}</div>
+                </div>
+                <div style={{fontSize:24,opacity:0.3}}>→</div>
+              </div>
+            </div>
+
+            <div className="panel" style={{padding:14,cursor:'pointer'}} onClick={()=>setSection('staged')}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div>
+                  <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:4}}>STAGED ORDERS</div>
+                  <div style={{fontSize:24,fontWeight:800,color:'var(--amber)',fontFamily:'var(--font-mono)'}}>{staged.filter(s=>s.status==='staged').length}</div>
+                </div>
+                <div style={{fontSize:24,opacity:0.3}}>→</div>
+              </div>
+            </div>
+
+            <div className="panel" style={{padding:14,cursor:'pointer'}} onClick={()=>setSection('alerts')}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div>
+                  <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:4}}>ACTIVE ALERTS</div>
+                  <div style={{fontSize:24,fontWeight:800,color:'var(--amber)',fontFamily:'var(--font-mono)'}}>{subs.length}</div>
+                </div>
+                <div style={{fontSize:24,opacity:0.3}}>→</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Recent Fired Alerts */}
+          {firedAlerts.length > 0 && (
+            <div className="panel" style={{marginTop:14}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>RECENT ALERTS</div>
+              {firedAlerts.slice(0,5).map(a => (
+                <div key={a.id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:10}}>
+                    <span style={{fontSize:14}}>{a.type==='stop_violation'?'🛑':a.type==='price_above'?'📈':'📉'}</span>
+                    <div>
+                      <div style={{fontSize:12,color:'var(--text)',fontWeight:600}}>{a.symbol}</div>
+                      <div style={{fontSize:10,color:'var(--text3)'}}>{a.message}</div>
+                    </div>
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{a.created_at}</span>
+                    {!a.acknowledged && (
+                      <button onClick={()=>acknowledgeAlert(a.id)}
+                        style={{padding:'2px 8px',background:'rgba(240,165,0,0.12)',border:'1px solid rgba(240,165,0,0.3)',borderRadius:3,color:'var(--amber)',fontSize:9,cursor:'pointer',fontWeight:700}}>ACK</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─── STAGED ORDERS ────────────────────────── */}
+      {section==='staged' && (
+        <div>
+          <div className="panel" style={{marginBottom:14}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>STAGED BRACKET ORDERS</div>
+              <button className="btn btn-primary btn-sm" onClick={()=>setShowStageForm(!showStageForm)}>
+                {showStageForm ? '✕ Cancel' : '+ Stage Order'}
+              </button>
+            </div>
+
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:'8px 12px',marginBottom:12,fontSize:11,color:'var(--text2)'}}>
+              Stage bracket orders here, then submit with one click. Each submission runs a pre-trade risk check (portfolio heat, sector exposure, regime) before sending to Alpaca.
+            </div>
+
+            {/* Stage Form */}
+            {showStageForm && (
+              <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:14,marginBottom:12}}>
+                <div style={{fontSize:10,color:'var(--amber)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>NEW STAGED ORDER</div>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))',gap:8}}>
+                  {[
+                    {key:'symbol',label:'Symbol',ph:'AAPL'},
+                    {key:'entry_price',label:'Entry Price',ph:'0.00',type:'number'},
+                    {key:'stop_price',label:'Stop Price',ph:'0.00',type:'number'},
+                    {key:'target1_price',label:'Target Price',ph:'0.00',type:'number'},
+                    {key:'qty',label:'Shares',ph:'100',type:'number'},
+                  ].map(f => (
+                    <div key={f.key}>
+                      <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>{f.label}</label>
+                      <input type={f.type||'text'} value={stageForm[f.key]} onChange={e=>setStageForm({...stageForm,[f.key]:e.target.value})} placeholder={f.ph}
+                        style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
+                    </div>
+                  ))}
+                </div>
+                <div style={{marginTop:8}}>
+                  <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Notes</label>
+                  <input value={stageForm.notes} onChange={e=>setStageForm({...stageForm,notes:e.target.value})} placeholder="Setup type, thesis..."
+                    style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13}}/>
+                </div>
+                <button className="btn btn-primary btn-sm" onClick={stageOrder} style={{marginTop:10}}>Stage Bracket Order</button>
+              </div>
+            )}
+          </div>
+
+          {/* Staged Orders Table */}
+          {staged.length > 0 ? (
+            <div className="panel" style={{overflowX:'auto'}}>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                <thead>
+                  <tr style={{borderBottom:'1px solid var(--border)'}}>
+                    {['#','Symbol','Side','Entry','Stop','Target','Qty','Source','Status','Created','Actions'].map(h =>
+                      <th key={h} style={{padding:'8px 6px',textAlign:'left',fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {staged.map(o => (
+                    <tr key={o.id} style={{borderBottom:'1px solid var(--border)'}}>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--text3)'}}>{o.id}</td>
+                      <td style={{padding:'8px 6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{o.symbol}</td>
+                      <td style={{padding:'8px 6px',color:o.side==='buy'?'var(--green)':'var(--red)'}}>{o.side.toUpperCase()}</td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>${fmt(o.entry_price)}</td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--red)'}}>${fmt(o.stop_price)}</td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--green)'}}>{o.target1_price?'$'+fmt(o.target1_price):'—'}</td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{o.qty}</td>
+                      <td style={{padding:'8px 6px',fontSize:10,color:'var(--text3)'}}>{o.source}</td>
+                      <td style={{padding:'8px 6px'}}>
+                        <span style={{padding:'2px 8px',borderRadius:3,fontSize:10,fontWeight:700,color:statusColor(o.status),background:`${statusColor(o.status)}15`,border:`1px solid ${statusColor(o.status)}30`}}>
+                          {o.status.toUpperCase()}
+                        </span>
+                      </td>
+                      <td style={{padding:'8px 6px',fontSize:10,color:'var(--text3)'}}>{o.created_at?.split(' ')[0]}</td>
+                      <td style={{padding:'8px 6px'}}>
+                        <div style={{display:'flex',gap:4}}>
+                          {o.status==='staged' && (
+                            <button onClick={()=>submitStaged(o.id)}
+                              style={{padding:'3px 10px',background:'var(--green)',border:'none',borderRadius:3,color:'#000',fontSize:10,cursor:'pointer',fontWeight:700}}>
+                              SUBMIT
+                            </button>
+                          )}
+                          {(o.status==='staged'||o.status==='submitted') && (
+                            <button onClick={()=>cancelStaged(o.id)}
+                              style={{padding:'3px 8px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:10,cursor:'pointer'}}>
+                              Cancel
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="panel" style={{textAlign:'center',padding:30,color:'var(--text3)'}}>
+              No staged orders — use <strong>+ Stage Order</strong> or stage from Trade Setups tab
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─── POSITIONS ────────────────────────────── */}
+      {section==='positions' && (
+        <div>
+          {positions.length > 0 ? (
+            <div className="panel" style={{overflowX:'auto'}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>ALPACA POSITIONS</div>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                <thead>
+                  <tr style={{borderBottom:'1px solid var(--border)'}}>
+                    {['Symbol','Qty','Side','Avg Entry','Current','Mkt Value','Unrealized P&L','P&L %','Today','Stop','Target'].map(h =>
+                      <th key={h} style={{padding:'8px 6px',textAlign:'left',fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {positions.map(p => (
+                    <tr key={p.symbol} style={{borderBottom:'1px solid var(--border)'}}>
+                      <td style={{padding:'8px 6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{p.symbol}</td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{p.qty}</td>
+                      <td style={{padding:'8px 6px',color:p.side==='long'?'var(--green)':'var(--red)'}}>{p.side}</td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>${fmt(p.avgEntryPrice)}</td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>${fmt(p.currentPrice)}</td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>${Number(p.marketValue).toLocaleString()}</td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',fontWeight:700,color:p.unrealizedPL>=0?'var(--green)':'var(--red)'}}>
+                        {p.unrealizedPL>=0?'+':''}${fmt(p.unrealizedPL)}
+                      </td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',fontWeight:700,color:p.unrealizedPLPct>=0?'var(--green)':'var(--red)'}}>
+                        {p.unrealizedPLPct>=0?'+':''}{fmt(p.unrealizedPLPct,1)}%
+                      </td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:p.changeToday>=0?'var(--green)':'var(--red)'}}>
+                        {p.changeToday>=0?'+':''}{fmt(p.changeToday,1)}%
+                      </td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--red)'}}>{p.localStop?'$'+fmt(p.localStop):'—'}</td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--green)'}}>{p.localTarget1?'$'+fmt(p.localTarget1):'—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="panel" style={{textAlign:'center',padding:30,color:'var(--text3)'}}>
+              No open positions in Alpaca
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─── ALERTS ───────────────────────────────── */}
+      {section==='alerts' && (
+        <div>
+          <div className="panel" style={{marginBottom:14}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>PRICE ALERT SUBSCRIPTIONS</div>
+              <div style={{display:'flex',gap:6}}>
+                <button className="btn btn-sm" onClick={checkAlertsNow}>Check Now</button>
+                <button className="btn btn-primary btn-sm" onClick={()=>setShowAlertForm(!showAlertForm)}>
+                  {showAlertForm ? '✕ Cancel' : '+ New Alert'}
+                </button>
+              </div>
+            </div>
+
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:'8px 12px',marginBottom:12,fontSize:11,color:'var(--text2)'}}>
+              Set price alerts for breakouts, stop violations, or custom levels. Stop alerts are auto-created when you log trades with a stop price. The monitor checks every 5 min during market hours.
+            </div>
+
+            {/* Alert Form */}
+            {showAlertForm && (
+              <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:14,marginBottom:12}}>
+                <div style={{fontSize:10,color:'var(--amber)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>NEW PRICE ALERT</div>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))',gap:8}}>
+                  <div>
+                    <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Symbol</label>
+                    <input value={alertForm.symbol} onChange={e=>setAlertForm({...alertForm,symbol:e.target.value})} placeholder="NVDA"
+                      style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
+                  </div>
+                  <div>
+                    <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Trigger Price</label>
+                    <input type="number" value={alertForm.trigger_price} onChange={e=>setAlertForm({...alertForm,trigger_price:e.target.value})} placeholder="0.00"
+                      style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
+                  </div>
+                  <div>
+                    <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Direction</label>
+                    <select value={alertForm.direction} onChange={e=>setAlertForm({...alertForm,direction:e.target.value})}
+                      style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13}}>
+                      <option value="above">Above (breakout)</option>
+                      <option value="below">Below (stop)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Message (optional)</label>
+                    <input value={alertForm.message} onChange={e=>setAlertForm({...alertForm,message:e.target.value})} placeholder="VCP pivot hit"
+                      style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13}}/>
+                  </div>
+                </div>
+                <button className="btn btn-primary btn-sm" onClick={createAlert} style={{marginTop:10}}>Create Alert</button>
+              </div>
+            )}
+          </div>
+
+          {/* Active Subscriptions */}
+          {subs.length > 0 ? (
+            <div className="panel" style={{marginBottom:14,overflowX:'auto'}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>ACTIVE ({subs.length})</div>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                <thead>
+                  <tr style={{borderBottom:'1px solid var(--border)'}}>
+                    {['Symbol','Type','Trigger','Direction','Message','Created',''].map(h =>
+                      <th key={h} style={{padding:'8px 6px',textAlign:'left',fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {subs.map(s => (
+                    <tr key={s.id} style={{borderBottom:'1px solid var(--border)'}}>
+                      <td style={{padding:'8px 6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{s.symbol}</td>
+                      <td style={{padding:'8px 6px'}}>
+                        <span style={{padding:'2px 8px',borderRadius:3,fontSize:10,fontWeight:600,
+                          color:s.alert_type==='stop_violation'?'var(--red)':s.alert_type==='vcp_pivot'?'var(--purple)':'var(--amber)',
+                          background:s.alert_type==='stop_violation'?'rgba(255,61,87,0.1)':s.alert_type==='vcp_pivot'?'rgba(196,77,255,0.1)':'rgba(240,165,0,0.1)'}}>
+                          {s.alert_type.replace('_',' ').toUpperCase()}
+                        </span>
+                      </td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',fontWeight:700}}>${fmt(s.trigger_price)}</td>
+                      <td style={{padding:'8px 6px',color:s.direction==='above'?'var(--green)':'var(--red)',fontSize:11,fontWeight:700}}>
+                        {s.direction==='above'?'▲ ABOVE':'▼ BELOW'}
+                      </td>
+                      <td style={{padding:'8px 6px',color:'var(--text2)',fontSize:11}}>{s.message||'—'}</td>
+                      <td style={{padding:'8px 6px',color:'var(--text3)',fontSize:10}}>{s.created_at?.split(' ')[0]}</td>
+                      <td style={{padding:'8px 6px'}}>
+                        <button onClick={()=>deactivateAlert(s.id)}
+                          style={{padding:'3px 8px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:10,cursor:'pointer'}}>
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="panel" style={{textAlign:'center',padding:20,color:'var(--text3)',fontSize:12}}>
+              No active alert subscriptions
+            </div>
+          )}
+
+          {/* Fired Alerts Log */}
+          {firedAlerts.length > 0 && (
+            <div className="panel" style={{overflowX:'auto'}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>FIRED ALERTS LOG</div>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                <thead>
+                  <tr style={{borderBottom:'1px solid var(--border)'}}>
+                    {['Type','Symbol','Message','Time',''].map(h =>
+                      <th key={h} style={{padding:'8px 6px',textAlign:'left',fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {firedAlerts.map(a => (
+                    <tr key={a.id} style={{borderBottom:'1px solid var(--border)',opacity:a.acknowledged?0.5:1}}>
+                      <td style={{padding:'8px 6px'}}>
+                        <span style={{fontSize:14}}>{a.type==='stop_violation'?'🛑':a.type==='price_above'?'📈':'📉'}</span>
+                        <span style={{fontSize:10,color:'var(--text3)',marginLeft:6}}>{a.type}</span>
+                      </td>
+                      <td style={{padding:'8px 6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{a.symbol}</td>
+                      <td style={{padding:'8px 6px',color:'var(--text2)',fontSize:11}}>{a.message}</td>
+                      <td style={{padding:'8px 6px',color:'var(--text3)',fontSize:10,fontFamily:'var(--font-mono)'}}>{a.created_at}</td>
+                      <td style={{padding:'8px 6px'}}>
+                        {!a.acknowledged && (
+                          <button onClick={()=>acknowledgeAlert(a.id)}
+                            style={{padding:'2px 8px',background:'rgba(240,165,0,0.12)',border:'1px solid rgba(240,165,0,0.3)',borderRadius:3,color:'var(--amber)',fontSize:9,cursor:'pointer',fontWeight:700}}>ACK</button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─── BROKER ORDERS ────────────────────────── */}
+      {section==='orders' && (
+        <div>
+          {orders.length > 0 ? (
+            <div className="panel" style={{overflowX:'auto'}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>ALPACA ORDERS</div>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                <thead>
+                  <tr style={{borderBottom:'1px solid var(--border)'}}>
+                    {['Symbol','Side','Type','Qty','Limit','Stop','Status','Created',''].map(h =>
+                      <th key={h} style={{padding:'8px 6px',textAlign:'left',fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {orders.map(o => (
+                    <tr key={o.id} style={{borderBottom:'1px solid var(--border)'}}>
+                      <td style={{padding:'8px 6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{o.symbol}</td>
+                      <td style={{padding:'8px 6px',color:o.side==='buy'?'var(--green)':'var(--red)',fontWeight:700}}>{o.side.toUpperCase()}</td>
+                      <td style={{padding:'8px 6px',fontSize:11}}>{o.order_type||o.type}</td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{o.qty} {o.filled_qty!=='0'&&o.filled_qty?`(${o.filled_qty} filled)`:''}</td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{o.limit_price?'$'+o.limit_price:'—'}</td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--red)'}}>{o.stop_price?'$'+o.stop_price:'—'}</td>
+                      <td style={{padding:'8px 6px'}}>
+                        <span style={{padding:'2px 8px',borderRadius:3,fontSize:10,fontWeight:700,
+                          color:o.status==='filled'?'var(--green)':o.status==='new'||o.status==='accepted'?'var(--cyan)':'var(--text3)',
+                          background:o.status==='filled'?'rgba(0,230,118,0.1)':o.status==='new'||o.status==='accepted'?'rgba(0,212,255,0.1)':'rgba(136,136,187,0.1)'}}>
+                          {o.status.toUpperCase()}
+                        </span>
+                      </td>
+                      <td style={{padding:'8px 6px',color:'var(--text3)',fontSize:10}}>{o.created_at?.split('T')[0]}</td>
+                      <td style={{padding:'8px 6px'}}>
+                        {(o.status==='new'||o.status==='accepted'||o.status==='pending_new') && (
+                          <button onClick={()=>cancelOrder(o.id)}
+                            style={{padding:'3px 8px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:10,cursor:'pointer'}}>
+                            Cancel
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="panel" style={{textAlign:'center',padding:30,color:'var(--text3)'}}>
+              No open orders in Alpaca
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── PORTFOLIO TAB ────────────────────────────────────────────────────────
 function PortfolioTab() {
   const [status, setStatus]   = useState(null);
   const [config, setConfig]   = useState(null);
