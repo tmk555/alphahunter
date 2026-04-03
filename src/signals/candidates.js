@@ -49,7 +49,7 @@ function computeTradeSetup(stock, mode) {
     const pivotEntry = nearMA50 ? price : (ma50 ? +(ma50 * 1.002).toFixed(2) : price);
     entryLow  = +(pivotEntry * 0.995).toFixed(2);
     entryHigh = +(pivotEntry * 1.010).toFixed(2);
-    stopLevel = ma50 ? +Math.min(ma50 * 0.975, entryLow - 2 * atr).toFixed(2)
+    stopLevel = ma50 ? +Math.max(ma50 * 0.975, entryLow - 2 * atr).toFixed(2)
                      : +(entryLow - 2 * atr).toFixed(2);
     target1   = +(entryLow + 3.0 * atr).toFixed(2);
     target2   = +(entryLow + 5.0 * atr).toFixed(2);

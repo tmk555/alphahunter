@@ -4,6 +4,7 @@ const router  = express.Router();
 
 const { getRSTrend } = require('../signals/rs');
 const { calcConviction } = require('../signals/conviction');
+const { computeTradeSetup } = require('../signals/candidates');
 const { getMarketRegime } = require('../risk/regime');
 const { loadHistory, RS_HISTORY } = require('../data/store');
 
@@ -19,7 +20,9 @@ module.exports = function(runRSScanFn) {
         .map(s => {
           const trend = getRSTrend(s.ticker, history);
           const { convictionScore, reasons } = calcConviction(s, trend);
-          return { ...s, rsTrend: trend, convictionScore, reasons };
+          const swingSetup    = computeTradeSetup(s, 'swing');
+          const positionSetup = computeTradeSetup(s, 'position');
+          return { ...s, rsTrend: trend, convictionScore, reasons, swingSetup, positionSetup };
         })
         .sort((a, b) => b.convictionScore - a.convictionScore)
         .slice(0, 7);
