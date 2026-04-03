@@ -2011,24 +2011,48 @@ function MarketPulseTab() {
               );})()}
             </div>
           </div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10}}>
-            <div style={{background:'var(--bg)',borderRadius:4,padding:10,textAlign:'center',border:'1px solid var(--border)'}}>
-              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:4}}>DIST DAYS (25-SES)</div>
-              <div style={{fontSize:24,fontWeight:800,color:cycle.distributionDays?.count>=4?'var(--red)':cycle.distributionDays?.count>=3?'var(--amber)':'var(--green)',fontFamily:'var(--font-mono)'}}>{cycle.distributionDays?.count ?? '—'}</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:10}}>
+            <div style={{background:'var(--bg)',borderRadius:4,padding:12,textAlign:'center',border:'1px solid var(--border)'}}>
+              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:4}}>DISTRIBUTION DAYS (25-SESSION)</div>
+              <div style={{fontSize:28,fontWeight:800,color:cycle.distributionDays?.count>=4?'var(--red)':cycle.distributionDays?.count>=3?'var(--amber)':'var(--green)',fontFamily:'var(--font-mono)'}}>{cycle.distributionDays?.count ?? '—'}</div>
+              <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>
+                {cycle.distributionDays?.count>=5 ? 'DANGER — correction likely' :
+                 cycle.distributionDays?.count>=4 ? 'Elevated — tighten stops' :
+                 cycle.distributionDays?.count>=3 ? 'Watch closely' : 'Healthy market'}
+              </div>
+              {cycle.distributionDays?.dates?.length > 0 && (
+                <div style={{marginTop:6,fontSize:9,color:'var(--text3)',textAlign:'left'}}>
+                  {cycle.distributionDays.dates.slice(-5).map((d,i) => (
+                    <div key={i} style={{padding:'1px 0'}}>{typeof d === 'object' ? `${d.date} ${d.chg}%` : d}</div>
+                  ))}
+                </div>
+              )}
             </div>
-            <div style={{background:'var(--bg)',borderRadius:4,padding:10,textAlign:'center',border:'1px solid var(--border)'}}>
-              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:4}}>FTD STATUS</div>
-              <div style={{fontSize:14,fontWeight:800,color:cycle.ftd?.confirmed?'var(--green)':cycle.ftd?.fired?'var(--amber)':'var(--text3)',fontFamily:'var(--font-mono)'}}>
-                {cycle.ftd?.confirmed ? 'CONFIRMED' : cycle.ftd?.fired ? 'FIRED' : 'NONE'}
+            <div style={{background:'var(--bg)',borderRadius:4,padding:12,textAlign:'center',border:'1px solid var(--border)'}}>
+              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:4}}>FOLLOW-THROUGH DAY</div>
+              <div style={{fontSize:16,fontWeight:800,color:cycle.ftd?.confirmed?'var(--green)':cycle.ftd?.fired?'var(--amber)':'var(--text3)',fontFamily:'var(--font-mono)'}}>
+                {cycle.ftd?.confirmed ? 'CONFIRMED' : cycle.ftd?.fired ? 'FIRED (unconfirmed)' : 'NOT DETECTED'}
+              </div>
+              {cycle.ftd?.date && <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>Date: {cycle.ftd.date}</div>}
+              <div style={{fontSize:9,color:'var(--text3)',marginTop:4}}>
+                FTD = 1.25%+ gain on higher vol, days 4-7 of rally
               </div>
             </div>
-            <div style={{background:'var(--bg)',borderRadius:4,padding:10,textAlign:'center',border:'1px solid var(--border)'}}>
-              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:4}}>RALLY DAY</div>
-              <div style={{fontSize:24,fontWeight:800,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{cycle.rallyAttempt?.day ?? '—'}</div>
+            <div style={{background:'var(--bg)',borderRadius:4,padding:12,textAlign:'center',border:'1px solid var(--border)'}}>
+              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:4}}>RALLY ATTEMPT</div>
+              <div style={{fontSize:28,fontWeight:800,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{cycle.rallyAttempt?.day != null ? `Day ${cycle.rallyAttempt.day}` : '—'}</div>
+              <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>
+                {cycle.rallyAttempt?.startDate ? `From low on ${cycle.rallyAttempt.startDate}` : ''}
+              </div>
+              <div style={{fontSize:9,color:'var(--text3)',marginTop:2}}>
+                {cycle.rallyAttempt?.day >= 4 && cycle.rallyAttempt?.day <= 7 ? 'FTD WINDOW — watch for confirmation' :
+                 cycle.rallyAttempt?.day > 7 ? 'Past FTD window' : 'Too early for FTD'}
+              </div>
             </div>
-            <div style={{background:'var(--bg)',borderRadius:4,padding:10,textAlign:'center',border:'1px solid var(--border)'}}>
+            <div style={{background:'var(--bg)',borderRadius:4,padding:12,textAlign:'center',border:'1px solid var(--border)'}}>
               <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:4}}>BREADTH</div>
-              <div style={{fontSize:24,fontWeight:800,color:cycle.breadth?.upDaysPct>=55?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)'}}>{cycle.breadth?.upDaysPct ?? '—'}%</div>
+              <div style={{fontSize:28,fontWeight:800,color:cycle.breadth?.upDaysPct>=55?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)'}}>{cycle.breadth?.upDaysPct ?? '—'}%</div>
+              <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>Up days in last 25 sessions</div>
             </div>
           </div>
           {cycle.signals?.length > 0 && (
@@ -2395,6 +2419,87 @@ function RSTrendSection({ rsData }) {
             })}
           </tbody>
         </table>
+      )}
+    </div>
+  );
+}
+
+// ─── SECTOR / INDUSTRY RS TREND HISTORY ────────────────────────────────────
+function SectorIndustryRSTrend({ type, title, api: apiPath }) {
+  const [history,  setHistory]  = useState(null);
+  const [loading,  setLoading]  = useState(false);
+  const [open,     setOpen]     = useState(false);
+  const { sortData: sortSI, SH: SISH } = useSortTable('current', -1);
+
+  async function load() {
+    if (history) return;
+    setLoading(true);
+    try { const d = await api(apiPath); setHistory(d); } catch(_) {}
+    setLoading(false);
+  }
+
+  function handleOpen() {
+    setOpen(o => !o);
+    if (!open && !history) load();
+  }
+
+  const dirColor = d => d==='rising'?'var(--green)':d==='falling'?'var(--red)':'var(--text3)';
+  const dirIcon  = d => d==='rising'?'▲':d==='falling'?'▼':'→';
+  const trends   = history?.trends || [];
+
+  return (
+    <div style={{marginTop:20}}>
+      <hr style={{border:'none',borderTop:'1px solid var(--border)',margin:'20px 0'}}/>
+      <button className="btn btn-sm" onClick={handleOpen} style={{marginBottom:10}}>
+        {open?'▼':'▶'} {title} ({trends.length > 0 ? `${trends.length} items, ${history?.totalDays||0} snapshots` : 'click to load'})
+      </button>
+      {open && (
+        <div>
+          {loading && <Loader msg={`Loading ${type} RS history...`}/>}
+          {history?.totalDays === 0 && (
+            <div className="info-box">ℹ No {type} RS history yet. Load the {type} tab to start building history.</div>
+          )}
+          {trends.length > 0 && (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th title="Sector or industry ETF ticker symbol">Name</th>
+                  <SISH k="current"   label="IBD RS" title="Current RS percentile rank (1-99) within its universe"/>
+                  <SISH k="direction" label="Trend"  title="Direction: rising >+3 pts in 7 days, falling <-3 pts, flat otherwise"/>
+                  <SISH k="vs1w"      label="vs 1W"  title="RS rank change vs 7 days ago"/>
+                  <SISH k="vs1m"      label="vs 1M"  title="RS rank change vs 30 days ago"/>
+                  <SISH k="vs2m"      label="vs 2M"  title="RS rank change vs 60 days ago"/>
+                  <SISH k="vs3m"      label="vs 3M"  title="RS rank change vs 90 days ago"/>
+                  <th title="Signal derived from RS level + direction">Signal</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortSI(trends).map(t => {
+                  const signal =
+                    t.direction==='rising'  && t.current>=80 ? 'Leading — rotate in' :
+                    t.direction==='rising'  && t.current>=60 ? 'Improving — watch' :
+                    t.direction==='falling' && t.current<50  ? 'Lagging — avoid' :
+                    t.direction==='falling'                  ? 'Fading — reduce' :
+                                                               'Neutral — hold';
+                  return (
+                    <tr key={t.ticker}>
+                      <td style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--cyan)'}}>{t.ticker}</td>
+                      <td><RSBar rs={t.current}/></td>
+                      <td style={{color:dirColor(t.direction),fontFamily:'var(--font-mono)',fontWeight:700}}>
+                        {dirIcon(t.direction)} {t.direction}
+                      </td>
+                      <td className={t.vs1w>0?'up':t.vs1w<0?'dn':''}>{t.vs1w!=null?(t.vs1w>0?'+':'')+t.vs1w:'—'}</td>
+                      <td className={t.vs1m>0?'up':t.vs1m<0?'dn':''}>{t.vs1m!=null?(t.vs1m>0?'+':'')+t.vs1m:'—'}</td>
+                      <td className={t.vs2m>0?'up':t.vs2m<0?'dn':''}>{t.vs2m!=null?(t.vs2m>0?'+':'')+t.vs2m:'—'}</td>
+                      <td className={t.vs3m>0?'up':t.vs3m<0?'dn':''}>{t.vs3m!=null?(t.vs3m>0?'+':'')+t.vs3m:'—'}</td>
+                      <td style={{fontSize:12,color:'var(--text2)'}}>{signal}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
       )}
     </div>
   );
