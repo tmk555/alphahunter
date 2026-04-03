@@ -1696,63 +1696,95 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
       {/* Conviction-ranked picks */}
       {picks && picks.length > 0 && (
         <div style={{marginBottom:20}}>
+          <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10,paddingLeft:2}}>
+            CONVICTION PICKS — {picks.length} ranked by RS + Momentum + SEPA
+          </div>
           <div style={{display:'grid',gap:10}}>
             {picks.map((s, rank) => {
               const sw = s.swingSetup || {};
               const pos = s.positionSetup || {};
+              // Extract just the price from stopLevel (strip the parenthetical note)
+              const swStop = sw.stopLevel?.split(' (')[0] || '—';
+              const posStop = pos.stopLevel?.split(' (')[0] || '—';
+              // Extract the low end of entry zone for cleaner display
+              const swEntry = sw.entryZone?.split(' – ')[0] || '—';
+              const posEntry = pos.entryZone?.split(' – ')[0] || '—';
+              const rankColor = rank===0?'var(--green)':rank<=2?'var(--amber)':'var(--text3)';
               return (
                 <div key={s.ticker} style={{
-                  background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:'14px 16px',
-                  borderLeft:`3px solid ${rank===0?'var(--green)':rank<=2?'var(--amber)':'var(--border)'}`,
+                  background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,
+                  borderLeft:`3px solid ${rankColor}`,
                   opacity: noLongs ? 0.6 : 1,
+                  overflow:'hidden',
                 }}>
-                  <div style={{display:'flex',alignItems:'flex-start',gap:14,flexWrap:'wrap',marginBottom:8}}>
-                    <div style={{minWidth:30,textAlign:'center'}}>
-                      <div style={{fontFamily:'var(--font-mono)',fontSize:18,color:rank===0?'var(--green)':rank<=2?'var(--amber)':'var(--text3)',fontWeight:700}}>#{rank+1}</div>
-                    </div>
+                  {/* Card header */}
+                  <div style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',borderBottom:'1px solid var(--border)'}}>
+                    <div style={{fontFamily:'var(--font-mono)',fontSize:13,color:rankColor,fontWeight:700,minWidth:24}}>#{rank+1}</div>
                     <div style={{flex:1,minWidth:0}}>
-                      <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:6}}>
-                        <span className="td-ticker" style={{fontSize:18}}>{s.ticker}</span>
-                        <span style={{fontFamily:'var(--font-mono)',fontSize:13,color:'var(--text)'}}>${s.price?.toFixed(2)}</span>
-                        <span style={{fontSize:10,color:'var(--text3)'}}>{s.sector}</span>
-                        {s.rsLineNewHigh && <span style={{color:'var(--gold)',fontWeight:700,fontSize:11}}>⭐ RS Line High</span>}
-                        {s.vcpForming && <span style={{color:'var(--purple)',fontWeight:700,fontSize:11}}>VCP {s.vcpCount}x</span>}
-                        {s.earningsRisk && <span style={{color:'var(--red)',fontWeight:700,fontSize:11}}>⚠ Earnings {s.daysToEarnings}d</span>}
+                      <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:4}}>
+                        <span className="td-ticker" style={{fontSize:17}}>{s.ticker}</span>
+                        <span style={{fontFamily:'var(--font-mono)',fontSize:14,color:'var(--text)',fontWeight:600}}>${s.price?.toFixed(2)}</span>
+                        {s.rsLineNewHigh && <span style={{background:'rgba(255,215,0,0.12)',color:'var(--gold)',fontWeight:700,fontSize:10,padding:'1px 6px',borderRadius:3,border:'1px solid rgba(255,215,0,0.3)'}}>⭐ RS Line High</span>}
+                        {s.vcpForming && <span style={{background:'rgba(196,77,255,0.1)',color:'var(--purple)',fontWeight:700,fontSize:10,padding:'1px 6px',borderRadius:3,border:'1px solid rgba(196,77,255,0.3)'}}>VCP {s.vcpCount}x</span>}
+                        {s.earningsRisk && <span style={{background:'rgba(255,61,87,0.1)',color:'var(--red)',fontWeight:700,fontSize:10,padding:'1px 6px',borderRadius:3,border:'1px solid rgba(255,61,87,0.3)'}}>⚠ Earnings {s.daysToEarnings}d</span>}
+                        <span style={{fontSize:10,color:'var(--text3)',marginLeft:'auto'}}>{s.sector}</span>
                       </div>
-                      <div style={{display:'flex',gap:16,flexWrap:'wrap',fontSize:12}}>
-                        <div><span style={{color:'var(--text3)',fontSize:9,letterSpacing:1}}>RS </span><span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:rsColor(s.rsRank)}}>{s.rsRank}</span></div>
-                        <div><span style={{color:'var(--text3)',fontSize:9,letterSpacing:1}}>ACCEL </span><span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:s.rsTrend?.vs4w>5?'var(--green)':'var(--amber)'}}>{s.rsTrend?.vs4w>0?'+':''}{s.rsTrend?.vs4w||0}</span></div>
-                        <div><span style={{color:'var(--text3)',fontSize:9,letterSpacing:1}}>MOM </span><span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:s.swingMomentum>=60?'var(--green)':'var(--amber)'}}>{s.swingMomentum}</span></div>
-                        <div><span style={{color:'var(--text3)',fontSize:9,letterSpacing:1}}>SEPA </span><span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:s.sepaScore>=5?'var(--green)':'var(--amber)'}}>{s.sepaScore}/8</span></div>
-                        <div><span style={{color:'var(--text3)',fontSize:9,letterSpacing:1}}>CONV </span><span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:scoreColor(s.convictionScore)}}>{s.convictionScore}</span></div>
+                      {/* Metrics row */}
+                      <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
+                        {[
+                          {label:'RS',    val:s.rsRank,                color:rsColor(s.rsRank)},
+                          {label:'ACCEL', val:`${s.rsTrend?.vs4w>0?'+':''}${s.rsTrend?.vs4w||0}`, color:s.rsTrend?.vs4w>5?'var(--green)':'var(--amber)'},
+                          {label:'MOM',   val:s.swingMomentum,         color:s.swingMomentum>=60?'var(--green)':'var(--amber)'},
+                          {label:'SEPA',  val:`${s.sepaScore||0}/8`,   color:s.sepaScore>=5?'var(--green)':'var(--amber)'},
+                          {label:'CONV',  val:s.convictionScore,       color:scoreColor(s.convictionScore)},
+                        ].map(m => (
+                          <div key={m.label} style={{display:'flex',alignItems:'baseline',gap:4}}>
+                            <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1,textTransform:'uppercase'}}>{m.label}</span>
+                            <span style={{fontFamily:'var(--font-mono)',fontSize:13,fontWeight:700,color:m.color}}>{m.val}</span>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   </div>
 
                   {/* Trade levels */}
-                  <div style={{display:'grid',gridTemplateColumns:mode==='both'?'1fr 1fr':'1fr',gap:10,marginTop:8}}>
+                  <div style={{display:'grid',gridTemplateColumns:mode==='both'?'1fr 1fr':'1fr',gap:0}}>
                     {(mode==='swing' || mode==='both') && (
-                      <div style={{background:'var(--bg2)',borderRadius:4,padding:10,border:'1px solid rgba(0,212,255,0.2)'}}>
-                        <div style={{fontSize:9,color:'var(--cyan)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>SWING (2-10d)</div>
-                        <div style={{display:'flex',gap:12,flexWrap:'wrap',fontSize:12}}>
-                          <div><span style={{color:'var(--text3)'}}>Entry </span><span style={{color:'var(--green)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{sw.entryZone||'—'}</span></div>
-                          <div><span style={{color:'var(--text3)'}}>Stop </span><span style={{color:'var(--red)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{sw.stopLevel||'—'}</span></div>
-                          <div><span style={{color:'var(--text3)'}}>T1 </span><span style={{color:'var(--cyan)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{sw.target1||'—'}</span></div>
-                          <div><span style={{color:'var(--text3)'}}>R/R </span><span style={{color:'var(--green)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{sw.riskReward||'—'}</span></div>
+                      <div style={{padding:'12px 16px',borderRight:mode==='both'?'1px solid var(--border)':'none'}}>
+                        <div style={{fontSize:9,color:'var(--cyan)',letterSpacing:2,fontFamily:'var(--font-mono)',fontWeight:700,marginBottom:10}}>⚡ SWING · 2-10 DAYS</div>
+                        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+                          {[
+                            {label:'Entry',  val:swEntry,      color:'var(--green)',  bg:'rgba(0,230,118,0.06)',  border:'rgba(0,230,118,0.2)'},
+                            {label:'Stop',   val:swStop,       color:'var(--red)',    bg:'rgba(255,61,87,0.06)',  border:'rgba(255,61,87,0.2)'},
+                            {label:'Target', val:sw.target1||'—', color:'var(--cyan)',bg:'rgba(0,212,255,0.06)',  border:'rgba(0,212,255,0.2)'},
+                            {label:'R/R',    val:sw.riskReward||'—', color:'var(--amber)',bg:'rgba(240,165,0,0.06)',border:'rgba(240,165,0,0.2)'},
+                          ].map(lv => (
+                            <div key={lv.label} style={{background:lv.bg,border:`1px solid ${lv.border}`,borderRadius:4,padding:'8px 10px'}}>
+                              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:.5,textTransform:'uppercase',marginBottom:4}}>{lv.label}</div>
+                              <div style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:700,color:lv.color}}>{lv.val}</div>
+                            </div>
+                          ))}
                         </div>
-                        <div style={{fontSize:10,color:'var(--text3)',marginTop:3}}>ATR: ${sw.atrUsed} · Stop: {sw.stopPct}%</div>
+                        {sw.atrUsed && <div style={{fontSize:10,color:'var(--text3)',marginTop:8}}>ATR ${sw.atrUsed} · Stop {sw.stopPct}% below entry</div>}
                       </div>
                     )}
                     {(mode==='position' || mode==='both') && (
-                      <div style={{background:'var(--bg2)',borderRadius:4,padding:10,border:'1px solid rgba(0,230,118,0.2)'}}>
-                        <div style={{fontSize:9,color:'var(--green)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>POSITION (3-8w) — pullback to 50MA</div>
-                        <div style={{display:'flex',gap:12,flexWrap:'wrap',fontSize:12}}>
-                          <div><span style={{color:'var(--text3)'}}>Entry </span><span style={{color:'var(--green)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{pos.entryZone||'—'}</span></div>
-                          <div><span style={{color:'var(--text3)'}}>Stop </span><span style={{color:'var(--red)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{pos.stopLevel||'—'}</span></div>
-                          <div><span style={{color:'var(--text3)'}}>T1 </span><span style={{color:'var(--cyan)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{pos.target1||'—'}</span></div>
-                          <div><span style={{color:'var(--text3)'}}>R/R </span><span style={{color:'var(--green)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{pos.riskReward||'—'}</span></div>
+                      <div style={{padding:'12px 16px'}}>
+                        <div style={{fontSize:9,color:'var(--green)',letterSpacing:2,fontFamily:'var(--font-mono)',fontWeight:700,marginBottom:10}}>📈 POSITION · 3-8 WEEKS · PULLBACK TO 50MA</div>
+                        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+                          {[
+                            {label:'Entry',  val:posEntry,      color:'var(--green)',  bg:'rgba(0,230,118,0.06)',  border:'rgba(0,230,118,0.2)'},
+                            {label:'Stop',   val:posStop,       color:'var(--red)',    bg:'rgba(255,61,87,0.06)',  border:'rgba(255,61,87,0.2)'},
+                            {label:'Target', val:pos.target1||'—', color:'var(--cyan)',bg:'rgba(0,212,255,0.06)',  border:'rgba(0,212,255,0.2)'},
+                            {label:'R/R',    val:pos.riskReward||'—', color:'var(--amber)',bg:'rgba(240,165,0,0.06)',border:'rgba(240,165,0,0.2)'},
+                          ].map(lv => (
+                            <div key={lv.label} style={{background:lv.bg,border:`1px solid ${lv.border}`,borderRadius:4,padding:'8px 10px'}}>
+                              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:.5,textTransform:'uppercase',marginBottom:4}}>{lv.label}</div>
+                              <div style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:700,color:lv.color}}>{lv.val}</div>
+                            </div>
+                          ))}
                         </div>
-                        <div style={{fontSize:10,color:'var(--text3)',marginTop:3}}>ATR: ${pos.atrUsed} · Stop: {pos.stopPct}% · 50MA: ${s.ma50?.toFixed(2)||'—'}</div>
+                        {pos.atrUsed && <div style={{fontSize:10,color:'var(--text3)',marginTop:8}}>ATR ${pos.atrUsed} · 50MA ${s.ma50?.toFixed(2)||'—'} · Stop {pos.stopPct}%</div>}
                       </div>
                     )}
                   </div>
