@@ -463,7 +463,7 @@ function GlobalTradingGuide({ onClose }) {
             </div>
             <div style={{background:'var(--bg3)',border:'1px solid rgba(0,230,118,0.25)',borderRadius:4,padding:12}}>
               <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--green)',letterSpacing:2,fontWeight:700,marginBottom:8}}>📈 POSITION (3-8 weeks)</div>
-              {[['Regime','BULL only. SPY above 200MA. VIX <20.'],['RS','≥70 AND rising 4+ weeks.'],['SEPA','5-6/8. All MAs aligned.'],['Stage','S2 confirmed: above RISING 150MA.'],['CAN SLIM','C≥25% EPS growth, A≥25% annual.'],['Short Float','>15% short + rising RS = squeeze fuel.'],['Entry','Pullback to 50MA in uptrend.'],['Stop','2×ATR below 50MA.'],['Target','T1=4×ATR, T2=6×ATR.'],['Earnings','OK to hold. Cut to 50% size before.'],['Size','Never >10% of account in one stock.']].map(([k,v])=>(
+              {[['Regime','BULL only. SPY above 200MA. VIX <20.'],['RS','≥70 AND rising 4+ weeks.'],['SEPA','5-6/8. All MAs aligned.'],['Stage','S2 confirmed: above RISING 150MA.'],['CAN SLIM','C≥25% quarterly EPS, A≥25% annual for 3+ yrs.'],['Short Float','>15% short + rising RS = squeeze fuel.'],['Entry','Pullback to 50MA in uptrend.'],['Stop','2×ATR below 50MA.'],['Target','T1=4×ATR, T2=6×ATR.'],['Earnings','OK to hold. Cut to 50% size before.'],['Size','Never >10% of account in one stock.']].map(([k,v])=>(
                 <div key={k} style={{display:'flex',gap:8,marginBottom:4,fontSize:12}}>
                   <span style={{color:'var(--green)',fontWeight:700,minWidth:80,flexShrink:0}}>{k}:</span>
                   <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
@@ -518,14 +518,15 @@ function GlobalTradingGuide({ onClose }) {
         {section==='workflow' && (
           <div style={{display:'grid',gap:8,gridTemplateColumns:'1fr 1fr'}}>
             {[
-              ['1. Market Pulse (2 min)','Regime? BEAR = cash only. CAUTION = half size. BULL = full size. Check VIX, SPY vs MAs, breadth.'],
-              ['2. Sectors → 🎯 Focus (2 min)','Top 2-3 sectors by RS Accel? Click 🎯 to focus Industries + RS Dashboard on those sectors.'],
-              ['3. Industries (2 min)','Filtered by sector focus. Which industry ETFs lead? S2 + VCP = best. Click row for stocks.'],
-              ['4. RS Dashboard (3 min)','Filtered by sector focus. Sort by RS Accel. Find ★Triple + ⭐RS Line + VCP combos. Click for levels.'],
-              ['5. Click Levels (2 min each)','SEPA≥4? CAN SLIM≥4? EPS accelerating? Stage 2? Pass ≥3 of 4 to proceed.'],
-              ['6. Trade Setups (1 min)','ATR levels + earnings check. BUY-rated = enter today.'],
-              ['7. Portfolio → Size (1 min)','Enter price + stop → get exact shares. Check sector heat. Log the trade.'],
-              ['Non-negotiable rules','Never hold through earnings. Stop = 1.5×ATR. BEAR = cash. One trade handled right > ten handled wrong.'],
+              ['1. Market Pulse (2 min)','Check regime: BEAR = cash only (no new longs). CAUTION = half position size. BULL = full size. VIX, SPY vs MAs, breadth.'],
+              ['2. Sectors → 🎯 Focus (2 min)','Sort by RS Accel. Top 2-3 sectors accelerating? Click 🎯 to focus Industries + RS Dashboard on those sectors. In BEAR: note leading sectors for your watchlist — these are your first buys when regime shifts to CAUTION/BULL.'],
+              ['3. Industries (2 min)','Filtered by 🎯 sector focus. Which industry ETFs lead? S2 + VCP = ideal. Click row to see all stocks in that industry.'],
+              ['4. RS Dashboard (3 min)','Filtered by 🎯 sector focus. Shows ALL stocks in focused sectors (Min RS bypassed). Sort by RS Accel. Find ★Triple + ⭐RS Line + VCP combos.'],
+              ['5. Expand stock row (2 min)','Click any stock row to expand: see ATR-based entry/stop/target levels, SEPA score (≥4/8?), CAN SLIM score (≥4/7?), EPS growth (accelerating?), Stage 2 confirmed? Pass ≥3 of 4 checks to proceed.'],
+              ['6. Trade Setups tab (1 min)','Shows AI-generated trade briefs with entry zones, stop levels, targets, and earnings proximity. Confirms the levels you saw in step 5. BUY-rated + no earnings within 14 days = enter today.'],
+              ['7. Portfolio tab (1 min)','Position Sizer: enter price + stop → calculates exact shares based on your account size and risk %. Check portfolio heat and sector exposure. Log the trade in Trade Journal.'],
+              ['What is ATR?','Average True Range = average daily price movement (in $). A $100 stock with ATR $3 moves ~$3/day. Stop = 1.5×ATR means: set stop loss $4.50 below entry. This gives the stock normal breathing room but exits on abnormal drops.'],
+              ['BEAR regime rules','BEAR = NO new longs. Period. Use this time to build your watchlist: sectors/stocks with rising RS Accel in BEAR are coiling for the next rally. When regime shifts to CAUTION or BULL, buy the leaders on your watchlist immediately — you are NOT too late, you are disciplined.'],
             ].map(([step,desc])=>(
               <div key={step} style={{padding:'8px 12px',background:'var(--bg3)',borderRadius:4,borderLeft:'2px solid var(--border)'}}>
                 <div style={{fontSize:12,color:'var(--text)',fontWeight:700,marginBottom:3}}>{step}</div>
@@ -1336,9 +1337,11 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
   useEffect(() => { if (!rsLoaded) load(); }, []);
 
   // Quick filters — preset combinations for fastest workflow
+  // When sector focus is active, bypass minRS on "all" filter so you see every stock in that sector
+  const hasSectorFocus = selectedSectors && selectedSectors.size > 0;
   const [quickFilter, setQuickFilter] = useState('all');
   const quickFilters = {
-    all:      s => s.rsRank >= minRS,
+    all:      s => hasSectorFocus ? true : s.rsRank >= minRS,
     triple:   s => s.rsRank >= 70 && (s.rsTrend?.vs4w||0) > 0 && s.swingMomentum >= 60,
     s2triple: s => s.rsRank >= 70 && (s.rsTrend?.vs4w||0) > 0 && s.swingMomentum >= 60 && s.stage === 2,
     s2vcp:    s => s.rsRank >= 70 && s.stage === 2 && s.vcpForming,
@@ -1450,7 +1453,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                 {sec}
               </span>
             ))}
-            <span style={{color:'var(--text3)'}}>· Showing stocks in these sectors only.</span>
+            <span style={{color:'var(--text3)'}}>· Showing ALL stocks in these sectors (Min RS bypassed).</span>
             <button onClick={()=>setSelectedSectors(new Set())} style={{marginLeft:'auto',padding:'2px 8px',fontSize:10,border:'1px solid var(--border)',borderRadius:3,background:'transparent',color:'var(--text3)',cursor:'pointer'}}>
               ✕ Show all sectors
             </button>
@@ -2454,11 +2457,11 @@ function SectorIndustryRSTrend({ type, title, api: apiPath }) {
               <tbody>
                 {sortSI(trends).map(t => {
                   const signal =
-                    t.direction==='rising'  && t.current>=80 ? 'Leading — rotate in' :
-                    t.direction==='rising'  && t.current>=60 ? 'Improving — watch' :
+                    t.direction==='rising'  && t.current>=80 ? 'Leading — first buy when regime allows' :
+                    t.direction==='rising'  && t.current>=60 ? 'Improving — watchlist, wait for BULL' :
                     t.direction==='falling' && t.current<50  ? 'Lagging — avoid' :
-                    t.direction==='falling'                  ? 'Fading — reduce' :
-                                                               'Neutral — hold';
+                    t.direction==='falling'                  ? 'Fading — reduce exposure' :
+                                                               'Neutral — hold if owned';
                   return (
                     <tr key={t.ticker}>
                       <td style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--cyan)'}}>{t.ticker}</td>
@@ -2536,7 +2539,7 @@ function PortfolioTab() {
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
           <div>
             <div className="panel-title">Portfolio <span>Dashboard</span></div>
-            <div className="panel-sub">Risk management — portfolio heat, sector exposure, drawdown circuit breaker</div>
+            <div className="panel-sub">Risk management hub — does NOT tell you WHAT to trade, tells you HOW MUCH to trade</div>
           </div>
           <div style={{display:'flex',gap:8}}>
             <button className="btn btn-primary" onClick={()=>setEditConfig(!editConfig)}>
@@ -2546,6 +2549,17 @@ function PortfolioTab() {
           </div>
         </div>
         {error && <ErrorBox msg={error}/>}
+
+        {/* How this tab works */}
+        <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:'10px 14px',marginTop:10}}>
+          <div style={{fontSize:10,color:'var(--amber)',letterSpacing:1.5,fontFamily:'var(--font-mono)',fontWeight:700,marginBottom:6}}>HOW THIS TAB DRIVES TRADE DECISIONS</div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,fontSize:11,color:'var(--text2)',lineHeight:1.5}}>
+            <div><strong style={{color:'var(--text)'}}>Position Sizer:</strong> Enter your entry price + stop price. The system calculates exact share count based on your account size and risk-per-trade %. Never guess position size again.</div>
+            <div><strong style={{color:'var(--text)'}}>Portfolio Heat:</strong> Total $ at risk across all open trades ÷ account size. Green &lt;5%, amber 5-8%, red &gt;8%. When red, close weakest position before adding new ones.</div>
+            <div><strong style={{color:'var(--text)'}}>Sector Exposure:</strong> $ allocated per sector. Warning if any sector &gt;25%. Prevents concentration risk — even the best sector can rotate out.</div>
+            <div><strong style={{color:'var(--text)'}}>Market Regime:</strong> BULL = full size, CAUTION = 50% size, BEAR = no new longs. The position sizer auto-adjusts share count based on regime.</div>
+          </div>
+        </div>
       </div>
 
       {loading && <div className="panel"><Loader msg="Loading portfolio status..."/></div>}
