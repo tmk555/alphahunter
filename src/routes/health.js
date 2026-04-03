@@ -3,13 +3,20 @@ const express = require('express');
 const router  = express.Router();
 
 const { loadHistory, RS_HISTORY } = require('../data/store');
+const alpaca = require('../broker/alpaca');
+const { getMonitorStatus } = require('../broker/monitor');
+const { getActiveAlerts } = require('../broker/alerts');
 
 module.exports = function(UNIVERSE, SECTOR_MAP, anthropic) {
   router.get('/health', async (_, res) => {
     const h = loadHistory(RS_HISTORY), dates = Object.keys(h).sort();
+    const brokerConfig = alpaca.getConfig();
     res.json({
       ok: true,
       claude: !!anthropic,
+      broker: brokerConfig.configured ? (brokerConfig.base.includes('paper') ? 'paper' : 'live') : false,
+      activeAlerts: getActiveAlerts().length,
+      monitor: getMonitorStatus(),
       rsHistoryDays: dates.length,
       lastSnapshot: dates[dates.length-1] || 'none',
       universeSize: UNIVERSE.length,
