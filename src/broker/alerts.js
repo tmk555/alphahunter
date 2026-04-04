@@ -1,7 +1,20 @@
 // ─── Alert Engine ────────────────────────────────────────────────────────────
-// Price alert subscriptions, stop violation detection, webhook notifications
+// Price alert subscriptions, stop violation detection, multi-channel notifications
 const fetch = require('node-fetch');
 const { getDB } = require('../data/database');
+
+let _deliverAlert = null;
+let _getEnabledChannels = null;
+
+// Late-bind notification system to avoid circular deps
+function initNotifications() {
+  if (_deliverAlert) return;
+  try {
+    const channels = require('../notifications/channels');
+    _deliverAlert = channels.deliverAlert;
+    _getEnabledChannels = channels.getEnabledChannels;
+  } catch (_) {}
+}
 
 function db() { return getDB(); }
 
@@ -114,6 +127,17 @@ async function checkAlerts(currentPrices) {
         fireWebhook(url, payload).catch(e =>
           console.error(`  Alert webhook failed for ${sub.symbol}: ${e.message}`)
         );
+      }
+
+      // Deliver through notification channels (Slack, Telegram, etc.)
+      initNotifications();
+      if (_deliverAlert && _getEnabledChannels) {
+        const channels = _getEnabledChannels(sub.alert_type);
+        if (channels.length) {
+          _deliverAlert(payload, channels).catch(e =>
+            console.error(`  Notification delivery failed for ${sub.symbol}: ${e.message}`)
+          );
+        }
       }
 
       fired.push(payload);

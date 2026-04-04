@@ -181,6 +181,58 @@ function initSchema() {
       FOREIGN KEY (job_id) REFERENCES scheduled_jobs(id)
     );
 
+    -- Notification channels (Tier 5 Alerting)
+    CREATE TABLE IF NOT EXISTS notification_channels (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      channel TEXT NOT NULL CHECK(channel IN ('slack','telegram','webhook')),
+      config JSON DEFAULT '{}',
+      filters JSON DEFAULT '{}',
+      enabled BOOLEAN DEFAULT 1,
+      priority INTEGER DEFAULT 10,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Notification delivery log
+    CREATE TABLE IF NOT EXISTS notification_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      alert_id INTEGER,
+      channel TEXT NOT NULL,
+      status TEXT NOT NULL,
+      error TEXT,
+      payload JSON,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Provider health log (Tier 1 multi-provider)
+    CREATE TABLE IF NOT EXISTS provider_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL,
+      event TEXT NOT NULL,
+      details JSON,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Signal replay results (Tier 4 backtest)
+    CREATE TABLE IF NOT EXISTS replay_results (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      strategy TEXT NOT NULL,
+      params JSON NOT NULL,
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      initial_capital REAL NOT NULL,
+      final_equity REAL,
+      total_return REAL,
+      total_trades INTEGER,
+      win_rate REAL,
+      profit_factor REAL,
+      max_drawdown REAL,
+      sharpe_ratio REAL,
+      result JSON,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
     -- Create indexes for common queries
     CREATE INDEX IF NOT EXISTS idx_rs_snapshots_date ON rs_snapshots(date);
     CREATE INDEX IF NOT EXISTS idx_rs_snapshots_symbol ON rs_snapshots(symbol);
@@ -193,6 +245,10 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_enabled ON scheduled_jobs(enabled) WHERE enabled = 1;
     CREATE INDEX IF NOT EXISTS idx_job_history_job ON job_history(job_id);
     CREATE INDEX IF NOT EXISTS idx_job_history_started ON job_history(started_at);
+    CREATE INDEX IF NOT EXISTS idx_notification_log_channel ON notification_log(channel);
+    CREATE INDEX IF NOT EXISTS idx_notification_log_created ON notification_log(created_at);
+    CREATE INDEX IF NOT EXISTS idx_provider_log_provider ON provider_log(provider);
+    CREATE INDEX IF NOT EXISTS idx_replay_results_strategy ON replay_results(strategy);
   `);
 }
 
