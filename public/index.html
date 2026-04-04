@@ -346,6 +346,7 @@ function App() {
     { id:'execution', label:'🔗 Execution' },
     { id:'trades',    label:'📒 Trade Journal' },
     { id:'performance',label:'📈 Performance' },
+    { id:'scheduler',  label:'⏰ Scheduler' },
   ];
 
   return (
@@ -423,6 +424,7 @@ function App() {
         {tab==='execution'  && <ExecutionTab />}
         {tab==='trades'     && <TradeJournalTab />}
         {tab==='performance'&& <PerformanceTab />}
+        {tab==='scheduler'  && <SchedulerTab />}
       </div>
     </div>
   );
@@ -435,7 +437,9 @@ function GlobalTradingGuide({ onClose }) {
     {id:'setup',    label:'⚡ Checklists'},
     {id:'signals',  label:'📊 Signals'},
     {id:'canslim',  label:'📈 CAN SLIM'},
-    {id:'workflow', label:'🗓 Workflow'},
+    {id:'workflow',  label:'🗓 Workflow'},
+    {id:'execution', label:'🔗 Execution'},
+    {id:'scheduler', label:'⏰ Scheduler'},
   ];
   return (
     <div style={{background:'var(--bg2)',borderBottom:'2px solid var(--amber)',flexShrink:0,maxHeight:420,overflowY:'auto'}}>
@@ -535,6 +539,135 @@ function GlobalTradingGuide({ onClose }) {
                 <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5}}>{desc}</div>
               </div>
             ))}
+          </div>
+        )}
+        {section==='execution' && (
+          <div style={{display:'grid',gap:10}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              <div style={{background:'var(--bg3)',border:'1px solid rgba(0,212,255,0.25)',borderRadius:4,padding:12}}>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--cyan)',letterSpacing:2,fontWeight:700,marginBottom:8}}>🔗 EXECUTION BRIDGE (TIER 3)</div>
+                {[
+                  ['What it does','Connects analysis → broker. Monitors stops, fires alerts, auto-sells on violations. Bridges the gap between "I found a trade" and "my order is live."'],
+                  ['Stop Monitor','Runs every 5 min (weekdays). Fetches prices from Alpaca (or Yahoo fallback). Checks all active alert subscriptions against current prices.'],
+                  ['Alert Types','stop_violation (auto-created with trades), price_above, price_below, vcp_pivot (breakout alert).'],
+                  ['Auto-Execute','Set AUTO_STOP_EXECUTE=true in .env. When a stop_violation fires, system submits a market sell to Alpaca automatically. Protects you when away.'],
+                  ['Webhooks','Set ALERT_WEBHOOK_URL in .env. Every fired alert POSTs JSON payload (type, symbol, price, trade_id, timestamp) to your webhook.'],
+                  ['Reconciliation','Compares local Trade Journal vs Alpaca positions. Shows broker-only and local-only discrepancies. Run from Execution tab.'],
+                ].map(([k,v])=>(
+                  <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
+                    <span style={{color:'var(--cyan)',fontWeight:700,minWidth:100,flexShrink:0}}>{k}:</span>
+                    <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{background:'var(--bg3)',border:'1px solid rgba(240,165,0,0.25)',borderRadius:4,padding:12}}>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:8}}>📋 ORDER STAGING WORKFLOW</div>
+                {[
+                  ['1. Stage from Setup','Trade Setups → click STAGE. System calculates position size, runs pre-trade checks (heat, sector exposure, regime, earnings).'],
+                  ['2. Manual Stage','Execution tab → STAGE ORDER. Enter symbol, entry, stop, target, qty manually. For off-scanner trades.'],
+                  ['3. Review','Staged orders show in Execution tab with full bracket details. Risk check results displayed (passed/failed gates).'],
+                  ['4. Submit','One-click SUBMIT sends bracket order to Alpaca: limit entry + stop_loss + take_profit. Status updates to "submitted."'],
+                  ['5. Monitor','Stop Monitor watches submitted positions. Alert auto-created for stop price. Fires webhook + optional auto-sell on violation.'],
+                  ['6. Journal','Log exit in Trade Journal. PnL, R-multiple, exit reason auto-calculated. Performance tab tracks your edge.'],
+                ].map(([k,v])=>(
+                  <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
+                    <span style={{color:'var(--amber)',fontWeight:700,minWidth:120,flexShrink:0}}>{k}:</span>
+                    <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              <div style={{background:'var(--bg3)',border:'1px solid rgba(255,61,87,0.25)',borderRadius:4,padding:12}}>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--red)',letterSpacing:2,fontWeight:700,marginBottom:8}}>⚠ PRE-TRADE SAFETY GATES</div>
+                {[
+                  ['Portfolio Heat','Total open risk must be &lt; 8% of account. Sum of (entry−stop)×shares for all open trades.'],
+                  ['Sector Exposure','Max 25% of account in one sector. Max 3 correlated positions per sector.'],
+                  ['Earnings Blackout','No new swing entries within 10 trading days of earnings. Position trades: cut to 50% size.'],
+                  ['Regime Gate','BEAR = blocked. CAUTION = 50% position size multiplier. BULL = full size.'],
+                  ['Position Cap','Single position max 20% of account value. Prevents concentration risk.'],
+                  ['Drawdown Breaker','If account drawdown exceeds circuit breaker threshold, all new entries blocked.'],
+                ].map(([k,v])=>(
+                  <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
+                    <span style={{color:'var(--red)',fontWeight:700,minWidth:110,flexShrink:0}}>{k}:</span>
+                    <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{background:'var(--bg3)',border:'1px solid rgba(0,230,118,0.25)',borderRadius:4,padding:12}}>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--green)',letterSpacing:2,fontWeight:700,marginBottom:8}}>🔌 ALPACA SETUP</div>
+                {[
+                  ['Required .env','ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL (paper: https://paper-api.alpaca.markets)'],
+                  ['Paper vs Live','Use paper-api URL for testing. Switch to api.alpaca.markets for live. System shows (paper) or (LIVE) in header.'],
+                  ['Without Alpaca','Stop Monitor still works using Yahoo Finance prices. Staging and alerts functional. Only broker submission disabled.'],
+                  ['Webhook Setup','ALERT_WEBHOOK_URL=https://your-endpoint. Receives POST with alert data. Use Slack/Discord/Telegram webhook.'],
+                  ['Auto-Stop','AUTO_STOP_EXECUTE=true enables automatic market sells on stop violations. Use with paper account first.'],
+                ].map(([k,v])=>(
+                  <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
+                    <span style={{color:'var(--green)',fontWeight:700,minWidth:100,flexShrink:0}}>{k}:</span>
+                    <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+        {section==='scheduler' && (
+          <div style={{display:'grid',gap:10}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              <div style={{background:'var(--bg3)',border:'1px solid rgba(196,77,255,0.25)',borderRadius:4,padding:12}}>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--purple)',letterSpacing:2,fontWeight:700,marginBottom:8}}>⏰ JOB SCHEDULER (TIER 5)</div>
+                {[
+                  ['What it does','Cron-based automation engine. Schedules recurring tasks: RS scans, stop checks, order cleanup, portfolio reconciliation, data maintenance.'],
+                  ['How it works','node-cron runs jobs on schedule. Each execution logged to job_history table with status, duration, and result. Jobs persist across restarts via SQLite.'],
+                  ['Quick Start','Go to Scheduler tab → SEED DEFAULTS. Creates 6 recommended jobs. Toggle ON/OFF individually. Click RUN to test immediately.'],
+                  ['Custom Jobs','+ NEW JOB → pick type, set cron expression, configure JSON params. System validates cron syntax before saving.'],
+                  ['Monitoring','Scheduler tab shows live status: enabled/disabled, last run time, success/error, duration. Click any job row to see execution history.'],
+                ].map(([k,v])=>(
+                  <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
+                    <span style={{color:'var(--purple)',fontWeight:700,minWidth:90,flexShrink:0}}>{k}:</span>
+                    <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{background:'var(--bg3)',border:'1px solid rgba(255,215,0,0.25)',borderRadius:4,padding:12}}>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--gold)',letterSpacing:2,fontWeight:700,marginBottom:8}}>📅 BUILT-IN JOB TYPES</div>
+                {[
+                  ['rs_scan','Full universe RS scan. Persists snapshots to SQLite. Schedule: weekdays 4 PM (after market close).'],
+                  ['stop_monitor','Checks active alerts vs current prices. Fires webhooks on violations. Schedule: every 5 min weekdays.'],
+                  ['expire_stale_orders','Cleans staged orders older than N hours. Config: {maxAgeHours: 24}. Schedule: hourly.'],
+                  ['watchlist_snapshot','Fetches current prices for watchlist symbols. Useful for tracking without active alerts.'],
+                  ['portfolio_reconcile','Syncs Trade Journal vs Alpaca positions. Shows discrepancies. Schedule: weekdays 4:30 PM.'],
+                  ['rs_history_cleanup','Prunes RS snapshots older than N days. Config: {keepDays: 365}. Schedule: weekly Sunday 2 AM.'],
+                  ['job_history_cleanup','Prunes execution logs older than N days. Config: {keepDays: 30}. Schedule: weekly Sunday 3 AM.'],
+                ].map(([k,v])=>(
+                  <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
+                    <span style={{color:'var(--gold)',fontWeight:700,minWidth:130,flexShrink:0,fontFamily:'var(--font-mono)',fontSize:11}}>{k}</span>
+                    <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text2)',letterSpacing:2,fontWeight:700,marginBottom:8}}>📖 CRON EXPRESSION REFERENCE</div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(250px,1fr))',gap:6}}>
+                {[
+                  ['*/5 * * * 1-5','Every 5 minutes, Mon-Fri'],
+                  ['0 * * * *','Every hour, on the hour'],
+                  ['0 9 * * 1-5','9:00 AM, Mon-Fri (market open)'],
+                  ['0 16 * * 1-5','4:00 PM, Mon-Fri (market close)'],
+                  ['30 16 * * 1-5','4:30 PM, Mon-Fri'],
+                  ['0 2 * * 0','2:00 AM, Sundays only'],
+                  ['0 0 1 * *','Midnight, 1st of month'],
+                  ['Format','min(0-59) hour(0-23) day(1-31) month(1-12) weekday(0-6, 0=Sun)'],
+                ].map(([expr,desc])=>(
+                  <div key={expr} style={{display:'flex',gap:8,fontSize:11}}>
+                    <span style={{color:'var(--amber)',fontFamily:'var(--font-mono)',minWidth:120,flexShrink:0}}>{expr}</span>
+                    <span style={{color:'var(--text3)'}}>→ {desc}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -3474,6 +3607,346 @@ function TradeJournalTab() {
           No trades yet — click <strong>+ New Trade</strong> to log your first entry
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── SCHEDULER TAB (Tier 5 — Job Scheduler) ────────────────────────────────
+function SchedulerTab() {
+  const [jobs, setJobs]         = useState([]);
+  const [types, setTypes]       = useState({});
+  const [status, setStatus]     = useState(null);
+  const [history, setHistory]   = useState([]);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState('');
+  const [showCreate, setShowCreate] = useState(false);
+  const [selectedJob, setSelectedJob] = useState(null);
+  const [jobHistory, setJobHistory]   = useState([]);
+  const [form, setForm] = useState({ name:'', description:'', job_type:'', cron_expression:'', config:'{}', enabled:true });
+
+  async function loadAll() {
+    setLoading(true); setError('');
+    try {
+      const [j, t, s, h] = await Promise.all([
+        api('/api/scheduler/jobs').catch(()=>({jobs:[]})),
+        api('/api/scheduler/types').catch(()=>({types:{}})),
+        api('/api/scheduler/status').catch(()=>null),
+        api('/api/scheduler/history?limit=30').catch(()=>({history:[]})),
+      ]);
+      setJobs(j.jobs||[]); setTypes(t.types||{}); setStatus(s); setHistory(h.history||[]);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  useEffect(() => { loadAll(); }, []);
+
+  async function seedDefaults() {
+    try {
+      await api('/api/scheduler/seed', {method:'POST'});
+      loadAll();
+    } catch(e) { setError(e.message); }
+  }
+
+  async function createNewJob() {
+    if (!form.name || !form.job_type || !form.cron_expression) return;
+    try {
+      let config = {};
+      try { config = JSON.parse(form.config); } catch(_) {}
+      await api('/api/scheduler/jobs', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({...form, config, enabled:form.enabled}),
+      });
+      setForm({name:'',description:'',job_type:'',cron_expression:'',config:'{}',enabled:true});
+      setShowCreate(false); loadAll();
+    } catch(e) { setError(e.message); }
+  }
+
+  async function toggleEnabled(id, enabled) {
+    try {
+      await api(`/api/scheduler/jobs/${id}/toggle`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({enabled}),
+      });
+      loadAll();
+    } catch(e) { setError(e.message); }
+  }
+
+  async function runNow(id) {
+    try {
+      setError('');
+      const r = await api(`/api/scheduler/jobs/${id}/run`, {method:'POST'});
+      if (r.error) setError(`Job failed: ${r.error}`);
+      loadAll();
+      if (selectedJob === id) loadJobHistory(id);
+    } catch(e) { setError(e.message); }
+  }
+
+  async function deleteJobById(id) {
+    try {
+      await api(`/api/scheduler/jobs/${id}`, {method:'DELETE'});
+      if (selectedJob === id) { setSelectedJob(null); setJobHistory([]); }
+      loadAll();
+    } catch(e) { setError(e.message); }
+  }
+
+  async function loadJobHistory(id) {
+    setSelectedJob(id);
+    try {
+      const r = await api(`/api/scheduler/jobs/${id}/history?limit=20`);
+      setJobHistory(r.history||[]);
+    } catch(e) { setJobHistory([]); }
+  }
+
+  const cronDescriptions = {
+    '*/5 * * * 1-5': 'Every 5 min (weekdays)',
+    '0 * * * *': 'Every hour',
+    '0 16 * * 1-5': 'Daily at 4:00 PM (weekdays)',
+    '30 16 * * 1-5': 'Daily at 4:30 PM (weekdays)',
+    '0 9 * * 1-5': 'Daily at 9:00 AM (weekdays)',
+    '0 2 * * 0': 'Weekly (Sunday 2 AM)',
+    '0 3 * * 0': 'Weekly (Sunday 3 AM)',
+    '0 0 1 * *': 'Monthly (1st, midnight)',
+  };
+
+  function describeCron(expr) {
+    return cronDescriptions[expr] || expr;
+  }
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="panel" style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:10}}>
+        <div>
+          <div className="panel-title"><span>TIER 5</span> — JOB SCHEDULER</div>
+          <div className="panel-sub">Automated cron jobs — RS scans, stop monitoring, cleanup, reconciliation</div>
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          {status && (
+            <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--text3)'}}>
+              {status.running} active / {status.totalJobs} total
+            </span>
+          )}
+          <button className="load-btn" onClick={loadAll} disabled={loading} style={{fontSize:10,padding:'6px 14px'}}>
+            {loading ? 'LOADING...' : 'REFRESH'}
+          </button>
+          <button className="load-btn" onClick={seedDefaults} style={{fontSize:10,padding:'6px 14px',background:'var(--cyan)',color:'#000'}}>
+            SEED DEFAULTS
+          </button>
+          <button className="load-btn" onClick={()=>setShowCreate(!showCreate)} style={{fontSize:10,padding:'6px 14px',background:'var(--green)',color:'#000'}}>
+            + NEW JOB
+          </button>
+        </div>
+      </div>
+
+      {error && <div style={{padding:'8px 14px',background:'rgba(255,61,87,0.1)',border:'1px solid var(--red)',borderRadius:4,marginBottom:12,color:'var(--red)',fontSize:12,fontFamily:'var(--font-mono)'}}>{error}</div>}
+
+      {/* Create Job Form */}
+      {showCreate && (
+        <div className="panel" style={{borderColor:'var(--green)'}}>
+          <div className="section-label" style={{marginBottom:10}}>CREATE NEW JOB</div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+            <div>
+              <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>NAME</label>
+              <input value={form.name} onChange={e=>setForm({...form,name:e.target.value})}
+                placeholder="e.g. Daily RS Scan"
+                style={{width:'100%',padding:'7px 10px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontFamily:'var(--font-mono)',fontSize:12}} />
+            </div>
+            <div>
+              <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>JOB TYPE</label>
+              <select value={form.job_type} onChange={e=>setForm({...form,job_type:e.target.value})}
+                style={{width:'100%',padding:'7px 10px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontFamily:'var(--font-mono)',fontSize:12}}>
+                <option value="">Select type...</option>
+                {Object.entries(types).map(([k,v])=>(
+                  <option key={k} value={k}>{k} — {v.description}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>CRON EXPRESSION</label>
+              <input value={form.cron_expression} onChange={e=>setForm({...form,cron_expression:e.target.value})}
+                placeholder="*/5 * * * 1-5"
+                style={{width:'100%',padding:'7px 10px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontFamily:'var(--font-mono)',fontSize:12}} />
+              <div style={{fontSize:9,color:'var(--text3)',marginTop:2}}>min hour day month weekday (0=Sun)</div>
+            </div>
+            <div>
+              <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>CONFIG (JSON)</label>
+              <input value={form.config} onChange={e=>setForm({...form,config:e.target.value})}
+                placeholder='{"persist": true}'
+                style={{width:'100%',padding:'7px 10px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontFamily:'var(--font-mono)',fontSize:12}} />
+            </div>
+            <div style={{gridColumn:'span 2'}}>
+              <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>DESCRIPTION</label>
+              <input value={form.description} onChange={e=>setForm({...form,description:e.target.value})}
+                placeholder="What does this job do?"
+                style={{width:'100%',padding:'7px 10px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontFamily:'var(--font-mono)',fontSize:12}} />
+            </div>
+          </div>
+          <div style={{display:'flex',gap:8,marginTop:10,alignItems:'center'}}>
+            <label style={{fontSize:11,color:'var(--text2)',display:'flex',alignItems:'center',gap:4}}>
+              <input type="checkbox" checked={form.enabled} onChange={e=>setForm({...form,enabled:e.target.checked})} /> Enabled on create
+            </label>
+            <div style={{marginLeft:'auto',display:'flex',gap:8}}>
+              <button onClick={()=>setShowCreate(false)} style={{padding:'6px 16px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',cursor:'pointer',fontSize:11}}>Cancel</button>
+              <button onClick={createNewJob} className="load-btn" style={{fontSize:10,padding:'6px 16px',background:'var(--green)',color:'#000'}}>CREATE JOB</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Jobs Table */}
+      <div className="panel">
+        <div className="section-label">SCHEDULED JOBS</div>
+        {jobs.length === 0 ? (
+          <div style={{textAlign:'center',padding:30,color:'var(--text3)',fontSize:13}}>
+            No jobs configured. Click <strong>SEED DEFAULTS</strong> to create recommended jobs.
+          </div>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Schedule</th>
+                <th>Last Run</th>
+                <th>Runs</th>
+                <th>Duration</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {jobs.map(j => (
+                <tr key={j.id} style={{cursor:'pointer',background:selectedJob===j.id?'var(--bg3)':'transparent'}}
+                    onClick={()=>loadJobHistory(j.id)}>
+                  <td>
+                    <span className="status-dot" style={{background:j.enabled?'var(--green)':'var(--text3)'}} />
+                    <span style={{fontSize:10,color:j.enabled?'var(--green)':'var(--text3)'}}>{j.enabled?'ON':'OFF'}</span>
+                  </td>
+                  <td>
+                    <span style={{color:'var(--text)',fontWeight:600,fontFamily:'var(--font-sans)'}}>{j.name}</span>
+                    {j.description && <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-sans)',whiteSpace:'normal',maxWidth:200}}>{j.description}</div>}
+                  </td>
+                  <td><span style={{fontSize:11,color:'var(--cyan)',background:'rgba(0,212,255,0.08)',padding:'2px 6px',borderRadius:3}}>{j.job_type}</span></td>
+                  <td>
+                    <span style={{fontSize:11}}>{describeCron(j.cron_expression)}</span>
+                    <div style={{fontSize:9,color:'var(--text3)'}}>{j.cron_expression}</div>
+                  </td>
+                  <td>
+                    {j.last_run_at ? (
+                      <div>
+                        <span style={{fontSize:11,color:j.last_run_status==='success'?'var(--green)':'var(--red)'}}>
+                          {j.last_run_status==='success'?'OK':'ERR'}
+                        </span>
+                        <div style={{fontSize:9,color:'var(--text3)'}}>{new Date(j.last_run_at+'Z').toLocaleString()}</div>
+                      </div>
+                    ) : <span style={{color:'var(--text3)',fontSize:11}}>Never</span>}
+                  </td>
+                  <td style={{textAlign:'center'}}>{j.run_count}</td>
+                  <td style={{fontSize:11}}>{j.last_run_duration_ms ? `${j.last_run_duration_ms}ms` : '—'}</td>
+                  <td onClick={e=>e.stopPropagation()}>
+                    <div style={{display:'flex',gap:4}}>
+                      <button onClick={()=>runNow(j.id)} title="Run now"
+                        style={{padding:'3px 8px',background:'rgba(240,165,0,0.15)',border:'1px solid var(--amber)',borderRadius:3,color:'var(--amber)',cursor:'pointer',fontSize:10,fontWeight:700}}>RUN</button>
+                      <button onClick={()=>toggleEnabled(j.id,!j.enabled)} title={j.enabled?'Disable':'Enable'}
+                        style={{padding:'3px 8px',background:j.enabled?'rgba(255,61,87,0.1)':'rgba(0,230,118,0.1)',border:`1px solid ${j.enabled?'var(--red)':'var(--green)'}`,borderRadius:3,color:j.enabled?'var(--red)':'var(--green)',cursor:'pointer',fontSize:10,fontWeight:700}}>
+                        {j.enabled?'OFF':'ON'}
+                      </button>
+                      <button onClick={()=>deleteJobById(j.id)} title="Delete"
+                        style={{padding:'3px 8px',background:'rgba(255,61,87,0.06)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',cursor:'pointer',fontSize:10}}>DEL</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Job History Detail */}
+      {selectedJob && (
+        <div className="panel" style={{borderColor:'var(--amber)'}}>
+          <div className="section-label">EXECUTION HISTORY — {jobs.find(j=>j.id===selectedJob)?.name || `Job #${selectedJob}`}</div>
+          {jobs.find(j=>j.id===selectedJob)?.last_error && (
+            <div style={{padding:'6px 10px',background:'rgba(255,61,87,0.08)',borderRadius:3,marginBottom:10,fontSize:11,color:'var(--red)',fontFamily:'var(--font-mono)'}}>
+              Last error: {jobs.find(j=>j.id===selectedJob).last_error}
+            </div>
+          )}
+          {jobHistory.length === 0 ? (
+            <div style={{color:'var(--text3)',fontSize:12,padding:10}}>No executions yet. Click <strong>RUN</strong> to test.</div>
+          ) : (
+            <table className="data-table">
+              <thead><tr><th>Started</th><th>Status</th><th>Duration</th><th>Result</th></tr></thead>
+              <tbody>
+                {jobHistory.map(h => (
+                  <tr key={h.id}>
+                    <td style={{fontSize:11}}>{new Date(h.started_at+'Z').toLocaleString()}</td>
+                    <td>
+                      <span style={{fontSize:10,padding:'2px 6px',borderRadius:3,fontWeight:700,
+                        background:h.status==='success'?'rgba(0,230,118,0.1)':h.status==='error'?'rgba(255,61,87,0.1)':'rgba(240,165,0,0.1)',
+                        color:h.status==='success'?'var(--green)':h.status==='error'?'var(--red)':'var(--amber)'}}>
+                        {h.status.toUpperCase()}
+                      </span>
+                    </td>
+                    <td style={{fontSize:11}}>{h.duration_ms != null ? `${h.duration_ms}ms` : '...'}</td>
+                    <td style={{fontSize:10,color:'var(--text3)',maxWidth:300,overflow:'hidden',textOverflow:'ellipsis'}}>
+                      {h.error || (h.result ? JSON.stringify(h.result).slice(0,120) : '—')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* Recent Global History */}
+      <div className="panel">
+        <div className="section-label">RECENT EXECUTION LOG (ALL JOBS)</div>
+        {history.length === 0 ? (
+          <div style={{color:'var(--text3)',fontSize:12,padding:10}}>No job executions yet.</div>
+        ) : (
+          <table className="data-table">
+            <thead><tr><th>Time</th><th>Job</th><th>Status</th><th>Duration</th><th>Details</th></tr></thead>
+            <tbody>
+              {history.slice(0,20).map(h => (
+                <tr key={h.id}>
+                  <td style={{fontSize:10}}>{new Date(h.started_at+'Z').toLocaleString()}</td>
+                  <td style={{color:'var(--cyan)',fontSize:11}}>{h.job_name}</td>
+                  <td>
+                    <span style={{fontSize:10,padding:'1px 5px',borderRadius:3,
+                      background:h.status==='success'?'rgba(0,230,118,0.1)':h.status==='error'?'rgba(255,61,87,0.1)':'rgba(240,165,0,0.1)',
+                      color:h.status==='success'?'var(--green)':h.status==='error'?'var(--red)':'var(--amber)'}}>
+                      {h.status}
+                    </span>
+                  </td>
+                  <td style={{fontSize:10}}>{h.duration_ms != null ? `${h.duration_ms}ms` : '—'}</td>
+                  <td style={{fontSize:10,color:'var(--text3)',maxWidth:250,overflow:'hidden',textOverflow:'ellipsis'}}>
+                    {h.error || (h.result ? JSON.stringify(h.result).slice(0,80) : '')}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Available Job Types Reference */}
+      <div className="panel">
+        <div className="section-label">AVAILABLE JOB TYPES</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:8}}>
+          {Object.entries(types).map(([type, info]) => (
+            <div key={type} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:'10px 12px'}}>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--cyan)',fontWeight:600}}>{type}</div>
+              <div style={{fontSize:11,color:'var(--text2)',marginTop:3,lineHeight:1.4}}>{info.description}</div>
+              {info.defaultConfig && Object.keys(info.defaultConfig).length > 0 && (
+                <div style={{fontSize:9,color:'var(--text3)',marginTop:4,fontFamily:'var(--font-mono)'}}>
+                  defaults: {JSON.stringify(info.defaultConfig)}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

@@ -55,6 +55,7 @@ const portfolioRoutes     = require('./src/routes/portfolio')(db);
 const brokerRoutes        = require('./src/routes/broker')(db);
 const stagingRoutes       = require('./src/routes/staging')(db, runScan);
 const alertRoutes         = require('./src/routes/alerts')(db);
+const schedulerRoutes     = require('./src/routes/scheduler');
 
 app.use('/api', scanRoutes);
 app.use('/api', sectorRoutes);
@@ -70,6 +71,7 @@ app.use('/api', portfolioRoutes);
 app.use('/api', brokerRoutes);
 app.use('/api', stagingRoutes);
 app.use('/api', alertRoutes);
+app.use('/api', schedulerRoutes);
 
 // ─── SPA fallback ────────────────────────────────────────────────────────────
 app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
@@ -77,6 +79,10 @@ app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html
 // ─── Broker Monitor ─────────────────────────────────────────────────────────
 const { startStopMonitor } = require('./src/broker/monitor');
 const alpacaConfig = require('./src/broker/alpaca').getConfig();
+
+// ─── Job Scheduler (Tier 5) ─────────────────────────────────────────────────
+const { startScheduler } = require('./src/scheduler/engine');
+const { setRunScan }     = require('./src/scheduler/jobs');
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
@@ -93,4 +99,8 @@ app.listen(PORT, () => {
 
   // Start stop monitor (works with or without Alpaca — uses Yahoo for prices)
   startStopMonitor();
+
+  // Start job scheduler (Tier 5)
+  setRunScan(runScan);
+  startScheduler();
 });
