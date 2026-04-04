@@ -56,6 +56,9 @@ const brokerRoutes        = require('./src/routes/broker')(db);
 const stagingRoutes       = require('./src/routes/staging')(db, runScan);
 const alertRoutes         = require('./src/routes/alerts')(db);
 const schedulerRoutes     = require('./src/routes/scheduler');
+const notificationRoutes  = require('./src/routes/notifications');
+const providerRoutes      = require('./src/routes/providers');
+const replayRoutes        = require('./src/routes/replay');
 
 app.use('/api', scanRoutes);
 app.use('/api', sectorRoutes);
@@ -72,6 +75,9 @@ app.use('/api', brokerRoutes);
 app.use('/api', stagingRoutes);
 app.use('/api', alertRoutes);
 app.use('/api', schedulerRoutes);
+app.use('/api', notificationRoutes);
+app.use('/api', providerRoutes);
+app.use('/api', replayRoutes);
 
 // ─── SPA fallback ────────────────────────────────────────────────────────────
 app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
@@ -87,12 +93,20 @@ const { setRunScan }     = require('./src/scheduler/jobs');
 // ─── Start ───────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   const counts = Object.entries(SECTOR_MAP).reduce((a,[,s])=>{a[s]=(a[s]||0)+1;return a},{});
+  // Check provider availability
+  const { getProviderHealth } = require('./src/data/providers/manager');
+  const providerStatus = getProviderHealth();
+  const availableProviders = providerStatus.filter(p => p.configured).map(p => p.name);
+
   console.log(`\n🎯 Alpha Hunter v7  →  http://localhost:${PORT}`);
   console.log(`   Universe: ${UNIVERSE.length} stocks`);
   console.log(`   RS model: REAL IBD (12-month daily closes)`);
   console.log(`   Database: SQLite (WAL mode)`);
+  console.log(`   Data: ${availableProviders.join(' → ') || 'Yahoo Finance'} (cascading fallback)`);
   console.log(`   Risk Engine: Position sizing + Portfolio heat + Drawdown circuit breaker`);
   console.log(`   Market Cycle: O'Neil distribution days + FTD detection`);
+  console.log(`   Notifications: Slack / Telegram / Webhook delivery channels`);
+  console.log(`   Replay: Signal backtest engine (5 built-in strategies)`);
   console.log(`   Claude: ${anthropic?'✓ sonnet-4-6 / haiku-4-5':'⚠ Set ANTHROPIC_API_KEY'}`);
   console.log(`   Broker: ${alpacaConfig.configured ? '✓ Alpaca' + (alpacaConfig.base.includes('paper') ? ' (paper)' : ' (LIVE)') : '⚠ Set ALPACA_API_KEY'}`);
   console.log(`   Sectors: ${JSON.stringify(counts)}\n`);

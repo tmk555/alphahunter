@@ -347,6 +347,9 @@ function App() {
     { id:'trades',    label:'📒 Trade Journal' },
     { id:'performance',label:'📈 Performance' },
     { id:'scheduler',  label:'⏰ Scheduler' },
+    { id:'notifications', label:'🔔 Notifications' },
+    { id:'providers',  label:'🔌 Data Sources' },
+    { id:'replay',     label:'🔁 Replay' },
   ];
 
   return (
@@ -425,6 +428,9 @@ function App() {
         {tab==='trades'     && <TradeJournalTab />}
         {tab==='performance'&& <PerformanceTab />}
         {tab==='scheduler'  && <SchedulerTab />}
+        {tab==='notifications' && <NotificationsTab />}
+        {tab==='providers'  && <ProvidersTab />}
+        {tab==='replay'     && <ReplayTab />}
       </div>
     </div>
   );
@@ -4043,6 +4049,585 @@ function PerformanceTab() {
               </table>
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── NOTIFICATIONS TAB (Tier 5 — Alert Delivery) ────────────────────────────
+function NotificationsTab() {
+  const [channels, setChannels]   = useState([]);
+  const [available, setAvailable] = useState([]);
+  const [log, setLog]             = useState([]);
+  const [stats, setStats]         = useState([]);
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState('');
+  const [showCreate, setShowCreate] = useState(false);
+  const [form, setForm] = useState({ name:'', channel:'slack', config:'{}', filters:'{}', enabled:true, priority:10 });
+
+  async function loadAll() {
+    setLoading(true); setError('');
+    try {
+      const [ch, av, lg, st] = await Promise.all([
+        api('/api/notifications/channels').catch(()=>({channels:[]})),
+        api('/api/notifications/channels/available').catch(()=>({channels:[]})),
+        api('/api/notifications/log?limit=30').catch(()=>({log:[]})),
+        api('/api/notifications/stats').catch(()=>({stats:[]})),
+      ]);
+      setChannels(ch.channels||[]); setAvailable(av.channels||[]);
+      setLog(lg.log||[]); setStats(st.stats||[]);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  useEffect(() => { loadAll(); }, []);
+
+  async function createChannel() {
+    if (!form.name || !form.channel) return;
+    try {
+      let config = {}, filters = {};
+      try { config = JSON.parse(form.config); } catch(_) {}
+      try { filters = JSON.parse(form.filters); } catch(_) {}
+      await api('/api/notifications/channels', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({...form, config, filters}),
+      });
+      setForm({name:'',channel:'slack',config:'{}',filters:'{}',enabled:true,priority:10});
+      setShowCreate(false); loadAll();
+    } catch(e) { setError(e.message); }
+  }
+
+  async function testCh(id) {
+    try {
+      setError('');
+      const r = await api(`/api/notifications/channels/${id}/test`, {method:'POST'});
+      const result = r.results?.[0];
+      if (result?.delivered) setError(''); else setError(`Test failed: ${result?.error||'unknown'}`);
+      loadAll();
+    } catch(e) { setError(e.message); }
+  }
+
+  async function toggleCh(id, enabled) {
+    try {
+      await api(`/api/notifications/channels/${id}`, {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({enabled}),
+      });
+      loadAll();
+    } catch(e) { setError(e.message); }
+  }
+
+  async function deleteCh(id) {
+    try {
+      await api(`/api/notifications/channels/${id}`, {method:'DELETE'});
+      loadAll();
+    } catch(e) { setError(e.message); }
+  }
+
+  const configTemplates = {
+    slack: '{"webhook_url": "https://hooks.slack.com/services/T.../B.../xxx"}',
+    telegram: '{"bot_token": "123456:ABC...", "chat_id": "123456789"}',
+    webhook: '{"url": "https://your-endpoint.com/alerts"}',
+  };
+
+  return (
+    <div>
+      <div className="panel">
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
+          <div>
+            <div className="panel-title">🔔 <span>NOTIFICATION</span> CHANNELS</div>
+            <div className="panel-sub">Configure Slack, Telegram, and webhook delivery for alerts</div>
+          </div>
+          <div style={{display:'flex',gap:8}}>
+            <button className="load-btn" onClick={()=>setShowCreate(!showCreate)} style={{fontSize:10,padding:'6px 14px'}}>{showCreate?'CANCEL':'+ ADD CHANNEL'}</button>
+            <button className="load-btn" onClick={loadAll} disabled={loading} style={{fontSize:10,padding:'6px 14px',background:'var(--cyan)'}}>REFRESH</button>
+          </div>
+        </div>
+
+        {error && <div style={{background:'rgba(255,61,87,0.1)',border:'1px solid var(--red)',borderRadius:4,padding:'8px 12px',marginBottom:12,fontSize:12,color:'var(--red)'}}>{error}</div>}
+
+        {/* Available channel types */}
+        <div style={{display:'flex',gap:10,marginBottom:14}}>
+          {available.map(a=>(
+            <div key={a.key} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:'8px 14px',fontSize:12,display:'flex',alignItems:'center',gap:8}}>
+              <span>{a.icon}</span>
+              <span style={{fontWeight:600,color:'var(--text)'}}>{a.name}</span>
+              <span style={{fontSize:10,color:a.configured?'var(--green)':'var(--text3)'}}>{a.configured?'✓ ENV':'○ manual'}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Create form */}
+        {showCreate && (
+          <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:14,marginBottom:14}}>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:2,marginBottom:10}}>NEW CHANNEL</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:10}}>
+              <input placeholder="Name" value={form.name} onChange={e=>setForm({...form,name:e.target.value})} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 10px',color:'var(--text)',fontSize:12,fontFamily:'var(--font-mono)'}}/>
+              <select value={form.channel} onChange={e=>setForm({...form,channel:e.target.value,config:configTemplates[e.target.value]||'{}'})} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 10px',color:'var(--text)',fontSize:12}}>
+                <option value="slack">Slack</option>
+                <option value="telegram">Telegram</option>
+                <option value="webhook">Webhook</option>
+              </select>
+              <input type="number" placeholder="Priority" value={form.priority} onChange={e=>setForm({...form,priority:+e.target.value})} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 10px',color:'var(--text)',fontSize:12,fontFamily:'var(--font-mono)'}}/>
+            </div>
+            <textarea placeholder='Config JSON' value={form.config} onChange={e=>setForm({...form,config:e.target.value})} rows={3} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 10px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)',marginBottom:8,resize:'vertical'}}/>
+            <textarea placeholder='Filters JSON (optional): {"alert_types":["stop_violation","vcp_pivot"]}' value={form.filters} onChange={e=>setForm({...form,filters:e.target.value})} rows={2} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 10px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)',marginBottom:8,resize:'vertical'}}/>
+            <button className="load-btn" onClick={createChannel} style={{fontSize:10,padding:'6px 16px'}}>CREATE CHANNEL</button>
+          </div>
+        )}
+
+        {/* Configured channels list */}
+        {channels.length > 0 && (
+          <table className="data-table">
+            <thead><tr>
+              <th>Channel</th><th>Type</th><th>Priority</th><th>Status</th><th>Actions</th>
+            </tr></thead>
+            <tbody>
+              {channels.map(ch=>(
+                <tr key={ch.id}>
+                  <td style={{fontWeight:600,color:'var(--cyan)'}}>{ch.name}</td>
+                  <td>{ch.channel}</td>
+                  <td style={{fontFamily:'var(--font-mono)',fontSize:12}}>{ch.priority}</td>
+                  <td><span style={{color:ch.enabled?'var(--green)':'var(--text3)',fontSize:11}}>{ch.enabled?'● Enabled':'○ Disabled'}</span></td>
+                  <td style={{display:'flex',gap:6}}>
+                    <button onClick={()=>testCh(ch.id)} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 10px',color:'var(--amber)',fontSize:10,cursor:'pointer'}}>TEST</button>
+                    <button onClick={()=>toggleCh(ch.id,!ch.enabled)} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 10px',color:ch.enabled?'var(--red)':'var(--green)',fontSize:10,cursor:'pointer'}}>{ch.enabled?'DISABLE':'ENABLE'}</button>
+                    <button onClick={()=>deleteCh(ch.id)} style={{background:'var(--bg)',border:'1px solid var(--red)',borderRadius:3,padding:'3px 10px',color:'var(--red)',fontSize:10,cursor:'pointer'}}>DEL</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {channels.length === 0 && !showCreate && (
+          <div style={{textAlign:'center',padding:30,color:'var(--text3)',fontSize:13}}>No notification channels configured. Click + ADD CHANNEL to set up Slack, Telegram, or webhook delivery.</div>
+        )}
+      </div>
+
+      {/* Delivery Stats */}
+      {stats.length > 0 && (
+        <div className="panel">
+          <div className="panel-title">📊 <span>DELIVERY</span> STATS</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))',gap:10,marginTop:10}}>
+            {stats.map(s=>(
+              <div key={s.channel} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--amber)',letterSpacing:1,marginBottom:6}}>{s.channel.toUpperCase()}</div>
+                <div style={{display:'flex',gap:12,fontSize:12}}>
+                  <span style={{color:'var(--green)'}}>✓ {s.delivered}</span>
+                  <span style={{color:'var(--red)'}}>✗ {s.failed}</span>
+                  <span style={{color:'var(--text3)'}}>Σ {s.total}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Delivery Log */}
+      <div className="panel">
+        <div className="panel-title">📋 <span>DELIVERY</span> LOG</div>
+        {log.length > 0 ? (
+          <table className="data-table" style={{marginTop:10}}>
+            <thead><tr><th>Time</th><th>Channel</th><th>Status</th><th>Error</th></tr></thead>
+            <tbody>
+              {log.map(l=>(
+                <tr key={l.id}>
+                  <td style={{fontSize:11,color:'var(--text3)'}}>{l.created_at?.slice(5,16)}</td>
+                  <td>{l.channel}</td>
+                  <td><span style={{color:l.status==='delivered'?'var(--green)':'var(--red)',fontSize:11}}>{l.status}</span></td>
+                  <td style={{fontSize:11,color:'var(--red)',maxWidth:250,overflow:'hidden',textOverflow:'ellipsis'}}>{l.error||'—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : <div style={{textAlign:'center',padding:20,color:'var(--text3)',fontSize:12}}>No delivery history yet</div>}
+      </div>
+    </div>
+  );
+}
+
+// ─── DATA PROVIDERS TAB (Tier 1 — Multi-Source) ─────────────────────────────
+function ProvidersTab() {
+  const [providers, setProviders] = useState([]);
+  const [primary, setPrimary]     = useState('');
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState('');
+
+  async function loadProviders() {
+    setLoading(true); setError('');
+    try {
+      const r = await api('/api/providers');
+      setProviders(r.providers||[]); setPrimary(r.primary||'');
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  useEffect(() => { loadProviders(); }, []);
+
+  async function resetProvider(key) {
+    try {
+      await api(`/api/providers/${key}/reset`, {method:'POST'});
+      loadProviders();
+    } catch(e) { setError(e.message); }
+  }
+
+  const statusColor = (p) => p.circuitBroken ? 'var(--red)' : p.available ? 'var(--green)' : 'var(--text3)';
+  const statusLabel = (p) => p.circuitBroken ? '⚡ Circuit Broken' : p.available ? '● Active' : '○ Unavailable';
+
+  return (
+    <div>
+      <div className="panel">
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
+          <div>
+            <div className="panel-title">🔌 <span>DATA</span> PROVIDERS</div>
+            <div className="panel-sub">Cascading fallback: requests try each provider in priority order</div>
+          </div>
+          <button className="load-btn" onClick={loadProviders} disabled={loading} style={{fontSize:10,padding:'6px 14px'}}>REFRESH</button>
+        </div>
+
+        {error && <div style={{background:'rgba(255,61,87,0.1)',border:'1px solid var(--red)',borderRadius:4,padding:'8px 12px',marginBottom:12,fontSize:12,color:'var(--red)'}}>{error}</div>}
+
+        <div style={{fontSize:11,color:'var(--text2)',marginBottom:14,fontFamily:'var(--font-mono)'}}>
+          Primary: <span style={{color:'var(--amber)',fontWeight:600}}>{primary || 'none'}</span>
+          <span style={{margin:'0 8px',color:'var(--border2)'}}>|</span>
+          Fallback order: {providers.map(p=>p.key).join(' → ')}
+        </div>
+
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:12}}>
+          {providers.map((p,i)=>(
+            <div key={p.key} style={{background:'var(--bg3)',border:`1px solid ${p.key===primary?'var(--amber)':'var(--border)'}`,borderRadius:6,overflow:'hidden'}}>
+              <div style={{height:3,background:statusColor(p)}}/>
+              <div style={{padding:14}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                  <div>
+                    <div style={{fontWeight:700,fontSize:14,color:'var(--text)'}}>{p.name}</div>
+                    <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>Priority #{i+1}</div>
+                  </div>
+                  <span style={{color:statusColor(p),fontSize:11,fontWeight:600}}>{statusLabel(p)}</span>
+                </div>
+
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:10}}>
+                  <div style={{background:'var(--bg)',borderRadius:3,padding:'6px 8px'}}>
+                    <div style={{fontSize:8,color:'var(--text3)',textTransform:'uppercase',letterSpacing:1}}>Successes</div>
+                    <div style={{fontSize:16,fontWeight:700,color:'var(--green)',fontFamily:'var(--font-mono)'}}>{p.successes}</div>
+                  </div>
+                  <div style={{background:'var(--bg)',borderRadius:3,padding:'6px 8px'}}>
+                    <div style={{fontSize:8,color:'var(--text3)',textTransform:'uppercase',letterSpacing:1}}>Failures</div>
+                    <div style={{fontSize:16,fontWeight:700,color:p.failures>0?'var(--red)':'var(--text3)',fontFamily:'var(--font-mono)'}}>{p.failures}</div>
+                  </div>
+                  <div style={{background:'var(--bg)',borderRadius:3,padding:'6px 8px'}}>
+                    <div style={{fontSize:8,color:'var(--text3)',textTransform:'uppercase',letterSpacing:1}}>Success Rate</div>
+                    <div style={{fontSize:14,fontWeight:600,color:'var(--text)',fontFamily:'var(--font-mono)'}}>{p.successRate!=null?p.successRate+'%':'—'}</div>
+                  </div>
+                  <div style={{background:'var(--bg)',borderRadius:3,padding:'6px 8px'}}>
+                    <div style={{fontSize:8,color:'var(--text3)',textTransform:'uppercase',letterSpacing:1}}>Configured</div>
+                    <div style={{fontSize:14,fontWeight:600,color:p.configured?'var(--green)':'var(--text3)',fontFamily:'var(--font-mono)'}}>{p.configured?'✓ Yes':'✗ No'}</div>
+                  </div>
+                </div>
+
+                {p.lastError && (
+                  <div style={{fontSize:10,color:'var(--red)',marginBottom:8,padding:'4px 6px',background:'rgba(255,61,87,0.05)',borderRadius:3,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                    Last error: {p.lastError}
+                  </div>
+                )}
+                {p.lastSuccess && (
+                  <div style={{fontSize:10,color:'var(--text3)',marginBottom:8}}>
+                    Last success: {p.lastSuccess.slice(0,19).replace('T',' ')}
+                  </div>
+                )}
+
+                <div style={{display:'flex',gap:6}}>
+                  {p.circuitBroken && (
+                    <button onClick={()=>resetProvider(p.key)} style={{background:'var(--bg)',border:'1px solid var(--amber)',borderRadius:3,padding:'4px 12px',color:'var(--amber)',fontSize:10,cursor:'pointer'}}>RESET CIRCUIT</button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Configuration guide */}
+      <div className="panel">
+        <div className="panel-title">⚙️ <span>SETUP</span> GUIDE</div>
+        <div style={{marginTop:10,display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}}>
+          <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:1,marginBottom:6}}>YAHOO FINANCE</div>
+            <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.5}}>Built-in, no API key needed. Uses crumb/cookie auth. May rate-limit under heavy use. Primary by default.</div>
+          </div>
+          <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--cyan)',letterSpacing:1,marginBottom:6}}>FMP (Recommended Fallback)</div>
+            <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.5}}>250 req/day free tier. Set <code style={{color:'var(--amber)',fontSize:11}}>FMP_API_KEY</code> in .env. Good quote + history coverage.</div>
+          </div>
+          <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--purple)',letterSpacing:1,marginBottom:6}}>ALPHA VANTAGE</div>
+            <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.5}}>25 req/day free. Emergency fallback. Set <code style={{color:'var(--amber)',fontSize:11}}>ALPHA_VANTAGE_API_KEY</code> in .env.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── REPLAY TAB (Tier 4 — Signal Backtest) ──────────────────────────────────
+function ReplayTab() {
+  const [strategies, setStrategies] = useState([]);
+  const [dateRange, setDateRange]   = useState(null);
+  const [history, setHistory]       = useState([]);
+  const [result, setResult]         = useState(null);
+  const [loading, setLoading]       = useState(false);
+  const [error, setError]           = useState('');
+  const [form, setForm] = useState({ strategy:'rs_momentum', startDate:'', endDate:'', maxPositions:10, initialCapital:100000, params:'{}' });
+
+  async function loadAll() {
+    try {
+      const [s, r, h] = await Promise.all([
+        api('/api/replay/strategies').catch(()=>({strategies:[]})),
+        api('/api/replay/range').catch(()=>null),
+        api('/api/replay/history?limit=10').catch(()=>({history:[]})),
+      ]);
+      setStrategies(s.strategies||[]);
+      setDateRange(r);
+      setHistory(h.history||[]);
+      if (r?.rs_snapshots?.start_date && !form.startDate) {
+        setForm(f=>({...f, startDate:r.rs_snapshots.start_date, endDate:r.rs_snapshots.end_date||''}));
+      }
+    } catch(e) { setError(e.message); }
+  }
+
+  useEffect(() => { loadAll(); }, []);
+
+  async function runReplay() {
+    if (!form.strategy || !form.startDate || !form.endDate) return;
+    setLoading(true); setError(''); setResult(null);
+    try {
+      let params = {};
+      try { params = JSON.parse(form.params); } catch(_) {}
+      const r = await api('/api/replay/run', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          strategy: form.strategy, startDate: form.startDate, endDate: form.endDate,
+          maxPositions: form.maxPositions, initialCapital: form.initialCapital, params,
+        }),
+      });
+      setResult(r); loadAll();
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  async function runCompare() {
+    if (!form.startDate || !form.endDate) return;
+    setLoading(true); setError(''); setResult(null);
+    try {
+      const strats = strategies.map(s=>({strategy:s.key, params:{}}));
+      const r = await api('/api/replay/compare', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          strategies: strats, startDate: form.startDate, endDate: form.endDate,
+          maxPositions: form.maxPositions, initialCapital: form.initialCapital,
+        }),
+      });
+      setResult(r); loadAll();
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  async function loadResult(id) {
+    try {
+      const r = await api(`/api/replay/${id}`);
+      setResult({...r.result, id:r.id, strategy:r.strategy, params:JSON.parse(typeof r.params==='string'?r.params:'{}')});
+    } catch(e) { setError(e.message); }
+  }
+
+  const selectedStrat = strategies.find(s=>s.key===form.strategy);
+  const pctColor = v => v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text3)';
+
+  return (
+    <div>
+      <div className="panel">
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
+          <div>
+            <div className="panel-title">🔁 <span>SIGNAL</span> REPLAY ENGINE</div>
+            <div className="panel-sub">Backtest strategies against stored RS snapshots and scan results</div>
+          </div>
+        </div>
+
+        {error && <div style={{background:'rgba(255,61,87,0.1)',border:'1px solid var(--red)',borderRadius:4,padding:'8px 12px',marginBottom:12,fontSize:12,color:'var(--red)'}}>{error}</div>}
+
+        {/* Date range info */}
+        {dateRange && (
+          <div style={{fontSize:11,color:'var(--text3)',marginBottom:12,fontFamily:'var(--font-mono)'}}>
+            Data available: {dateRange.rs_snapshots?.start_date || 'none'} → {dateRange.rs_snapshots?.end_date || 'none'}
+            {dateRange.rs_snapshots?.trading_days > 0 && <span> ({dateRange.rs_snapshots.trading_days} snapshots)</span>}
+          </div>
+        )}
+
+        {/* Strategy selection */}
+        <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr 1fr 1fr',gap:8,marginBottom:10}}>
+          <select value={form.strategy} onChange={e=>setForm({...form,strategy:e.target.value,params:'{}'})} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'8px 10px',color:'var(--text)',fontSize:12}}>
+            {strategies.map(s=><option key={s.key} value={s.key}>{s.name}</option>)}
+          </select>
+          <input type="date" value={form.startDate} onChange={e=>setForm({...form,startDate:e.target.value})} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          <input type="date" value={form.endDate} onChange={e=>setForm({...form,endDate:e.target.value})} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          <input type="number" value={form.maxPositions} onChange={e=>setForm({...form,maxPositions:+e.target.value})} placeholder="Max Pos" style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          <input type="number" value={form.initialCapital} onChange={e=>setForm({...form,initialCapital:+e.target.value})} placeholder="Capital" style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+        </div>
+
+        {selectedStrat && (
+          <div style={{fontSize:12,color:'var(--text2)',marginBottom:8}}>
+            <span style={{color:'var(--amber)',fontWeight:600}}>{selectedStrat.name}:</span> {selectedStrat.description}
+          </div>
+        )}
+
+        {/* Strategy params override */}
+        <textarea placeholder='Params override JSON (optional)' value={form.params} onChange={e=>setForm({...form,params:e.target.value})} rows={2} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 10px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)',marginBottom:10,resize:'vertical'}}/>
+
+        <div style={{display:'flex',gap:8}}>
+          <button className="load-btn" onClick={runReplay} disabled={loading} style={{fontSize:10,padding:'6px 18px'}}>{loading?'RUNNING...':'RUN REPLAY'}</button>
+          <button className="load-btn" onClick={runCompare} disabled={loading} style={{fontSize:10,padding:'6px 18px',background:'var(--cyan)'}}>{loading?'...':'COMPARE ALL'}</button>
+        </div>
+      </div>
+
+      {/* Results */}
+      {result && !result.comparisons && result.performance && (
+        <div className="panel">
+          <div className="panel-title">📈 <span>{result.strategy||result.strategyKey}</span> RESULTS</div>
+          <div style={{fontSize:11,color:'var(--text3)',marginBottom:12,fontFamily:'var(--font-mono)'}}>
+            {result.period?.startDate} → {result.period?.endDate} · {result.period?.tradingDays} trading days
+          </div>
+
+          {/* KPI cards */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(6,1fr)',gap:10,marginBottom:16}}>
+            {[
+              ['Total Return', (result.performance.totalReturn>0?'+':'')+result.performance.totalReturn+'%', pctColor(result.performance.totalReturn)],
+              ['Final Equity', '$'+result.performance.finalEquity.toLocaleString(), 'var(--text)'],
+              ['Win Rate', result.trades.winRate+'%', result.trades.winRate>=50?'var(--green)':'var(--red)'],
+              ['Profit Factor', result.performance.profitFactor, result.performance.profitFactor>=1.5?'var(--green)':'var(--text)'],
+              ['Max Drawdown', result.performance.maxDrawdown+'%', 'var(--red)'],
+              ['Sharpe Ratio', result.performance.sharpeRatio, result.performance.sharpeRatio>=1?'var(--green)':'var(--text3)'],
+            ].map(([label,val,color])=>(
+              <div key={label} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:'10px 12px',textAlign:'center'}}>
+                <div style={{fontSize:8,color:'var(--text3)',textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>{label}</div>
+                <div style={{fontSize:16,fontWeight:700,color,fontFamily:'var(--font-mono)'}}>{val}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Trade summary */}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:1,marginBottom:8}}>TRADE STATS</div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,fontSize:12}}>
+                <span style={{color:'var(--text3)'}}>Total Trades:</span><span style={{fontFamily:'var(--font-mono)',fontWeight:600}}>{result.trades.total}</span>
+                <span style={{color:'var(--text3)'}}>Winners:</span><span style={{color:'var(--green)',fontFamily:'var(--font-mono)',fontWeight:600}}>{result.trades.wins}</span>
+                <span style={{color:'var(--text3)'}}>Losers:</span><span style={{color:'var(--red)',fontFamily:'var(--font-mono)',fontWeight:600}}>{result.trades.losses}</span>
+                <span style={{color:'var(--text3)'}}>Avg Win:</span><span style={{color:'var(--green)',fontFamily:'var(--font-mono)'}}>{result.trades.avgWin>0?'+':''}{result.trades.avgWin}%</span>
+                <span style={{color:'var(--text3)'}}>Avg Loss:</span><span style={{color:'var(--red)',fontFamily:'var(--font-mono)'}}>{result.trades.avgLoss}%</span>
+                <span style={{color:'var(--text3)'}}>Avg R:</span><span style={{fontFamily:'var(--font-mono)',fontWeight:600}}>{result.trades.avgR}R</span>
+              </div>
+            </div>
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:1,marginBottom:8}}>EXIT REASONS</div>
+              {result.trades.exitReasons && Object.entries(result.trades.exitReasons).map(([reason,count])=>(
+                <div key={reason} style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:4}}>
+                  <span style={{color:'var(--text2)'}}>{reason.replace(/_/g,' ')}</span>
+                  <span style={{fontFamily:'var(--font-mono)',fontWeight:600,color:'var(--text)'}}>{count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Trade log */}
+          {result.tradeLog && result.tradeLog.length > 0 && (
+            <div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text2)',letterSpacing:2,marginBottom:8}}>TRADE LOG ({result.tradeLog.length})</div>
+              <div style={{maxHeight:300,overflowY:'auto'}}>
+                <table className="data-table">
+                  <thead><tr>
+                    <th>Symbol</th><th>Entry</th><th>Exit</th><th>Entry $</th><th>Exit $</th><th>P&L %</th><th>Days</th><th>Reason</th>
+                  </tr></thead>
+                  <tbody>
+                    {result.tradeLog.map((t,i)=>(
+                      <tr key={i}>
+                        <td className="td-ticker">{t.symbol}</td>
+                        <td style={{fontSize:11,color:'var(--text3)'}}>{t.entryDate}</td>
+                        <td style={{fontSize:11,color:'var(--text3)'}}>{t.exitDate}</td>
+                        <td>${t.entryPrice?.toFixed(2)}</td>
+                        <td>${t.exitPrice?.toFixed(2)}</td>
+                        <td style={{color:pctColor(t.pnlPct),fontWeight:600}}>{t.pnlPct>0?'+':''}{t.pnlPct}%</td>
+                        <td>{t.holdingDays}d</td>
+                        <td style={{fontSize:10,color:'var(--text3)'}}>{t.exitReason?.replace(/_/g,' ')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Comparison results */}
+      {result && result.comparisons && (
+        <div className="panel">
+          <div className="panel-title">⚔️ <span>STRATEGY</span> COMPARISON</div>
+          <div style={{fontSize:11,color:'var(--text3)',marginBottom:12,fontFamily:'var(--font-mono)'}}>
+            {result.period?.startDate} → {result.period?.endDate} · Ranked by {result.rankedBy}
+          </div>
+          <table className="data-table">
+            <thead><tr>
+              <th>#</th><th>Strategy</th><th>Return</th><th>Win Rate</th><th>PF</th><th>Max DD</th><th>Sharpe</th><th>Trades</th>
+            </tr></thead>
+            <tbody>
+              {result.comparisons.map((c,i)=>(
+                <tr key={i}>
+                  <td style={{color:'var(--amber)',fontWeight:700}}>{i+1}</td>
+                  <td style={{fontWeight:600,color:'var(--cyan)'}}>{c.strategy||c.strategyKey||'—'}</td>
+                  <td style={{color:pctColor(c.performance?.totalReturn),fontWeight:700}}>{c.performance?(c.performance.totalReturn>0?'+':'')+c.performance.totalReturn+'%':'—'}</td>
+                  <td>{c.trades?.winRate!=null?c.trades.winRate+'%':'—'}</td>
+                  <td>{c.performance?.profitFactor||'—'}</td>
+                  <td style={{color:'var(--red)'}}>{c.performance?.maxDrawdown!=null?c.performance.maxDrawdown+'%':'—'}</td>
+                  <td>{c.performance?.sharpeRatio||'—'}</td>
+                  <td>{c.trades?.total||0}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Past replays */}
+      {history.length > 0 && (
+        <div className="panel">
+          <div className="panel-title">📜 <span>REPLAY</span> HISTORY</div>
+          <table className="data-table" style={{marginTop:10}}>
+            <thead><tr>
+              <th>Date</th><th>Strategy</th><th>Period</th><th>Return</th><th>Win Rate</th><th>Sharpe</th><th>Trades</th><th></th>
+            </tr></thead>
+            <tbody>
+              {history.map(h=>(
+                <tr key={h.id}>
+                  <td style={{fontSize:11,color:'var(--text3)'}}>{h.created_at?.slice(0,10)}</td>
+                  <td style={{fontWeight:600,color:'var(--cyan)'}}>{h.strategy}</td>
+                  <td style={{fontSize:11}}>{h.start_date}→{h.end_date}</td>
+                  <td style={{color:pctColor(h.total_return),fontWeight:700}}>{h.total_return>0?'+':''}{h.total_return}%</td>
+                  <td>{h.win_rate}%</td>
+                  <td>{h.sharpe_ratio}</td>
+                  <td>{h.total_trades}</td>
+                  <td><button onClick={()=>loadResult(h.id)} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 10px',color:'var(--amber)',fontSize:10,cursor:'pointer'}}>VIEW</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* No data state */}
+      {!dateRange?.rs_snapshots?.trading_days && (
+        <div className="panel" style={{textAlign:'center',padding:30}}>
+          <div style={{fontSize:14,color:'var(--text2)',marginBottom:8}}>No replay data available yet</div>
+          <div style={{fontSize:12,color:'var(--text3)'}}>Run RS scans to build up snapshot history for backtesting. The replay engine uses stored rs_snapshots and scan_results.</div>
         </div>
       )}
     </div>

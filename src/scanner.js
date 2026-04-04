@@ -3,7 +3,7 @@
 
 const { cacheGet, cacheSet, TTL_QUOTE } = require('./data/cache');
 const { loadHistory, saveHistory, RS_HISTORY, SEC_HISTORY, IND_HISTORY } = require('./data/store');
-const { yahooQuote, yahooHistory, pLimit } = require('./data/providers/yahoo');
+const { getQuotes, getHistory, pLimit } = require('./data/providers/manager');
 const { calcRS, rankToRS, getRSTrend, preGenerateHistoryFor } = require('./signals/rs');
 const { calcSwingMomentum, calcPeriodReturns, calcATR, volumeTrend } = require('./signals/momentum');
 const { calcVCP }    = require('./signals/vcp');
@@ -18,18 +18,18 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
   const uniq = [...new Set([...UNIVERSE, 'SPY'])];
   console.log(`  RS scan: ${uniq.length} stocks...`);
 
-  // Fetch quotes
+  // Fetch quotes (multi-provider with fallback)
   const allQuotes = {};
   for (let i = 0; i < uniq.length; i += 20) {
-    const batch = await yahooQuote(uniq.slice(i, i + 20));
+    const batch = await getQuotes(uniq.slice(i, i + 20));
     for (const q of batch) allQuotes[q.symbol] = q;
   }
 
-  // Fetch history (concurrent, 5 at a time)
+  // Fetch history (concurrent, 5 at a time, multi-provider)
   const histMap = {};
   await pLimit(uniq.map(sym => async () => {
     try {
-      const c = await yahooHistory(sym);
+      const c = await getHistory(sym);
       if (c.length >= 63) histMap[sym] = c;
     } catch(_) {}
   }), 5);
@@ -133,6 +133,26 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
   const snap  = {};
   for (const s of results) snap[s.ticker] = s.rsRank;
   saveHistory(RS_HISTORY, snap, today);
+
+  // Persist scan_results for signal replay / backtest
+  try {
+    const { getDB } = require('./data/database');
+    const { calcConviction } = require('./signals/conviction');
+    const rsHist = loadHistory(RS_HISTORY);
+    const { getRSTrend } = require('./signals/rs');
+    const scanInsert = getDB().prepare(
+      'INSERT OR REPLACE INTO scan_results (date, symbol, data, conviction_score) VALUES (?, ?, ?, ?)'
+    );
+    const scanTxn = getDB().transaction(() => {
+      for (const s of results) {
+        const rsTrend = getRSTrend(s.ticker, rsHist);
+        const { convictionScore } = calcConviction(s, rsTrend);
+        scanInsert.run(today, s.ticker, JSON.stringify(s), convictionScore);
+      }
+    });
+    scanTxn();
+  } catch (_) { /* non-critical */ }
+
   console.log(`  ✓ RS scan: ${results.length} stocks, snapshot saved ${today}`);
 
   cacheSet('rs:full', results);
@@ -142,8 +162,8 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
 // ─── Sector/Industry scan helper ─────────────────────────────────────────────
 async function runETFScan(etfs, histType, prefix, extraMap) {
   const symbols = etfs.map(s => s.t);
-  const quotes  = await yahooQuote(symbols);
-  const histResults = await pLimit([...symbols, 'SPY'].map(sym => async () => ({ sym, closes: await yahooHistory(sym) })), 5);
+  const quotes  = await getQuotes(symbols);
+  const histResults = await pLimit([...symbols, 'SPY'].map(sym => async () => ({ sym, closes: await getHistory(sym) })), 5);
   const histMap = {}; histResults.forEach(r => { if(r) histMap[r.sym] = r.closes; });
   const spyCloses = histMap['SPY'] || [];
 

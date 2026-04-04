@@ -1,0 +1,290 @@
+// ─── Notification Delivery Channels ─────────────────────────────────────────
+// Slack, Telegram, and webhook delivery for alerts
+const fetch = require('node-fetch');
+const { getDB } = require('../data/database');
+
+function db() { return getDB(); }
+
+// ─── Channel Configuration ─────────────────────────────────────────────────
+
+const CHANNELS = {
+  slack: {
+    name: 'Slack',
+    envKey: 'SLACK_WEBHOOK_URL',
+    configKeys: ['webhook_url'],
+    icon: '💬',
+  },
+  telegram: {
+    name: 'Telegram',
+    envKey: 'TELEGRAM_BOT_TOKEN',
+    configKeys: ['bot_token', 'chat_id'],
+    icon: '📨',
+  },
+  webhook: {
+    name: 'Webhook',
+    envKey: 'ALERT_WEBHOOK_URL',
+    configKeys: ['url'],
+    icon: '🔗',
+  },
+};
+
+// ─── Slack Delivery ────────────────────────────────────────────────────────
+
+function formatSlackPayload(alert) {
+  const emoji = alert.type === 'stop_violation' ? '🔴'
+    : alert.type === 'vcp_pivot' ? '🟢'
+    : alert.type === 'price_above' ? '📈'
+    : alert.type === 'price_below' ? '📉'
+    : '🔔';
+
+  return {
+    blocks: [
+      {
+        type: 'header',
+        text: { type: 'plain_text', text: `${emoji} ${alert.symbol} Alert`, emoji: true },
+      },
+      {
+        type: 'section',
+        fields: [
+          { type: 'mrkdwn', text: `*Type:*\n${alert.type.replace(/_/g, ' ')}` },
+          { type: 'mrkdwn', text: `*Price:*\n$${alert.current_price}` },
+          { type: 'mrkdwn', text: `*Trigger:*\n$${alert.trigger_price}` },
+          { type: 'mrkdwn', text: `*Time:*\n${new Date(alert.timestamp).toLocaleString()}` },
+        ],
+      },
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: alert.message },
+      },
+    ],
+  };
+}
+
+async function sendSlack(alert, config) {
+  const webhookUrl = config.webhook_url || process.env.SLACK_WEBHOOK_URL;
+  if (!webhookUrl) throw new Error('Slack webhook URL not configured');
+
+  const payload = formatSlackPayload(alert);
+  const res = await fetch(webhookUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Slack API error (${res.status}): ${text}`);
+  }
+  return { delivered: true, channel: 'slack' };
+}
+
+// ─── Telegram Delivery ─────────────────────────────────────────────────────
+
+function formatTelegramMessage(alert) {
+  const emoji = alert.type === 'stop_violation' ? '🔴'
+    : alert.type === 'vcp_pivot' ? '🟢'
+    : alert.type === 'price_above' ? '📈'
+    : alert.type === 'price_below' ? '📉'
+    : '🔔';
+
+  return [
+    `${emoji} <b>${alert.symbol} Alert</b>`,
+    ``,
+    `<b>Type:</b> ${alert.type.replace(/_/g, ' ')}`,
+    `<b>Price:</b> $${alert.current_price}`,
+    `<b>Trigger:</b> $${alert.trigger_price}`,
+    `<b>Message:</b> ${alert.message}`,
+    ``,
+    `<i>${new Date(alert.timestamp).toLocaleString()}</i>`,
+  ].join('\n');
+}
+
+async function sendTelegram(alert, config) {
+  const botToken = config.bot_token || process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = config.chat_id || process.env.TELEGRAM_CHAT_ID;
+  if (!botToken || !chatId) throw new Error('Telegram bot_token and chat_id required');
+
+  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: formatTelegramMessage(alert),
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+    }),
+  });
+
+  const data = await res.json();
+  if (!data.ok) throw new Error(`Telegram API error: ${data.description}`);
+  return { delivered: true, channel: 'telegram', message_id: data.result?.message_id };
+}
+
+// ─── Webhook Delivery ──────────────────────────────────────────────────────
+
+async function sendWebhook(alert, config) {
+  const url = config.url || process.env.ALERT_WEBHOOK_URL;
+  if (!url) throw new Error('Webhook URL not configured');
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(config.headers || {}),
+    },
+    body: JSON.stringify(alert),
+  });
+
+  if (!res.ok) throw new Error(`Webhook error (${res.status})`);
+  return { delivered: true, channel: 'webhook' };
+}
+
+// ─── Delivery Router ───────────────────────────────────────────────────────
+
+const senders = {
+  slack: sendSlack,
+  telegram: sendTelegram,
+  webhook: sendWebhook,
+};
+
+async function deliverAlert(alert, channels) {
+  const results = [];
+
+  for (const ch of channels) {
+    const sender = senders[ch.channel];
+    if (!sender) {
+      results.push({ channel: ch.channel, error: 'Unknown channel', delivered: false });
+      continue;
+    }
+    try {
+      const result = await sender(alert, ch.config || {});
+      logDelivery(alert, ch.channel, 'delivered', null);
+      results.push(result);
+    } catch (e) {
+      logDelivery(alert, ch.channel, 'failed', e.message);
+      results.push({ channel: ch.channel, error: e.message, delivered: false });
+    }
+  }
+
+  return results;
+}
+
+function logDelivery(alert, channel, status, error) {
+  try {
+    db().prepare(`
+      INSERT INTO notification_log (alert_id, channel, status, error, payload)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      alert.alert_id || null, channel, status, error,
+      JSON.stringify({ symbol: alert.symbol, type: alert.type, message: alert.message })
+    );
+  } catch (_) {
+    // Don't fail delivery on log errors
+  }
+}
+
+// ─── Channel Config CRUD (persisted to SQLite) ────────────────────────────
+
+function getNotificationChannels() {
+  return db().prepare('SELECT * FROM notification_channels ORDER BY priority ASC').all()
+    .map(c => ({ ...c, config: JSON.parse(c.config || '{}'), filters: JSON.parse(c.filters || '{}') }));
+}
+
+function getEnabledChannels(alertType) {
+  const all = getNotificationChannels().filter(c => c.enabled);
+  if (!alertType) return all;
+  return all.filter(c => {
+    const filters = c.filters || {};
+    if (!filters.alert_types || filters.alert_types.length === 0) return true;
+    return filters.alert_types.includes(alertType);
+  });
+}
+
+function createNotificationChannel({ name, channel, config, filters = {}, enabled = true, priority = 10 }) {
+  if (!name || !channel) throw new Error('name and channel required');
+  if (!senders[channel]) throw new Error(`Unknown channel: ${channel}. Available: ${Object.keys(senders).join(', ')}`);
+
+  const result = db().prepare(`
+    INSERT INTO notification_channels (name, channel, config, filters, enabled, priority)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(name, channel, JSON.stringify(config || {}), JSON.stringify(filters), enabled ? 1 : 0, priority);
+
+  return { id: result.lastInsertRowid, name, channel, config, enabled, priority };
+}
+
+function updateNotificationChannel(id, updates) {
+  const fields = [];
+  const values = [];
+
+  if (updates.name !== undefined) { fields.push('name = ?'); values.push(updates.name); }
+  if (updates.config !== undefined) { fields.push('config = ?'); values.push(JSON.stringify(updates.config)); }
+  if (updates.filters !== undefined) { fields.push('filters = ?'); values.push(JSON.stringify(updates.filters)); }
+  if (updates.enabled !== undefined) { fields.push('enabled = ?'); values.push(updates.enabled ? 1 : 0); }
+  if (updates.priority !== undefined) { fields.push('priority = ?'); values.push(updates.priority); }
+  fields.push("updated_at = datetime('now')");
+
+  values.push(id);
+  db().prepare(`UPDATE notification_channels SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  return db().prepare('SELECT * FROM notification_channels WHERE id = ?').get(id);
+}
+
+function deleteNotificationChannel(id) {
+  db().prepare('DELETE FROM notification_channels WHERE id = ?').run(id);
+}
+
+function testChannel(id) {
+  const ch = db().prepare('SELECT * FROM notification_channels WHERE id = ?').get(id);
+  if (!ch) throw new Error(`Channel ${id} not found`);
+  ch.config = JSON.parse(ch.config || '{}');
+
+  const testAlert = {
+    type: 'test',
+    symbol: 'TEST',
+    trigger_price: 100.00,
+    current_price: 101.50,
+    message: 'Alpha Hunter test notification — delivery is working!',
+    timestamp: new Date().toISOString(),
+  };
+
+  return deliverAlert(testAlert, [{ channel: ch.channel, config: ch.config }]);
+}
+
+// ─── Delivery Log Queries ──────────────────────────────────────────────────
+
+function getDeliveryLog(limit = 50) {
+  return db().prepare('SELECT * FROM notification_log ORDER BY created_at DESC LIMIT ?').all(limit);
+}
+
+function getDeliveryStats() {
+  const stats = db().prepare(`
+    SELECT channel,
+      COUNT(*) as total,
+      SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) as delivered,
+      SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+    FROM notification_log
+    GROUP BY channel
+  `).all();
+  return stats;
+}
+
+// ─── Available Channels Info ───────────────────────────────────────────────
+
+function getAvailableChannels() {
+  return Object.entries(CHANNELS).map(([key, ch]) => ({
+    key,
+    ...ch,
+    configured: ch.envKey ? !!process.env[ch.envKey] : false,
+  }));
+}
+
+module.exports = {
+  deliverAlert,
+  getNotificationChannels, getEnabledChannels,
+  createNotificationChannel, updateNotificationChannel, deleteNotificationChannel,
+  testChannel,
+  getDeliveryLog, getDeliveryStats,
+  getAvailableChannels,
+  // Individual senders for direct use
+  sendSlack, sendTelegram, sendWebhook,
+};
