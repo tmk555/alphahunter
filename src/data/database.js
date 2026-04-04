@@ -149,6 +149,38 @@ function initSchema() {
       FOREIGN KEY (trade_id) REFERENCES trades(id)
     );
 
+    -- Scheduled jobs (Tier 5 — Job Scheduler)
+    CREATE TABLE IF NOT EXISTS scheduled_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT,
+      job_type TEXT NOT NULL,
+      cron_expression TEXT NOT NULL,
+      config JSON DEFAULT '{}',
+      enabled BOOLEAN DEFAULT 1,
+      last_run_at TEXT,
+      last_run_status TEXT,
+      last_run_duration_ms INTEGER,
+      last_error TEXT,
+      run_count INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Job execution history
+    CREATE TABLE IF NOT EXISTS job_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id INTEGER NOT NULL,
+      job_name TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      status TEXT NOT NULL DEFAULT 'running',
+      duration_ms INTEGER,
+      result JSON,
+      error TEXT,
+      FOREIGN KEY (job_id) REFERENCES scheduled_jobs(id)
+    );
+
     -- Create indexes for common queries
     CREATE INDEX IF NOT EXISTS idx_rs_snapshots_date ON rs_snapshots(date);
     CREATE INDEX IF NOT EXISTS idx_rs_snapshots_symbol ON rs_snapshots(symbol);
@@ -158,6 +190,9 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_alerts_type ON alerts(type);
     CREATE INDEX IF NOT EXISTS idx_staged_status ON staged_orders(status);
     CREATE INDEX IF NOT EXISTS idx_alert_subs_active ON alert_subscriptions(active) WHERE active = 1;
+    CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_enabled ON scheduled_jobs(enabled) WHERE enabled = 1;
+    CREATE INDEX IF NOT EXISTS idx_job_history_job ON job_history(job_id);
+    CREATE INDEX IF NOT EXISTS idx_job_history_started ON job_history(started_at);
   `);
 }
 
