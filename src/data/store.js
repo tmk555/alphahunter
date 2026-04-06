@@ -47,10 +47,8 @@ function saveHistory(type, scores, dateStr) {
   });
   txn();
 
-  // Prune old data (keep 95 days)
-  const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 95);
-  const cut = cutoff.toISOString().split('T')[0];
-  db.prepare(`DELETE FROM rs_snapshots WHERE type = ? AND date < ?`).run(type, cut);
+  // Note: pruning handled by rs_history_cleanup scheduler job (default keepDays: 365)
+  // Removed aggressive 95-day prune that was destroying replay/backtest data
 }
 
 function loadWatchlist() {
