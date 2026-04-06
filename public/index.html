@@ -446,6 +446,7 @@ function GlobalTradingGuide({ onClose }) {
     {id:'workflow',  label:'🗓 Workflow'},
     {id:'execution', label:'🔗 Execution'},
     {id:'scheduler', label:'⏰ Scheduler'},
+    {id:'journal',   label:'📓 Trade Journal'},
   ];
   return (
     <div style={{background:'var(--bg2)',borderBottom:'2px solid var(--amber)',flexShrink:0,maxHeight:420,overflowY:'auto'}}>
@@ -670,6 +671,74 @@ function GlobalTradingGuide({ onClose }) {
                   <div key={expr} style={{display:'flex',gap:8,fontSize:11}}>
                     <span style={{color:'var(--amber)',fontFamily:'var(--font-mono)',minWidth:120,flexShrink:0}}>{expr}</span>
                     <span style={{color:'var(--text3)'}}>→ {desc}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+        {section==='journal' && (
+          <div style={{display:'grid',gap:10}}>
+            <div style={{background:'var(--bg3)',border:'1px solid rgba(240,165,0,0.25)',borderRadius:4,padding:12}}>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:10}}>📓 END-TO-END TRADE WORKFLOW — REAL EXAMPLE</div>
+              <div style={{fontSize:11,color:'var(--text3)',marginBottom:10,lineHeight:1.5,fontStyle:'italic'}}>
+                This walkthrough follows a professional swing trader through a complete trade lifecycle in Alpha Hunter — from scanning to journaling. Use this as your repeatable process.
+              </div>
+              <div style={{display:'grid',gap:8}}>
+                {[
+                  ['PHASE 1: SCAN (4:15 PM, after close)',
+                   'Scheduler runs rs_scan automatically at 4 PM. Open Alpha Hunter → Market Pulse shows BULL regime, VIX 18, SPY above 50MA. Go to Sectors tab → sort by RS Accel → Technology +8, Healthcare +5 are leading. Click 🎯 on Technology to focus.'],
+                  ['PHASE 2: FIND THE SETUP (5 min)',
+                   'RS Dashboard filtered to Technology. Sort by RS Accel descending. Spot NVDA: RS 92, Accel +14, SwingMom 78, ★Triple signal, ⭐RS Line new high, VCP forming (3 contractions). Click row to expand → ATR $4.20, SEPA 7/8, CAN SLIM 5/7, Stage 2 confirmed. This passes all 4 checks.'],
+                  ['PHASE 3: AI TRADE BRIEF (1 min)',
+                   'Trade Setups tab → NVDA shows AI-generated brief: "BUY — RS leadership with VCP breakout forming. Entry zone $138-140, Stop $131.70 (2×ATR below pivot), T1 $150.50 (2.5×ATR), T2 $156.80 (4×ATR). No earnings within 14 days." Confirms your levels.'],
+                  ['PHASE 4: SIZE & STAGE (2 min)',
+                   'Portfolio tab → Position Sizer: $100K account, 1% risk = $1,000 max loss. Entry $139, Stop $131.70 → risk per share = $7.30. Shares = $1,000 ÷ $7.30 = 136 shares ($18,904 position = 18.9% of account). Pre-trade checks: portfolio heat 4.2% (< 8% limit), Tech sector exposure 12% (< 25% limit). All gates pass. Click STAGE ORDER.'],
+                  ['PHASE 5: EXECUTE (next market open)',
+                   'Execution tab shows staged bracket order: 136 shares NVDA, limit $139, stop $131.70, target $150.50. Review one final time → click SUBMIT. Alpaca receives bracket order. Stop monitor starts watching every 5 min. Alert auto-created for stop_violation at $131.70.'],
+                  ['PHASE 6: MANAGE (daily, 1 min)',
+                   'Each day: check Portfolio tab for open positions. Stop monitor runs automatically. Day 3: NVDA hits $145 → move stop to breakeven ($139) manually in broker. Day 5: NVDA hits T1 at $150.50 → sell 50% (68 shares), lock in +$782. Trail stop on remaining 68 shares to $146. Webhook fires to Slack: "NVDA partial exit at T1."'],
+                  ['PHASE 7: EXIT & JOURNAL (when trade closes)',
+                   'Day 8: Remaining 68 shares hit trailing stop at $148.20. Total P&L: 68×($150.50-$139) + 68×($148.20-$139) = $782 + $625 = $1,407 (+7.4%). Trade Journal → log exit: exit price $148.20, reason "target1+trail", R-multiple = +1.9R. Notes: "VCP breakout worked textbook. Partial at T1 was correct — stock pulled back from $152 high."'],
+                  ['PHASE 8: REVIEW & REPLAY (weekend)',
+                   'Performance tab: check win rate (target >45%), profit factor (target >1.5), avg R (target >1.0R). Replay tab: backtest your rs_momentum strategy over the same period — did the system agree with your picks? Compare all 5 strategies to see which edge is sharpest. Adjust parameters for next week.'],
+                ].map(([step,desc])=>(
+                  <div key={step} style={{padding:'8px 12px',background:'var(--bg2)',borderRadius:4,borderLeft:'3px solid var(--amber)'}}>
+                    <div style={{fontSize:12,color:'var(--amber)',fontWeight:700,marginBottom:3}}>{step}</div>
+                    <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>{desc}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              <div style={{background:'var(--bg3)',border:'1px solid rgba(0,212,255,0.25)',borderRadius:4,padding:12}}>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--cyan)',letterSpacing:2,fontWeight:700,marginBottom:8}}>ALERT SYSTEM</div>
+                {[
+                  ['Auto-Created','Every trade with a stop_price auto-creates a stop_violation alert. No manual setup needed.'],
+                  ['Price Alerts','Set price_above/price_below alerts from any stock row. Fires when crossed intraday.'],
+                  ['VCP Pivot','Set vcp_pivot alert on watchlist stocks. Fires when price breaks above VCP resistance.'],
+                  ['Delivery','Alerts fire via: (1) in-app notification, (2) webhook POST to Slack/Discord/Telegram, (3) optional auto-sell on stop violations.'],
+                  ['Monitor Interval','Stop monitor checks every 5 min on weekdays. For tighter monitoring, change cron to */1 in Scheduler.'],
+                ].map(([k,v])=>(
+                  <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
+                    <span style={{color:'var(--cyan)',fontWeight:700,minWidth:100,flexShrink:0}}>{k}:</span>
+                    <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{background:'var(--bg3)',border:'1px solid rgba(255,61,87,0.25)',borderRadius:4,padding:12}}>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--red)',letterSpacing:2,fontWeight:700,marginBottom:8}}>JOURNAL BEST PRACTICES</div>
+                {[
+                  ['Log Every Trade','Winners AND losers. Your edge lives in the data, not your memory.'],
+                  ['Note the "Why"','Why did you enter? Why did you exit? "VCP breakout, RS 90" is better than "looked good."'],
+                  ['Track R-Multiples','A 2R win on 1% risk = +2%. Thinking in R keeps you process-focused, not dollar-focused.'],
+                  ['Review Weekly','Sort closed trades by R-multiple. What do your best trades have in common? Your worst?'],
+                  ['Use Replay','Backtest your actual strategy. If replay shows 38% win rate but you have 52%, you are adding real edge. If replay beats you, study why.'],
+                  ['Exit Reasons Matter','If 60% of exits are "stop" and only 10% are "target1" — your entries or stop placement need work.'],
+                ].map(([k,v])=>(
+                  <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
+                    <span style={{color:'var(--red)',fontWeight:700,minWidth:110,flexShrink:0}}>{k}:</span>
+                    <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
                   </div>
                 ))}
               </div>
