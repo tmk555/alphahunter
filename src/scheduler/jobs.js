@@ -28,8 +28,8 @@ registerJobType('rs_scan', {
       const txn = db().transaction(() => {
         let count = 0;
         for (const r of results) {
-          insert.run(date, r.ticker, r.rs, r.swingMomentum || null, r.sepa || null, r.stage || null,
-            r.price || null, r.vs50 || null, r.vs200 || null, r.volumeRatio || null,
+          insert.run(date, r.ticker, r.rsRank ?? null, r.swingMomentum ?? null, r.sepaScore ?? null, r.stage ?? null,
+            r.price ?? null, r.vsMA50 ?? null, r.vsMA200 ?? null, r.volumeRatio ?? null,
             r.vcpForming ? 1 : 0, r.rsLineNewHigh ? 1 : 0);
           count++;
         }
