@@ -316,6 +316,34 @@ function App() {
   const [swingScanned, setSwingScanned] = useState(0);
   const [swingSummary, setSwingSummary] = useState('');
 
+  // Lifted filter states — persist across tab switches
+  const [rsSigFilters, setRsSigFilters] = useState(new Set());
+  const [rsQuickFilter, setRsQuickFilter] = useState('all');
+  const [setupSigFilters, setSetupSigFilters] = useState(new Set());
+  const [setupMode, setSetupMode] = useState('swing');
+
+  // Badge counts — fetch periodically for tab indicators
+  const [badgeCounts, setBadgeCounts] = useState({staged:0, review:0, positions:0});
+  useEffect(() => {
+    async function fetchBadges() {
+      try {
+        const [st, tr, pos] = await Promise.all([
+          api('/api/staging?status=staged').catch(()=>({orders:[]})),
+          api('/api/trades?status=open&limit=200').catch(()=>({trades:[]})),
+          api('/api/broker/positions').catch(()=>({positions:[]})),
+        ]);
+        setBadgeCounts({
+          staged: (st.orders||[]).length,
+          review: (tr.trades||[]).filter(t=>t.needs_review).length,
+          positions: (pos.positions||[]).length,
+        });
+      } catch(_) {}
+    }
+    fetchBadges();
+    const id = setInterval(fetchBadges, 60000);
+    return () => clearInterval(id);
+  }, []);
+
   useEffect(() => {
     loadTicker();
     const id = setInterval(loadTicker, 60000);
@@ -348,9 +376,9 @@ function App() {
     { id:'industries',label:'🏭 Industries' },
     { id:'rs',        label:'📊 Scanner' },
     { id:'setups',    label:'🎯 Trade Setups' },
-    { id:'watchlist', label:'⭐ Watchlist' },
-    { id:'trading',   label:'💼 Trading' },
-    { id:'journal',   label:'📒 Journal' },
+    { id:'watchlist', label:'📋 Pipeline', badge: badgeCounts.staged || null },
+    { id:'trading',   label:'💼 Trading', badge: badgeCounts.positions || null },
+    { id:'journal',   label:'📒 Journal', badge: badgeCounts.review || null, badgeWarn: !!badgeCounts.review },
     { id:'replay',    label:'🔁 Replay' },
     { id:'settings',  label:'⚙ Settings' },
   ];
@@ -413,7 +441,7 @@ function App() {
           <button key={t.id} className={`tab ${tab===t.id?'active':''}`}
             onClick={() => setTab(t.id)}>
             {t.label}
-            {t.badge && <span className="tab-badge">{t.badge}</span>}
+            {t.badge && <span className="tab-badge" style={t.badgeWarn?{background:'rgba(240,165,0,0.15)',color:'var(--amber)'}:undefined}>{t.badge}</span>}
           </button>
         ))}
       </div>
@@ -423,8 +451,8 @@ function App() {
         {tab==='pulse'      && <MarketPulseTab />}
         {tab==='sectors'    && <SectorsTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
         {tab==='industries' && <IndustriesTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
-        {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
-        {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary}/>}
+        {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} sigFilters={rsSigFilters} setSigFilters={setRsSigFilters} quickFilter={rsQuickFilter} setQuickFilter={setRsQuickFilter}/>}
+        {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary} setupSigFilters={setupSigFilters} setSetupSigFilters={setSetupSigFilters} mode={setupMode} setMode={setSetupMode}/>}
         {tab==='watchlist'  && <WatchlistTab rsData={rsData} />}
         {tab==='trading'    && <><PortfolioTab /><ExecutionTab /></>}
         {tab==='journal'    && <><PerformanceTab /><TradeJournalTab /></>}
@@ -1371,7 +1399,7 @@ function IndustriesTab({ selectedSectors, setSelectedSectors }) {
 }
 
 // ─── RS SCANNER TAB ───────────────────────────────────────────────────────────
-function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, selectedSectors, setSelectedSectors }) {
+function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, selectedSectors, setSelectedSectors, sigFilters, setSigFilters, quickFilter, setQuickFilter }) {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   const [rsStaging, setRsStaging] = useState(null);
@@ -1406,8 +1434,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
     }, 50);
   }
   const { sortData: sortRS, SH } = useSortTable('rsRank');
-  // Signal filter chips — individual toggles (any active = must have that signal)
-  const [sigFilters, setSigFilters] = useState(new Set());
+  // Signal filter chips — from App props, persists across tab switches
   const toggleSig = key => setSigFilters(prev => {
     const next = new Set(prev);
     next.has(key) ? next.delete(key) : next.add(key);
@@ -1428,8 +1455,8 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
 
   // Quick filters — preset combinations for fastest workflow
   // When sector focus is active, bypass minRS on "all" filter so you see every stock in that sector
+  // quickFilter from App props, persists across tab switches
   const hasSectorFocus = selectedSectors && selectedSectors.size > 0;
-  const [quickFilter, setQuickFilter] = useState('all');
   const quickFilters = {
     all:      s => hasSectorFocus ? true : s.rsRank >= minRS,
     triple:   s => s.rsRank >= 70 && (s.rsTrend?.vs4w||0) > 0 && s.swingMomentum >= 60,
@@ -1714,16 +1741,14 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
 }
 
 // ─── TRADE SETUPS (unified: conviction-ranked picks + ATR levels + regime gate) ──
-function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegime, scanned, setScanned, summary, setSummary }) {
-  const [mode,    setMode]   = useState('swing');
+function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegime, scanned, setScanned, summary, setSummary, setupSigFilters, setSetupSigFilters, mode, setMode }) {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   const [picks,   setPicks]   = useState(null);
   const [picksLoad, setPicksLoad] = useState(false);
   const [staging, setStaging] = useState(null); // ticker currently staging
 
-  // Signal filters for conviction picks
-  const [setupSigFilters, setSetupSigFilters] = useState(new Set());
+  // Signal filters from App props — persists across tab switches
   const toggleSetupSig = key => setSetupSigFilters(prev => {
     const next = new Set(prev);
     next.has(key) ? next.delete(key) : next.add(key);
@@ -2448,17 +2473,24 @@ function MarketPulseTab() {
 // ─── WATCHLIST TAB ────────────────────────────────────────────────────────────
 function WatchlistTab({ rsData }) {
   const [list,      setList]    = useState([]);
+  const [staged,    setStaged]  = useState([]);
   const [ticker,    setTicker]  = useState('');
   const [note,      setNote]    = useState('');
   const [loading,   setLoading] = useState(false);
-  const [editNote,  setEditNote] = useState(null);   // ticker being edited
-  const [editVal,   setEditVal]  = useState('');     // current edit value
+  const [editNote,  setEditNote] = useState(null);
+  const [editVal,   setEditVal]  = useState('');
+  const [stageFilter, setStageFilter] = useState('all');
+  const [staging,   setStaging] = useState(null);
   const { sortData: sortWL, SH: WLSH } = useSortTable('addedAt', -1);
 
-  useEffect(() => { loadWL(); }, []);
+  useEffect(() => { loadWL(); loadStaged(); }, []);
 
   async function loadWL() {
     try { const d = await api('/api/watchlist'); setList(d.watchlist || []); } catch(_) {}
+  }
+
+  async function loadStaged() {
+    try { const d = await api('/api/staging?status=staged'); setStaged(d.orders || []); } catch(_) {}
   }
 
   async function add() {
@@ -2495,62 +2527,134 @@ function WatchlistTab({ rsData }) {
     } catch(_) {}
   }
 
-  const stageColor = s => s==='active'?'var(--green)':s==='candidate'?'var(--amber)':'var(--text3)';
-  const stageLabel = s => s==='active'?'ACTIVE TRADE':s==='candidate'?'CANDIDATE':'WATCHING';
+  async function stageFromPipeline(ticker, mode) {
+    setStaging(ticker);
+    try {
+      const r = await api('/api/staging/from-setup', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ ticker, mode: mode || 'swing' }),
+      });
+      await loadStaged();
+      alert(`Staged ${r.staged?.symbol}: ${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk`);
+    } catch(e) { alert(`Stage failed: ${e.message}`); }
+    setStaging(null);
+  }
+
+  const stageColor = s => s==='staged'?'var(--green)':s==='candidate'?'var(--amber)':'var(--text3)';
+  const stageLabel = s => s==='staged'?'STAGED':s==='candidate'?'CANDIDATE':'WATCHING';
+
+  const stagedSymbols = new Set(staged.map(s => s.symbol));
+  const filtered = list.filter(w => stageFilter === 'all' || w.stage === stageFilter);
+  const counts = { watching: list.filter(w=>w.stage==='watching').length, candidate: list.filter(w=>w.stage==='candidate').length, staged: stagedSymbols.size };
 
   return (
     <div>
       <div className="panel">
-        <div className="panel-title" style={{marginBottom:4}}>⭐ <span>Watchlist</span></div>
-        <div className="panel-sub">Stocks you're monitoring. When ready to trade, use STAGE from Trade Setups or Scanner.</div>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4,flexWrap:'wrap',gap:8}}>
+          <div>
+            <div className="panel-title" style={{marginBottom:4}}>📋 <span>Trade Pipeline</span></div>
+            <div className="panel-sub">Watching → Candidate → Staged → Executed. One-click staging when setup forms.</div>
+          </div>
+        </div>
+
+        {/* Pipeline funnel counts */}
+        <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap'}}>
+          {[
+            {id:'all',label:'All',count:list.length,color:'var(--text)'},
+            {id:'watching',label:'Watching',count:counts.watching,color:'var(--text3)'},
+            {id:'candidate',label:'Candidates',count:counts.candidate,color:'var(--amber)'},
+            {id:'staged',label:'Staged Orders',count:counts.staged,color:'var(--green)'},
+          ].map(f => (
+            <button key={f.id} onClick={()=>setStageFilter(f.id)}
+              style={{padding:'6px 14px',background:stageFilter===f.id?'rgba(255,255,255,0.06)':'transparent',
+                border:`1px solid ${stageFilter===f.id?f.color:'var(--border)'}`,borderRadius:4,color:stageFilter===f.id?f.color:'var(--text3)',
+                cursor:'pointer',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:stageFilter===f.id?700:400}}>
+              {f.label} <strong style={{marginLeft:4}}>{f.count}</strong>
+            </button>
+          ))}
+        </div>
 
         <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap',alignItems:'center'}}>
           <input value={ticker} onChange={e=>setTicker(e.target.value.toUpperCase())} placeholder="TICKER"
             style={{width:90,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',padding:'8px 10px',fontFamily:'var(--font-mono)',fontSize:13,outline:'none',letterSpacing:2}}/>
-          <input value={note} onChange={e=>setNote(e.target.value)} placeholder="Thesis, setup type, key level..."
+          <input value={note} onChange={e=>setNote(e.target.value)} placeholder="Thesis, key level, what triggers entry..."
             style={{flex:1,minWidth:120,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',padding:'8px 10px',fontSize:12,outline:'none'}}/>
           <button className="btn btn-primary btn-sm" onClick={add} disabled={loading||!ticker}>+ Add</button>
         </div>
 
-        {list.length === 0 && (
-          <div className="empty">No stocks in watchlist yet. Add tickers above.</div>
+        {/* Staged orders summary (if filter is 'staged') */}
+        {stageFilter === 'staged' && staged.length > 0 && (
+          <div style={{marginBottom:14}}>
+            <div style={{fontSize:10,color:'var(--green)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>STAGED ORDERS — READY TO SUBMIT</div>
+            <table className="data-table">
+              <thead><tr>
+                {['Symbol','Entry','Stop','Target','Qty','Source',''].map(h =>
+                  <th key={h} style={{fontSize:10}}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {staged.map(s => (
+                  <tr key={s.id}>
+                    <td><span className="td-ticker">{s.symbol}</span></td>
+                    <td style={{fontFamily:'var(--font-mono)'}}>${fmt(s.entry_price)}</td>
+                    <td style={{fontFamily:'var(--font-mono)',color:'var(--red)'}}>${fmt(s.stop_price)}</td>
+                    <td style={{fontFamily:'var(--font-mono)',color:'var(--green)'}}>{s.target1_price?'$'+fmt(s.target1_price):'—'}</td>
+                    <td style={{fontFamily:'var(--font-mono)'}}>{s.qty}</td>
+                    <td style={{fontSize:10,color:'var(--text3)'}}>{s.source}</td>
+                    <td style={{fontSize:11,color:'var(--cyan)'}}>Go to Trading tab to submit</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
 
-        {list.length > 0 && (
+        {stageFilter !== 'staged' && filtered.length === 0 && (
+          <div className="empty">No stocks in this stage. Add tickers above or promote from a lower stage.</div>
+        )}
+
+        {stageFilter !== 'staged' && filtered.length > 0 && (
           <table className="data-table">
             <thead>
               <tr>
+                <th>Stage</th>
                 <th title="Ticker symbol">Ticker</th>
                 <WLSH k="price"  label="Price"   title="Current market price"/>
                 <WLSH k="chg1d"  label="1D"      title="Today's % price change"/>
                 <WLSH k="chg1w"  label="1W"      title="5-day price return"/>
                 <WLSH k="chg1m"  label="1M"      title="21-day price return"/>
-                <WLSH k="rsRank" label="IBD RS"  title="IBD RS percentile rank 1-99. Updates each time you run the RS Scanner."/>
-                <th title="RS direction: rising/flat/falling based on 7-day rank change. Arrow shows the arc.">RS Trend</th>
-                <WLSH k="swingMomentum" label="SwingMom" title="Absolute price velocity (5/10/21-day ROC). ≥60=moving fast now. NOT relative to peers."/>
-                <th title="Your personal notes on this position — thesis, entry level, what you're watching for">Note</th>
-                <WLSH k="addedAt" label="Added"  title="Date you added this to the watchlist"/>
-                <th></th>
+                <WLSH k="rsRank" label="IBD RS"  title="IBD RS percentile rank 1-99"/>
+                <th>RS Trend</th>
+                <WLSH k="swingMomentum" label="SwingMom" title="Absolute price velocity"/>
+                <th>Note / Thesis</th>
+                <WLSH k="addedAt" label="Added"/>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {sortWL(list.map(w => {
+              {sortWL(filtered.map(w => {
                 const s2 = rsData?.find(r => r.ticker === w.ticker);
                 return {...w, price:s2?.price, chg1d:s2?.chg1d, chg1w:s2?.chg1w, chg1m:s2?.chg1m,
-                        rsRank:s2?.rsRank, swingMomentum:s2?.swingMomentum};
+                        rsRank:s2?.rsRank, rsTrend:s2?.rsTrend, swingMomentum:s2?.swingMomentum};
               })).map(w => {
-                const s = w; // merged via sortWL map above
+                const isStaged = stagedSymbols.has(w.ticker);
                 return (
                   <tr key={w.ticker}>
-                    <td><span className="td-ticker">{w.ticker}</span></td>
-                    <td>{s ? `$${fmt(s.price)}` : '—'}</td>
-                    <td className={fmtC(s?.chg1d)}>{fmtP(s?.chg1d)}</td>
-                    <td className={fmtC(s?.chg1w)}>{fmtP(s?.chg1w)}</td>
-                    <td className={fmtC(s?.chg1m)}>{fmtP(s?.chg1m)}</td>
-                    <td>{s ? <RSBar rs={s.rsRank}/> : '—'}</td>
-                    <td>{s ? <RSTrendBadge trend={s.rsTrend} rs={s.rsRank}/> : '—'}</td>
                     <td>
-                      {s?.swingMomentum != null ? <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:s.swingMomentum>=60?'var(--green)':s.swingMomentum>=45?'var(--amber)':'var(--red)'}}>{s.swingMomentum}</span> : '—'}
+                      <span style={{padding:'2px 8px',borderRadius:3,fontSize:10,fontWeight:700,letterSpacing:0.5,
+                        background:w.stage==='candidate'?'rgba(240,165,0,0.15)':'rgba(255,255,255,0.04)',
+                        color:stageColor(w.stage),border:`1px solid ${stageColor(w.stage)}`}}>
+                        {stageLabel(w.stage)}
+                      </span>
+                    </td>
+                    <td><span className="td-ticker">{w.ticker}</span></td>
+                    <td>{w.price ? `$${fmt(w.price)}` : '—'}</td>
+                    <td className={fmtC(w.chg1d)}>{fmtP(w.chg1d)}</td>
+                    <td className={fmtC(w.chg1w)}>{fmtP(w.chg1w)}</td>
+                    <td className={fmtC(w.chg1m)}>{fmtP(w.chg1m)}</td>
+                    <td>{w.rsRank ? <RSBar rs={w.rsRank}/> : '—'}</td>
+                    <td>{w.rsTrend ? <RSTrendBadge trend={w.rsTrend} rs={w.rsRank}/> : '—'}</td>
+                    <td>
+                      {w.swingMomentum != null ? <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:w.swingMomentum>=60?'var(--green)':w.swingMomentum>=45?'var(--amber)':'var(--red)'}}>{w.swingMomentum}</span> : '—'}
                     </td>
                     <td style={{maxWidth:180}}>
                       {editNote === w.ticker ? (
@@ -2558,22 +2662,39 @@ function WatchlistTab({ rsData }) {
                           <textarea value={editVal} onChange={e=>setEditVal(e.target.value)}
                             onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();saveNote(w);}if(e.key==='Escape')setEditNote(null);}}
                             autoFocus rows={2}
-                            placeholder="Enter note (Enter to save, Shift+Enter for newline)"
                             style={{flex:1,minWidth:100,background:'var(--bg)',border:'1px solid var(--amber)',borderRadius:3,color:'var(--text)',padding:'4px 6px',fontSize:11,outline:'none',resize:'vertical',fontFamily:'var(--font-sans)',lineHeight:1.4}}/>
                           <button onClick={()=>saveNote(w)} style={{padding:'2px 6px',background:'var(--amber)',border:'none',borderRadius:2,color:'#000',fontSize:10,cursor:'pointer',fontWeight:700}}>✓</button>
-                          <button onClick={()=>setEditNote(null)} style={{padding:'2px 6px',background:'transparent',border:'1px solid var(--border)',borderRadius:2,color:'var(--text3)',fontSize:10,cursor:'pointer'}}>✕</button>
                         </div>
                       ) : (
                         <span onClick={()=>{setEditNote(w.ticker);setEditVal(w.note||'');}}
-                          title="Click to edit note"
+                          title="Click to edit"
                           style={{fontSize:11,color:w.note?'var(--text2)':'var(--text3)',cursor:'text',display:'block',
                                   minWidth:60,whiteSpace:'normal',wordBreak:'break-word',lineHeight:1.4}}>
-                          {w.note || <em style={{opacity:0.4}}>+ add note</em>}
+                          {w.note || <em style={{opacity:0.4}}>+ thesis</em>}
                         </span>
                       )}
                     </td>
                     <td className="muted" style={{fontSize:10}}>{w.addedAt?.split('T')[0]}</td>
-                    <td><button className="btn btn-sm" onClick={()=>remove(w.ticker)} style={{padding:'3px 8px',fontSize:10,color:'var(--red)',borderColor:'rgba(255,61,87,0.3)'}}>✕</button></td>
+                    <td>
+                      <div style={{display:'flex',gap:4,alignItems:'center',flexWrap:'wrap'}}>
+                        {w.stage === 'watching' && (
+                          <button onClick={()=>updateStage(w,'candidate')} title="Promote to candidate"
+                            style={{padding:'3px 8px',fontSize:10,background:'rgba(240,165,0,0.15)',border:'1px solid rgba(240,165,0,0.3)',borderRadius:3,color:'var(--amber)',cursor:'pointer',fontWeight:600}}>↑ Candidate</button>
+                        )}
+                        {w.stage === 'candidate' && !isStaged && (
+                          <button onClick={()=>stageFromPipeline(w.ticker)} disabled={staging===w.ticker} title="Auto-size and stage bracket order"
+                            style={{padding:'3px 8px',fontSize:10,background:'rgba(0,210,211,0.15)',border:'1px solid rgba(0,210,211,0.3)',borderRadius:3,color:'var(--cyan)',cursor:'pointer',fontWeight:600}}>
+                            {staging===w.ticker?'Staging...':'⚡ Stage'}
+                          </button>
+                        )}
+                        {isStaged && <span style={{fontSize:10,color:'var(--green)',fontWeight:700}}>STAGED</span>}
+                        {w.stage === 'candidate' && (
+                          <button onClick={()=>updateStage(w,'watching')} title="Demote"
+                            style={{padding:'3px 6px',fontSize:10,background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',cursor:'pointer'}}>↓</button>
+                        )}
+                        <button onClick={()=>remove(w.ticker)} style={{padding:'3px 6px',fontSize:10,color:'var(--red)',background:'transparent',border:'1px solid rgba(255,61,87,0.3)',borderRadius:3,cursor:'pointer'}}>✕</button>
+                      </div>
+                    </td>
                   </tr>
                 );
               })}
@@ -2582,8 +2703,10 @@ function WatchlistTab({ rsData }) {
         )}
 
         <div style={{marginTop:16,padding:'12px 16px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,fontSize:12,color:'var(--text3)',lineHeight:1.9}}>
-          <strong style={{color:'var(--amber)'}}>Workflow:</strong> Add tickers here to monitor RS trend, momentum, and price action.
-          When a setup forms, go to <strong style={{color:'var(--text)'}}>Trade Setups</strong> or <strong style={{color:'var(--text)'}}>Scanner</strong> and click <strong style={{color:'var(--green)'}}>STAGE</strong> to size and stage a bracket order.
+          <strong style={{color:'var(--amber)'}}>Pipeline Flow:</strong>{' '}
+          <span style={{color:'var(--text3)'}}>WATCHING</span> → add thesis →{' '}
+          <span style={{color:'var(--amber)'}}>CANDIDATE</span> → click Stage →{' '}
+          <span style={{color:'var(--green)'}}>STAGED ORDER</span> → go to <strong style={{color:'var(--text)'}}>Trading</strong> tab to submit to broker
         </div>
       </div>
     </div>
@@ -3080,13 +3203,19 @@ function ExecutionTab() {
               <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
                 <thead>
                   <tr style={{borderBottom:'1px solid var(--border)'}}>
-                    {['#','Symbol','Side','Entry','Stop','Target','Qty','Source','Status','Created','Actions'].map(h =>
+                    {['#','Symbol','Side','Entry','Stop','Target','R:R','Risk $','Qty','Source','Status','Created','Actions'].map(h =>
                       <th key={h} style={{padding:'8px 6px',textAlign:'left',fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
                     )}
                   </tr>
                 </thead>
                 <tbody>
-                  {staged.map(o => (
+                  {staged.map(o => {
+                    const risk = o.entry_price - o.stop_price;
+                    const reward = o.target1_price ? o.target1_price - o.entry_price : 0;
+                    const rr = risk > 0 && reward > 0 ? (reward / risk) : null;
+                    const rrColor = rr >= 3 ? 'var(--green)' : rr >= 2 ? 'var(--cyan)' : rr >= 1 ? 'var(--amber)' : 'var(--red)';
+                    const riskDollars = risk > 0 ? risk * o.qty : 0;
+                    return (
                     <tr key={o.id} style={{borderBottom:'1px solid var(--border)'}}>
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--text3)'}}>{o.id}</td>
                       <td style={{padding:'8px 6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{o.symbol}</td>
@@ -3094,6 +3223,12 @@ function ExecutionTab() {
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>${fmt(o.entry_price)}</td>
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--red)'}}>${fmt(o.stop_price)}</td>
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--green)'}}>{o.target1_price?'$'+fmt(o.target1_price):'—'}</td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',fontWeight:700,color:rr?rrColor:'var(--text3)'}}>
+                        {rr ? `1:${fmt(rr,1)}` : '—'}
+                      </td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--red)',fontSize:11}}>
+                        ${fmt(riskDollars,0)}
+                      </td>
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{o.qty}</td>
                       <td style={{padding:'8px 6px',fontSize:10,color:'var(--text3)'}}>{o.source}</td>
                       <td style={{padding:'8px 6px'}}>
@@ -3119,7 +3254,8 @@ function ExecutionTab() {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -3389,7 +3525,11 @@ function PortfolioTab() {
     setLoading(false);
   }
 
-  useEffect(() => { loadStatus(); }, []);
+  useEffect(() => {
+    loadStatus();
+    const interval = setInterval(loadStatus, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   async function calcSize() {
     if (!sizeEntry || !sizeStop) return;
@@ -3472,6 +3612,28 @@ function PortfolioTab() {
 
       {status && (
         <div>
+          {/* Broker Account Summary — live from Alpaca */}
+          {status.broker && (
+            <div className="panel" style={{marginBottom:14,padding:14,borderLeft:'3px solid var(--cyan)'}}>
+              <div style={{fontSize:10,color:'var(--cyan)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>BROKER ACCOUNT (LIVE)</div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))',gap:12}}>
+                {[
+                  {label:'Equity',val:'$'+Number(status.broker.equity).toLocaleString(undefined,{maximumFractionDigits:0}),color:'var(--text)'},
+                  {label:'Portfolio Value',val:'$'+Number(status.broker.portfolioValue).toLocaleString(undefined,{maximumFractionDigits:0}),color:'var(--cyan)'},
+                  {label:'Cash',val:'$'+Number(status.broker.cash).toLocaleString(undefined,{maximumFractionDigits:0}),color:'var(--green)'},
+                  {label:'Buying Power',val:'$'+Number(status.broker.buyingPower).toLocaleString(undefined,{maximumFractionDigits:0}),color:'var(--amber)'},
+                  {label:'Broker Positions',val:status.brokerPositions?.length||0,color:'var(--cyan)'},
+                  {label:'Unrealized P&L',val:(()=>{const pl=(status.brokerPositions||[]).reduce((s,p)=>s+p.unrealizedPL,0);return (pl>=0?'+':'')+' $'+fmt(Math.abs(pl),0);})(),color:(status.brokerPositions||[]).reduce((s,p)=>s+p.unrealizedPL,0)>=0?'var(--green)':'var(--red)'},
+                ].map(m => (
+                  <div key={m.label} style={{textAlign:'center'}}>
+                    <div style={{fontSize:10,color:'var(--text3)',marginBottom:3}}>{m.label}</div>
+                    <div style={{fontSize:20,fontWeight:700,color:m.color,fontFamily:'var(--font-mono)'}}>{m.val}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Top Metrics Row */}
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12,marginBottom:14}}>
             {/* Portfolio Heat */}
@@ -3510,17 +3672,65 @@ function PortfolioTab() {
               </div>
             </div>
 
-            {/* Open Positions */}
+            {/* Open Positions — show broker count if available */}
             <div className="panel" style={{padding:14}}>
               <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>OPEN POSITIONS</div>
               <div style={{fontSize:36,fontWeight:800,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>
-                {status.openPositions || 0}
+                {status.brokerPositions?.length || status.openPositions || 0}
               </div>
               <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
-                Account: ${(config?.accountSize||100000).toLocaleString()}
+                {status.broker ? `Equity: $${Number(status.broker.equity).toLocaleString(undefined,{maximumFractionDigits:0})}` : `Account: $${(config?.accountSize||100000).toLocaleString()}`}
               </div>
+              {status.brokerPositions && status.openPositions !== status.brokerPositions.length && (
+                <div style={{fontSize:10,color:'var(--amber)',marginTop:4}}>
+                  {status.brokerPositions.filter(p=>!p.inJournal).length} position(s) not in journal
+                </div>
+              )}
             </div>
           </div>
+
+          {/* Broker Positions with P&L */}
+          {status.brokerPositions && status.brokerPositions.length > 0 && (
+            <div className="panel" style={{marginBottom:14,padding:14}}>
+              <div style={{fontSize:10,color:'var(--cyan)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>LIVE POSITIONS</div>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                <thead>
+                  <tr style={{borderBottom:'1px solid var(--border)'}}>
+                    {['Symbol','Qty','Avg Entry','Current','Mkt Value','P&L $','P&L %','Today','Stop','Target','Journal'].map(h =>
+                      <th key={h} style={{padding:'6px 5px',textAlign:'left',fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {status.brokerPositions.map(p => (
+                    <tr key={p.symbol} style={{borderBottom:'1px solid var(--border)'}}>
+                      <td style={{padding:'6px 5px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{p.symbol}</td>
+                      <td style={{padding:'6px 5px',fontFamily:'var(--font-mono)'}}>{p.qty}</td>
+                      <td style={{padding:'6px 5px',fontFamily:'var(--font-mono)'}}>${fmt(p.avgEntryPrice)}</td>
+                      <td style={{padding:'6px 5px',fontFamily:'var(--font-mono)'}}>${fmt(p.currentPrice)}</td>
+                      <td style={{padding:'6px 5px',fontFamily:'var(--font-mono)'}}>${Number(p.marketValue).toLocaleString()}</td>
+                      <td style={{padding:'6px 5px',fontFamily:'var(--font-mono)',fontWeight:700,color:p.unrealizedPL>=0?'var(--green)':'var(--red)'}}>
+                        {p.unrealizedPL>=0?'+':''}${fmt(p.unrealizedPL,0)}
+                      </td>
+                      <td style={{padding:'6px 5px',fontFamily:'var(--font-mono)',fontWeight:700,color:p.unrealizedPLPct>=0?'var(--green)':'var(--red)'}}>
+                        {p.unrealizedPLPct>=0?'+':''}{fmt(p.unrealizedPLPct,1)}%
+                      </td>
+                      <td style={{padding:'6px 5px',fontFamily:'var(--font-mono)',color:p.changeToday>=0?'var(--green)':'var(--red)'}}>
+                        {p.changeToday>=0?'+':''}{fmt(p.changeToday,1)}%
+                      </td>
+                      <td style={{padding:'6px 5px',fontFamily:'var(--font-mono)',color:'var(--red)'}}>{p.localStop?'$'+fmt(p.localStop):'—'}</td>
+                      <td style={{padding:'6px 5px',fontFamily:'var(--font-mono)',color:'var(--green)'}}>{p.localTarget1?'$'+fmt(p.localTarget1):'—'}</td>
+                      <td style={{padding:'6px 5px'}}>
+                        {p.inJournal
+                          ? <span style={{color:'var(--green)',fontSize:10}}>Yes</span>
+                          : <span style={{color:'var(--amber)',fontSize:10,fontWeight:700}}>MISSING</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {/* Sector Exposure */}
           <div className="panel" style={{marginBottom:14,padding:14}}>
@@ -3589,6 +3799,33 @@ function TradeJournalTab() {
   const [showExit, setShowExit] = useState(null);
   const [form, setForm]         = useState({symbol:'',entry_price:'',stop_price:'',target1:'',shares:'',side:'long',sector:'',notes:''});
   const [exitForm, setExitForm] = useState({exit_price:'',exit_reason:'stop',notes:''});
+  const [syncing, setSyncing]   = useState(false);
+  const [syncMsg, setSyncMsg]   = useState('');
+  const [editNoteId, setEditNoteId] = useState(null);
+  const [editNoteVal, setEditNoteVal] = useState('');
+
+  const needsReviewCount = trades.filter(t => t.needs_review).length;
+
+  async function syncBroker() {
+    setSyncing(true); setSyncMsg('');
+    try {
+      const d = await api('/api/trades/sync', { method:'POST' });
+      setSyncMsg(d.message);
+      loadTrades();
+    } catch(e) { setSyncMsg('Sync failed: ' + e.message); }
+    setSyncing(false);
+  }
+
+  async function saveTradeNote(id) {
+    try {
+      await api(`/api/trades/${id}`, {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ notes: editNoteVal, needs_review: 0 }),
+      });
+      setEditNoteId(null);
+      loadTrades();
+    } catch(e) { setError(e.message); }
+  }
 
   async function loadTrades() {
     setLoading(true); setError('');
@@ -3634,7 +3871,15 @@ function TradeJournalTab() {
             <div className="panel-title">Trade <span>Journal</span></div>
             <div className="panel-sub">Log entries and exits — track R-multiples and P&L</div>
           </div>
-          <div style={{display:'flex',gap:8}}>
+          <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+            {needsReviewCount > 0 && (
+              <span style={{padding:'4px 10px',background:'rgba(240,165,0,0.15)',border:'1px solid var(--amber)',borderRadius:4,fontSize:11,color:'var(--amber)',fontWeight:700}}>
+                {needsReviewCount} need{needsReviewCount===1?'s':''} review
+              </span>
+            )}
+            <button className="btn btn-primary" onClick={syncBroker} disabled={syncing} style={{fontSize:11}}>
+              {syncing ? '⟳ Syncing...' : '⟳ Sync Broker'}
+            </button>
             <div className="btn-group">
               {['all','open','closed'].map(f => (
                 <button key={f} className={`mode-btn ${filter===f?'active':''}`} onClick={()=>setFilter(f)}>
@@ -3648,6 +3893,7 @@ function TradeJournalTab() {
           </div>
         </div>
         {error && <ErrorBox msg={error}/>}
+        {syncMsg && <div style={{marginTop:8,padding:'8px 12px',background:'rgba(0,210,211,0.1)',border:'1px solid var(--cyan)',borderRadius:4,fontSize:11,color:'var(--cyan)'}}>{syncMsg}</div>}
       </div>
 
       {/* Entry Form */}
@@ -3687,15 +3933,18 @@ function TradeJournalTab() {
           <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
             <thead>
               <tr style={{borderBottom:'1px solid var(--border)'}}>
-                {['Symbol','Side','Entry','Stop','Target','Shares','Entry Date','Exit','P&L %','R-Multiple','Reason',''].map(h =>
+                {['Symbol','Side','Entry','Stop','Target','Shares','Entry Date','Exit','P&L %','R-Multiple','Reason','Notes',''].map(h =>
                   <th key={h} style={{padding:'8px 6px',textAlign:'left',fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
                 )}
               </tr>
             </thead>
             <tbody>
               {trades.map(t => (
-                <tr key={t.id} style={{borderBottom:'1px solid var(--border)'}}>
-                  <td style={{padding:'8px 6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{t.symbol}</td>
+                <tr key={t.id} style={{borderBottom:'1px solid var(--border)',background:t.needs_review?'rgba(240,165,0,0.06)':'transparent'}}>
+                  <td style={{padding:'8px 6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>
+                    {t.needs_review ? <span title="Needs review" style={{color:'var(--amber)',marginRight:4}}>●</span> : null}
+                    {t.symbol}
+                  </td>
                   <td style={{padding:'8px 6px',color:t.side==='long'?'var(--green)':'var(--red)'}}>{t.side}</td>
                   <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>${fmt(t.entry_price)}</td>
                   <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--red)'}}>{t.stop_price?'$'+fmt(t.stop_price):'—'}</td>
@@ -3712,6 +3961,23 @@ function TradeJournalTab() {
                     {t.r_multiple != null ? (t.r_multiple>0?'+':'')+fmt(t.r_multiple,2)+'R' : '—'}
                   </td>
                   <td style={{padding:'8px 6px',color:'var(--text3)',fontSize:10}}>{t.exit_reason||''}</td>
+                  <td style={{padding:'8px 6px',maxWidth:200}}>
+                    {editNoteId === t.id ? (
+                      <div style={{display:'flex',gap:4}}>
+                        <textarea value={editNoteVal} onChange={e=>setEditNoteVal(e.target.value)} autoFocus rows={2}
+                          onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();saveTradeNote(t.id);}if(e.key==='Escape')setEditNoteId(null);}}
+                          style={{flex:1,minWidth:120,background:'var(--bg)',border:`1px solid ${t.needs_review?'var(--amber)':'var(--border)'}`,borderRadius:3,color:'var(--text)',padding:'4px 6px',fontSize:11,outline:'none',resize:'vertical',fontFamily:'var(--font-sans)'}}/>
+                        <button onClick={()=>saveTradeNote(t.id)} style={{padding:'2px 6px',background:'var(--amber)',border:'none',borderRadius:2,color:'#000',fontSize:10,cursor:'pointer',fontWeight:700}}>✓</button>
+                      </div>
+                    ) : (
+                      <span onClick={()=>{setEditNoteId(t.id);setEditNoteVal(t.notes||'');}}
+                        title="Click to edit notes"
+                        style={{fontSize:11,color:t.needs_review?'var(--amber)':t.notes?'var(--text2)':'var(--text3)',cursor:'text',display:'block',
+                                whiteSpace:'normal',wordBreak:'break-word',lineHeight:1.4,fontWeight:t.needs_review?600:400}}>
+                        {t.needs_review ? (t.notes?.replace(/\[AUTO[^\]]*\]\s*/g,'') || 'Add trade thesis...') : (t.notes || <em style={{opacity:0.4}}>+ notes</em>)}
+                      </span>
+                    )}
+                  </td>
                   <td style={{padding:'8px 6px'}}>
                     {!t.exit_date && (
                       showExit === t.id ? (
