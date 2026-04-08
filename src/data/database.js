@@ -121,7 +121,7 @@ function initSchema() {
       stop_price REAL NOT NULL,
       target1_price REAL,
       target2_price REAL,
-      time_in_force TEXT DEFAULT 'day',
+      time_in_force TEXT DEFAULT 'gtc',
       source TEXT,
       conviction_score REAL,
       risk_check JSON,
