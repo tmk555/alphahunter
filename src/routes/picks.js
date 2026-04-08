@@ -15,7 +15,9 @@ module.exports = function(runRSScanFn) {
       const history = loadHistory(RS_HISTORY);
       const regime  = await getMarketRegime();
 
-      const scored = stocks
+      const limit = Math.max(1, Math.min(50, parseInt(req.query.limit, 10) || 7));
+
+      const ranked = stocks
         .filter(s => s.rsRank >= 60 && s.swingMomentum >= 40)
         .map(s => {
           const trend = getRSTrend(s.ticker, history);
@@ -24,16 +26,19 @@ module.exports = function(runRSScanFn) {
           const positionSetup = computeTradeSetup(s, 'position');
           return { ...s, rsTrend: trend, convictionScore, reasons, swingSetup, positionSetup };
         })
-        .sort((a, b) => b.convictionScore - a.convictionScore)
-        .slice(0, 7);
+        .sort((a, b) => b.convictionScore - a.convictionScore);
+
+      const totalQualified = ranked.length;
+      const picks = ranked.slice(0, limit);
 
       res.json({
-        picks: scored,
+        picks,
+        totalQualified,
         regime,
         date: new Date().toISOString().split('T')[0],
         note: regime.swingOk === false
           ? 'BEAR REGIME — no new long setups recommended'
-          : `${scored.length} candidates ranked by conviction (RS + Accel + Momentum + SEPA)`,
+          : `${picks.length} of ${totalQualified} candidates ranked by conviction (RS + Accel + Momentum + SEPA)`,
       });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });

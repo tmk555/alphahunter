@@ -41,9 +41,80 @@ async function getMarketRegime() {
       warning = 'Normal size — mixed signals, respect stops';
     }
 
+    // ── Cycle-based regime adjustments ─────────────────────────────────────
+    let cycleOverride = null;
+    try {
+      const cycle = await autoDetectCycleState();
+      if (cycle) {
+        const basicRegime = regime;
+
+        // Rule 1: BEAR + FTD_CONFIRMED with above50 → upgrade to CAUTION
+        if (sizeMultiplier === 0 && cycle.mode === 'FTD_CONFIRMED' && cycle.spy?.above50) {
+          regime = 'CAUTION'; color = '#ff8c00'; swingOk = true; positionOk = false; sizeMultiplier = 0.5;
+          warning = 'FTD confirmed — pilot buys allowed';
+          cycleOverride = { applied: true, from: basicRegime, to: regime, reason: 'FTD confirmed — pilot buys allowed' };
+        }
+        // Rule 2: CAUTION + FTD_CONFIRMED with confidence >= 70 → upgrade to NEUTRAL
+        else if (basicRegime === 'CAUTION' && cycle.mode === 'FTD_CONFIRMED' && cycle.confidence >= 70) {
+          regime = 'NEUTRAL'; color = '#f0a500'; swingOk = true; positionOk = true; sizeMultiplier = 0.75;
+          warning = 'FTD confirmed — increased sizing';
+          cycleOverride = { applied: true, from: basicRegime, to: regime, reason: 'FTD confirmed — increased sizing' };
+        }
+        // Rule 4: CORRECTION (below 50MA + 3+ dist days) → force CAUTION (checked before Rule 3 to take priority)
+        else if (cycle.mode === 'CORRECTION') {
+          if (basicRegime !== 'HIGH RISK / BEAR' && basicRegime !== 'CAUTION') {
+            regime = 'CAUTION'; color = '#ff8c00'; swingOk = true; positionOk = false; sizeMultiplier = 0.5;
+            warning = 'Correction detected — reduce to half position size';
+            cycleOverride = { applied: true, from: basicRegime, to: regime, reason: 'Correction detected — below 50MA with distribution days' };
+          }
+        }
+        // Rule 3: UPTREND_PRESSURE (4+ dist days) → downgrade by one level
+        else if (cycle.mode === 'UPTREND_PRESSURE' && cycle.distributionDays?.count >= 4) {
+          if (basicRegime === 'BULL / RISK ON') {
+            regime = 'NEUTRAL'; color = '#f0a500'; swingOk = true; positionOk = true; sizeMultiplier = 0.75;
+            warning = 'Distribution day accumulation — reduce exposure';
+            cycleOverride = { applied: true, from: basicRegime, to: regime, reason: 'Distribution day accumulation — reduce exposure' };
+          } else if (basicRegime === 'NEUTRAL') {
+            regime = 'CAUTION'; color = '#ff8c00'; swingOk = true; positionOk = false; sizeMultiplier = 0.5;
+            warning = 'Distribution day accumulation — reduce exposure';
+            cycleOverride = { applied: true, from: basicRegime, to: regime, reason: 'Distribution day accumulation — reduce exposure' };
+          }
+        }
+      }
+    } catch (e) {
+      // Cycle detection failed — proceed with basic regime only
+    }
+
+    // ── Graduated exposure ramp (O'Neil: increase exposure as rally confirms) ──
+    // maxHeatPct tells the portfolio module how much total risk is allowed right now
+    let exposureRamp = null;
+    try {
+      const cycle = cycleOverride?._cycle || await autoDetectCycleState();
+      if (cycle && cycle.ftd?.fired) {
+        const rallyDay = cycle.rallyAttempt?.day || 0;
+        const ftdConfirmed = cycle.ftd?.confirmed;
+        const distDays = cycle.distributionDays?.count || 0;
+        // O'Neil ramp: pilot → half → three-quarter → full
+        let maxHeatPct, exposureLevel;
+        if (!ftdConfirmed || rallyDay <= 3) {
+          maxHeatPct = 2; exposureLevel = 'PILOT';          // 25% of normal 8% heat
+        } else if (rallyDay <= 7 && distDays <= 1) {
+          maxHeatPct = 4; exposureLevel = 'HALF';           // 50% of normal heat
+        } else if (rallyDay <= 15 && distDays <= 2 && above50) {
+          maxHeatPct = 6; exposureLevel = 'THREE_QUARTER';  // 75% of normal heat
+        } else if (above50 && above200 && distDays <= 2) {
+          maxHeatPct = 8; exposureLevel = 'FULL';           // Full heat ceiling
+        } else {
+          maxHeatPct = 4; exposureLevel = 'REDUCED';        // Too many dist days
+        }
+        exposureRamp = { maxHeatPct, exposureLevel, rallyDay, ftdConfirmed, distDays };
+      }
+    } catch (_) {}
+
     const result = {
       regime, color, swingOk, positionOk, sizeMultiplier, warning, vixLevel,
       spyPrice, spyChg1d, spy50, spy200, above50, above200,
+      cycleOverride, exposureRamp,
       qqqChg1d: qqq?.regularMarketChangePercent,
       iwmChg1d: iwm?.regularMarketChangePercent,
       tltChg1d: tlt?.regularMarketChangePercent,

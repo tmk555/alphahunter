@@ -237,14 +237,21 @@ function RegimeBanner({ regime }) {
   if (!regime) return null;
   const bg  = regime.swingOk === false ? 'rgba(255,61,87,0.1)' : regime.regime === 'BULL / RISK ON' ? 'rgba(0,230,118,0.08)' : 'rgba(240,165,0,0.08)';
   const col = regime.swingOk === false ? 'var(--red)' : regime.regime === 'BULL / RISK ON' ? 'var(--green)' : 'var(--amber)';
+  const co = regime.cycleOverride;
   return (
     <div style={{padding:'10px 14px',background:bg,border:`1px solid ${col}44`,borderRadius:5,marginBottom:14,display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
       <div>
         <span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:col,fontSize:12,letterSpacing:1}}>{regime.regime}</span>
+        <span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--text3)',fontSize:11,marginLeft:6}}>{regime.sizeMultiplier}x</span>
         {regime.warning && <span style={{fontSize:11,color:'var(--text2)',marginLeft:10}}>{regime.warning}</span>}
+        {co && co.applied && (
+          <span style={{fontSize:10,color:'var(--cyan)',marginLeft:10,fontFamily:'var(--font-mono)',fontWeight:600}}>
+            CYCLE: {co.from} → {co.to} ({co.reason})
+          </span>
+        )}
       </div>
       <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>
-        SPY {regime.spyAbove50?'above':'below'} 50MA · {regime.spyAbove200?'above':'below'} 200MA · VIX {regime.vixLevel?.toFixed(0)}
+        SPY {regime.above50?'above':'below'} 50MA · {regime.above200?'above':'below'} 200MA · VIX {regime.vixLevel?.toFixed(0)}
       </div>
     </div>
   );
@@ -1368,17 +1375,18 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   const [rsStaging, setRsStaging] = useState(null);
+  const [rsStageMode, setRsStageMode] = useState('swing');
   // minRS/setMinRS now from App props — persists across tab switches
   const [expandedTicker, setExpandedTicker] = useState(null);
 
-  async function stageFromRS(ticker) {
+  async function stageFromRS(ticker, mode) {
     setRsStaging(ticker);
     try {
       const r = await api('/api/staging/from-setup', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ ticker, mode: 'swing' }),
+        body: JSON.stringify({ ticker, mode: mode || rsStageMode }),
       });
-      alert(`Staged ${r.staged?.symbol}: ${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk. Go to Trading tab to submit.`);
+      alert(`Staged ${r.staged?.symbol} (${mode || rsStageMode}): ${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk. Go to Trading tab to submit.`);
     } catch(e) { alert(`Stage failed: ${e.message}`); }
     setRsStaging(null);
   }
@@ -1667,6 +1675,15 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                                 {s.sector && <span style={{fontSize:11,padding:'2px 8px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text2)'}}>{s.sector}</span>}
                               </div>
                               <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                                <div className="btn-group">
+                                  {['swing','position'].map(m => (
+                                    <button key={m} className={`mode-btn ${rsStageMode===m?'active':''}`}
+                                      style={{padding:'3px 10px',fontSize:10}}
+                                      onClick={() => setRsStageMode(m)}>
+                                      {m === 'swing' ? '⚡ Swing' : '📈 Position'}
+                                    </button>
+                                  ))}
+                                </div>
                                 <button disabled={rsStaging===s.ticker} onClick={()=>stageFromRS(s.ticker)}
                                   style={{padding:'5px 14px',background:'var(--green)',border:'1px solid var(--green)',borderRadius:4,color:'#000',fontSize:11,fontWeight:800,cursor:'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
                                   {rsStaging===s.ticker ? 'STAGING...' : 'STAGE'}
@@ -1705,6 +1722,45 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
   const [picksLoad, setPicksLoad] = useState(false);
   const [staging, setStaging] = useState(null); // ticker currently staging
 
+  // Signal filters for conviction picks
+  const [setupSigFilters, setSetupSigFilters] = useState(new Set());
+  const toggleSetupSig = key => setSetupSigFilters(prev => {
+    const next = new Set(prev);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
+  const [picksLimit, setPicksLimit] = useState(7);
+
+  const filteredPicks = useMemo(() => {
+    if (!picks || !picks.length) return [];
+    const sigChecks = {
+      '★':   s => s.rsRank>=70 && (s.rsTrend?.vs4w||0)>0 && s.swingMomentum>=60,
+      '⭐':   s => s.rsLineNewHigh,
+      'VCP': s => s.vcpForming,
+      'S2':  s => s.stage===2,
+    };
+    return picks.filter(s => {
+      if (setupSigFilters.size === 0) return true;
+      for (const key of setupSigFilters) {
+        if (sigChecks[key] && !sigChecks[key](s)) return false;
+      }
+      return true;
+    }).slice(0, picksLimit);
+  }, [picks, setupSigFilters, picksLimit]);
+
+  // Pending pullback: strong stocks too extended for position entry — watch for pullback to 50MA
+  const pendingPullback = useMemo(() => {
+    if (!rsLoaded || !rsData.length) return [];
+    return rsData.filter(s =>
+      s.rsRank >= 70 &&                           // Strong RS
+      (s.rsTrend?.vs1m > 0 || s.rsTrend?.vs4w > 0) && // RS still rising
+      s.vsMA200 > 0 &&                            // Above 200MA
+      s.vsMA50 > 5 && s.vsMA50 <= 20 &&           // 5-20% above 50MA (too extended for position, not absurdly extended)
+      (s.sepaScore >= 4 || s.vcpForming || s.stage === 2) // Has quality structure
+    ).sort((a, b) => a.vsMA50 - b.vsMA50)          // Sort by closest to pullback zone first
+     .slice(0, 15);
+  }, [rsData, rsLoaded]);
+
   useEffect(() => { loadPicks(); }, []);
 
   async function stageFromSetup(ticker, stageMode) {
@@ -1722,7 +1778,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
   async function loadPicks() {
     setPicksLoad(true);
     try {
-      const d = await api('/api/daily-picks');
+      const d = await api('/api/daily-picks?limit=50');
       setPicks(d.picks || []);
       if (d.regime) setRegime(d.regime);
     } catch(_) {}
@@ -1766,6 +1822,31 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
 
       {regime && !noLongs && <RegimeBanner regime={regime} />}
 
+      {/* Exposure ramp indicator — O'Neil graduated exposure */}
+      {regime?.exposureRamp && (
+        <div style={{padding:'8px 14px',background:'rgba(0,212,255,0.06)',border:'1px solid rgba(0,212,255,0.2)',borderRadius:5,marginBottom:14,display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
+          <div style={{fontFamily:'var(--font-mono)',fontSize:10,letterSpacing:2,color:'var(--cyan)',fontWeight:700}}>EXPOSURE RAMP</div>
+          <div style={{display:'flex',gap:4}}>
+            {['PILOT','HALF','THREE_QUARTER','FULL'].map((lvl, i) => {
+              const active = ['PILOT','HALF','THREE_QUARTER','FULL'].indexOf(regime.exposureRamp.exposureLevel) >= i;
+              const reduced = regime.exposureRamp.exposureLevel === 'REDUCED';
+              return (
+                <div key={lvl} style={{
+                  width:40, height:6, borderRadius:3,
+                  background: reduced ? (i===0||i===1 ? 'var(--amber)' : 'var(--bg3)') : active ? 'var(--cyan)' : 'var(--bg3)',
+                  border:'1px solid var(--border)',
+                }} title={`${lvl}: ${[2,4,6,8][i]}% max heat`}/>
+              );
+            })}
+          </div>
+          <span style={{fontSize:11,color:'var(--text2)',fontFamily:'var(--font-mono)'}}>
+            {regime.exposureRamp.exposureLevel} — max heat {regime.exposureRamp.maxHeatPct}% · rally day {regime.exposureRamp.rallyDay}
+            {regime.exposureRamp.ftdConfirmed && ' · FTD confirmed'}
+            {regime.exposureRamp.distDays > 0 && ` · ${regime.exposureRamp.distDays} dist days`}
+          </span>
+        </div>
+      )}
+
       <div className="panel" style={{marginBottom:14}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12,flexWrap:'wrap',gap:8}}>
           <div>
@@ -1797,11 +1878,36 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
       {/* Conviction-ranked picks */}
       {picks && picks.length > 0 && (
         <div style={{marginBottom:20}}>
-          <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10,paddingLeft:2}}>
-            CONVICTION PICKS — {picks.length} ranked by RS + Momentum + SEPA
+          <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:10,paddingLeft:2,flexWrap:'wrap'}}>
+            <span style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>
+              CONVICTION PICKS — {filteredPicks.length}{picks.length !== filteredPicks.length ? ` of ${picks.length}`:''} ranked by RS + Momentum + SEPA
+            </span>
+            <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+              {[
+                {key:'★',   label:'★ Triple',  col:'var(--green)'},
+                {key:'⭐',   label:'⭐ RS High', col:'var(--gold)'},
+                {key:'VCP', label:'VCP',        col:'var(--purple)'},
+                {key:'S2',  label:'S2',         col:'var(--green)'},
+              ].map(c => (
+                <button key={c.key} onClick={()=>toggleSetupSig(c.key)}
+                  style={{padding:'2px 8px',fontSize:9,fontWeight:700,fontFamily:'var(--font-mono)',
+                    background:setupSigFilters.has(c.key)?`${c.col}22`:'transparent',
+                    color:setupSigFilters.has(c.key)?c.col:'var(--text3)',
+                    border:`1px solid ${setupSigFilters.has(c.key)?c.col:'var(--border)'}`,
+                    borderRadius:3,cursor:'pointer',letterSpacing:.5}}>
+                  {c.label}
+                </button>
+              ))}
+              {setupSigFilters.size > 0 && (
+                <button onClick={()=>setSetupSigFilters(new Set())}
+                  style={{padding:'2px 6px',fontSize:9,background:'transparent',color:'var(--text3)',border:'1px solid var(--border)',borderRadius:3,cursor:'pointer'}}>
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
           <div style={{display:'grid',gap:10}}>
-            {picks.map((s, rank) => {
+            {filteredPicks.map((s, rank) => {
               const sw = s.swingSetup || {};
               const pos = s.positionSetup || {};
               // Extract just the price from stopLevel (strip the parenthetical note)
@@ -1896,6 +2002,76 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                 </div>
               );
             })}
+          </div>
+          {picks.length > 7 && picksLimit <= 7 && (
+            <div style={{textAlign:'center',marginTop:10}}>
+              <button onClick={()=>setPicksLimit(50)} style={{padding:'6px 20px',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:600,background:'transparent',color:'var(--text2)',border:'1px solid var(--border)',borderRadius:4,cursor:'pointer',letterSpacing:1}}>
+                Show All {picks.length} Candidates ▼
+              </button>
+            </div>
+          )}
+          {picksLimit > 7 && (
+            <div style={{textAlign:'center',marginTop:10}}>
+              <button onClick={()=>setPicksLimit(7)} style={{padding:'6px 20px',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:600,background:'transparent',color:'var(--text2)',border:'1px solid var(--border)',borderRadius:4,cursor:'pointer',letterSpacing:1}}>
+                Show Top 7 Only ▲
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Pending pullback — extended stocks to watch for position entry */}
+      {pendingPullback.length > 0 && (
+        <div style={{marginBottom:20}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,paddingLeft:2}}>
+            <span style={{fontSize:10,color:'var(--amber)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>
+              PENDING PULLBACK — {pendingPullback.length} stocks watching for 50MA entry
+            </span>
+            <span style={{fontSize:10,color:'var(--text3)'}}>
+              Strong RS + structure but too extended for position entry. Alert when vsMA50 drops below 5%.
+            </span>
+          </div>
+          <div style={{overflowX:'auto'}}>
+            <table className="rs-table" style={{fontSize:12}}>
+              <thead>
+                <tr>
+                  <th>Ticker</th>
+                  <th>Price</th>
+                  <th>RS</th>
+                  <th>Accel</th>
+                  <th>Mom</th>
+                  <th title="Distance above 50MA — needs to drop to ≤5% for position entry">vs 50MA</th>
+                  <th>50MA</th>
+                  <th title="Position entry zone when stock pulls back">Entry Zone</th>
+                  <th>SEPA</th>
+                  <th>Signals</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pendingPullback.map(s => {
+                  const entryZone = s.ma50 ? `$${(s.ma50 * 0.995).toFixed(2)} – $${(s.ma50 * 1.01).toFixed(2)}` : '—';
+                  return (
+                    <tr key={s.ticker}>
+                      <td><span className="td-ticker">{s.ticker}</span></td>
+                      <td style={{fontFamily:'var(--font-mono)'}}>${s.price?.toFixed(2)}</td>
+                      <td style={{fontFamily:'var(--font-mono)',color:rsColor(s.rsRank),fontWeight:700}}>{s.rsRank}</td>
+                      <td style={{fontFamily:'var(--font-mono)',color:(s.rsTrend?.vs4w||0)>5?'var(--green)':'var(--amber)'}}>{s.rsTrend?.vs4w>0?'+':''}{s.rsTrend?.vs4w||0}</td>
+                      <td style={{fontFamily:'var(--font-mono)',color:s.swingMomentum>=60?'var(--green)':'var(--amber)'}}>{s.swingMomentum}</td>
+                      <td style={{fontFamily:'var(--font-mono)',color:'var(--amber)',fontWeight:700}}>{s.vsMA50?.toFixed(1)}%</td>
+                      <td style={{fontFamily:'var(--font-mono)',color:'var(--text3)'}}>${s.ma50?.toFixed(2)}</td>
+                      <td style={{fontFamily:'var(--font-mono)',color:'var(--cyan)',fontSize:11}}>{entryZone}</td>
+                      <td style={{fontFamily:'var(--font-mono)',color:s.sepaScore>=5?'var(--green)':'var(--amber)'}}>{s.sepaScore||0}/8</td>
+                      <td style={{fontSize:11}}>
+                        {s.rsRank>=70&&(s.rsTrend?.vs4w||0)>0&&s.swingMomentum>=60 && <span style={{color:'var(--green)',fontWeight:700,marginRight:3}}>★</span>}
+                        {s.vcpForming && <span style={{color:'var(--purple)',fontWeight:700,marginRight:3}}>VCP</span>}
+                        {s.stage===2 && <span style={{color:'var(--green)',fontWeight:700,marginRight:3}}>S2</span>}
+                        {s.rsLineNewHigh && <span style={{color:'var(--gold)',fontWeight:700}}>⭐</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
