@@ -154,15 +154,17 @@ function preTradeCheck(candidate, openPositions, regime, currentPrices = {}) {
   const checks = [];
   let approved = true;
 
-  // 1. Portfolio heat
+  // 1. Portfolio heat (uses exposure ramp ceiling when available from cycle detection)
   const heat = getPortfolioHeat(openPositions);
   const candidateRisk = (candidate.entryPrice - candidate.stopPrice) * candidate.shares;
   const newHeat = heat.heatPct + (candidateRisk / config.accountSize * 100);
-  if (newHeat > config.maxPortfolioHeat) {
-    checks.push({ rule: 'Portfolio Heat', pass: false, detail: `Would bring heat to ${newHeat.toFixed(1)}% (max ${config.maxPortfolioHeat}%)` });
+  const effectiveMaxHeat = regime?.exposureRamp?.maxHeatPct || config.maxPortfolioHeat;
+  const rampNote = regime?.exposureRamp ? ` [${regime.exposureRamp.exposureLevel} — rally day ${regime.exposureRamp.rallyDay}]` : '';
+  if (newHeat > effectiveMaxHeat) {
+    checks.push({ rule: 'Portfolio Heat', pass: false, detail: `Would bring heat to ${newHeat.toFixed(1)}% (max ${effectiveMaxHeat}%${rampNote})` });
     approved = false;
   } else {
-    checks.push({ rule: 'Portfolio Heat', pass: true, detail: `${newHeat.toFixed(1)}% after trade (max ${config.maxPortfolioHeat}%)` });
+    checks.push({ rule: 'Portfolio Heat', pass: true, detail: `${newHeat.toFixed(1)}% after trade (max ${effectiveMaxHeat}%${rampNote})` });
   }
 
   // 2. Sector exposure
