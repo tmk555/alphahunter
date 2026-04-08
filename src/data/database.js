@@ -19,6 +19,13 @@ function getDB() {
   return db;
 }
 
+function safeAddColumn(table, column, type) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.find(c => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
+}
+
 function initSchema() {
   db.exec(`
     -- Daily RS snapshots (replaces rs-history JSON files)
@@ -72,6 +79,8 @@ function initSchema() {
       shares INTEGER,
       wave TEXT,
       notes TEXT,
+      alpaca_order_id TEXT,
+      needs_review INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -250,6 +259,10 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_provider_log_provider ON provider_log(provider);
     CREATE INDEX IF NOT EXISTS idx_replay_results_strategy ON replay_results(strategy);
   `);
+
+  // Migrations for existing databases
+  safeAddColumn('trades', 'alpaca_order_id', 'TEXT');
+  safeAddColumn('trades', 'needs_review', 'INTEGER DEFAULT 0');
 }
 
 // One-time migration from legacy JSON files into SQLite
