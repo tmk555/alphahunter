@@ -10,7 +10,7 @@ function db() { return getDB(); }
 // ─── Stage a bracket order from a trade setup ───────────────────────────────
 
 function stageOrder({ symbol, side = 'buy', order_type = 'limit', qty, entry_price, stop_price,
-                      target1_price, target2_price, time_in_force = 'day', source, conviction_score, notes }) {
+                      target1_price, target2_price, time_in_force = 'gtc', source, conviction_score, notes }) {
   const stmt = db().prepare(`
     INSERT INTO staged_orders (symbol, side, order_type, qty, entry_price, stop_price,
       target1_price, target2_price, time_in_force, source, conviction_score, notes)
