@@ -119,5 +119,57 @@ module.exports = function(db) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ─── Real-Time Stream Status & Prices ─────────────────────────────────────
+  router.get('/broker/stream/status', (req, res) => {
+    try {
+      const { priceStream } = require('../broker/monitor');
+      res.json(priceStream.getStatus());
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.get('/broker/stream/prices', (req, res) => {
+    try {
+      const { priceStream } = require('../broker/monitor');
+      const symbols = req.query.symbols ? req.query.symbols.split(',') : null;
+      const allPrices = priceStream.getAllPrices();
+      if (symbols) {
+        const filtered = {};
+        for (const s of symbols) {
+          if (allPrices[s]) filtered[s] = allPrices[s];
+        }
+        res.json(filtered);
+      } else {
+        res.json(allPrices);
+      }
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // SSE endpoint for real-time price updates to the UI
+  router.get('/broker/stream/sse', (req, res) => {
+    try {
+      const { priceStream } = require('../broker/monitor');
+
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders();
+
+      const symbols = req.query.symbols ? req.query.symbols.split(',') : null;
+
+      const handler = (symbol, update) => {
+        if (symbols && !symbols.includes(symbol)) return;
+        res.write(`data: ${JSON.stringify({ symbol, ...update })}\n\n`);
+      };
+
+      priceStream.on('price', handler);
+
+      req.on('close', () => {
+        priceStream.removeListener('price', handler);
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   return router;
 };

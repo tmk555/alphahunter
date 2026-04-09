@@ -43,7 +43,7 @@ function getRSTrend(ticker, history) {
     vs2w: w2 != null ? +(now-w2).toFixed(0) : null,
     vs4w: w4 != null ? +(now-w4).toFixed(0) : null,
     vs3m: m3 != null ? +(now-m3).toFixed(0) : null,
-    vs1m: w4 != null ? +(now-w4).toFixed(0) : null,
+    vs1m: w4 != null ? +(now-w4).toFixed(0) : null,  // 4 weeks ≈ 1 month
     vs2m: m2 != null ? +(now-m2).toFixed(0) : null,
   };
 }

@@ -1,19 +1,120 @@
-// ─── Stop Monitor Scheduler ─────────────────────────────────────────────────
-// Checks positions against stops every 5 minutes during market hours
+// ─── Stop Monitor — Real-Time Position Monitoring ────────────────────────────
+// Uses WebSocket streaming for millisecond-level stop detection.
+// Falls back to 5-minute cron for non-streaming scenarios.
 const cron = require('node-cron');
 const alpaca = require('./alpaca');
 const { checkAlerts, getActiveAlerts } = require('./alerts');
 const { expireStaleOrders } = require('./staging');
+const { priceStream } = require('./stream');
 const { getDB } = require('../data/database');
 const { yahooQuote } = require('../data/providers/yahoo');
 
 let monitorTask = null;
 let lastCheck = null;
 let checkCount = 0;
+let streamingActive = false;
 
 function db() { return getDB(); }
 
-// ─── Core: Check positions against stops ────────────────────────────────────
+// ─── Stream-Based Real-Time Monitoring ─────────────────────────────────────
+
+function startStreamMonitor() {
+  const activeAlerts = getActiveAlerts();
+  const symbols = [...new Set(activeAlerts.map(a => a.symbol))];
+
+  if (symbols.length === 0) {
+    console.log('  Stream Monitor: No active alerts — will auto-subscribe when alerts are created');
+    streamingActive = true;
+    _watchForNewAlerts();
+    return;
+  }
+
+  // Subscribe to all symbols with active alerts
+  priceStream.subscribe(symbols);
+  streamingActive = true;
+
+  // Listen for every price update and check stops instantly
+  priceStream.on('price', async (symbol, update) => {
+    try {
+      const activeForSymbol = getActiveAlerts(symbol);
+      if (!activeForSymbol.length) return;
+
+      const prices = { [symbol]: update.price };
+      const fired = await checkAlerts(prices);
+
+      if (fired.length > 0) {
+        checkCount++;
+        lastCheck = {
+          time: new Date().toISOString(),
+          mode: 'streaming',
+          latency: `<${update.source === 'alpaca-ws' ? '50' : '15000'}ms`,
+          symbol,
+          price: update.price,
+          fired: fired.length,
+          firedAlerts: fired,
+        };
+
+        // Auto-execute stops if enabled
+        await _autoExecuteStops(fired);
+      }
+    } catch (e) {
+      // Don't crash the stream listener on individual check errors
+    }
+  });
+
+  // Periodically refresh subscriptions as alerts are added/removed
+  _watchForNewAlerts();
+
+  console.log(`  Stream Monitor: ✓ Watching ${symbols.length} symbol(s) in real-time`);
+}
+
+// Periodically check for new alert subscriptions and update stream
+function _watchForNewAlerts() {
+  setInterval(() => {
+    const activeAlerts = getActiveAlerts();
+    const symbols = [...new Set(activeAlerts.map(a => a.symbol))];
+    const currentSubs = priceStream.subscribedSymbols;
+
+    // Add new symbols
+    const toAdd = symbols.filter(s => !currentSubs.has(s));
+    if (toAdd.length > 0) {
+      priceStream.subscribe(toAdd);
+      console.log(`  Stream Monitor: Added ${toAdd.length} symbol(s): ${toAdd.join(', ')}`);
+    }
+
+    // Remove symbols with no active alerts
+    const toRemove = [...currentSubs].filter(s => !symbols.includes(s));
+    if (toRemove.length > 0) {
+      priceStream.unsubscribe(toRemove);
+    }
+  }, 30000); // Check every 30 seconds
+}
+
+// ─── Auto-Execute Stops ──────────────────────────────────────────────────────
+
+async function _autoExecuteStops(firedAlerts) {
+  const { configured } = alpaca.getConfig();
+  if (process.env.AUTO_STOP_EXECUTE !== 'true' || !configured) return;
+
+  for (const alert of firedAlerts) {
+    if (alert.type === 'stop_violation') {
+      try {
+        await alpaca.submitOrder({
+          symbol: alert.symbol,
+          qty: 0, // Close entire position
+          side: 'sell',
+          type: 'market',
+          time_in_force: 'day',
+        });
+        console.log(`  Auto-sold ${alert.symbol} on stop violation (price: $${alert.current_price})`);
+      } catch (e) {
+        console.error(`  Auto-stop failed for ${alert.symbol}: ${e.message}`);
+      }
+    }
+  }
+}
+
+// ─── Legacy Cron Fallback (still used as safety net) ───────────────────────
 
 async function checkPositionsAgainstStops() {
   try {
@@ -23,27 +124,37 @@ async function checkPositionsAgainstStops() {
       return;
     }
 
-    // Get unique symbols from active alerts
     const symbols = [...new Set(activeAlerts.map(a => a.symbol))];
-
-    // Fetch current prices — use Alpaca positions if available, otherwise Yahoo
     const currentPrices = {};
-    const { configured } = alpaca.getConfig();
 
-    if (configured) {
+    // Try streaming prices first (already available if stream is active)
+    if (streamingActive) {
+      for (const s of symbols) {
+        const streamPrice = priceStream.getPrice(s);
+        if (streamPrice) currentPrices[s] = streamPrice.price;
+      }
+    }
+
+    // Fill gaps from Alpaca positions API
+    const { configured } = alpaca.getConfig();
+    const missing = symbols.filter(s => !currentPrices[s]);
+
+    if (configured && missing.length) {
       try {
         const positions = await alpaca.getPositions();
         for (const pos of positions) {
-          currentPrices[pos.symbol] = +pos.current_price;
+          if (!currentPrices[pos.symbol]) {
+            currentPrices[pos.symbol] = +pos.current_price;
+          }
         }
-      } catch (_) { /* fall through to Yahoo */ }
+      } catch (_) {}
     }
 
-    // Fill any missing prices from Yahoo (batched)
-    const missing = symbols.filter(s => !currentPrices[s]);
-    if (missing.length) {
+    // Final fallback: Yahoo quotes for anything still missing
+    const stillMissing = symbols.filter(s => !currentPrices[s]);
+    if (stillMissing.length) {
       try {
-        const quotes = await yahooQuote(missing);
+        const quotes = await yahooQuote(stillMissing);
         for (const q of quotes) {
           if (q.regularMarketPrice) currentPrices[q.symbol] = q.regularMarketPrice;
         }
@@ -52,32 +163,13 @@ async function checkPositionsAgainstStops() {
       }
     }
 
-    // Check alerts against current prices
     const fired = await checkAlerts(currentPrices);
-
-    // Auto-execute stops if enabled
-    if (process.env.AUTO_STOP_EXECUTE === 'true' && configured) {
-      for (const alert of fired) {
-        if (alert.type === 'stop_violation') {
-          try {
-            await alpaca.submitOrder({
-              symbol: alert.symbol,
-              qty: 0, // Close entire position
-              side: 'sell',
-              type: 'market',
-              time_in_force: 'day',
-            });
-            console.log(`  Auto-sold ${alert.symbol} on stop violation`);
-          } catch (e) {
-            console.error(`  Auto-stop failed for ${alert.symbol}: ${e.message}`);
-          }
-        }
-      }
-    }
+    await _autoExecuteStops(fired);
 
     checkCount++;
     lastCheck = {
       time: new Date().toISOString(),
+      mode: streamingActive ? 'cron-backup' : 'cron-primary',
       alertsChecked: activeAlerts.length,
       symbolsChecked: symbols.length,
       pricesFetched: Object.keys(currentPrices).length,
@@ -125,32 +217,42 @@ async function reconcilePositions() {
 
 // ─── Scheduler ──────────────────────────────────────────────────────────────
 
-function startStopMonitor() {
-  if (monitorTask) return;
+async function startStopMonitor() {
+  // Start WebSocket streaming (primary real-time monitor)
+  try {
+    await priceStream.start();
+    startStreamMonitor();
+    console.log('   Stream Monitor: ✓ Real-time price streaming active');
+  } catch (e) {
+    console.warn(`   Stream Monitor: Failed to start streaming: ${e.message}`);
+  }
 
-  // Every 5 minutes, weekdays only
-  monitorTask = cron.schedule('*/5 * * * 1-5', async () => {
-    // Check market hours if Alpaca is configured
-    const { configured } = alpaca.getConfig();
-    if (configured) {
-      try {
-        const { open } = await alpaca.isMarketOpen();
-        if (!open) return; // Skip outside market hours
-      } catch (_) { /* If clock check fails, still run — Yahoo doesn't need market hours */ }
-    }
+  // Keep cron as a safety net (catches anything the stream misses)
+  if (!monitorTask) {
+    monitorTask = cron.schedule('*/5 * * * 1-5', async () => {
+      const { configured } = alpaca.getConfig();
+      if (configured) {
+        try {
+          const { open } = await alpaca.isMarketOpen();
+          if (!open) return;
+        } catch (_) {}
+      }
+      await checkPositionsAgainstStops();
+    }, { scheduled: true });
 
-    await checkPositionsAgainstStops();
-  }, { scheduled: true });
+    // Expire stale staged orders every hour
+    cron.schedule('0 * * * *', () => {
+      expireStaleOrders();
+    }, { scheduled: true });
 
-  // Also expire stale staged orders every hour
-  cron.schedule('0 * * * *', () => {
-    expireStaleOrders();
-  }, { scheduled: true });
-
-  console.log('   Stop Monitor: ✓ Running (every 5 min, market hours)');
+    console.log('   Cron Backup: ✓ Running (every 5 min, market hours)');
+  }
 }
 
 function stopMonitor() {
+  priceStream.stop();
+  streamingActive = false;
+
   if (monitorTask) {
     monitorTask.stop();
     monitorTask = null;
@@ -159,7 +261,8 @@ function stopMonitor() {
 
 function getMonitorStatus() {
   return {
-    running: !!monitorTask,
+    running: !!monitorTask || streamingActive,
+    streamStatus: priceStream.getStatus(),
     lastCheck,
     totalChecks: checkCount,
     activeAlerts: getActiveAlerts().length,
@@ -169,4 +272,5 @@ function getMonitorStatus() {
 module.exports = {
   startStopMonitor, stopMonitor, getMonitorStatus,
   checkPositionsAgainstStops, reconcilePositions,
+  priceStream, // Export for routes to expose status
 };

@@ -236,10 +236,10 @@ async function autoDetectCycleState() {
 
     if (vixLevel > 35 || (spyNow < ma200 && (spyNow - ma200) / ma200 < -0.15)) {
       mode = 'BEAR'; confidence = 95; action = 'CASH';
-    } else if (!above50 && distCount >= 3) {
-      mode = 'CORRECTION'; confidence = 85; action = 'CASH';
     } else if (!above50 && distCount >= 4) {
-      mode = 'CORRECTION'; confidence = 90; action = 'CASH';
+      mode = 'CORRECTION'; confidence = 90; action = 'CASH';  // 4+ dist days = high confidence
+    } else if (!above50 && distCount >= 3) {
+      mode = 'CORRECTION'; confidence = 85; action = 'CASH';  // 3 dist days = moderate confidence
     } else if (ftdConfirmed && above50) {
       mode = 'FTD_CONFIRMED'; confidence = 75; action = 'FULL_DEPLOY';
     } else if (ftdFired && !ftdConfirmed) {

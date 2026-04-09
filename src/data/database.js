@@ -260,9 +260,19 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_replay_results_strategy ON replay_results(strategy);
   `);
 
+  // Portfolio state (peak equity, config — survives server restarts)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS portfolio_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+
   // Migrations for existing databases
   safeAddColumn('trades', 'alpaca_order_id', 'TEXT');
   safeAddColumn('trades', 'needs_review', 'INTEGER DEFAULT 0');
+  safeAddColumn('rs_snapshots', 'atr_pct', 'REAL');
 }
 
 // One-time migration from legacy JSON files into SQLite
