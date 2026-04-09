@@ -89,7 +89,7 @@ module.exports = function(db) {
   // ─── Position Sizer ────────────────────────────────────────────────────────
   router.post('/portfolio/size', async (req, res) => {
     try {
-      const { entryPrice, stopPrice } = req.body;
+      const { entryPrice, stopPrice, beta, atrPct } = req.body;
       if (!entryPrice || !stopPrice) return res.status(400).json({ error: 'entryPrice and stopPrice required' });
       const config = getConfig();
       const regime = await getMarketRegime();
@@ -100,8 +100,26 @@ module.exports = function(db) {
         stopPrice,
         regimeMultiplier: regime.sizeMultiplier,
         maxPositionPct: config.maxPositionPct,
+        beta, atrPct,
       });
       res.json({ ...sizing, regime: regime.regime });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Correlation Matrix for open positions ────────────────────────────────
+  router.get('/portfolio/correlations', async (req, res) => {
+    try {
+      const { calcCorrelationMatrix } = require('../risk/position-sizer');
+      const { getHistory } = require('../data/providers/manager');
+      const openPositions = db.prepare('SELECT symbol FROM trades WHERE exit_date IS NULL').all();
+      if (openPositions.length < 2) {
+        return res.json({ matrix: {}, symbols: [], warnings: [], note: 'Need at least 2 open positions' });
+      }
+      const closesMap = {};
+      for (const p of openPositions) {
+        try { closesMap[p.symbol] = await getHistory(p.symbol); } catch(_) {}
+      }
+      res.json(calcCorrelationMatrix(closesMap, 60));
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -132,13 +150,15 @@ module.exports = function(db) {
 
       const stmt = db.prepare(`
         INSERT INTO trades (symbol, side, entry_date, entry_price, stop_price, target1, target2,
-                           shares, entry_rs, entry_sepa, entry_regime, wave, sector, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                           shares, initial_shares, remaining_shares,
+                           entry_rs, entry_sepa, entry_regime, wave, sector, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const result = stmt.run(
         symbol.toUpperCase(), side, entry_date || new Date().toISOString().split('T')[0],
         entry_price, stop_price, target1, target2,
-        shares, entry_rs, entry_sepa, entry_regime, wave, sector, notes,
+        shares, shares, shares,
+        entry_rs, entry_sepa, entry_regime, wave, sector, notes,
       );
       // Auto-create stop alert if stop_price is set
       if (stop_price) {
@@ -280,6 +300,106 @@ module.exports = function(db) {
       }
 
       res.json({ synced, exited, message: `Synced ${synced.length} entries, ${exited.length} exits` });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Tier 3: Scaling actions (preview pending partial-exits) ──────────────
+  router.get('/trades/scaling/pending', async (req, res) => {
+    try {
+      const { scanOpenPositionsForScaling } = require('../risk/scaling');
+      const { yahooQuote } = require('../data/providers/yahoo');
+      const trades = db.prepare('SELECT DISTINCT symbol FROM trades WHERE exit_date IS NULL').all();
+      if (!trades.length) return res.json({ pending: [] });
+      const symbols = trades.map(t => t.symbol);
+      const quotes = await yahooQuote(symbols);
+      const prices = {};
+      for (const q of quotes) if (q.regularMarketPrice) prices[q.symbol] = q.regularMarketPrice;
+      const pending = scanOpenPositionsForScaling(prices);
+      res.json({ pending: pending.map(p => ({
+        tradeId: p.trade.id,
+        symbol: p.trade.symbol,
+        entry: p.trade.entry_price,
+        currentPrice: prices[p.trade.symbol],
+        ...p.action,
+      })) });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.post('/trades/:id/scale', (req, res) => {
+    try {
+      const { applyScalingAction, evaluateScalingAction } = require('../risk/scaling');
+      const trade = db.prepare('SELECT * FROM trades WHERE id = ?').get(+req.params.id);
+      if (!trade) return res.status(404).json({ error: 'Trade not found' });
+      const { currentPrice, action: forcedAction } = req.body;
+      const action = forcedAction || evaluateScalingAction(trade, currentPrice);
+      if (!action) return res.json({ message: 'No action available at this price' });
+      const result = applyScalingAction(+req.params.id, action);
+      res.json({ ok: true, action: result });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Tier 5: Performance Attribution ──────────────────────────────────────
+  router.get('/trades/attribution', (req, res) => {
+    try {
+      const closed = db.prepare(
+        `SELECT * FROM trades WHERE exit_date IS NOT NULL`
+      ).all();
+      if (!closed.length) return res.json({ message: 'No closed trades', buckets: {} });
+
+      const bucket = (trades, keyFn) => {
+        const acc = {};
+        for (const t of trades) {
+          const k = keyFn(t);
+          if (k == null) continue;
+          if (!acc[k]) acc[k] = { trades: 0, wins: 0, pnl: 0, totalR: 0 };
+          acc[k].trades++;
+          if ((t.pnl_percent || 0) > 0) acc[k].wins++;
+          acc[k].pnl += (t.pnl_dollars || 0);
+          acc[k].totalR += (t.r_multiple || 0);
+        }
+        for (const k of Object.keys(acc)) {
+          acc[k].winRate = +((acc[k].wins / acc[k].trades) * 100).toFixed(1);
+          acc[k].avgR    = +(acc[k].totalR / acc[k].trades).toFixed(2);
+          acc[k].pnl     = +acc[k].pnl.toFixed(2);
+          delete acc[k].totalR;
+        }
+        return acc;
+      };
+
+      // Bucket trades several ways for attribution analysis
+      const bySector = bucket(closed, t => t.sector || 'Unknown');
+      const byRegime = bucket(closed, t => t.entry_regime || 'Unknown');
+      const bySide   = bucket(closed, t => t.side || 'long');
+      const byRsBand = bucket(closed, t => {
+        const rs = t.entry_rs || 0;
+        if (rs >= 90) return 'RS 90-99';
+        if (rs >= 80) return 'RS 80-89';
+        if (rs >= 70) return 'RS 70-79';
+        if (rs >= 50) return 'RS 50-69';
+        return 'RS <50';
+      });
+      const byHoldDays = bucket(closed, t => {
+        if (!t.entry_date || !t.exit_date) return null;
+        const days = Math.round((new Date(t.exit_date) - new Date(t.entry_date)) / 86400000);
+        if (days <= 5)  return '0-5 days';
+        if (days <= 15) return '6-15 days';
+        if (days <= 30) return '16-30 days';
+        if (days <= 60) return '31-60 days';
+        return '60+ days';
+      });
+
+      // Best/worst attribution
+      const bestSector = Object.entries(bySector).sort((a,b) => b[1].pnl - a[1].pnl)[0];
+      const worstSector = Object.entries(bySector).sort((a,b) => a[1].pnl - b[1].pnl)[0];
+
+      res.json({
+        totalClosed: closed.length,
+        bySector, byRegime, bySide, byRsBand, byHoldDays,
+        insights: {
+          bestSector: bestSector ? { name: bestSector[0], ...bestSector[1] } : null,
+          worstSector: worstSector ? { name: worstSector[0], ...worstSector[1] } : null,
+        },
+      });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 

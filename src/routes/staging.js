@@ -72,6 +72,8 @@ module.exports = function(db, runScan) {
         stopPrice,
         regimeMultiplier: regime.sizeMultiplier,
         maxPositionPct: config.maxPositionPct,
+        beta: stock.beta,
+        atrPct: stock.atrPct,
       });
 
       // Stage the bracket order
@@ -86,6 +88,11 @@ module.exports = function(db, runScan) {
           positionValue: sizing.positionValue,
           portfolioPct: sizing.portfolioPct,
           regimeMultiplier: regime.sizeMultiplier,
+          betaMultiplier: sizing.betaMultiplier,
+          volMultiplier: sizing.volMultiplier,
+          totalMultiplier: sizing.totalMultiplier,
+          beta: sizing.beta,
+          atrPct: sizing.atrPct,
         },
         stock: {
           ticker: stock.ticker,

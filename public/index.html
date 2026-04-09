@@ -377,6 +377,7 @@ function App() {
     { id:'rs',        label:'📊 Scanner' },
     { id:'setups',    label:'🎯 Trade Setups' },
     { id:'watchlist', label:'📋 Pipeline', badge: badgeCounts.staged || null },
+    { id:'hedge',     label:'🛡 Hedge' },
     { id:'trading',   label:'💼 Trading', badge: badgeCounts.positions || null },
     { id:'journal',   label:'📒 Journal', badge: badgeCounts.review || null, badgeWarn: !!badgeCounts.review },
     { id:'replay',    label:'🔁 Replay' },
@@ -454,6 +455,7 @@ function App() {
         {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} sigFilters={rsSigFilters} setSigFilters={setRsSigFilters} quickFilter={rsQuickFilter} setQuickFilter={setRsQuickFilter}/>}
         {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary} setupSigFilters={setupSigFilters} setSetupSigFilters={setSetupSigFilters} mode={setupMode} setMode={setSetupMode}/>}
         {tab==='watchlist'  && <WatchlistTab rsData={rsData} />}
+        {tab==='hedge'      && <HedgeTab />}
         {tab==='trading'    && <><PortfolioTab /><ExecutionTab /></>}
         {tab==='journal'    && <><PerformanceTab /><TradeJournalTab /></>}
         {tab==='replay'     && <ReplayTab />}
@@ -4355,14 +4357,22 @@ function SchedulerTab() {
 // ─── PERFORMANCE TAB ───────────────────────────────────────────────────────
 function PerformanceTab() {
   const [perf, setPerf]       = useState(null);
+  const [attribution, setAttribution] = useState(null);
+  const [pendingScales, setPendingScales] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState('');
 
   async function loadPerf() {
     setLoading(true); setError('');
     try {
-      const d = await api('/api/trades/performance');
-      setPerf(d);
+      const [p, a, s] = await Promise.all([
+        api('/api/trades/performance').catch(()=>null),
+        api('/api/trades/attribution').catch(()=>null),
+        api('/api/trades/scaling/pending').catch(()=>({pending:[]})),
+      ]);
+      setPerf(p);
+      setAttribution(a);
+      setPendingScales(s?.pending || []);
     } catch(e) { setError(e.message); }
     setLoading(false);
   }
@@ -4412,6 +4422,83 @@ function PerformanceTab() {
               </div>
             ))}
           </div>
+
+          {/* Pending Scaling Actions (Tier 3) */}
+          {pendingScales?.length > 0 && (
+            <div className="panel" style={{marginBottom:14,borderColor:'var(--amber)'}}>
+              <div style={{fontSize:10,color:'var(--amber)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>
+                ⚡ PENDING SCALING ACTIONS ({pendingScales.length})
+              </div>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                <thead><tr style={{borderBottom:'1px solid var(--border)'}}>
+                  {['Symbol','Action','Level','Current','Shares','Reason'].map(h =>
+                    <th key={h} style={{padding:'6px',textAlign:'left',fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
+                  )}
+                </tr></thead>
+                <tbody>
+                  {pendingScales.map((p,i)=>(
+                    <tr key={i} style={{borderBottom:'1px solid var(--border)'}}>
+                      <td style={{padding:'6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{p.symbol}</td>
+                      <td style={{padding:'6px',color:'var(--amber)',fontFamily:'var(--font-mono)'}}>{p.action}</td>
+                      <td style={{padding:'6px',color:'var(--text2)',fontFamily:'var(--font-mono)'}}>{p.level||'—'}</td>
+                      <td style={{padding:'6px',fontFamily:'var(--font-mono)'}}>${fmt(p.currentPrice,2)}</td>
+                      <td style={{padding:'6px',fontFamily:'var(--font-mono)'}}>{p.shares||'—'}</td>
+                      <td style={{padding:'6px',color:'var(--text3)',fontSize:10}}>{p.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Performance Attribution (Tier 5) */}
+          {attribution && attribution.totalClosed > 0 && (
+            <div className="panel" style={{marginBottom:14}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>
+                PERFORMANCE ATTRIBUTION ({attribution.totalClosed} closed trades)
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:14}}>
+                {[
+                  ['By Sector', attribution.bySector],
+                  ['By Regime', attribution.byRegime],
+                  ['By Side',   attribution.bySide],
+                  ['By RS Band', attribution.byRsBand],
+                  ['By Hold Period', attribution.byHoldDays],
+                ].map(([title, data]) => (
+                  <div key={title} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:10}}>
+                    <div style={{fontSize:10,color:'var(--amber)',letterSpacing:1,fontFamily:'var(--font-mono)',marginBottom:6}}>{title.toUpperCase()}</div>
+                    <table style={{width:'100%',fontSize:11,borderCollapse:'collapse'}}>
+                      <thead><tr style={{color:'var(--text3)',fontSize:9}}>
+                        <th style={{textAlign:'left',padding:'2px 4px'}}>Bucket</th>
+                        <th style={{textAlign:'right',padding:'2px 4px'}}>Trades</th>
+                        <th style={{textAlign:'right',padding:'2px 4px'}}>Win%</th>
+                        <th style={{textAlign:'right',padding:'2px 4px'}}>AvgR</th>
+                        <th style={{textAlign:'right',padding:'2px 4px'}}>P&L</th>
+                      </tr></thead>
+                      <tbody>
+                        {data && Object.entries(data).sort((a,b)=>b[1].pnl-a[1].pnl).map(([k,v])=>(
+                          <tr key={k}>
+                            <td style={{padding:'2px 4px',color:'var(--text2)'}}>{k}</td>
+                            <td style={{padding:'2px 4px',textAlign:'right',fontFamily:'var(--font-mono)'}}>{v.trades}</td>
+                            <td style={{padding:'2px 4px',textAlign:'right',fontFamily:'var(--font-mono)',color:v.winRate>=50?'var(--green)':'var(--red)'}}>{v.winRate}%</td>
+                            <td style={{padding:'2px 4px',textAlign:'right',fontFamily:'var(--font-mono)',color:v.avgR>0?'var(--green)':'var(--red)'}}>{v.avgR>0?'+':''}{v.avgR}R</td>
+                            <td style={{padding:'2px 4px',textAlign:'right',fontFamily:'var(--font-mono)',color:v.pnl>=0?'var(--green)':'var(--red)'}}>${v.pnl.toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ))}
+              </div>
+              {attribution.insights?.bestSector && (
+                <div style={{marginTop:10,fontSize:11,color:'var(--text2)'}}>
+                  Best sector: <strong style={{color:'var(--green)'}}>{attribution.insights.bestSector.name}</strong> (${attribution.insights.bestSector.pnl.toLocaleString()}, {attribution.insights.bestSector.winRate}% win)
+                  &nbsp;·&nbsp;
+                  Worst: <strong style={{color:'var(--red)'}}>{attribution.insights.worstSector.name}</strong> (${attribution.insights.worstSector.pnl.toLocaleString()})
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Recent Trades */}
           {perf.recentTrades?.length > 0 && (
@@ -4789,6 +4876,232 @@ function SettingsTab() {
 }
 
 // ─── REPLAY TAB (Tier 4 — Signal Backtest) ──────────────────────────────────
+// ─── HEDGE TAB — Short candidates, hedge recommendations, instruments, stream ──
+function HedgeTab() {
+  const [shorts, setShorts] = useState(null);
+  const [watch, setWatch] = useState(null);
+  const [rec, setRec] = useState(null);
+  const [instruments, setInstruments] = useState(null);
+  const [streamStatus, setStreamStatus] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [subTab, setSubTab] = useState('recommendation');
+
+  async function loadAll() {
+    setLoading(true);
+    try {
+      const [r, s, w, inst, ss] = await Promise.all([
+        api('/api/hedge/recommendation').catch(()=>null),
+        api('/api/hedge/shorts').catch(()=>null),
+        api('/api/hedge/watch').catch(()=>null),
+        api('/api/hedge/instruments').catch(()=>null),
+        api('/api/broker/stream/status').catch(()=>null),
+      ]);
+      setRec(r); setShorts(s); setWatch(w); setInstruments(inst); setStreamStatus(ss);
+    } catch(_) {}
+    setLoading(false);
+  }
+
+  useEffect(() => { loadAll(); }, []);
+
+  const pctColor = v => v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text3)';
+  const urgencyColor = u => u === 'high' ? 'var(--red)' : u === 'medium' ? 'var(--amber)' : 'var(--text3)';
+
+  const SUB_TABS = [
+    { id:'recommendation', label:'Hedge Recs' },
+    { id:'shorts', label:`Short Candidates (${shorts?.count||0})` },
+    { id:'watch', label:`Short Watch (${watch?.count||0})` },
+    { id:'instruments', label:'Inverse ETFs' },
+    { id:'stream', label:'Stream Status' },
+  ];
+
+  return (
+    <div>
+      <div className="panel">
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
+          <div>
+            <div className="panel-title">🛡 <span>HEDGE &</span> SHORT BOOK</div>
+            <div className="panel-sub">Short candidates, hedge recommendations, inverse ETFs, real-time stream status</div>
+          </div>
+          <button className="load-btn" onClick={loadAll} disabled={loading} style={{fontSize:10,padding:'6px 18px'}}>{loading?'LOADING...':'↻ REFRESH'}</button>
+        </div>
+
+        {/* Sub-tabs */}
+        <div style={{display:'flex',gap:6,marginBottom:16,flexWrap:'wrap'}}>
+          {SUB_TABS.map(t=>(
+            <button key={t.id} onClick={()=>setSubTab(t.id)}
+              style={{padding:'6px 14px',fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1,border:`1px solid ${subTab===t.id?'var(--amber)':'var(--border)'}`,background:subTab===t.id?'rgba(240,165,0,0.1)':'transparent',color:subTab===t.id?'var(--amber)':'var(--text3)',borderRadius:4,cursor:'pointer',fontWeight:subTab===t.id?700:400}}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Hedge Recommendations ── */}
+      {subTab==='recommendation' && rec && (
+        <div className="panel">
+          <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16}}>
+            <div style={{fontSize:10,fontFamily:'var(--font-mono)',color:'var(--text3)',letterSpacing:1}}>REGIME</div>
+            <div style={{fontSize:14,fontWeight:700,color:'var(--amber)'}}>{rec.regime}</div>
+            <div style={{fontSize:10,fontFamily:'var(--font-mono)',color:'var(--text3)',letterSpacing:1,marginLeft:16}}>VIX</div>
+            <div style={{fontSize:14,fontWeight:700,color:rec.vixLevel>25?'var(--red)':rec.vixLevel<18?'var(--green)':'var(--amber)'}}>{rec.vixLevel?.toFixed(1)}</div>
+            <div style={{fontSize:10,fontFamily:'var(--font-mono)',color:'var(--text3)',letterSpacing:1,marginLeft:16}}>TOTAL HEDGE</div>
+            <div style={{fontSize:14,fontWeight:700,color:'var(--cyan)'}}>{rec.totalHedgeAllocation}%</div>
+            <div style={{fontSize:10,fontFamily:'var(--font-mono)',color:'var(--text3)',letterSpacing:1,marginLeft:16}}>PORTFOLIO HEAT</div>
+            <div style={{fontSize:14,fontWeight:700,color:rec.portfolioHeat?.heatPct>5?'var(--red)':'var(--green)'}}>{rec.portfolioHeat?.heatPct||0}%</div>
+          </div>
+
+          {rec.recommendations?.length===0 && (
+            <div style={{textAlign:'center',padding:20,color:'var(--text3)',fontSize:13}}>No hedge recommendations in current regime. Market conditions favor full long exposure.</div>
+          )}
+
+          {rec.recommendations?.map((r,i)=>(
+            <div key={i} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:14,marginBottom:10}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+                <div style={{display:'flex',alignItems:'center',gap:10}}>
+                  <span style={{fontFamily:'var(--font-mono)',fontWeight:700,fontSize:16,color:'var(--cyan)'}}>{r.instrument}</span>
+                  <span style={{fontSize:10,padding:'2px 8px',background:'rgba(240,165,0,0.1)',border:'1px solid var(--border)',borderRadius:3,color:'var(--amber)',fontFamily:'var(--font-mono)',letterSpacing:1}}>{r.type.replace(/_/g,' ').toUpperCase()}</span>
+                </div>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <span style={{fontSize:10,color:urgencyColor(r.urgency),fontFamily:'var(--font-mono)',letterSpacing:1}}>{r.urgency?.toUpperCase()}</span>
+                  <span style={{fontFamily:'var(--font-mono)',fontWeight:700,fontSize:16,color:'var(--text)'}}>{r.allocation}%</span>
+                </div>
+              </div>
+              <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.5}}>{r.rationale}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Short Candidates ── */}
+      {subTab==='shorts' && (
+        <div className="panel">
+          <div className="panel-title" style={{marginBottom:12}}>📉 <span>SHORT</span> CANDIDATES — Stage 4 Breakdowns</div>
+          {(!shorts || shorts.count===0) ? (
+            <div style={{textAlign:'center',padding:20,color:'var(--text3)',fontSize:13}}>No short candidates found. All stocks too strong to short (RS too high, no Stage 4 breakdowns).</div>
+          ) : (
+            <div style={{maxHeight:500,overflowY:'auto'}}>
+              <table className="data-table">
+                <thead><tr>
+                  <th>SCORE</th><th>TICKER</th><th>PRICE</th><th>RS</th><th>MOM</th><th>SEPA</th><th>STAGE</th><th>vs 50MA</th><th>vs 200MA</th><th>REASONS</th>
+                </tr></thead>
+                <tbody>
+                  {shorts.shorts?.map((s,i)=>(
+                    <tr key={i}>
+                      <td style={{fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--red)'}}>{s.shortConviction}</td>
+                      <td className="td-ticker">{s.ticker}</td>
+                      <td style={{fontFamily:'var(--font-mono)'}}>${s.price?.toFixed(2)}</td>
+                      <td style={{fontFamily:'var(--font-mono)',color:s.rsRank<=15?'var(--red)':'var(--amber)'}}>{s.rsRank}</td>
+                      <td style={{fontFamily:'var(--font-mono)',color:'var(--red)'}}>{s.swingMomentum}</td>
+                      <td style={{fontFamily:'var(--font-mono)'}}>{s.sepaScore}/8</td>
+                      <td style={{fontSize:10,color:'var(--red)'}}>STG {s.stage}</td>
+                      <td style={{fontFamily:'var(--font-mono)',color:'var(--red)'}}>{s.vsMA50?.toFixed(1)}%</td>
+                      <td style={{fontFamily:'var(--font-mono)',color:'var(--red)'}}>{s.vsMA200?.toFixed(1)}%</td>
+                      <td style={{fontSize:10,color:'var(--text3)',maxWidth:200}}>{s.shortReasons?.join(', ')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Short Watch ── */}
+      {subTab==='watch' && (
+        <div className="panel">
+          <div className="panel-title" style={{marginBottom:12}}>👁 <span>SHORT</span> WATCH — Topping / Weakening Stocks</div>
+          <div className="panel-sub" style={{marginBottom:12}}>Stage 3/4 stocks with weak RS that may become short candidates. Not ready to short yet.</div>
+          {(!watch || watch.count===0) ? (
+            <div style={{textAlign:'center',padding:20,color:'var(--text3)',fontSize:13}}>No stocks on short watch list.</div>
+          ) : (
+            <div style={{maxHeight:400,overflowY:'auto'}}>
+              <table className="data-table">
+                <thead><tr>
+                  <th>RS</th><th>TICKER</th><th>PRICE</th><th>SEPA</th><th>STAGE</th><th>vs 50MA</th><th>1W</th><th>1M</th>
+                </tr></thead>
+                <tbody>
+                  {watch.watch?.map((s,i)=>(
+                    <tr key={i}>
+                      <td style={{fontFamily:'var(--font-mono)',color:s.rsRank<=20?'var(--red)':'var(--amber)'}}>{s.rsRank}</td>
+                      <td className="td-ticker">{s.ticker}</td>
+                      <td style={{fontFamily:'var(--font-mono)'}}>${s.price?.toFixed(2)}</td>
+                      <td style={{fontFamily:'var(--font-mono)'}}>{s.sepaScore}/8</td>
+                      <td style={{fontSize:10,color:s.stage>=4?'var(--red)':'var(--amber)'}}>STG {s.stage}</td>
+                      <td style={{fontFamily:'var(--font-mono)',color:pctColor(s.vsMA50)}}>{s.vsMA50?.toFixed(1)}%</td>
+                      <td style={{fontFamily:'var(--font-mono)',color:pctColor(s.chg1w)}}>{s.chg1w?.toFixed(1)}%</td>
+                      <td style={{fontFamily:'var(--font-mono)',color:pctColor(s.chg1m)}}>{s.chg1m?.toFixed(1)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Inverse ETF Instruments ── */}
+      {subTab==='instruments' && (
+        <div className="panel">
+          <div className="panel-title" style={{marginBottom:12}}>📊 <span>INVERSE</span> ETF INSTRUMENTS</div>
+          <div className="panel-sub" style={{marginBottom:12}}>Hedge instruments for short exposure without borrowing shares.</div>
+          {(!instruments || instruments.count===0) ? (
+            <div style={{textAlign:'center',padding:20,color:'var(--text3)',fontSize:13}}>Loading inverse ETF data...</div>
+          ) : (
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill, minmax(280px, 1fr))',gap:10}}>
+              {instruments.instruments?.map((inst,i)=>(
+                <div key={i} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:14}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                    <span style={{fontFamily:'var(--font-mono)',fontWeight:700,fontSize:16,color:'var(--cyan)'}}>{inst.ticker}</span>
+                    <span style={{fontSize:10,padding:'2px 8px',background:'rgba(255,61,87,0.1)',borderRadius:3,color:'var(--red)',fontFamily:'var(--font-mono)'}}>
+                      {inst.meta?.leverage}x
+                    </span>
+                  </div>
+                  <div style={{fontSize:11,color:'var(--text3)',marginBottom:6}}>{inst.meta?.name}</div>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,fontSize:12}}>
+                    <span style={{color:'var(--text3)'}}>Price:</span><span style={{fontFamily:'var(--font-mono)',fontWeight:600}}>${inst.price?.toFixed(2)}</span>
+                    <span style={{color:'var(--text3)'}}>1D:</span><span style={{fontFamily:'var(--font-mono)',color:pctColor(inst.chg1d)}}>{inst.chg1d?.toFixed(2)}%</span>
+                    <span style={{color:'var(--text3)'}}>1W:</span><span style={{fontFamily:'var(--font-mono)',color:pctColor(inst.chg1w)}}>{inst.chg1w?.toFixed(1)}%</span>
+                    <span style={{color:'var(--text3)'}}>1M:</span><span style={{fontFamily:'var(--font-mono)',color:pctColor(inst.chg1m)}}>{inst.chg1m?.toFixed(1)}%</span>
+                    <span style={{color:'var(--text3)'}}>Tracks:</span><span style={{fontFamily:'var(--font-mono)',color:'var(--amber)'}}>{inst.meta?.tracks}</span>
+                    <span style={{color:'var(--text3)'}}>Type:</span><span style={{fontFamily:'var(--font-mono)'}}>{inst.meta?.type}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Stream Status ── */}
+      {subTab==='stream' && (
+        <div className="panel">
+          <div className="panel-title" style={{marginBottom:12}}>📡 <span>REAL-TIME</span> STREAM STATUS</div>
+          {!streamStatus ? (
+            <div style={{textAlign:'center',padding:20,color:'var(--text3)',fontSize:13}}>Unable to fetch stream status.</div>
+          ) : (
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
+              {[
+                ['Mode', streamStatus.mode, streamStatus.mode==='alpaca-ws'?'var(--green)':'var(--amber)'],
+                ['Connected', streamStatus.connected?'YES':'NO', streamStatus.connected?'var(--green)':'var(--red)'],
+                ['Authenticated', streamStatus.authenticated?'YES':'NO', streamStatus.authenticated?'var(--green)':'var(--text3)'],
+                ['Subscribed Symbols', streamStatus.subscribedSymbols||0, 'var(--cyan)'],
+                ['Latest Prices', streamStatus.latestPriceCount||0, 'var(--text)'],
+                ['Reconnect Attempts', streamStatus.reconnectAttempts||0, streamStatus.reconnectAttempts>0?'var(--amber)':'var(--green)'],
+              ].map(([label,val,color])=>(
+                <div key={label} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:'12px 14px'}}>
+                  <div style={{fontSize:8,color:'var(--text3)',textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>{label}</div>
+                  <div style={{fontSize:16,fontWeight:700,color,fontFamily:'var(--font-mono)'}}>{String(val)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── REPLAY TAB ─────────────────────────────────────────────────────────────
 function ReplayTab() {
   const [strategies, setStrategies] = useState([]);
   const [dateRange, setDateRange]   = useState(null);
@@ -4916,7 +5229,7 @@ function ReplayTab() {
           </div>
 
           {/* KPI cards */}
-          <div style={{display:'grid',gridTemplateColumns:'repeat(6,1fr)',gap:10,marginBottom:16}}>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:10}}>
             {[
               ['Total Return', (result.performance.totalReturn>0?'+':'')+result.performance.totalReturn+'%', pctColor(result.performance.totalReturn)],
               ['Final Equity', '$'+result.performance.finalEquity.toLocaleString(), 'var(--text)'],
@@ -4924,6 +5237,8 @@ function ReplayTab() {
               ['Profit Factor', result.performance.profitFactor, result.performance.profitFactor>=1.5?'var(--green)':'var(--text)'],
               ['Max Drawdown', result.performance.maxDrawdown+'%', 'var(--red)'],
               ['Sharpe Ratio', result.performance.sharpeRatio, result.performance.sharpeRatio>=1?'var(--green)':'var(--text3)'],
+              ['Alpha vs SPY', result.performance.alpha!=null?(result.performance.alpha>0?'+':'')+result.performance.alpha+'%':'N/A', result.performance.alpha>0?'var(--green)':result.performance.alpha<0?'var(--red)':'var(--text3)'],
+              ['Side', result.side||'long', result.side==='short'?'var(--red)':'var(--cyan)'],
             ].map(([label,val,color])=>(
               <div key={label} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:'10px 12px',textAlign:'center'}}>
                 <div style={{fontSize:8,color:'var(--text3)',textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>{label}</div>
@@ -4931,6 +5246,37 @@ function ReplayTab() {
               </div>
             ))}
           </div>
+
+          {/* SPY Benchmark Comparison */}
+          {result.benchmark && (
+            <div style={{background:result.benchmark.outperformed?'rgba(0,230,118,0.05)':'rgba(255,61,87,0.05)',border:`1px solid ${result.benchmark.outperformed?'rgba(0,230,118,0.2)':'rgba(255,61,87,0.2)'}`,borderRadius:6,padding:12,marginBottom:10}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                <div style={{display:'flex',alignItems:'center',gap:16}}>
+                  <span style={{fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1,color:'var(--text3)'}}>SPY BENCHMARK</span>
+                  <span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:pctColor(result.benchmark.spyReturn)}}>{result.benchmark.spyReturn>0?'+':''}{result.benchmark.spyReturn}%</span>
+                  <span style={{fontSize:10,color:'var(--text3)'}}>DD: {result.benchmark.spyMaxDrawdown}%</span>
+                  <span style={{fontSize:10,color:'var(--text3)'}}>Sharpe: {result.benchmark.spySharpe}</span>
+                </div>
+                <div style={{fontFamily:'var(--font-mono)',fontWeight:700,fontSize:14,color:result.benchmark.outperformed?'var(--green)':'var(--red)'}}>
+                  {result.benchmark.outperformed?'BEAT SPY':'LAGGED SPY'} by {Math.abs(result.performance.alpha||0)}%
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Execution Costs */}
+          {result.executionCosts && (
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:16}}>
+              <div style={{display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
+                <span style={{fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1,color:'var(--amber)'}}>EXECUTION COSTS</span>
+                <span style={{fontSize:11,color:'var(--text2)'}}>Slippage: <strong style={{color:'var(--red)'}}>${result.executionCosts.totalSlippage?.toLocaleString()}</strong> ({result.executionCosts.slippageAsReturnDrag}% drag)</span>
+                <span style={{fontSize:11,color:'var(--text2)'}}>Entry: {result.executionCosts.entrySlippageBps}bps</span>
+                <span style={{fontSize:11,color:'var(--text2)'}}>Exit: {result.executionCosts.exitSlippageBps}bps</span>
+                {result.executionCosts.skippedGaps > 0 && <span style={{fontSize:11,color:'var(--amber)'}}>Skipped gaps: {result.executionCosts.skippedGaps}</span>}
+                <span style={{fontSize:11,color:'var(--text3)'}}>Max gap filter: {result.executionCosts.maxGapPct}%</span>
+              </div>
+            </div>
+          )}
 
           {/* Trade summary */}
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
@@ -4995,7 +5341,7 @@ function ReplayTab() {
           </div>
           <table className="data-table">
             <thead><tr>
-              <th>#</th><th>Strategy</th><th>Return</th><th>Win Rate</th><th>PF</th><th>Max DD</th><th>Sharpe</th><th>Trades</th>
+              <th>#</th><th>Strategy</th><th>Return</th><th>Alpha</th><th>Win Rate</th><th>PF</th><th>Max DD</th><th>Sharpe</th><th>Trades</th><th>Slippage</th>
             </tr></thead>
             <tbody>
               {result.comparisons.map((c,i)=>(
@@ -5003,11 +5349,13 @@ function ReplayTab() {
                   <td style={{color:'var(--amber)',fontWeight:700}}>{i+1}</td>
                   <td style={{fontWeight:600,color:'var(--cyan)'}}>{c.strategy||c.strategyKey||'—'}</td>
                   <td style={{color:pctColor(c.performance?.totalReturn),fontWeight:700}}>{c.performance?(c.performance.totalReturn>0?'+':'')+c.performance.totalReturn+'%':'—'}</td>
+                  <td style={{color:pctColor(c.performance?.alpha),fontWeight:700}}>{c.performance?.alpha!=null?(c.performance.alpha>0?'+':'')+c.performance.alpha+'%':'—'}</td>
                   <td>{c.trades?.winRate!=null?c.trades.winRate+'%':'—'}</td>
                   <td>{c.performance?.profitFactor||'—'}</td>
                   <td style={{color:'var(--red)'}}>{c.performance?.maxDrawdown!=null?c.performance.maxDrawdown+'%':'—'}</td>
                   <td>{c.performance?.sharpeRatio||'—'}</td>
                   <td>{c.trades?.total||0}</td>
+                  <td style={{fontSize:10,color:'var(--text3)'}}>{c.executionCosts?.slippageAsReturnDrag!=null?c.executionCosts.slippageAsReturnDrag+'%':'—'}</td>
                 </tr>
               ))}
             </tbody>
