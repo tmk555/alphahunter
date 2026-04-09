@@ -467,12 +467,13 @@ function App() {
 
 // ─── GLOBAL TRADING GUIDE (header panel — visible on every tab) ────────────────
 function GlobalTradingGuide({ onClose }) {
-  const [section, setSection] = useState('setup');
+  const [section, setSection] = useState('workflow');
   const sections = [
+    {id:'workflow', label:'🗓 Workflow'},
     {id:'setup',    label:'⚡ Checklists'},
     {id:'signals',  label:'📊 Signals'},
-    {id:'workflow', label:'🗓 Workflow'},
-    {id:'risk',     label:'⚠ Risk Rules'},
+    {id:'risk',     label:'⚠ Risk & Sizing'},
+    {id:'tools',    label:'🛠 Tool Map'},
   ];
   return (
     <div style={{background:'var(--bg2)',borderBottom:'2px solid var(--amber)',flexShrink:0,maxHeight:420,overflowY:'auto'}}>
@@ -515,7 +516,7 @@ function GlobalTradingGuide({ onClose }) {
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
             <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
               <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:8}}>SCANNER SIGNALS</div>
-              {[['IBD RS (1-99)','Percentile rank vs universe. RS 85 = beats 85% of stocks.'],['RS Accel','Rank change over 28 days. Sort descending to find fastest movers.'],['RS Line ⭐','Price÷SPY at 52wk high. Outperforming the market — earliest signal.'],['SwingMom','5/10-day rate of change, 0-99. ≥60=fast, ≥45=ok, <40=stalling.'],['★ Triple','RS≥70 + Accel>0 + Mom≥60. All aligned = daily candidate list.'],['↗ EMRG','RS 55-70 + Accel>+5. Emerging strength — watchlist add.'],['VCP','2+ shrinking contractions. Breakout on volume = entry.'],['⚡ Vol Surge','Volume >2× avg near 52wk high. Institutional confirmation.']].map(([k,v])=>(
+              {[['IBD RS (1-99)','Percentile rank vs universe. RS 85 = beats 85% of stocks.'],['Sector RS','Percentile within sector peer group. ≥90 = sector leader (+4 conviction bonus).'],['RS Accel','Rank change over 28 days. Sort descending to find fastest movers.'],['RS Line ⭐','Price÷SPY at 52wk high. Outperforming the market — earliest signal.'],['SwingMom','5/10-day rate of change, 0-99. ≥60=fast, ≥45=ok, <40=stalling.'],['PEAD','Post-earnings drift: gap ≥3% holding gains = institutional accumulation.'],['★ Triple','RS≥70 + Accel>0 + Mom≥60. All aligned = daily candidate list.'],['↗ EMRG','RS 55-70 + Accel>+5. Emerging strength — watchlist add.'],['VCP','2+ shrinking contractions. Breakout on volume = entry.'],['⚡ Vol Surge','Volume >2× avg near 52wk high. Institutional confirmation.']].map(([k,v])=>(
                 <div key={k} style={{display:'flex',gap:8,marginBottom:6,fontSize:12,borderBottom:'1px solid var(--border)',paddingBottom:4}}>
                   <span style={{color:'var(--amber)',fontWeight:700,minWidth:100,flexShrink:0,fontFamily:'var(--font-mono)',fontSize:11}}>{k}</span>
                   <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
@@ -542,54 +543,28 @@ function GlobalTradingGuide({ onClose }) {
           </div>
         )}
         {section==='workflow' && (
-          <div style={{display:'grid',gap:8}}>
+          <div style={{display:'grid',gap:10}}>
+            <div style={{background:'var(--bg3)',border:'1px solid rgba(240,165,0,0.3)',borderRadius:4,padding:'8px 12px',fontSize:11,color:'var(--text2)'}}>
+              <strong style={{color:'var(--amber)'}}>Daily flow:</strong> Pulse → Sectors → Hedge check → Scanner → Setups → Stage → Trading → Journal. ~10 minutes pre-open, ~5 minutes mid-day, 5 minutes EOD.
+            </div>
             <div style={{display:'grid',gap:6,gridTemplateColumns:'1fr 1fr'}}>
               {[
-                ['1. Market Pulse','Check regime. BEAR = cash. CAUTION = half size. BULL = full size.'],
-                ['2. Sectors → 🎯','Sort by RS Accel. Focus top 2-3 accelerating sectors.'],
-                ['3. Scanner','Filtered by 🎯 focus. Sort by RS Accel. Find ★Triple + VCP combos.'],
-                ['4. Expand row','Check ATR levels, SEPA ≥4/8, Stage 2, earnings clear.'],
-                ['5. Trade Setups','AI brief confirms entry/stop/target. BUY + no earnings = go.'],
-                ['6. STAGE','Click STAGE on setup or scanner row. System sizes position and runs risk checks.'],
-                ['7. Submit','Review staged order in Trading tab → SUBMIT to broker.'],
-                ['8. Manage','Stop monitor runs automatically. Sell 50% at T1, trail the rest.'],
+                ['1. ⚡ Market Pulse','Read regime + cycle (BEAR/CAUTION/NEUTRAL/BULL) and exposure ramp (PILOT→FULL). BEAR = no longs, hedges only.'],
+                ['2. 🔄 Sectors / Industries','Sort by RS Accel. Focus top 2-3 accelerating sectors. Skip declining ones entirely.'],
+                ['3. 🛡 Hedge','Always check before adding longs. In BEAR/CAUTION the recommended hedge tells you sizing; short candidates surface stage-4 breakdowns.'],
+                ['4. 📊 Scanner','Filter by focused sectors. Sort by Conviction or RS Accel. Look for ★Triple + sector-leader badge + VCP.'],
+                ['5. 🎯 Trade Setups','Auto-generated entries with ATR stops/targets. Verify SEPA ≥5/8, Stage 2, earnings clear.'],
+                ['6. 📋 Pipeline → STAGE','Click STAGE — system sizes position (regime × beta × ATR%), runs all 6 pre-trade gates, builds bracket order.'],
+                ['7. 💼 Trading → SUBMIT','Review risk_check JSON. One-click sends limit + stop + target as bracket to Alpaca.'],
+                ['8. Auto-manage','WebSocket monitor watches every tick. Sells 1/3 at T1 (stop→breakeven), 1/3 at T2 (stop→halfway), trails final 1/3 with 8%.'],
+                ['9. 📒 Journal','Log thesis. Mid-day check Pending Scaling. EOD review Performance Attribution to learn what is paying.'],
+                ['10. 🔁 Replay (weekly)','Backtest any strategy vs SPY. Read alpha + slippage drag. Tune params, then deploy.'],
               ].map(([step,desc])=>(
-                <div key={step} style={{padding:'6px 10px',background:'var(--bg3)',borderRadius:4,borderLeft:'2px solid var(--border)'}}>
+                <div key={step} style={{padding:'6px 10px',background:'var(--bg3)',borderRadius:4,borderLeft:'2px solid var(--amber)'}}>
                   <div style={{fontSize:12,color:'var(--text)',fontWeight:700,marginBottom:2}}>{step}</div>
                   <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.4}}>{desc}</div>
                 </div>
               ))}
-            </div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-              <div style={{background:'var(--bg3)',border:'1px solid rgba(240,165,0,0.25)',borderRadius:4,padding:12}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:8}}>ORDER STAGING</div>
-                {[
-                  ['From Scanner/Setup','Click STAGE → auto-sizes position, runs pre-trade checks.'],
-                  ['Manual','Trading tab → STAGE ORDER. Enter symbol, entry, stop, target.'],
-                  ['Submit','One-click sends bracket order: limit entry + stop + target.'],
-                  ['Monitor','Stop monitor watches every 5 min. Auto-alerts on violations.'],
-                ].map(([k,v])=>(
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
-                    <span style={{color:'var(--amber)',fontWeight:700,minWidth:110,flexShrink:0}}>{k}:</span>
-                    <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
-                  </div>
-                ))}
-              </div>
-              <div style={{background:'var(--bg3)',border:'1px solid rgba(255,61,87,0.25)',borderRadius:4,padding:12}}>
-                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--red)',letterSpacing:2,fontWeight:700,marginBottom:8}}>JOURNAL DISCIPLINE</div>
-                {[
-                  ['Log every trade','Winners AND losers. Your edge is in the data.'],
-                  ['Note the "why"','"VCP breakout, RS 90" — not "looked good."'],
-                  ['Think in R','2R win on 1% risk = +2%. Process over dollars.'],
-                  ['Review weekly','Best trades share what? Worst trades share what?'],
-                  ['Exit reasons','60% stops + 10% targets = fix entries or stops.'],
-                ].map(([k,v])=>(
-                  <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
-                    <span style={{color:'var(--red)',fontWeight:700,minWidth:100,flexShrink:0}}>{k}:</span>
-                    <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
-                  </div>
-                ))}
-              </div>
             </div>
           </div>
         )}
@@ -598,12 +573,13 @@ function GlobalTradingGuide({ onClose }) {
             <div style={{background:'var(--bg3)',border:'1px solid rgba(255,61,87,0.25)',borderRadius:4,padding:12}}>
               <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--red)',letterSpacing:2,fontWeight:700,marginBottom:8}}>PRE-TRADE GATES</div>
               {[
-                ['Portfolio Heat','Total open risk &lt; 8% of account.'],
+                ['Portfolio Heat','Total open risk < 8% of account.'],
                 ['Sector Limit','Max 25% in one sector. Max 3 correlated positions.'],
+                ['Correlation','Pairs >0.8 flagged. View in Portfolio → Correlations.'],
                 ['Earnings','No swings within 10 days of earnings.'],
                 ['Regime','BEAR = blocked. CAUTION = 50% size. BULL = full.'],
                 ['Position Cap','Single position max 20% of account.'],
-                ['Drawdown','Circuit breaker blocks entries past threshold.'],
+                ['Drawdown','Circuit breaker: 10% DD blocks new entries.'],
               ].map(([k,v])=>(
                 <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
                   <span style={{color:'var(--red)',fontWeight:700,minWidth:100,flexShrink:0}}>{k}:</span>
@@ -623,9 +599,14 @@ function GlobalTradingGuide({ onClose }) {
                   <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
                 </div>
               ))}
-              <div style={{marginTop:10,fontFamily:'var(--font-mono)',fontSize:10,color:'var(--green)',letterSpacing:2,fontWeight:700,marginBottom:6}}>ATR QUICK REFERENCE</div>
+              <div style={{marginTop:10,fontFamily:'var(--font-mono)',fontSize:10,color:'var(--green)',letterSpacing:2,fontWeight:700,marginBottom:6}}>POSITION SIZING FORMULA</div>
+              <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5,marginBottom:6}}>
+                <strong>shares</strong> = (1% risk ÷ (entry−stop)) × regime × <strong>beta_mult</strong> × <strong>vol_mult</strong><br/>
+                <strong>beta_mult</strong> = 1/β clamped [0.4–1.5] (high-β = smaller). <strong>vol_mult</strong> = 2/ATR% clamped [0.33–1.0] (volatile = smaller). ATR%≤2 = full size.
+              </div>
+              <div style={{marginTop:6,fontFamily:'var(--font-mono)',fontSize:10,color:'var(--green)',letterSpacing:2,fontWeight:700,marginBottom:6}}>SCALING PYRAMID (auto)</div>
               <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5}}>
-                ATR = avg daily price range ($). <strong>Stop</strong>: 1.5×ATR (swing), 2×ATR (position). <strong>T1</strong>: 2.5×ATR. <strong>T2</strong>: 4×ATR. A $100 stock with $3 ATR → stop $4.50 below, T1 $7.50 above entry.
+                Sell 1/3 at T1 → stop to breakeven. Sell 1/3 at T2 → stop to halfway + 8% trail activates. Trail final 1/3 with 8% close trail. WebSocket monitor applies live.
               </div>
               <div style={{marginTop:10,fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:6}}>ALERTS</div>
               {[
@@ -638,6 +619,45 @@ function GlobalTradingGuide({ onClose }) {
                   <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+        {section==='tools' && (
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:8}}>RESEARCH TABS</div>
+              {[
+                ['⚡ Market Pulse','Regime (BULL/CAUTION/BEAR) + cycle + exposure ramp. FTD tracker.'],
+                ['🔄 Sectors','Sector RS ranks + accel. Rotation view.'],
+                ['🏭 Industries','Industry RS — leading groups within sectors.'],
+                ['📊 Scanner','Full universe scan. Filter by sector, sort by Conviction/Accel.'],
+                ['🎯 Trade Setups','Auto-built entry/stop/target from ATR per candidate.'],
+                ['👁 Watchlist','Manual follow list. Tracks RS deltas daily.'],
+              ].map(([k,v])=>(
+                <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
+                  <span style={{color:'var(--amber)',fontWeight:700,minWidth:110,flexShrink:0}}>{k}</span>
+                  <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--cyan)',letterSpacing:2,fontWeight:700,marginBottom:8}}>EXECUTION & REVIEW</div>
+              {[
+                ['📋 Pipeline','Stage pre-sized bracket orders with pre-trade gates + risk_check JSON.'],
+                ['💼 Trading','One-click submit to Alpaca. Live positions, orders, P&L.'],
+                ['🛡 Hedge','Regime-aware hedge size. Stage-4 short candidates.'],
+                ['📒 Journal','Open trades, thesis, Pending Scaling, Performance Attribution.'],
+                ['🔁 Replay','Backtest any strategy on SQLite history vs SPY benchmark.'],
+                ['⚙ Settings','Alpaca keys, risk params, notification channels, auto-exec flags.'],
+              ].map(([k,v])=>(
+                <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
+                  <span style={{color:'var(--cyan)',fontWeight:700,minWidth:90,flexShrink:0}}>{k}</span>
+                  <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
+                </div>
+              ))}
+              <div style={{marginTop:10,padding:'6px 8px',background:'rgba(0,212,255,0.07)',borderRadius:3,fontSize:11,color:'var(--text3)',lineHeight:1.4}}>
+                <strong style={{color:'var(--cyan)'}}>Automation env flags:</strong> <code>AUTO_STOP_EXECUTE=true</code> (auto-sell on stop), <code>AUTO_SCALE_EXECUTE=true</code> (auto partial-exits at T1/T2).
+              </div>
             </div>
           </div>
         )}
