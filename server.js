@@ -59,6 +59,7 @@ const schedulerRoutes     = require('./src/routes/scheduler');
 const notificationRoutes  = require('./src/routes/notifications');
 const providerRoutes      = require('./src/routes/providers');
 const replayRoutes        = require('./src/routes/replay');
+const hedgeRoutes         = require('./src/routes/hedge')(runScan);
 
 app.use('/api', scanRoutes);
 app.use('/api', sectorRoutes);
@@ -78,6 +79,7 @@ app.use('/api', schedulerRoutes);
 app.use('/api', notificationRoutes);
 app.use('/api', providerRoutes);
 app.use('/api', replayRoutes);
+app.use('/api', hedgeRoutes);
 
 // ─── SPA fallback ────────────────────────────────────────────────────────────
 app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));

@@ -142,6 +142,13 @@ const FULL_UNIVERSE = {
   AWK:'Utilities',  ETR:'Utilities',  AEP:'Utilities',  D:'Utilities',
   DUK:'Utilities',  SO:'Utilities',   SRE:'Utilities',  WEC:'Utilities',
   ES:'Utilities',   XEL:'Utilities',
+
+  // ── Hedge / Inverse Instruments ───────────────────────────────────────────
+  // Tracked for regime-based hedging — not momentum candidates
+  SH:'Hedge',    SDS:'Hedge',   SPXS:'Hedge',    // S&P 500 inverse
+  PSQ:'Hedge',   SQQQ:'Hedge',                    // Nasdaq inverse
+  RWM:'Hedge',                                     // Russell 2000 inverse
+  VIXY:'Hedge',  UVXY:'Hedge',                     // VIX long (= equity short)
 };
 
 // Deduplicate (JS objects overwrite same keys, but be explicit)

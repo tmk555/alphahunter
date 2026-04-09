@@ -3,7 +3,7 @@
 
 const { cacheGet, cacheSet, TTL_QUOTE } = require('./data/cache');
 const { loadHistory, saveHistory, RS_HISTORY, SEC_HISTORY, IND_HISTORY } = require('./data/store');
-const { getQuotes, getHistory, pLimit } = require('./data/providers/manager');
+const { getQuotes, getHistory, getHistoryFull, pLimit } = require('./data/providers/manager');
 const { calcRS, rankToRS, getRSTrend, preGenerateHistoryFor } = require('./signals/rs');
 const { calcSwingMomentum, calcPeriodReturns, calcATR, volumeTrend } = require('./signals/momentum');
 const { calcVCP }    = require('./signals/vcp');
@@ -25,13 +25,24 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
     for (const q of batch) allQuotes[q.symbol] = q;
   }
 
-  // Fetch history (concurrent, 5 at a time, multi-provider)
-  const histMap = {};
+  // Fetch full OHLCV history (concurrent, 5 at a time, multi-provider)
+  // Full bars needed for True ATR calculation; closes extracted for RS/momentum/VCP
+  const barsMap = {};   // symbol → [{date, open, high, low, close, volume}, ...]
+  const histMap = {};   // symbol → [close, close, ...] (legacy compat for RS/momentum/VCP)
   await pLimit(uniq.map(sym => async () => {
     try {
-      const c = await getHistory(sym);
-      if (c.length >= 63) histMap[sym] = c;
-    } catch(_) {}
+      const bars = await getHistoryFull(sym);
+      if (bars && bars.length >= 63) {
+        barsMap[sym] = bars;
+        histMap[sym] = bars.map(b => b.close);
+      }
+    } catch(_) {
+      // Fallback to close-only if full history unavailable
+      try {
+        const c = await getHistory(sym);
+        if (c.length >= 63) histMap[sym] = c;
+      } catch(_) {}
+    }
   }), 5);
 
   // Pre-generate history on first run
@@ -49,7 +60,7 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
     const vsMA200 = ma200 ? +((price-ma200)/ma200*100).toFixed(2) : null;
     const distFromHigh = q.fiftyTwoWeekHigh ? +((q.fiftyTwoWeekHigh-price)/q.fiftyTwoWeekHigh).toFixed(4) : null;
     const periods = calcPeriodReturns(closes);
-    const atr     = calcATR(closes);
+    const atr     = calcATR(barsMap[sym] || closes);  // True ATR from OHLCV bars, fallback to closes
     const atrPct  = atr && price ? +(atr/price*100).toFixed(2) : null;
     const swingMom  = calcSwingMomentum(closes, q);
     const ma150     = closes.length >= 150

@@ -32,6 +32,12 @@ const BUILT_IN_STRATEGIES = {
     description: 'Buy top conviction-scored picks, sell after holding period',
     defaults: { minConviction: 60, topN: 5, holdDays: 20 },
   },
+  short_breakdown: {
+    name: 'Short Breakdown',
+    description: 'Short Stage 4 stocks with RS <= 20, cover on RS recovery or stop',
+    defaults: { maxRS: 20, maxSEPA: 2, exitRS: 40, stopATR: 1.5, holdDays: 15 },
+    side: 'short',
+  },
 };
 
 // ─── Data Loading ──────────────────────────────────────────────────────────
@@ -63,7 +69,7 @@ function loadScanData(startDate, endDate) {
 function loadSnapshotData(startDate, endDate) {
   return db().prepare(`
     SELECT date, symbol, rs_rank, swing_momentum, sepa_score, stage, price,
-           vs_ma50, vs_ma200, volume_ratio, vcp_forming, rs_line_new_high
+           vs_ma50, vs_ma200, volume_ratio, vcp_forming, rs_line_new_high, atr_pct
     FROM rs_snapshots
     WHERE type = 'stock' AND date >= ? AND date <= ?
     ORDER BY date, rs_rank DESC
@@ -93,6 +99,11 @@ function evaluateEntry(stock, strategy, params) {
     case 'conviction':
       return true; // Handled by top-N selection
 
+    case 'short_breakdown':
+      return stock.rs_rank <= params.maxRS &&
+             (stock.sepa_score || 8) <= params.maxSEPA &&
+             stock.stage === 4;
+
     default:
       return false;
   }
@@ -109,7 +120,9 @@ function evaluateExit(stock, entryStock, strategy, params, holdingDays) {
 
     case 'vcp_breakout': {
       if (!entryStock.price || !stock.price) break;
-      const atr = entryStock.price * 0.02; // approximate ATR as 2%
+      // Use stored atrPct from snapshot if available, otherwise approximate at 2.5%
+      const atrPct = entryStock.atr_pct || 2.5;
+      const atr = entryStock.price * (atrPct / 100);
       const stopPrice = entryStock.price - (params.stopATR * atr);
       const targetPrice = entryStock.price + (params.targetATR * atr);
       if (stock.price <= stopPrice) return { exit: true, reason: 'stop_hit' };
@@ -127,18 +140,119 @@ function evaluateExit(stock, entryStock, strategy, params, holdingDays) {
 
     case 'conviction':
       break; // Pure hold-period based
+
+    case 'short_breakdown': {
+      // Cover short if RS recovers (stock is strengthening)
+      if (stock.rs_rank >= params.exitRS) return { exit: true, reason: 'rs_recovered' };
+      // Stop-out: price moves against us (up)
+      if (entryStock.price && stock.price) {
+        const atrPct = entryStock.atr_pct || 2.5;
+        const atr = entryStock.price * (atrPct / 100);
+        const stopPrice = entryStock.price + (params.stopATR * atr);
+        if (stock.price >= stopPrice) return { exit: true, reason: 'stop_hit' };
+      }
+      break;
+    }
   }
 
   return { exit: false };
 }
 
+// ─── Execution Model ──────────────────────────────────────────────────────
+// Realistic slippage and cost simulation
+
+const DEFAULT_EXECUTION = {
+  entrySlippageBps: 10,    // 10 basis points slippage on entries (buying into strength)
+  exitSlippageBps: 5,      // 5 bps on exits (more orderly)
+  commissionPerShare: 0,   // Most brokers are $0 commission now; set >0 if needed
+  maxGapPct: 3.0,          // Skip entries where price gaps up >3% from prior close
+};
+
+function applySlippage(price, bps, side) {
+  // Slippage always works against you:
+  // Buying long / covering short = pay more
+  // Selling long / shorting = receive less
+  const slipMultiplier = side === 'buy' ? (1 + bps / 10000) : (1 - bps / 10000);
+  return +(price * slipMultiplier).toFixed(4);
+}
+
+// ─── SPY Benchmark ────────────────────────────────────────────────────────
+
+function calcSPYBenchmark(startDate, endDate) {
+  // Load SPY snapshots for the same period
+  const spySnaps = db().prepare(`
+    SELECT date, price FROM rs_snapshots
+    WHERE symbol = 'SPY' AND type = 'stock' AND date >= ? AND date <= ? AND price > 0
+    ORDER BY date
+  `).all(startDate, endDate);
+
+  if (spySnaps.length < 2) return null;
+
+  const startPrice = spySnaps[0].price;
+  const endPrice = spySnaps[spySnaps.length - 1].price;
+  const totalReturn = +((endPrice / startPrice - 1) * 100).toFixed(2);
+
+  // SPY equity curve for comparison
+  const equityCurve = spySnaps.map(s => ({
+    date: s.date,
+    equity: +(100000 * (s.price / startPrice)).toFixed(2),  // Normalized to 100K
+  }));
+
+  // SPY max drawdown
+  let peak = 100000, maxDD = 0;
+  for (const point of equityCurve) {
+    if (point.equity > peak) peak = point.equity;
+    const dd = ((peak - point.equity) / peak) * 100;
+    if (dd > maxDD) maxDD = dd;
+  }
+
+  // SPY Sharpe
+  const dailyReturns = [];
+  for (let i = 1; i < spySnaps.length; i++) {
+    dailyReturns.push(spySnaps[i].price / spySnaps[i - 1].price - 1);
+  }
+  const avgDR = dailyReturns.length ? dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length : 0;
+  const stdDR = dailyReturns.length > 1
+    ? Math.sqrt(dailyReturns.reduce((a, r) => a + (r - avgDR) ** 2, 0) / (dailyReturns.length - 1))
+    : 0;
+  const sharpe = stdDR > 0 ? +((avgDR / stdDR) * Math.sqrt(252)).toFixed(2) : 0;
+
+  return {
+    totalReturn,
+    maxDrawdown: +maxDD.toFixed(2),
+    sharpeRatio: sharpe,
+    startPrice: +startPrice.toFixed(2),
+    endPrice: +endPrice.toFixed(2),
+    equityCurve: equityCurve.filter((_, i) =>
+      i % Math.max(1, Math.floor(equityCurve.length / 100)) === 0 || i === equityCurve.length - 1
+    ),
+  };
+}
+
+// ─── Point-in-Time Universe Filter ────────────────────────────────────────
+// Excludes stocks that were removed from the universe before a given date
+// to reduce survivorship bias. Only effective if universe_mgmt is populated.
+
+function getActiveUniverse(date) {
+  try {
+    const removed = db().prepare(`
+      SELECT symbol FROM universe_mgmt
+      WHERE removed_date IS NOT NULL AND removed_date <= ?
+    `).all(date).map(r => r.symbol);
+    return new Set(removed);
+  } catch (_) {
+    return new Set(); // No universe tracking = can't filter
+  }
+}
+
 // ─── Replay Engine ─────────────────────────────────────────────────────────
 
-function runReplay({ strategy, params = {}, startDate, endDate, maxPositions = 10, initialCapital = 100000 }) {
+function runReplay({ strategy, params = {}, startDate, endDate, maxPositions = 10, initialCapital = 100000, execution = {} }) {
   const stratDef = BUILT_IN_STRATEGIES[strategy];
   if (!stratDef) throw new Error(`Unknown strategy: ${strategy}. Available: ${Object.keys(BUILT_IN_STRATEGIES).join(', ')}`);
 
   const mergedParams = { ...stratDef.defaults, ...params };
+  const exec = { ...DEFAULT_EXECUTION, ...execution };
 
   // Load data
   const snapshots = loadSnapshotData(startDate, endDate);
@@ -155,17 +269,27 @@ function runReplay({ strategy, params = {}, startDate, endDate, maxPositions = 1
   const dates = Object.keys(byDate).sort();
 
   // Simulation state
+  const isShort = stratDef.side === 'short';
   let capital = initialCapital;
-  const positions = new Map(); // symbol -> { entryDate, entryPrice, entryStock, shares }
+  let totalSlippageCost = 0;
+  let skippedGaps = 0;
+  let skippedSurvivorship = 0;
+  const positions = new Map();
   const trades = [];
   const equityCurve = [{ date: dates[0], equity: capital, positions: 0 }];
   let totalWins = 0, totalLosses = 0;
+
+  // Build prior-day price map for gap detection
+  const priorPriceMap = {};
 
   for (let i = 0; i < dates.length; i++) {
     const date = dates[i];
     const dayStocks = byDate[date];
     const stockMap = {};
     for (const s of dayStocks) stockMap[s.symbol] = s;
+
+    // Survivorship filter: skip stocks removed from universe before this date
+    const removedSymbols = getActiveUniverse(date);
 
     // Check exits first
     for (const [symbol, pos] of positions) {
@@ -176,14 +300,30 @@ function runReplay({ strategy, params = {}, startDate, endDate, maxPositions = 1
       const exitCheck = evaluateExit(stock, pos.entryStock, strategy, mergedParams, holdingDays);
 
       if (exitCheck.exit && stock.price) {
-        const pnl = (stock.price - pos.entryPrice) * pos.shares;
-        const pnlPct = ((stock.price / pos.entryPrice) - 1) * 100;
-        capital += pos.shares * stock.price;
+        // Apply exit slippage
+        const rawExitPrice = stock.price;
+        const exitPrice = isShort
+          ? applySlippage(rawExitPrice, exec.exitSlippageBps, 'buy')    // Cover = buy
+          : applySlippage(rawExitPrice, exec.exitSlippageBps, 'sell');
+        const slippageCost = Math.abs(rawExitPrice - exitPrice) * pos.shares;
+        totalSlippageCost += slippageCost;
+
+        const pnl = isShort
+          ? (pos.entryPrice - exitPrice) * pos.shares
+          : (exitPrice - pos.entryPrice) * pos.shares;
+        const pnlPct = isShort
+          ? ((pos.entryPrice / exitPrice) - 1) * 100
+          : ((exitPrice / pos.entryPrice) - 1) * 100;
+
+        capital += pos.collateral + pnl;
 
         trades.push({
-          symbol, entryDate: pos.entryDate, exitDate: date,
-          entryPrice: pos.entryPrice, exitPrice: stock.price,
+          symbol, side: isShort ? 'short' : 'long',
+          entryDate: pos.entryDate, exitDate: date,
+          entryPrice: pos.entryPrice, exitPrice: +exitPrice.toFixed(2),
           shares: pos.shares, pnl: +pnl.toFixed(2), pnlPct: +pnlPct.toFixed(2),
+          atrPct: pos.entryStock.atr_pct || null,
+          slippageCost: +slippageCost.toFixed(2),
           holdingDays, exitReason: exitCheck.reason,
           entryRS: pos.entryStock.rs_rank, exitRS: stock.rs_rank,
         });
@@ -195,44 +335,80 @@ function runReplay({ strategy, params = {}, startDate, endDate, maxPositions = 1
 
     // Check entries (if we have capacity)
     if (positions.size < maxPositions) {
-      const candidates = dayStocks
+      let candidates = dayStocks
         .filter(s => !positions.has(s.symbol) && s.price > 0)
+        .filter(s => !removedSymbols.has(s.symbol))  // Survivorship filter
         .filter(s => evaluateEntry(s, strategy, mergedParams));
 
-      // For conviction strategy, take top N
+      // For conviction strategy, take top N; for shorts, take weakest RS
       if (strategy === 'conviction') {
         candidates.sort((a, b) => (b.rs_rank || 0) - (a.rs_rank || 0));
+      } else if (isShort) {
+        candidates.sort((a, b) => (a.rs_rank || 99) - (b.rs_rank || 99));
       }
 
       const slotsAvailable = maxPositions - positions.size;
-      const positionSize = capital / maxPositions; // Equal-weight
+      // Use AVAILABLE capital, not total — prevents implicit leverage
+      const availableCapital = Math.max(0, capital);
+      const positionSize = availableCapital / Math.max(1, slotsAvailable);
 
       for (const stock of candidates.slice(0, slotsAvailable)) {
-        if (positionSize < 100 || !stock.price) continue; // Min position size
+        if (positionSize < 100 || !stock.price) continue;
 
-        const shares = Math.floor(positionSize / stock.price);
+        // Gap filter: skip if price gapped up >maxGapPct from prior close
+        const priorPrice = priorPriceMap[stock.symbol];
+        if (!isShort && priorPrice && stock.price > 0) {
+          const gapPct = ((stock.price / priorPrice) - 1) * 100;
+          if (gapPct > exec.maxGapPct) {
+            skippedGaps++;
+            continue; // Missed the breakout — don't chase
+          }
+        }
+
+        // Apply entry slippage
+        const rawEntryPrice = stock.price;
+        const entryPrice = isShort
+          ? applySlippage(rawEntryPrice, exec.entrySlippageBps, 'sell')   // Short = sell
+          : applySlippage(rawEntryPrice, exec.entrySlippageBps, 'buy');
+        const shares = Math.floor(positionSize / entryPrice);
         if (shares <= 0) continue;
 
-        capital -= shares * stock.price;
+        const slippageCost = Math.abs(rawEntryPrice - entryPrice) * shares;
+        totalSlippageCost += slippageCost;
+
+        const collateral = shares * entryPrice;
+        capital -= collateral;
+
         positions.set(stock.symbol, {
           entryDate: date,
-          entryPrice: stock.price,
+          entryPrice: +entryPrice.toFixed(4),
           entryStock: stock,
           shares,
+          collateral,
         });
       }
+    }
+
+    // Update prior price map for next day's gap detection
+    for (const s of dayStocks) {
+      if (s.price > 0) priorPriceMap[s.symbol] = s.price;
     }
 
     // Record equity
     let positionValue = 0;
     for (const [symbol, pos] of positions) {
       const current = stockMap[symbol];
-      positionValue += (current?.price || pos.entryPrice) * pos.shares;
+      const currentPrice = current?.price || pos.entryPrice;
+      if (isShort) {
+        positionValue += pos.collateral + (pos.entryPrice - currentPrice) * pos.shares;
+      } else {
+        positionValue += currentPrice * pos.shares;
+      }
     }
     equityCurve.push({ date, equity: +(capital + positionValue).toFixed(2), positions: positions.size });
   }
 
-  // Close remaining positions at last known price
+  // Close remaining positions at last known price (with exit slippage)
   const lastDate = dates[dates.length - 1];
   const lastDayStocks = byDate[lastDate] || [];
   const lastStockMap = {};
@@ -240,15 +416,24 @@ function runReplay({ strategy, params = {}, startDate, endDate, maxPositions = 1
 
   for (const [symbol, pos] of positions) {
     const stock = lastStockMap[symbol];
-    const exitPrice = stock?.price || pos.entryPrice;
-    const pnl = (exitPrice - pos.entryPrice) * pos.shares;
-    const pnlPct = ((exitPrice / pos.entryPrice) - 1) * 100;
-    capital += pos.shares * exitPrice;
+    const rawExitPrice = stock?.price || pos.entryPrice;
+    const exitPrice = isShort
+      ? applySlippage(rawExitPrice, exec.exitSlippageBps, 'buy')
+      : applySlippage(rawExitPrice, exec.exitSlippageBps, 'sell');
+    const pnl = isShort
+      ? (pos.entryPrice - exitPrice) * pos.shares
+      : (exitPrice - pos.entryPrice) * pos.shares;
+    const pnlPct = isShort
+      ? ((pos.entryPrice / exitPrice) - 1) * 100
+      : ((exitPrice / pos.entryPrice) - 1) * 100;
+    capital += pos.collateral + pnl;
 
     trades.push({
-      symbol, entryDate: pos.entryDate, exitDate: lastDate,
-      entryPrice: pos.entryPrice, exitPrice,
+      symbol, side: isShort ? 'short' : 'long',
+      entryDate: pos.entryDate, exitDate: lastDate,
+      entryPrice: pos.entryPrice, exitPrice: +exitPrice.toFixed(2),
       shares: pos.shares, pnl: +pnl.toFixed(2), pnlPct: +pnlPct.toFixed(2),
+      atrPct: pos.entryStock.atr_pct || null,
       holdingDays: dates.slice(dates.indexOf(pos.entryDate)).length,
       exitReason: 'end_of_period',
       entryRS: pos.entryStock.rs_rank, exitRS: stock?.rs_rank || null,
@@ -281,9 +466,13 @@ function runReplay({ strategy, params = {}, startDate, endDate, maxPositions = 1
   const grossLoss = Math.abs(losingTrades.reduce((a, t) => a + t.pnl, 0));
   const profitFactor = grossLoss > 0 ? +(grossProfit / grossLoss).toFixed(2) : grossProfit > 0 ? Infinity : 0;
 
-  // Average R-multiple (approx using 2% ATR as risk)
+  // Average R-multiple (approx using per-trade risk — entry to stop distance)
   const avgR = trades.length
-    ? +(trades.reduce((a, t) => a + (t.pnlPct / 2), 0) / trades.length).toFixed(2) // 2% ATR approx
+    ? +(trades.reduce((a, t) => {
+        // Use actual ATR% from snapshot if available, fallback to 2.5%
+        const riskPct = t.atrPct || 2.5;
+        return a + (t.pnlPct / riskPct);
+      }, 0) / trades.length).toFixed(2)
     : 0;
 
   // Sharpe ratio approximation (daily returns)
@@ -303,6 +492,12 @@ function runReplay({ strategy, params = {}, startDate, endDate, maxPositions = 1
     exitReasons[t.exitReason] = (exitReasons[t.exitReason] || 0) + 1;
   }
 
+  // ─── SPY Benchmark ─────────────────────────────────────────────────────────
+  const spyBenchmark = calcSPYBenchmark(startDate, endDate);
+  const alpha = spyBenchmark
+    ? +(totalReturn - spyBenchmark.totalReturn).toFixed(2)
+    : null;
+
   // ─── Persist replay result ───────────────────────────────────────────────
 
   const replayId = db().prepare(`
@@ -313,7 +508,7 @@ function runReplay({ strategy, params = {}, startDate, endDate, maxPositions = 1
     strategy, JSON.stringify(mergedParams), startDate, endDate, initialCapital,
     finalEquity, +totalReturn.toFixed(2), trades.length, +winRate.toFixed(1),
     profitFactor, +maxDD.toFixed(2), sharpe,
-    JSON.stringify({ trades, equityCurve, exitReasons })
+    JSON.stringify({ trades, equityCurve, exitReasons, spyBenchmark })
   ).lastInsertRowid;
 
   return {
@@ -321,6 +516,7 @@ function runReplay({ strategy, params = {}, startDate, endDate, maxPositions = 1
     strategy: stratDef.name,
     strategyKey: strategy,
     params: mergedParams,
+    side: isShort ? 'short' : 'long',
     period: { startDate, endDate, tradingDays: dates.length },
     performance: {
       initialCapital, finalEquity: +finalEquity.toFixed(2),
@@ -328,6 +524,23 @@ function runReplay({ strategy, params = {}, startDate, endDate, maxPositions = 1
       maxDrawdown: +maxDD.toFixed(2),
       sharpeRatio: sharpe,
       profitFactor,
+      alpha,
+    },
+    benchmark: spyBenchmark ? {
+      spyReturn: spyBenchmark.totalReturn,
+      spyMaxDrawdown: spyBenchmark.maxDrawdown,
+      spySharpe: spyBenchmark.sharpeRatio,
+      outperformed: totalReturn > spyBenchmark.totalReturn,
+      spyEquityCurve: spyBenchmark.equityCurve,
+    } : null,
+    executionCosts: {
+      totalSlippage: +totalSlippageCost.toFixed(2),
+      slippageAsReturnDrag: +(totalSlippageCost / initialCapital * 100).toFixed(3),
+      skippedGaps,
+      skippedSurvivorship,
+      entrySlippageBps: exec.entrySlippageBps,
+      exitSlippageBps: exec.exitSlippageBps,
+      maxGapPct: exec.maxGapPct,
     },
     trades: {
       total: trades.length,

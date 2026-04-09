@@ -31,12 +31,35 @@ function calcPeriodReturns(closes) {
 }
 
 // ATR (14-day) — for position sizing
-function calcATR(closes) {
-  if (!closes || closes.length < 15) return null;
-  const n = closes.length;
+// Accepts OHLCV bars [{open, high, low, close, ...}] OR close-only array (legacy fallback)
+function calcATR(data) {
+  if (!data || data.length < 15) return null;
+
+  // Detect input format: array of objects (bars) vs array of numbers (closes)
+  const isBars = typeof data[0] === 'object' && data[0] !== null && 'high' in data[0];
+
+  if (isBars) {
+    // True ATR: TR = max(high-low, |high-prevClose|, |low-prevClose|)
+    const n = data.length;
+    let atrSum = 0;
+    for (let i = n - 14; i < n; i++) {
+      const bar = data[i];
+      const prevClose = data[i - 1].close;
+      const tr = Math.max(
+        bar.high - bar.low,
+        Math.abs(bar.high - prevClose),
+        Math.abs(bar.low - prevClose)
+      );
+      atrSum += tr;
+    }
+    return +(atrSum / 14).toFixed(2);
+  }
+
+  // Legacy fallback: close-to-close (for backward compat where only closes are available)
+  const n = data.length;
   let atrSum = 0;
-  for (let i = n-14; i < n; i++) {
-    atrSum += Math.abs(closes[i] - closes[i-1]);
+  for (let i = n - 14; i < n; i++) {
+    atrSum += Math.abs(data[i] - data[i - 1]);
   }
   return +(atrSum / 14).toFixed(2);
 }

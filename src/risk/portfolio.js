@@ -1,5 +1,10 @@
 // ─── Portfolio Risk Management ───────────────────────────────────────────────
 // Portfolio heat, sector exposure, correlation risk, drawdown circuit breaker
+// Peak equity and config are persisted to SQLite — survive server restarts.
+
+const { getDB } = require('../data/database');
+
+function db() { return getDB(); }
 
 const DEFAULT_CONFIG = {
   accountSize: 100000,
@@ -17,22 +22,79 @@ const DEFAULT_CONFIG = {
   earningsBlackoutDays: 10,
 };
 
-let config = { ...DEFAULT_CONFIG };
-let peakEquity = config.accountSize;
+// ─── Persistent state helpers ───────────────────────────────────────────────
 
-function getConfig() { return { ...config }; }
+function _loadState(key, fallback) {
+  try {
+    const row = db().prepare('SELECT value FROM portfolio_state WHERE key = ?').get(key);
+    if (row) return JSON.parse(row.value);
+  } catch (_) {}
+  return fallback;
+}
+
+function _saveState(key, value) {
+  try {
+    db().prepare(
+      `INSERT OR REPLACE INTO portfolio_state (key, value, updated_at) VALUES (?, ?, datetime('now'))`
+    ).run(key, JSON.stringify(value));
+  } catch (_) {}
+}
+
+// ─── Config (persisted) ─────────────────────────────────────────────────────
+
+let _configLoaded = false;
+let config = { ...DEFAULT_CONFIG };
+
+function _ensureConfig() {
+  if (_configLoaded) return;
+  const saved = _loadState('config', null);
+  if (saved) {
+    // Merge saved config with defaults (in case new fields were added)
+    config = { ...DEFAULT_CONFIG, ...saved, drawdownLevels: { ...DEFAULT_CONFIG.drawdownLevels, ...(saved.drawdownLevels || {}) } };
+  }
+  _configLoaded = true;
+}
+
+function getConfig() {
+  _ensureConfig();
+  return { ...config };
+}
 
 function updateConfig(updates) {
+  _ensureConfig();
+  if (updates.drawdownLevels) {
+    config.drawdownLevels = { ...config.drawdownLevels, ...updates.drawdownLevels };
+    delete updates.drawdownLevels;
+  }
   config = { ...config, ...updates };
-  if (updates.accountSize && updates.accountSize > peakEquity) {
-    peakEquity = updates.accountSize;
+  _saveState('config', config);
+
+  // If accountSize increased past peak, update peak
+  const peak = _loadPeakEquity();
+  if (config.accountSize > peak) {
+    _savePeakEquity(config.accountSize);
   }
   return config;
+}
+
+// ─── Peak Equity (persisted) ────────────────────────────────────────────────
+
+function _loadPeakEquity() {
+  const saved = _loadState('peakEquity', null);
+  if (saved && typeof saved === 'number' && saved > 0) return saved;
+  // First time: use accountSize from config
+  _ensureConfig();
+  return config.accountSize;
+}
+
+function _savePeakEquity(value) {
+  _saveState('peakEquity', value);
 }
 
 // ─── Portfolio Heat ──────────────────────────────────────────────────────────
 // Sum of dollar risk across all open positions as % of account
 function getPortfolioHeat(openPositions) {
+  _ensureConfig();
   if (!openPositions?.length) {
     return { heatPct: 0, totalDollarRisk: 0, positionCount: 0, details: [] };
   }
@@ -66,6 +128,7 @@ function getPortfolioHeat(openPositions) {
 
 // ─── Sector Exposure ─────────────────────────────────────────────────────────
 function getSectorExposure(openPositions, currentPrices = {}) {
+  _ensureConfig();
   if (!openPositions?.length) return { sectors: {}, warnings: [] };
 
   const sectors = {};
@@ -90,6 +153,7 @@ function getSectorExposure(openPositions, currentPrices = {}) {
 
 // ─── Correlation Risk (sector-based proxy) ───────────────────────────────────
 function getCorrelationRisk(candidate, openPositions) {
+  _ensureConfig();
   if (!openPositions?.length) return { warnings: [], sameIndustryCount: 0 };
 
   const warnings = [];
@@ -115,7 +179,13 @@ function getCorrelationRisk(candidate, openPositions) {
 
 // ─── Drawdown Circuit Breaker ────────────────────────────────────────────────
 function getDrawdownStatus(currentEquity) {
-  if (currentEquity > peakEquity) peakEquity = currentEquity;
+  _ensureConfig();
+  let peakEquity = _loadPeakEquity();
+
+  if (currentEquity > peakEquity) {
+    peakEquity = currentEquity;
+    _savePeakEquity(peakEquity);
+  }
 
   const drawdownPct = +((peakEquity - currentEquity) / peakEquity * 100).toFixed(2);
   const levels = config.drawdownLevels;
@@ -151,6 +221,7 @@ function getDrawdownStatus(currentEquity) {
 // ─── Pre-trade Validation ────────────────────────────────────────────────────
 // Checks all rules before allowing a new position
 function preTradeCheck(candidate, openPositions, regime, currentPrices = {}) {
+  _ensureConfig();
   const checks = [];
   let approved = true;
 
