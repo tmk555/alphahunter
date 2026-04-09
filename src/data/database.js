@@ -273,6 +273,28 @@ function initSchema() {
   safeAddColumn('trades', 'alpaca_order_id', 'TEXT');
   safeAddColumn('trades', 'needs_review', 'INTEGER DEFAULT 0');
   safeAddColumn('rs_snapshots', 'atr_pct', 'REAL');
+
+  // Tier 3: partial profit-taking state
+  safeAddColumn('trades', 'initial_shares', 'INTEGER');
+  safeAddColumn('trades', 'remaining_shares', 'INTEGER');
+  safeAddColumn('trades', 'realized_pnl_dollars', 'REAL DEFAULT 0');
+  safeAddColumn('trades', 'partial_exits', 'JSON');
+  safeAddColumn('trades', 'trailing_stop_active', 'INTEGER DEFAULT 0');
+  safeAddColumn('trades', 'beta', 'REAL');
+
+  // Tier 5: performance attribution
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS performance_attribution (
+      date TEXT NOT NULL,
+      bucket TEXT NOT NULL,
+      bucket_value TEXT NOT NULL,
+      pnl REAL DEFAULT 0,
+      trade_count INTEGER DEFAULT 0,
+      win_count INTEGER DEFAULT 0,
+      avg_r REAL,
+      PRIMARY KEY (date, bucket, bucket_value)
+    );
+  `);
 }
 
 // One-time migration from legacy JSON files into SQLite

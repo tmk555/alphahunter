@@ -8,6 +8,7 @@ const { expireStaleOrders } = require('./staging');
 const { priceStream } = require('./stream');
 const { getDB } = require('../data/database');
 const { yahooQuote } = require('../data/providers/yahoo');
+const { evaluateScalingAction, applyScalingAction } = require('../risk/scaling');
 
 let monitorTask = null;
 let lastCheck = null;
@@ -33,30 +34,33 @@ function startStreamMonitor() {
   priceStream.subscribe(symbols);
   streamingActive = true;
 
-  // Listen for every price update and check stops instantly
+  // Listen for every price update and check stops + scaling instantly
   priceStream.on('price', async (symbol, update) => {
     try {
       const activeForSymbol = getActiveAlerts(symbol);
-      if (!activeForSymbol.length) return;
+      if (activeForSymbol.length) {
+        const prices = { [symbol]: update.price };
+        const fired = await checkAlerts(prices);
 
-      const prices = { [symbol]: update.price };
-      const fired = await checkAlerts(prices);
+        if (fired.length > 0) {
+          checkCount++;
+          lastCheck = {
+            time: new Date().toISOString(),
+            mode: 'streaming',
+            latency: `<${update.source === 'alpaca-ws' ? '50' : '15000'}ms`,
+            symbol,
+            price: update.price,
+            fired: fired.length,
+            firedAlerts: fired,
+          };
 
-      if (fired.length > 0) {
-        checkCount++;
-        lastCheck = {
-          time: new Date().toISOString(),
-          mode: 'streaming',
-          latency: `<${update.source === 'alpaca-ws' ? '50' : '15000'}ms`,
-          symbol,
-          price: update.price,
-          fired: fired.length,
-          firedAlerts: fired,
-        };
-
-        // Auto-execute stops if enabled
-        await _autoExecuteStops(fired);
+          // Auto-execute stops if enabled
+          await _autoExecuteStops(fired);
+        }
       }
+
+      // Tier 3: check open trades for partial profit-taking targets
+      await _checkScalingForSymbol(symbol, update.price);
     } catch (e) {
       // Don't crash the stream listener on individual check errors
     }
@@ -88,6 +92,45 @@ function _watchForNewAlerts() {
       priceStream.unsubscribe(toRemove);
     }
   }, 30000); // Check every 30 seconds
+}
+
+// ─── Tier 3: Auto Scaling / Partial Exits ──────────────────────────────────
+// Triggered on every price tick — checks if any open trade has hit a target
+// and applies the partial-exit pyramid (1/3, 1/3, trail final 1/3).
+
+async function _checkScalingForSymbol(symbol, price) {
+  const trades = db().prepare(
+    'SELECT * FROM trades WHERE exit_date IS NULL AND symbol = ?'
+  ).all(symbol);
+  if (!trades.length) return;
+
+  const { configured } = alpaca.getConfig();
+  const autoExec = process.env.AUTO_SCALE_EXECUTE === 'true' && configured;
+
+  for (const t of trades) {
+    const action = evaluateScalingAction(t, price);
+    if (!action) continue;
+
+    // Persist the action (move stops, record partial fills)
+    const applied = applyScalingAction(t.id, action);
+    console.log(`  📤 Scaling ${t.symbol}: ${action.reason}`);
+
+    // Auto-execute partial sell at the broker if enabled
+    if (autoExec && action.action === 'partial_exit' && action.shares > 0) {
+      try {
+        await alpaca.submitOrder({
+          symbol: t.symbol,
+          qty: action.shares,
+          side: t.side === 'short' ? 'buy' : 'sell',
+          type: 'market',
+          time_in_force: 'day',
+        });
+        console.log(`  ✓ Auto partial-sold ${action.shares} ${t.symbol} @ ${action.level}`);
+      } catch (e) {
+        console.error(`  Auto partial-exit failed for ${t.symbol}: ${e.message}`);
+      }
+    }
+  }
 }
 
 // ─── Auto-Execute Stops ──────────────────────────────────────────────────────

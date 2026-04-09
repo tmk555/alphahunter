@@ -22,6 +22,27 @@ function rankToRS(items, key = 'rawRS') {
   return items;
 }
 
+// Sector-relative RS rank: percentile within each sector group
+// A stock can be #1 in a weak sector even with moderate absolute RS
+function rankBySector(items, sectorKey = 'sector', rawKey = 'rawRS', outKey = 'sectorRsRank') {
+  const groups = {};
+  for (const s of items) {
+    const sec = s[sectorKey] || 'Unknown';
+    if (!groups[sec]) groups[sec] = [];
+    groups[sec].push(s);
+  }
+  for (const sec of Object.keys(groups)) {
+    const group = groups[sec];
+    const valid = group.filter(s => s[rawKey] != null);
+    valid.sort((a, b) => a[rawKey] - b[rawKey]);
+    valid.forEach((s, i) => {
+      s[outKey] = Math.round((i / Math.max(valid.length - 1, 1)) * 98) + 1;
+    });
+    group.filter(s => s[rawKey] == null).forEach(s => { s[outKey] = 50; });
+  }
+  return items;
+}
+
 function getRSTrend(ticker, history) {
   const dates = Object.keys(history).sort();
   if (dates.length < 2) return null;
@@ -93,4 +114,4 @@ function preGenerateHistoryFor(histMap, keyFn, histType, label, minSnapshots = 3
   console.log(`  ✓ ${label} RS history pre-generated (13 weekly snapshots)`);
 }
 
-module.exports = { calcRS, rankToRS, getRSTrend, preGenerateHistoryFor };
+module.exports = { calcRS, rankToRS, rankBySector, getRSTrend, preGenerateHistoryFor };

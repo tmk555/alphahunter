@@ -4,11 +4,13 @@
 const { cacheGet, cacheSet, TTL_QUOTE } = require('./data/cache');
 const { loadHistory, saveHistory, RS_HISTORY, SEC_HISTORY, IND_HISTORY } = require('./data/store');
 const { getQuotes, getHistory, getHistoryFull, pLimit } = require('./data/providers/manager');
-const { calcRS, rankToRS, getRSTrend, preGenerateHistoryFor } = require('./signals/rs');
+const { calcRS, rankToRS, rankBySector, getRSTrend, preGenerateHistoryFor } = require('./signals/rs');
 const { calcSwingMomentum, calcPeriodReturns, calcATR, volumeTrend } = require('./signals/momentum');
 const { calcVCP }    = require('./signals/vcp');
 const { calcRSLine } = require('./signals/rsline');
 const { calcStage }  = require('./signals/stage');
+const { calcEarningsDrift } = require('./signals/earningsDrift');
+const { calcBeta } = require('./risk/position-sizer');
 
 // ─── Core RS scan (shared, cached) ──────────────────────────────────────────
 async function runRSScan(UNIVERSE, SECTOR_MAP) {
@@ -47,6 +49,8 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
 
   // Pre-generate history on first run
   preGenerateHistoryFor(histMap, sym => sym, RS_HISTORY, 'stock');
+
+  const spyCloses = histMap['SPY'] || [];
 
   const results = [];
   for (const sym of uniq) {
@@ -100,6 +104,9 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
       }
     }
 
+    const earningsDrift = calcEarningsDrift(barsMap[sym], daysToEarnings, q);
+    const beta = calcBeta(closes, spyCloses, 90);
+
     const epsTrailing   = q.epsTrailingTwelveMonths || null;
     const epsForward    = q.epsForward || null;
     const epsGrowthEst  = epsTrailing && epsForward && epsTrailing > 0
@@ -133,10 +140,13 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
       ...calcRSLine(closes, histMap['SPY'] || []),
       ...calcStage(closes, ma150),
       rawRS,
+      earningsDrift,
+      beta,
     });
   }
 
   rankToRS(results);
+  rankBySector(results);
   results.sort((a,b) => b.rsRank - a.rsRank);
 
   // Save today's snapshot
