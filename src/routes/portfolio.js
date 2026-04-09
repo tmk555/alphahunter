@@ -238,11 +238,20 @@ module.exports = function(db) {
       const openTrades = db.prepare('SELECT symbol, entry_date FROM trades WHERE exit_date IS NULL').all();
       const openSymDates = new Set(openTrades.map(t => `${t.symbol}:${t.entry_date}`));
 
+      // Backfill sector on any existing trades with NULL sector (from older auto-syncs)
+      const backfilled = db.prepare(`
+        UPDATE trades
+           SET sector = (SELECT u.sector FROM universe_mgmt u WHERE u.symbol = trades.symbol)
+         WHERE sector IS NULL
+           AND symbol IN (SELECT symbol FROM universe_mgmt)
+      `).run().changes;
+
       const synced = [];
       const stmt = db.prepare(`
-        INSERT INTO trades (symbol, side, entry_date, entry_price, shares, alpaca_order_id, needs_review, notes)
-        VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+        INSERT INTO trades (symbol, side, entry_date, entry_price, shares, sector, alpaca_order_id, needs_review, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
       `);
+      const sectorLookup = db.prepare('SELECT sector FROM universe_mgmt WHERE symbol = ?');
 
       for (const order of filled) {
         if (existingIds.has(order.id)) continue;
@@ -254,12 +263,16 @@ module.exports = function(db) {
           'SELECT stop_price, target1_price, target2_price, source, conviction_score FROM staged_orders WHERE alpaca_order_id = ?'
         ).get(order.id);
 
+        // Look up sector from universe so attribution can group by it later
+        const sector = sectorLookup.get(order.symbol)?.sector || null;
+
         stmt.run(
           order.symbol,
           order.side === 'buy' ? 'long' : 'short',
           fillDate,
           +order.filled_avg_price,
           +order.filled_qty,
+          sector,
           order.id,
           `[AUTO-SYNCED] Filled at $${(+order.filled_avg_price).toFixed(2)} via ${staged?.source || 'broker'}. Add your trade thesis and setup notes.`,
         );
@@ -299,7 +312,7 @@ module.exports = function(db) {
         exited.push({ symbol: sell.symbol, exitPrice, pnl_percent });
       }
 
-      res.json({ synced, exited, message: `Synced ${synced.length} entries, ${exited.length} exits` });
+      res.json({ synced, exited, backfilled, message: `Synced ${synced.length} entries, ${exited.length} exits${backfilled?`, backfilled sector on ${backfilled} trades`:''}` });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 

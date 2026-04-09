@@ -374,10 +374,10 @@ function App() {
     { id:'pulse',     label:'⚡ Market Pulse' },
     { id:'sectors',   label:'🔄 Sectors' },
     { id:'industries',label:'🏭 Industries' },
+    { id:'hedge',     label:'🛡 Hedge' },
     { id:'rs',        label:'📊 Scanner' },
     { id:'setups',    label:'🎯 Trade Setups' },
     { id:'watchlist', label:'📋 Pipeline', badge: badgeCounts.staged || null },
-    { id:'hedge',     label:'🛡 Hedge' },
     { id:'trading',   label:'💼 Trading', badge: badgeCounts.positions || null },
     { id:'journal',   label:'📒 Journal', badge: badgeCounts.review || null, badgeWarn: !!badgeCounts.review },
     { id:'replay',    label:'🔁 Replay' },
@@ -552,7 +552,7 @@ function GlobalTradingGuide({ onClose }) {
                 ['1. ⚡ Market Pulse','Read regime + cycle (BEAR/CAUTION/NEUTRAL/BULL) and exposure ramp (PILOT→FULL). BEAR = no longs, hedges only.'],
                 ['2. 🔄 Sectors / Industries','Sort by RS Accel. Focus top 2-3 accelerating sectors. Skip declining ones entirely.'],
                 ['3. 🛡 Hedge','Always check before adding longs. In BEAR/CAUTION the recommended hedge tells you sizing; short candidates surface stage-4 breakdowns.'],
-                ['4. 📊 Scanner','Filter by focused sectors. Sort by Conviction or RS Accel. Look for ★Triple + sector-leader badge + VCP.'],
+                ['4. 📊 Scanner','Filter by focused sectors. Sort by RS Accel (or IBD RS / Mom). Look for ★Triple + sector-leader badge + VCP. Conviction ranking happens in step 5.'],
                 ['5. 🎯 Trade Setups','Auto-generated entries with ATR stops/targets. Verify SEPA ≥5/8, Stage 2, earnings clear.'],
                 ['6. 📋 Pipeline → STAGE','Click STAGE — system sizes position (regime × beta × ATR%), runs all 6 pre-trade gates, builds bracket order.'],
                 ['7. 💼 Trading → SUBMIT','Review risk_check JSON. One-click sends limit + stop + target as bracket to Alpaca.'],
@@ -630,7 +630,7 @@ function GlobalTradingGuide({ onClose }) {
                 ['⚡ Market Pulse','Regime (BULL/CAUTION/BEAR) + cycle + exposure ramp. FTD tracker.'],
                 ['🔄 Sectors','Sector RS ranks + accel. Rotation view.'],
                 ['🏭 Industries','Industry RS — leading groups within sectors.'],
-                ['📊 Scanner','Full universe scan. Filter by sector, sort by Conviction/Accel.'],
+                ['📊 Scanner','Full universe scan. Filter by sector, sort by RS Accel / IBD RS / Mom.'],
                 ['🎯 Trade Setups','Auto-built entry/stop/target from ATR per candidate.'],
                 ['👁 Watchlist','Manual follow list. Tracks RS deltas daily.'],
               ].map(([k,v])=>(
@@ -1203,7 +1203,7 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14,flexWrap:'wrap',gap:8}}>
           <div>
             <div className="panel-title">Sectors <span>RS Ranking</span></div>
-            <div className="panel-sub">IBD RS: (3M×40%+6M×20%+9M×20%+12M×20%) · Click row to see sector stocks · Click column headers to sort</div>
+            <div className="panel-sub">Default sort: <strong>IBD RS</strong> (current rank). Click <strong>RS Accel</strong> to find fastest improvers (e.g. XLRE), or sort by IBD RS to find absolute leaders. The history table at the bottom shows the same data sorted by current rank by default.</div>
           </div>
           <div style={{display:'flex',gap:8}}>
             <button className="btn btn-sm" onClick={load}>↻ Refresh</button>
@@ -1291,7 +1291,7 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
         {selSector && (
           <SectorStocks sectorName={data.find(d=>d.symbol===selSector)?.name||selSector} rsData={rsData} onClose={()=>setSelSector(null)}/>
         )}
-        <SectorIndustryRSTrend type="sectors" title="Sector RS Trend History" api="/api/rs-history/sectors"/>
+        <SectorIndustryRSTrend type="sectors" title="Sector RS — Current Rank (with 1W/1M/2M/3M history)" api="/api/rs-history/sectors"/>
       </div>
     </div>
   );
@@ -1327,7 +1327,7 @@ function IndustriesTab({ selectedSectors, setSelectedSectors }) {
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14,flexWrap:'wrap',gap:8}}>
           <div>
             <div className="panel-title">Industry <span>Rotation</span></div>
-            <div className="panel-sub">IBD RS: same formula as stocks · Ranked within 22 industry ETFs · Use 🎯 Sector Focus (from Sectors tab) to filter by sector</div>
+            <div className="panel-sub">Default sort: <strong>IBD RS</strong> (current rank within 22 industry ETFs). Click <strong>RS Accel</strong> to find fastest improvers, IBD RS for absolute leaders. The history table at the bottom defaults to current rank. Use 🎯 Sector Focus from the Sectors tab to filter.</div>
           </div>
           <div style={{display:'flex',gap:8}}>
             <button className="btn btn-sm" onClick={load}>↻ Refresh</button>
@@ -1414,7 +1414,7 @@ function IndustriesTab({ selectedSectors, setSelectedSectors }) {
         {selInd2 && (
           <IndustryStockDrill etf={selInd2} etfName={data.find(d=>d.symbol===selInd2)?.name} rsData={rsData} onClose={()=>setSelInd2(null)}/>
         )}
-        <SectorIndustryRSTrend type="industries" title="Industry RS Trend History" api="/api/rs-history/industries"/>
+        <SectorIndustryRSTrend type="industries" title="Industry RS — Current Rank (with 1W/1M/2M/3M history)" api="/api/rs-history/industries"/>
       </div>
     </div>
   );
@@ -1869,31 +1869,6 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
 
       {regime && !noLongs && <RegimeBanner regime={regime} />}
 
-      {/* Exposure ramp indicator — O'Neil graduated exposure */}
-      {regime?.exposureRamp && (
-        <div style={{padding:'8px 14px',background:'rgba(0,212,255,0.06)',border:'1px solid rgba(0,212,255,0.2)',borderRadius:5,marginBottom:14,display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
-          <div style={{fontFamily:'var(--font-mono)',fontSize:10,letterSpacing:2,color:'var(--cyan)',fontWeight:700}}>EXPOSURE RAMP</div>
-          <div style={{display:'flex',gap:4}}>
-            {['PILOT','HALF','THREE_QUARTER','FULL'].map((lvl, i) => {
-              const active = ['PILOT','HALF','THREE_QUARTER','FULL'].indexOf(regime.exposureRamp.exposureLevel) >= i;
-              const reduced = regime.exposureRamp.exposureLevel === 'REDUCED';
-              return (
-                <div key={lvl} style={{
-                  width:40, height:6, borderRadius:3,
-                  background: reduced ? (i===0||i===1 ? 'var(--amber)' : 'var(--bg3)') : active ? 'var(--cyan)' : 'var(--bg3)',
-                  border:'1px solid var(--border)',
-                }} title={`${lvl}: ${[2,4,6,8][i]}% max heat`}/>
-              );
-            })}
-          </div>
-          <span style={{fontSize:11,color:'var(--text2)',fontFamily:'var(--font-mono)'}}>
-            {regime.exposureRamp.exposureLevel} — max heat {regime.exposureRamp.maxHeatPct}% · rally day {regime.exposureRamp.rallyDay}
-            {regime.exposureRamp.ftdConfirmed && ' · FTD confirmed'}
-            {regime.exposureRamp.distDays > 0 && ` · ${regime.exposureRamp.distDays} dist days`}
-          </span>
-        </div>
-      )}
-
       <div className="panel" style={{marginBottom:14}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12,flexWrap:'wrap',gap:8}}>
           <div>
@@ -2229,7 +2204,7 @@ function MarketPulseTab() {
   }
 
   const modeColor = m => ({
-    UPTREND:'#00e676', UPTREND_PRESSURE:'#f0a500', FTD_CONFIRMED:'#69f0ae',
+    UPTREND:'#00e676', UPTREND_PRESSURE:'#f0a500', FTD_CONFIRMED:'#69f0ae', FTD_FIRED:'#f0a500',
     RALLY_ATTEMPT:'#80d8ff', CORRECTION:'#ff8c00', BEAR:'#ff3d57', CHOPPY:'#888',
   }[m] || '#888');
 
@@ -2265,6 +2240,31 @@ function MarketPulseTab() {
             {(regime.riskOnSignals||[]).map(s => <span key={s} style={{fontSize:11,padding:'3px 10px',background:'rgba(0,230,118,0.12)',border:'1px solid rgba(0,230,118,0.3)',borderRadius:3,color:'var(--green)'}}>{s}</span>)}
             {(regime.riskOffSignals||[]).map(s => <span key={s} style={{fontSize:11,padding:'3px 10px',background:'rgba(255,61,87,0.12)',border:'1px solid rgba(255,61,87,0.3)',borderRadius:3,color:'var(--red)'}}>{s}</span>)}
           </div>
+        </div>
+      )}
+
+      {/* Exposure ramp indicator — O'Neil graduated exposure */}
+      {regime?.exposureRamp && (
+        <div style={{padding:'8px 14px',background:'rgba(0,212,255,0.06)',border:'1px solid rgba(0,212,255,0.2)',borderRadius:5,marginBottom:14,display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
+          <div style={{fontFamily:'var(--font-mono)',fontSize:10,letterSpacing:2,color:'var(--cyan)',fontWeight:700}}>EXPOSURE RAMP</div>
+          <div style={{display:'flex',gap:4}}>
+            {['PILOT','HALF','THREE_QUARTER','FULL'].map((lvl, i) => {
+              const active = ['PILOT','HALF','THREE_QUARTER','FULL'].indexOf(regime.exposureRamp.exposureLevel) >= i;
+              const reduced = regime.exposureRamp.exposureLevel === 'REDUCED';
+              return (
+                <div key={lvl} style={{
+                  width:40, height:6, borderRadius:3,
+                  background: reduced ? (i===0||i===1 ? 'var(--amber)' : 'var(--bg3)') : active ? 'var(--cyan)' : 'var(--bg3)',
+                  border:'1px solid var(--border)',
+                }} title={`${lvl}: ${[2,4,6,8][i]}% max heat`}/>
+              );
+            })}
+          </div>
+          <span style={{fontSize:11,color:'var(--text2)',fontFamily:'var(--font-mono)'}}>
+            {regime.exposureRamp.exposureLevel} — max heat {regime.exposureRamp.maxHeatPct}% · rally day {regime.exposureRamp.rallyDay}
+            {regime.exposureRamp.ftdConfirmed && ' · FTD confirmed'}
+            {regime.exposureRamp.distDays > 0 && ` · ${regime.exposureRamp.distDays} dist days`}
+          </span>
         </div>
       )}
 
@@ -2870,6 +2870,11 @@ function SectorIndustryRSTrend({ type, title, api: apiPath }) {
       </button>
       {open && (
         <div>
+          <div className="panel-sub" style={{marginBottom:8}}>
+            Sorted by <strong>current IBD RS rank</strong> (default) — different from the main table above which defaults to RS Accel.
+            This view shows <em>where each {type === 'sectors' ? 'sector' : 'industry'} stands today</em> and how its rank has drifted over 1W/1M/2M/3M.
+            Use it to find absolute leaders; use the main table to find fastest improvers.
+          </div>
           {loading && <Loader msg={`Loading ${type} RS history...`}/>}
           {history?.totalDays === 0 && (
             <div className="info-box">ℹ No {type} RS history yet. Load the {type} tab to start building history.</div>
@@ -2930,6 +2935,7 @@ function ExecutionTab() {
   const [staged, setStaged]     = useState([]);
   const [subs, setSubs]         = useState([]);
   const [firedAlerts, setFired] = useState([]);
+  const [streamStatus, setStreamStatus] = useState(null);
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState('');
   // Alert form
@@ -2942,16 +2948,18 @@ function ExecutionTab() {
   async function loadAll() {
     setLoading(true); setError('');
     try {
-      const [b, p, o, s, al, fa] = await Promise.all([
+      const [b, p, o, s, al, fa, ss] = await Promise.all([
         api('/api/broker/status').catch(()=>null),
         api('/api/broker/positions').catch(()=>({positions:[]})),
         api('/api/broker/orders').catch(()=>({orders:[]})),
         api('/api/staging').catch(()=>({orders:[]})),
         api('/api/alerts/subscriptions').catch(()=>({subscriptions:[]})),
         api('/api/alerts?limit=20').catch(()=>({alerts:[]})),
+        api('/api/broker/stream/status').catch(()=>null),
       ]);
       setBroker(b); setPositions(p.positions||[]); setOrders(o.orders||[]);
       setStaged(s.orders||[]); setSubs(al.subscriptions||[]); setFired(fa.alerts||[]);
+      setStreamStatus(ss);
     } catch(e) { setError(e.message); }
     setLoading(false);
   }
@@ -3072,7 +3080,7 @@ function ExecutionTab() {
       {/* ─── OVERVIEW ─────────────────────────────── */}
       {section==='overview' && broker && (
         <div>
-          {/* Connection + Account */}
+          {/* Connection + Stream + Stop Monitor (account $ shown in Portfolio Dashboard above) */}
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:12,marginBottom:14}}>
             <div className="panel" style={{padding:14}}>
               <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>BROKER STATUS</div>
@@ -3080,27 +3088,7 @@ function ExecutionTab() {
                 {broker.broker?.connected ? 'CONNECTED' : 'DISCONNECTED'}
               </div>
               <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
-                {broker.broker?.paper ? 'Paper Trading' : 'LIVE Trading'} · {broker.broker?.status || '—'}
-              </div>
-            </div>
-
-            <div className="panel" style={{padding:14}}>
-              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>EQUITY</div>
-              <div style={{fontSize:28,fontWeight:800,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>
-                ${broker.broker?.equity ? Number(broker.broker.equity).toLocaleString() : '—'}
-              </div>
-              <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
-                Buying Power: ${broker.broker?.buyingPower ? Number(broker.broker.buyingPower).toLocaleString() : '—'}
-              </div>
-            </div>
-
-            <div className="panel" style={{padding:14}}>
-              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>CASH</div>
-              <div style={{fontSize:28,fontWeight:800,color:'var(--green)',fontFamily:'var(--font-mono)'}}>
-                ${broker.broker?.cash ? Number(broker.broker.cash).toLocaleString() : '—'}
-              </div>
-              <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
-                PDT: {broker.broker?.patternDayTrader ? 'Yes' : 'No'}
+                {broker.broker?.paper ? 'Paper Trading' : 'LIVE Trading'} · {broker.broker?.status || '—'} · PDT: {broker.broker?.patternDayTrader ? 'Yes' : 'No'}
               </div>
             </div>
 
@@ -3111,6 +3099,17 @@ function ExecutionTab() {
               </div>
               <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
                 Checks: {broker.monitor?.totalChecks || 0} · Alerts: {broker.monitor?.activeAlerts || 0}
+              </div>
+            </div>
+
+            <div className="panel" style={{padding:14}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>REAL-TIME STREAM</div>
+              <div style={{fontSize:20,fontWeight:800,color:streamStatus?.connected?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)'}}>
+                {streamStatus ? (streamStatus.connected ? 'CONNECTED' : 'OFFLINE') : '—'}
+              </div>
+              <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
+                {streamStatus ? `${streamStatus.mode||'—'} · ${streamStatus.subscribedSymbols||0} symbols` : 'No data'}
+                {streamStatus?.reconnectAttempts > 0 && ` · ${streamStatus.reconnectAttempts} reconnects`}
               </div>
             </div>
           </div>
@@ -4902,21 +4901,19 @@ function HedgeTab() {
   const [watch, setWatch] = useState(null);
   const [rec, setRec] = useState(null);
   const [instruments, setInstruments] = useState(null);
-  const [streamStatus, setStreamStatus] = useState(null);
   const [loading, setLoading] = useState(false);
   const [subTab, setSubTab] = useState('recommendation');
 
   async function loadAll() {
     setLoading(true);
     try {
-      const [r, s, w, inst, ss] = await Promise.all([
+      const [r, s, w, inst] = await Promise.all([
         api('/api/hedge/recommendation').catch(()=>null),
         api('/api/hedge/shorts').catch(()=>null),
         api('/api/hedge/watch').catch(()=>null),
         api('/api/hedge/instruments').catch(()=>null),
-        api('/api/broker/stream/status').catch(()=>null),
       ]);
-      setRec(r); setShorts(s); setWatch(w); setInstruments(inst); setStreamStatus(ss);
+      setRec(r); setShorts(s); setWatch(w); setInstruments(inst);
     } catch(_) {}
     setLoading(false);
   }
@@ -4931,7 +4928,6 @@ function HedgeTab() {
     { id:'shorts', label:`Short Candidates (${shorts?.count||0})` },
     { id:'watch', label:`Short Watch (${watch?.count||0})` },
     { id:'instruments', label:'Inverse ETFs' },
-    { id:'stream', label:'Stream Status' },
   ];
 
   return (
@@ -4940,7 +4936,7 @@ function HedgeTab() {
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
           <div>
             <div className="panel-title">🛡 <span>HEDGE &</span> SHORT BOOK</div>
-            <div className="panel-sub">Short candidates, hedge recommendations, inverse ETFs, real-time stream status</div>
+            <div className="panel-sub">Short candidates, hedge recommendations, inverse ETFs</div>
           </div>
           <button className="load-btn" onClick={loadAll} disabled={loading} style={{fontSize:10,padding:'6px 18px'}}>{loading?'LOADING...':'↻ REFRESH'}</button>
         </div>
@@ -5092,31 +5088,6 @@ function HedgeTab() {
         </div>
       )}
 
-      {/* ── Stream Status ── */}
-      {subTab==='stream' && (
-        <div className="panel">
-          <div className="panel-title" style={{marginBottom:12}}>📡 <span>REAL-TIME</span> STREAM STATUS</div>
-          {!streamStatus ? (
-            <div style={{textAlign:'center',padding:20,color:'var(--text3)',fontSize:13}}>Unable to fetch stream status.</div>
-          ) : (
-            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
-              {[
-                ['Mode', streamStatus.mode, streamStatus.mode==='alpaca-ws'?'var(--green)':'var(--amber)'],
-                ['Connected', streamStatus.connected?'YES':'NO', streamStatus.connected?'var(--green)':'var(--red)'],
-                ['Authenticated', streamStatus.authenticated?'YES':'NO', streamStatus.authenticated?'var(--green)':'var(--text3)'],
-                ['Subscribed Symbols', streamStatus.subscribedSymbols||0, 'var(--cyan)'],
-                ['Latest Prices', streamStatus.latestPriceCount||0, 'var(--text)'],
-                ['Reconnect Attempts', streamStatus.reconnectAttempts||0, streamStatus.reconnectAttempts>0?'var(--amber)':'var(--green)'],
-              ].map(([label,val,color])=>(
-                <div key={label} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:'12px 14px'}}>
-                  <div style={{fontSize:8,color:'var(--text3)',textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>{label}</div>
-                  <div style={{fontSize:16,fontWeight:700,color,fontFamily:'var(--font-mono)'}}>{String(val)}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
