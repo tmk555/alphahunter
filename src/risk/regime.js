@@ -243,7 +243,7 @@ async function autoDetectCycleState() {
     } else if (ftdConfirmed && above50) {
       mode = 'FTD_CONFIRMED'; confidence = 75; action = 'FULL_DEPLOY';
     } else if (ftdFired && !ftdConfirmed) {
-      mode = 'FTD_CONFIRMED'; confidence = 60; action = 'WATCH_ONLY';
+      mode = 'FTD_FIRED'; confidence = 60; action = 'WATCH_ONLY';
     } else if (rallyDay >= 1 && rallyDay <= 7 && !above50) {
       mode = 'RALLY_ATTEMPT'; confidence = 50; action = 'WATCH_ONLY';
     } else if (above50 && above200 && ma200Rising && distCount <= 2) {
