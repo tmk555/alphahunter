@@ -274,6 +274,13 @@ function initSchema() {
   safeAddColumn('trades', 'needs_review', 'INTEGER DEFAULT 0');
   safeAddColumn('rs_snapshots', 'atr_pct', 'REAL');
 
+  // Multi-timeframe RS + accumulation profile (institutional-edge signals)
+  safeAddColumn('rs_snapshots', 'rs_rank_weekly', 'INTEGER');
+  safeAddColumn('rs_snapshots', 'rs_rank_monthly', 'INTEGER');
+  safeAddColumn('rs_snapshots', 'rs_tf_alignment', 'INTEGER');
+  safeAddColumn('rs_snapshots', 'up_down_ratio_50', 'REAL');
+  safeAddColumn('rs_snapshots', 'accumulation_50', 'TEXT');
+
   // Tier 3: partial profit-taking state
   safeAddColumn('trades', 'initial_shares', 'INTEGER');
   safeAddColumn('trades', 'remaining_shares', 'INTEGER');

@@ -4,8 +4,8 @@
 const { cacheGet, cacheSet, TTL_QUOTE } = require('./data/cache');
 const { loadHistory, saveHistory, RS_HISTORY, SEC_HISTORY, IND_HISTORY } = require('./data/store');
 const { getQuotes, getHistory, getHistoryFull, pLimit } = require('./data/providers/manager');
-const { calcRS, rankToRS, rankBySector, getRSTrend, preGenerateHistoryFor } = require('./signals/rs');
-const { calcSwingMomentum, calcPeriodReturns, calcATR, volumeTrend } = require('./signals/momentum');
+const { calcRS, calcRSWeekly, calcRSMonthly, rankToRS, rankBySector, getRSTrend, preGenerateHistoryFor, getTimeframeAlignment } = require('./signals/rs');
+const { calcSwingMomentum, calcPeriodReturns, calcATR, volumeTrend, calcVolumeProfile } = require('./signals/momentum');
 const { calcVCP }    = require('./signals/vcp');
 const { calcRSLine } = require('./signals/rsline');
 const { calcStage }  = require('./signals/stage');
@@ -88,7 +88,10 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
       priceNearHigh:   distFromHigh != null && distFromHigh <= 0.25,
     };
     const sepaScore = Object.values(sepa).filter(v => v === true).length;
-    const rawRS    = calcRS(closes);
+    const rawRS         = calcRS(closes);
+    const rawRSWeekly   = calcRSWeekly(closes);
+    const rawRSMonthly  = calcRSMonthly(closes);
+    const volumeProfile = calcVolumeProfile(barsMap[sym]);
     const volRatio = q.averageDailyVolume3Month ? +(q.regularMarketVolume/q.averageDailyVolume3Month).toFixed(2) : 1;
 
     // Parse earnings date
@@ -140,13 +143,22 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
       ...calcRSLine(closes, histMap['SPY'] || []),
       ...calcStage(closes, ma150),
       rawRS,
+      rawRSWeekly,
+      rawRSMonthly,
+      volumeProfile,
       earningsDrift,
       beta,
     });
   }
 
   rankToRS(results);
+  rankToRS(results, 'rawRSWeekly', 'rsRankWeekly');
+  rankToRS(results, 'rawRSMonthly', 'rsRankMonthly');
   rankBySector(results);
+  // Multi-timeframe alignment count (0-3) — used by conviction + UI
+  for (const s of results) {
+    s.rsTimeframeAlignment = getTimeframeAlignment(s, 80);
+  }
   results.sort((a,b) => b.rsRank - a.rsRank);
 
   // Save today's snapshot

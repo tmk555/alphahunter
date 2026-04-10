@@ -14,12 +14,82 @@ function calcRS(closes) {
        + ((now/p9m - 1)*100)*0.20 + ((now/p12m- 1)*100)*0.20;
 }
 
-function rankToRS(items, key = 'rawRS') {
-  const valid = items.filter(s => s[key] != null);
-  valid.sort((a, b) => a[key] - b[key]);
-  valid.forEach((s, i) => { s.rsRank = Math.round((i / Math.max(valid.length-1, 1)) * 98) + 1; });
-  items.filter(s => s[key] == null).forEach(s => { s.rsRank = 50; });
+// ─── Multi-Timeframe RS ─────────────────────────────────────────────────────
+// Same weighted-period formula, but applied to weekly and monthly resampled
+// closes. Confirms whether daily strength is also visible on higher timeframes
+// — a stock with daily RS 95 + weekly RS 90 + monthly RS 85 is in a true
+// multi-timeframe leadership trend. Daily-only strength can be a 1-2 week
+// pop that fades. Use rsTimeframeAlignment as a confirmation gate.
+
+// Resample daily closes to weekly: take every 5th trading day from the end
+// (~Friday close) so the most recent weekly bar always reflects today.
+function resampleWeekly(closes) {
+  if (!closes || closes.length === 0) return [];
+  const out = [];
+  for (let i = closes.length - 1; i >= 0; i -= 5) out.unshift(closes[i]);
+  return out;
+}
+
+// Resample to monthly (~21 trading days). With 252-day history we get ~12
+// monthly bars, which is just enough for the 3/6/9/12 horizon weights.
+function resampleMonthly(closes) {
+  if (!closes || closes.length === 0) return [];
+  const out = [];
+  for (let i = closes.length - 1; i >= 0; i -= 21) out.unshift(closes[i]);
+  return out;
+}
+
+function calcRSWeekly(closes) {
+  // Need at least 13 weeks (~65 trading days) for the 3-month leg
+  if (!closes || closes.length < 65) return null;
+  const w = resampleWeekly(closes);
+  if (w.length < 13) return null;
+  const n = w.length;
+  const now  = w[n - 1];
+  const p3m  = w[Math.max(0, n - 13)];
+  const p6m  = w[Math.max(0, n - 26)] || p3m;
+  const p9m  = w[Math.max(0, n - 39)] || p6m;
+  const p12m = w[Math.max(0, n - 52)] || p9m;
+  return ((now/p3m - 1)*100)*0.40 + ((now/p6m - 1)*100)*0.20
+       + ((now/p9m - 1)*100)*0.20 + ((now/p12m - 1)*100)*0.20;
+}
+
+function calcRSMonthly(closes) {
+  // Need at least 3 months of data for the shortest leg
+  if (!closes || closes.length < 63) return null;
+  const m = resampleMonthly(closes);
+  if (m.length < 3) return null;
+  const n = m.length;
+  const now  = m[n - 1];
+  const p3m  = m[Math.max(0, n - 3)];
+  const p6m  = m[Math.max(0, n - 6)] || p3m;
+  const p9m  = m[Math.max(0, n - 9)] || p6m;
+  const p12m = m[Math.max(0, n - 12)] || p9m;
+  return ((now/p3m - 1)*100)*0.40 + ((now/p6m - 1)*100)*0.20
+       + ((now/p9m - 1)*100)*0.20 + ((now/p12m - 1)*100)*0.20;
+}
+
+// rankToRS: percentile-rank items by `inKey` and write the integer rank to
+// `outKey`. Defaults preserved so existing call sites (rankToRS(items)) keep
+// writing rawRS → rsRank. Pass alternate keys for weekly/monthly:
+//   rankToRS(items, 'rawRSWeekly', 'rsRankWeekly')
+function rankToRS(items, inKey = 'rawRS', outKey = 'rsRank') {
+  const valid = items.filter(s => s[inKey] != null);
+  valid.sort((a, b) => a[inKey] - b[inKey]);
+  valid.forEach((s, i) => { s[outKey] = Math.round((i / Math.max(valid.length-1, 1)) * 98) + 1; });
+  items.filter(s => s[inKey] == null).forEach(s => { s[outKey] = 50; });
   return items;
+}
+
+// Multi-timeframe alignment: how many of the 3 timeframes show "leader" RS.
+// Returns 0-3. A stock with 3/3 alignment has institutional support across
+// daily/weekly/monthly horizons; 1/3 is likely a short-term pop.
+function getTimeframeAlignment(stock, threshold = 80) {
+  let n = 0;
+  if ((stock.rsRank        || 0) >= threshold) n++;
+  if ((stock.rsRankWeekly  || 0) >= threshold) n++;
+  if ((stock.rsRankMonthly || 0) >= threshold) n++;
+  return n;
 }
 
 // Sector-relative RS rank: percentile within each sector group
@@ -114,4 +184,9 @@ function preGenerateHistoryFor(histMap, keyFn, histType, label, minSnapshots = 3
   console.log(`  ✓ ${label} RS history pre-generated (13 weekly snapshots)`);
 }
 
-module.exports = { calcRS, rankToRS, rankBySector, getRSTrend, preGenerateHistoryFor };
+module.exports = {
+  calcRS, calcRSWeekly, calcRSMonthly,
+  resampleWeekly, resampleMonthly,
+  rankToRS, rankBySector, getRSTrend, preGenerateHistoryFor,
+  getTimeframeAlignment,
+};

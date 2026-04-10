@@ -7,11 +7,15 @@ const {
   BUILT_IN_STRATEGIES,
   getAvailableDateRange,
   runReplay,
+  runWalkForward,
+  runMonteCarlo,
   compareStrategies,
   getReplayHistory,
   getReplayResult,
   deleteReplayResult,
 } = require('../signals/replay');
+const { runBackfill } = require('../signals/backfill');
+const { FULL_UNIVERSE } = require('../../universe');
 
 // ─── Available strategies ─────────────────────────────────────────────────
 router.get('/replay/strategies', (req, res) => {
@@ -60,6 +64,81 @@ router.post('/replay/compare', (req, res) => {
     });
     res.json(result);
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ─── Walk-forward optimization ────────────────────────────────────────────
+router.post('/replay/walk-forward', (req, res) => {
+  try {
+    const {
+      strategy, startDate, endDate,
+      trainDays, testDays, paramGrid,
+      optimizeMetric, maxPositions, initialCapital, execution,
+    } = req.body;
+    if (!strategy || !startDate || !endDate) {
+      return res.status(400).json({ error: 'strategy, startDate, and endDate required' });
+    }
+    if (!paramGrid || typeof paramGrid !== 'object') {
+      return res.status(400).json({ error: 'paramGrid object required (e.g. { minRS: [70,80,90] })' });
+    }
+    const result = runWalkForward({
+      strategy, startDate, endDate,
+      trainDays: trainDays || 120,
+      testDays: testDays || 60,
+      paramGrid,
+      optimizeMetric: optimizeMetric || 'sharpeRatio',
+      maxPositions: maxPositions || 10,
+      initialCapital: initialCapital || 100000,
+      execution: execution || {},
+    });
+    res.json(result);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ─── Monte Carlo simulation ───────────────────────────────────────────────
+router.post('/replay/monte-carlo', (req, res) => {
+  try {
+    const { replayId, trades, iterations, method, positionFraction, initialCapital } = req.body;
+    if (replayId == null && (!trades || !trades.length)) {
+      return res.status(400).json({ error: 'replayId or trades[] required' });
+    }
+    const result = runMonteCarlo({
+      replayId: replayId != null ? +replayId : null,
+      trades: trades || null,
+      iterations: iterations || 1000,
+      method: method || 'permutation',
+      positionFraction: positionFraction != null ? +positionFraction : 0.10,
+      initialCapital: initialCapital || 100000,
+    });
+    res.json(result);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ─── Historical snapshot backfill ─────────────────────────────────────────
+// Walks the past N trading days using each universe symbol's 1-year OHLCV
+// from the provider layer, recomputes the full signal stack, and persists
+// to rs_snapshots so the replay/walk-forward/monte-carlo engines can run on
+// real historical data instead of just today's tail.
+router.post('/replay/backfill', async (req, res) => {
+  try {
+    const { lookbackDays = 180, symbols, concurrency = 5 } = req.body || {};
+    const useSymbols = Array.isArray(symbols) && symbols.length
+      ? symbols
+      : Object.keys(FULL_UNIVERSE);
+    if (!useSymbols.length) {
+      return res.status(400).json({ error: 'no symbols available — provide symbols[] or populate universe' });
+    }
+    if (lookbackDays < 1 || lookbackDays > 252) {
+      return res.status(400).json({ error: 'lookbackDays must be between 1 and 252' });
+    }
+    const summary = await runBackfill({
+      symbols: useSymbols,
+      lookbackDays: +lookbackDays,
+      concurrency: +concurrency || 5,
+    });
+    res.json(summary);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ─── Replay history ───────────────────────────────────────────────────────

@@ -64,7 +64,7 @@ function calcATR(data) {
   return +(atrSum / 14).toFixed(2);
 }
 
-// Volume trend proxy
+// Volume trend proxy (legacy — single-bar quote based)
 function volumeTrend(q) {
   if (!q) return 'neutral';
   const price  = q.regularMarketPrice;
@@ -78,4 +78,62 @@ function volumeTrend(q) {
   return 'neutral';
 }
 
-module.exports = { calcSwingMomentum, calcPeriodReturns, calcATR, volumeTrend };
+// ─── Up/Down Volume Profile ─────────────────────────────────────────────────
+// Reads OHLCV bars and decomposes total volume into "up volume" (days the
+// stock closed higher) vs "down volume" (closed lower). The ratio is the
+// most direct proxy retail traders have for institutional accumulation:
+// when big money buys, it shows up as outsized volume on up days. IBD's
+// A/B/C/D/E accumulation grades use this same idea. Replaces the previous
+// crude single-day volumeTrend() proxy that only looked at the latest bar.
+//
+// Returns ratios for both 20-day (recent activity, swing-trade horizon) and
+// 50-day (institutional positioning timescale). The 50-day is the one that
+// matters most for "is this stock under accumulation?".
+function calcVolumeProfile(bars) {
+  if (!bars || bars.length < 21) return null;
+
+  function ratio(periodDays) {
+    if (bars.length < periodDays + 1) return null;
+    const slice = bars.slice(-periodDays - 1);
+    let upVol = 0, downVol = 0;
+    let upDays = 0, downDays = 0;
+    for (let i = 1; i < slice.length; i++) {
+      const v = slice[i].volume || 0;
+      if (slice[i].close > slice[i - 1].close) { upVol += v; upDays++; }
+      else if (slice[i].close < slice[i - 1].close) { downVol += v; downDays++; }
+    }
+    if (downVol === 0) return { ratio: upVol > 0 ? 99 : null, upVol, downVol, upDays, downDays };
+    return {
+      ratio: +(upVol / downVol).toFixed(2),
+      upVol, downVol, upDays, downDays,
+    };
+  }
+
+  // IBD-style accumulation/distribution grade
+  // A: heavy accumulation, E: heavy distribution
+  function grade(r) {
+    if (r == null) return null;
+    if (r >= 1.5) return 'A';
+    if (r >= 1.2) return 'B';
+    if (r >= 0.9) return 'C';
+    if (r >= 0.7) return 'D';
+    return 'E';
+  }
+
+  const r20 = ratio(20);
+  const r50 = ratio(50);
+
+  return {
+    upDownRatio20: r20?.ratio ?? null,
+    upDownRatio50: r50?.ratio ?? null,
+    accumulation20: grade(r20?.ratio),
+    accumulation50: grade(r50?.ratio),
+    upDays50: r50?.upDays ?? null,
+    downDays50: r50?.downDays ?? null,
+    // Convenience flags for downstream consumers
+    accumulating: r50 != null && r50.ratio != null && r50.ratio >= 1.2,
+    distributing: r50 != null && r50.ratio != null && r50.ratio < 0.9,
+  };
+}
+
+module.exports = { calcSwingMomentum, calcPeriodReturns, calcATR, volumeTrend, calcVolumeProfile };
