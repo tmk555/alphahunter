@@ -5102,9 +5102,9 @@ function ReplayTab() {
   const [mcResult, setMcResult]     = useState(null);
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState('');
-  const [form, setForm] = useState({ strategy:'rs_momentum', startDate:'', endDate:'', maxPositions:10, initialCapital:100000, params:'{}' });
+  const [form, setForm] = useState({ strategy:'rs_momentum', tradeMode:'', startDate:'', endDate:'', maxPositions:10, initialCapital:100000, params:'{}' });
   const [wfForm, setWfForm] = useState({ trainDays:120, testDays:60, optimizeMetric:'sharpeRatio', paramGrid:'{\n  "minRS": [70, 80, 90],\n  "minMomentum": [50, 60, 70]\n}' });
-  const [mcForm, setMcForm] = useState({ iterations:1000, method:'permutation', positionFraction:0.10 });
+  const [mcForm, setMcForm] = useState({ iterations:1000, method:'permutation', positionFraction:0.10, selectedReplayId:null });
   const [bfForm, setBfForm] = useState({ lookbackDays:180 });
   const [bfResult, setBfResult] = useState(null);
   const [bfLoading, setBfLoading] = useState(false);
@@ -5136,7 +5136,7 @@ function ReplayTab() {
       const r = await api('/api/replay/run', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
-          strategy: form.strategy, startDate: form.startDate, endDate: form.endDate,
+          strategy: form.strategy, tradeMode: form.tradeMode, startDate: form.startDate, endDate: form.endDate,
           maxPositions: form.maxPositions, initialCapital: form.initialCapital, params,
         }),
       });
@@ -5221,10 +5221,9 @@ function ReplayTab() {
   }
 
   async function runMonteCarlo() {
-    // Need either a viewed result or a recent backtest
-    const replayId = result?.id || history[0]?.id;
+    const replayId = mcForm.selectedReplayId || result?.id || history[0]?.id;
     if (!replayId) {
-      setError('Run or load a backtest first to feed Monte Carlo');
+      setError('Select or run a backtest first to feed Monte Carlo');
       return;
     }
     setLoading(true); setError(''); setMcResult(null);
@@ -5295,6 +5294,14 @@ function ReplayTab() {
             <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>STRATEGY</div>
             <select value={form.strategy} onChange={e=>setForm({...form,strategy:e.target.value,params:'{}'})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'8px 10px',color:'var(--text)',fontSize:12}}>
               {strategies.map(s=><option key={s.key} value={s.key}>{s.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>MODE</div>
+            <select value={form.tradeMode} onChange={e=>setForm({...form,tradeMode:e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11}}>
+              <option value="">All</option>
+              <option value="swing">Swing Only</option>
+              <option value="position">Position Only</option>
             </select>
           </div>
           <div>
@@ -5608,7 +5615,24 @@ function ReplayTab() {
       {/* ─── Monte Carlo Controls ────────────────────────────────────── */}
       <div className="panel">
         <div className="panel-title">🎲 <span>MONTE CARLO</span> SIMULATION</div>
-        <div className="panel-sub" style={{marginBottom:10}}>Resample the most recent replay's trades to see how much of the result was edge vs. luck. Permutation reorders the same trades; bootstrap samples with replacement.</div>
+        <div className="panel-sub" style={{marginBottom:10}}>Resample a replay's trades to see how much of the result was edge vs. luck. Permutation reorders the same trades; bootstrap samples with replacement.</div>
+
+        {/* Replay picker */}
+        <div style={{marginBottom:10,padding:'10px 12px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4}}>
+          <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:6}}>SELECT REPLAY</div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:8}}>
+            <select value={mcForm.selectedReplayId || ''} onChange={e=>setMcForm({...mcForm,selectedReplayId:+e.target.value||null})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'7px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}>
+              <option value="">-- Pick from history or view a result --</option>
+              {history.map(h=>(
+                <option key={h.id} value={h.id}>#{h.id} {h.strategy} ({h.start_date}→{h.end_date}, {h.total_trades}t, {h.total_return}%)</option>
+              ))}
+            </select>
+            {result?.id && (
+              <button onClick={()=>setMcForm({...mcForm,selectedReplayId:result.id})} style={{background:'var(--cyan)',border:'none',borderRadius:3,padding:'7px 12px',color:'var(--bg)',fontSize:10,fontWeight:600,cursor:'pointer'}}>USE CURRENT</button>
+            )}
+          </div>
+        </div>
+
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:8,marginBottom:10}}>
           <div>
             <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>METHOD</div>
@@ -5629,7 +5653,6 @@ function ReplayTab() {
             <button className="load-btn" onClick={runMonteCarlo} disabled={loading} style={{width:'100%',fontSize:10,padding:'7px 18px',background:'var(--violet, #9d4edd)'}}>{loading?'SIMULATING...':'RUN MC'}</button>
           </div>
         </div>
-        <div style={{fontSize:10,color:'var(--text3)'}}>Source: {result?.id ? `replay #${result.id}` : (history[0]?.id ? `latest replay #${history[0].id}` : 'no backtest available')}</div>
       </div>
 
       {/* ─── Monte Carlo Results (right after controls) ──────────── */}
