@@ -5165,7 +5165,36 @@ function ReplayTab() {
   async function loadResult(id) {
     try {
       const r = await api(`/api/replay/${id}`);
-      setResult({...r.result, id:r.id, strategy:r.strategy, params:JSON.parse(typeof r.params==='string'?r.params:'{}')});
+      const stored = r.result || {};
+      const trades = stored.trades || [];
+      const winningTrades = trades.filter(t => t.pnl > 0);
+      const losingTrades = trades.filter(t => t.pnl <= 0);
+      const avgWin = winningTrades.length ? +(winningTrades.reduce((a,t)=>a+t.pnlPct,0)/winningTrades.length).toFixed(2) : 0;
+      const avgLoss = losingTrades.length ? +(losingTrades.reduce((a,t)=>a+t.pnlPct,0)/losingTrades.length).toFixed(2) : 0;
+      const avgR = trades.length ? +(trades.reduce((a,t)=>a+(t.pnlPct/(t.atrPct||2.5)),0)/trades.length).toFixed(2) : 0;
+      const spyBm = stored.spyBenchmark;
+      const alpha = spyBm ? +(r.total_return - spyBm.totalReturn).toFixed(2) : null;
+      setResult({
+        id: r.id,
+        strategy: r.strategy,
+        params: JSON.parse(typeof r.params==='string'?r.params:'{}'),
+        period: { startDate: r.start_date, endDate: r.end_date, tradingDays: stored.equityCurve?.length || 0 },
+        performance: {
+          initialCapital: r.initial_capital, finalEquity: r.final_equity,
+          totalReturn: r.total_return, maxDrawdown: r.max_drawdown,
+          sharpeRatio: r.sharpe_ratio, profitFactor: r.profit_factor, alpha,
+        },
+        benchmark: spyBm ? {
+          spyReturn: spyBm.totalReturn, spyMaxDrawdown: spyBm.maxDrawdown,
+          spySharpe: spyBm.sharpeRatio, outperformed: r.total_return > spyBm.totalReturn,
+        } : null,
+        trades: {
+          total: r.total_trades, wins: winningTrades.length, losses: losingTrades.length,
+          winRate: r.win_rate, avgWin, avgLoss, avgR, exitReasons: stored.exitReasons || {},
+        },
+        tradeLog: trades,
+        equityCurve: stored.equityCurve || [],
+      });
     } catch(e) { setError(e.message); }
   }
 
@@ -5262,13 +5291,28 @@ function ReplayTab() {
 
         {/* Strategy selection */}
         <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr 1fr 1fr',gap:8,marginBottom:10}}>
-          <select value={form.strategy} onChange={e=>setForm({...form,strategy:e.target.value,params:'{}'})} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'8px 10px',color:'var(--text)',fontSize:12}}>
-            {strategies.map(s=><option key={s.key} value={s.key}>{s.name}</option>)}
-          </select>
-          <input type="date" value={form.startDate} onChange={e=>setForm({...form,startDate:e.target.value})} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
-          <input type="date" value={form.endDate} onChange={e=>setForm({...form,endDate:e.target.value})} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
-          <input type="number" value={form.maxPositions} onChange={e=>setForm({...form,maxPositions:+e.target.value})} placeholder="Max Pos" style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
-          <input type="number" value={form.initialCapital} onChange={e=>setForm({...form,initialCapital:+e.target.value})} placeholder="Capital" style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>STRATEGY</div>
+            <select value={form.strategy} onChange={e=>setForm({...form,strategy:e.target.value,params:'{}'})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'8px 10px',color:'var(--text)',fontSize:12}}>
+              {strategies.map(s=><option key={s.key} value={s.key}>{s.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>START DATE</div>
+            <input type="date" value={form.startDate} onChange={e=>setForm({...form,startDate:e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>END DATE</div>
+            <input type="date" value={form.endDate} onChange={e=>setForm({...form,endDate:e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>MAX POSITIONS</div>
+            <input type="number" value={form.maxPositions} onChange={e=>setForm({...form,maxPositions:+e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>INITIAL CAPITAL</div>
+            <input type="number" value={form.initialCapital} onChange={e=>setForm({...form,initialCapital:+e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          </div>
         </div>
 
         {selectedStrat && (
@@ -5286,61 +5330,7 @@ function ReplayTab() {
         </div>
       </div>
 
-      {/* ─── Walk-Forward Optimization Controls ─────────────────────── */}
-      <div className="panel">
-        <div className="panel-title">🔄 <span>WALK-FORWARD</span> OPTIMIZATION</div>
-        <div className="panel-sub" style={{marginBottom:10}}>Sweep params on rolling train windows, validate on the next held-out test slice. Reveals overfitting and parameter stability — pure out-of-sample.</div>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:10}}>
-          <div>
-            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>TRAIN DAYS</div>
-            <input type="number" value={wfForm.trainDays} onChange={e=>setWfForm({...wfForm,trainDays:+e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
-          </div>
-          <div>
-            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>TEST DAYS</div>
-            <input type="number" value={wfForm.testDays} onChange={e=>setWfForm({...wfForm,testDays:+e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
-          </div>
-          <div>
-            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>OPTIMIZE FOR</div>
-            <select value={wfForm.optimizeMetric} onChange={e=>setWfForm({...wfForm,optimizeMetric:e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'7px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}>
-              <option value="sharpeRatio">Sharpe Ratio</option>
-              <option value="totalReturn">Total Return</option>
-              <option value="profitFactor">Profit Factor</option>
-            </select>
-          </div>
-        </div>
-        <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>PARAM GRID JSON</div>
-        <textarea value={wfForm.paramGrid} onChange={e=>setWfForm({...wfForm,paramGrid:e.target.value})} rows={4} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 10px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)',marginBottom:10,resize:'vertical'}}/>
-        <button className="load-btn" onClick={runWalkForward} disabled={loading} style={{fontSize:10,padding:'6px 18px',background:'var(--amber)'}}>{loading?'OPTIMIZING...':'RUN WALK-FORWARD'}</button>
-      </div>
-
-      {/* ─── Monte Carlo Controls ────────────────────────────────────── */}
-      <div className="panel">
-        <div className="panel-title">🎲 <span>MONTE CARLO</span> SIMULATION</div>
-        <div className="panel-sub" style={{marginBottom:10}}>Resample the most recent replay's trades to see how much of the result was edge vs. luck. Permutation reorders the same trades; bootstrap samples with replacement.</div>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:8,marginBottom:10}}>
-          <div>
-            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>METHOD</div>
-            <select value={mcForm.method} onChange={e=>setMcForm({...mcForm,method:e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'7px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}>
-              <option value="permutation">Permutation</option>
-              <option value="bootstrap">Bootstrap</option>
-            </select>
-          </div>
-          <div>
-            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>ITERATIONS</div>
-            <input type="number" value={mcForm.iterations} min="50" max="10000" onChange={e=>setMcForm({...mcForm,iterations:+e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
-          </div>
-          <div>
-            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>POSITION FRACTION</div>
-            <input type="number" step="0.01" value={mcForm.positionFraction} onChange={e=>setMcForm({...mcForm,positionFraction:+e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
-          </div>
-          <div style={{display:'flex',alignItems:'flex-end'}}>
-            <button className="load-btn" onClick={runMonteCarlo} disabled={loading} style={{width:'100%',fontSize:10,padding:'7px 18px',background:'var(--violet, #9d4edd)'}}>{loading?'SIMULATING...':'RUN MC'}</button>
-          </div>
-        </div>
-        <div style={{fontSize:10,color:'var(--text3)'}}>Source: {result?.id ? `replay #${result.id}` : (history[0]?.id ? `latest replay #${history[0].id}` : 'no backtest available')}</div>
-      </div>
-
-      {/* Results */}
+      {/* ─── Replay Results (right after controls) ─────────────────── */}
       {result && !result.comparisons && result.performance && (
         <div className="panel">
           <div className="panel-title">📈 <span>{result.strategy||result.strategyKey}</span> RESULTS</div>
@@ -5511,7 +5501,34 @@ function ReplayTab() {
         </div>
       )}
 
-      {/* ─── Walk-Forward Results ────────────────────────────────────── */}
+      {/* ─── Walk-Forward Optimization Controls ─────────────────────── */}
+      <div className="panel">
+        <div className="panel-title">🔄 <span>WALK-FORWARD</span> OPTIMIZATION</div>
+        <div className="panel-sub" style={{marginBottom:10}}>Sweep params on rolling train windows, validate on the next held-out test slice. Reveals overfitting and parameter stability — pure out-of-sample.</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:10}}>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>TRAIN DAYS</div>
+            <input type="number" value={wfForm.trainDays} onChange={e=>setWfForm({...wfForm,trainDays:+e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>TEST DAYS</div>
+            <input type="number" value={wfForm.testDays} onChange={e=>setWfForm({...wfForm,testDays:+e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>OPTIMIZE FOR</div>
+            <select value={wfForm.optimizeMetric} onChange={e=>setWfForm({...wfForm,optimizeMetric:e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'7px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}>
+              <option value="sharpeRatio">Sharpe Ratio</option>
+              <option value="totalReturn">Total Return</option>
+              <option value="profitFactor">Profit Factor</option>
+            </select>
+          </div>
+        </div>
+        <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>PARAM GRID JSON</div>
+        <textarea value={wfForm.paramGrid} onChange={e=>setWfForm({...wfForm,paramGrid:e.target.value})} rows={4} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 10px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)',marginBottom:10,resize:'vertical'}}/>
+        <button className="load-btn" onClick={runWalkForward} disabled={loading} style={{fontSize:10,padding:'6px 18px',background:'var(--amber)'}}>{loading?'OPTIMIZING...':'RUN WALK-FORWARD'}</button>
+      </div>
+
+      {/* ─── Walk-Forward Results (right after controls) ──────────── */}
       {wfResult && wfResult.outOfSample && (
         <div className="panel">
           <div className="panel-title">🔄 <span>WALK-FORWARD</span> RESULTS — {wfResult.strategyName}</div>
@@ -5588,7 +5605,34 @@ function ReplayTab() {
         </div>
       )}
 
-      {/* ─── Monte Carlo Results ─────────────────────────────────────── */}
+      {/* ─── Monte Carlo Controls ────────────────────────────────────── */}
+      <div className="panel">
+        <div className="panel-title">🎲 <span>MONTE CARLO</span> SIMULATION</div>
+        <div className="panel-sub" style={{marginBottom:10}}>Resample the most recent replay's trades to see how much of the result was edge vs. luck. Permutation reorders the same trades; bootstrap samples with replacement.</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:8,marginBottom:10}}>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>METHOD</div>
+            <select value={mcForm.method} onChange={e=>setMcForm({...mcForm,method:e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'7px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}>
+              <option value="permutation">Permutation</option>
+              <option value="bootstrap">Bootstrap</option>
+            </select>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>ITERATIONS</div>
+            <input type="number" value={mcForm.iterations} min="50" max="10000" onChange={e=>setMcForm({...mcForm,iterations:+e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>POSITION FRACTION</div>
+            <input type="number" step="0.01" value={mcForm.positionFraction} onChange={e=>setMcForm({...mcForm,positionFraction:+e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          </div>
+          <div style={{display:'flex',alignItems:'flex-end'}}>
+            <button className="load-btn" onClick={runMonteCarlo} disabled={loading} style={{width:'100%',fontSize:10,padding:'7px 18px',background:'var(--violet, #9d4edd)'}}>{loading?'SIMULATING...':'RUN MC'}</button>
+          </div>
+        </div>
+        <div style={{fontSize:10,color:'var(--text3)'}}>Source: {result?.id ? `replay #${result.id}` : (history[0]?.id ? `latest replay #${history[0].id}` : 'no backtest available')}</div>
+      </div>
+
+      {/* ─── Monte Carlo Results (right after controls) ──────────── */}
       {mcResult && (
         <div className="panel">
           <div className="panel-title">🎲 <span>MONTE CARLO</span> DISTRIBUTION</div>
