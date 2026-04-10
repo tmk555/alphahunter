@@ -13,6 +13,12 @@ const {
   getReplayHistory,
   getReplayResult,
   deleteReplayResult,
+  saveMCResult,
+  getMCHistory,
+  getMCResult,
+  saveWFResult,
+  getWFHistory,
+  getWFResult,
 } = require('../signals/replay');
 const { runBackfill } = require('../signals/backfill');
 const { FULL_UNIVERSE } = require('../../universe');
@@ -37,12 +43,12 @@ router.get('/replay/range', (req, res) => {
 // ─── Run replay ───────────────────────────────────────────────────────────
 router.post('/replay/run', (req, res) => {
   try {
-    const { strategy, params, startDate, endDate, maxPositions, initialCapital } = req.body;
+    const { strategy, tradeMode, params, startDate, endDate, maxPositions, initialCapital } = req.body;
     if (!strategy || !startDate || !endDate) {
       return res.status(400).json({ error: 'strategy, startDate, and endDate required' });
     }
     const result = runReplay({
-      strategy, params, startDate, endDate,
+      strategy, tradeMode: tradeMode || undefined, params, startDate, endDate,
       maxPositions: maxPositions || 10,
       initialCapital: initialCapital || 100000,
     });
@@ -90,6 +96,12 @@ router.post('/replay/walk-forward', (req, res) => {
       initialCapital: initialCapital || 100000,
       execution: execution || {},
     });
+    // Persist WF result
+    try {
+      result.config = { ...result.config, startDate, endDate };
+      const wfId = saveWFResult(result);
+      result.id = wfId;
+    } catch (_) { /* non-critical */ }
     res.json(result);
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -109,6 +121,11 @@ router.post('/replay/monte-carlo', (req, res) => {
       positionFraction: positionFraction != null ? +positionFraction : 0.10,
       initialCapital: initialCapital || 100000,
     });
+    // Persist MC result
+    try {
+      const mcId = saveMCResult(replayId, result);
+      result.id = mcId;
+    } catch (_) { /* non-critical */ }
     res.json(result);
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -127,8 +144,8 @@ router.post('/replay/backfill', async (req, res) => {
     if (!useSymbols.length) {
       return res.status(400).json({ error: 'no symbols available — provide symbols[] or populate universe' });
     }
-    if (lookbackDays < 1 || lookbackDays > 252) {
-      return res.status(400).json({ error: 'lookbackDays must be between 1 and 252' });
+    if (lookbackDays < 1 || lookbackDays > 366) {
+      return res.status(400).json({ error: 'lookbackDays must be between 1 and 366' });
     }
     const summary = await runBackfill({
       symbols: useSymbols,
@@ -147,6 +164,38 @@ router.get('/replay/history', (req, res) => {
     const { limit = 20 } = req.query;
     const history = getReplayHistory(+limit);
     res.json({ history, count: history.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Monte Carlo history & view (before :id catch-all) ──────────────────
+router.get('/replay/mc/history', (req, res) => {
+  try {
+    const { limit = 10 } = req.query;
+    res.json({ history: getMCHistory(+limit) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/replay/mc/:id', (req, res) => {
+  try {
+    const result = getMCResult(+req.params.id);
+    if (!result) return res.status(404).json({ error: 'MC result not found' });
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Walk-Forward history & view ─────────────────────────────────────────
+router.get('/replay/wf/history', (req, res) => {
+  try {
+    const { limit = 10 } = req.query;
+    res.json({ history: getWFHistory(+limit) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/replay/wf/:id', (req, res) => {
+  try {
+    const result = getWFResult(+req.params.id);
+    if (!result) return res.status(404).json({ error: 'WF result not found' });
+    res.json(result);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
