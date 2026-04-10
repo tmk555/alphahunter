@@ -5098,9 +5098,16 @@ function ReplayTab() {
   const [dateRange, setDateRange]   = useState(null);
   const [history, setHistory]       = useState([]);
   const [result, setResult]         = useState(null);
+  const [wfResult, setWfResult]     = useState(null);
+  const [mcResult, setMcResult]     = useState(null);
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState('');
   const [form, setForm] = useState({ strategy:'rs_momentum', startDate:'', endDate:'', maxPositions:10, initialCapital:100000, params:'{}' });
+  const [wfForm, setWfForm] = useState({ trainDays:120, testDays:60, optimizeMetric:'sharpeRatio', paramGrid:'{\n  "minRS": [70, 80, 90],\n  "minMomentum": [50, 60, 70]\n}' });
+  const [mcForm, setMcForm] = useState({ iterations:1000, method:'permutation', positionFraction:0.10 });
+  const [bfForm, setBfForm] = useState({ lookbackDays:180 });
+  const [bfResult, setBfResult] = useState(null);
+  const [bfLoading, setBfLoading] = useState(false);
 
   async function loadAll() {
     try {
@@ -5162,6 +5169,61 @@ function ReplayTab() {
     } catch(e) { setError(e.message); }
   }
 
+  async function runWalkForward() {
+    if (!form.strategy || !form.startDate || !form.endDate) return;
+    setLoading(true); setError(''); setWfResult(null);
+    try {
+      let paramGrid = {};
+      try { paramGrid = JSON.parse(wfForm.paramGrid); }
+      catch(_) { setError('Invalid paramGrid JSON'); setLoading(false); return; }
+      const r = await api('/api/replay/walk-forward', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          strategy: form.strategy,
+          startDate: form.startDate, endDate: form.endDate,
+          trainDays: +wfForm.trainDays, testDays: +wfForm.testDays,
+          paramGrid, optimizeMetric: wfForm.optimizeMetric,
+          maxPositions: form.maxPositions, initialCapital: form.initialCapital,
+        }),
+      });
+      setWfResult(r);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  async function runMonteCarlo() {
+    // Need either a viewed result or a recent backtest
+    const replayId = result?.id || history[0]?.id;
+    if (!replayId) {
+      setError('Run or load a backtest first to feed Monte Carlo');
+      return;
+    }
+    setLoading(true); setError(''); setMcResult(null);
+    try {
+      const r = await api('/api/replay/monte-carlo', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          replayId, iterations: +mcForm.iterations, method: mcForm.method,
+          positionFraction: +mcForm.positionFraction, initialCapital: form.initialCapital,
+        }),
+      });
+      setMcResult(r);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  async function runBackfill() {
+    setBfLoading(true); setError(''); setBfResult(null);
+    try {
+      const r = await api('/api/replay/backfill', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ lookbackDays: +bfForm.lookbackDays }),
+      });
+      setBfResult(r); loadAll(); // refresh date range
+    } catch(e) { setError(e.message); }
+    setBfLoading(false);
+  }
+
   const selectedStrat = strategies.find(s=>s.key===form.strategy);
   const pctColor = v => v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text3)';
 
@@ -5177,11 +5239,24 @@ function ReplayTab() {
 
         {error && <div style={{background:'rgba(255,61,87,0.1)',border:'1px solid var(--red)',borderRadius:4,padding:'8px 12px',marginBottom:12,fontSize:12,color:'var(--red)'}}>{error}</div>}
 
-        {/* Date range info */}
-        {dateRange && (
-          <div style={{fontSize:11,color:'var(--text3)',marginBottom:12,fontFamily:'var(--font-mono)'}}>
-            Data available: {dateRange.rs_snapshots?.start_date || 'none'} → {dateRange.rs_snapshots?.end_date || 'none'}
-            {dateRange.rs_snapshots?.trading_days > 0 && <span> ({dateRange.rs_snapshots.trading_days} snapshots)</span>}
+        {/* Date range + backfill */}
+        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:12,flexWrap:'wrap'}}>
+          {dateRange && (
+            <div style={{fontSize:11,color:'var(--text3)',fontFamily:'var(--font-mono)',flex:1}}>
+              Data available: {dateRange.rs_snapshots?.start_date || 'none'} → {dateRange.rs_snapshots?.end_date || 'none'}
+              {dateRange.rs_snapshots?.trading_days > 0 && <span> ({dateRange.rs_snapshots.trading_days} snapshots)</span>}
+            </div>
+          )}
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <input type="number" value={bfForm.lookbackDays} onChange={e=>setBfForm({...bfForm,lookbackDays:+e.target.value})} min={1} max={252} style={{width:60,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'5px 6px',color:'var(--text)',fontSize:10,fontFamily:'var(--font-mono)',textAlign:'center'}}/>
+            <span style={{fontSize:9,color:'var(--text3)'}}>days</span>
+            <button className="load-btn" onClick={runBackfill} disabled={bfLoading} style={{fontSize:9,padding:'5px 12px',background:'var(--orange, #ff6d00)'}}>{bfLoading?'BACKFILLING...':'BACKFILL'}</button>
+          </div>
+        </div>
+        {bfResult && (
+          <div style={{background:'rgba(0,230,118,0.05)',border:'1px solid rgba(0,230,118,0.2)',borderRadius:4,padding:'8px 12px',marginBottom:12,fontSize:11,color:'var(--green)',fontFamily:'var(--font-mono)'}}>
+            Backfilled {bfResult.rowsWritten} rows · {bfResult.dates} dates ({bfResult.firstDate} → {bfResult.lastDate}) · {bfResult.symbolsWithData}/{bfResult.symbolsRequested} symbols · {(bfResult.durationMs/1000).toFixed(1)}s
+            {bfResult.errorCount > 0 && <span style={{color:'var(--amber)'}}> · {bfResult.errorCount} errors</span>}
           </div>
         )}
 
@@ -5209,6 +5284,60 @@ function ReplayTab() {
           <button className="load-btn" onClick={runReplay} disabled={loading} style={{fontSize:10,padding:'6px 18px'}}>{loading?'RUNNING...':'RUN REPLAY'}</button>
           <button className="load-btn" onClick={runCompare} disabled={loading} style={{fontSize:10,padding:'6px 18px',background:'var(--cyan)'}}>{loading?'...':'COMPARE ALL'}</button>
         </div>
+      </div>
+
+      {/* ─── Walk-Forward Optimization Controls ─────────────────────── */}
+      <div className="panel">
+        <div className="panel-title">🔄 <span>WALK-FORWARD</span> OPTIMIZATION</div>
+        <div className="panel-sub" style={{marginBottom:10}}>Sweep params on rolling train windows, validate on the next held-out test slice. Reveals overfitting and parameter stability — pure out-of-sample.</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:10}}>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>TRAIN DAYS</div>
+            <input type="number" value={wfForm.trainDays} onChange={e=>setWfForm({...wfForm,trainDays:+e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>TEST DAYS</div>
+            <input type="number" value={wfForm.testDays} onChange={e=>setWfForm({...wfForm,testDays:+e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>OPTIMIZE FOR</div>
+            <select value={wfForm.optimizeMetric} onChange={e=>setWfForm({...wfForm,optimizeMetric:e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'7px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}>
+              <option value="sharpeRatio">Sharpe Ratio</option>
+              <option value="totalReturn">Total Return</option>
+              <option value="profitFactor">Profit Factor</option>
+            </select>
+          </div>
+        </div>
+        <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>PARAM GRID JSON</div>
+        <textarea value={wfForm.paramGrid} onChange={e=>setWfForm({...wfForm,paramGrid:e.target.value})} rows={4} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 10px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)',marginBottom:10,resize:'vertical'}}/>
+        <button className="load-btn" onClick={runWalkForward} disabled={loading} style={{fontSize:10,padding:'6px 18px',background:'var(--amber)'}}>{loading?'OPTIMIZING...':'RUN WALK-FORWARD'}</button>
+      </div>
+
+      {/* ─── Monte Carlo Controls ────────────────────────────────────── */}
+      <div className="panel">
+        <div className="panel-title">🎲 <span>MONTE CARLO</span> SIMULATION</div>
+        <div className="panel-sub" style={{marginBottom:10}}>Resample the most recent replay's trades to see how much of the result was edge vs. luck. Permutation reorders the same trades; bootstrap samples with replacement.</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:8,marginBottom:10}}>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>METHOD</div>
+            <select value={mcForm.method} onChange={e=>setMcForm({...mcForm,method:e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'7px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}>
+              <option value="permutation">Permutation</option>
+              <option value="bootstrap">Bootstrap</option>
+            </select>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>ITERATIONS</div>
+            <input type="number" value={mcForm.iterations} min="50" max="10000" onChange={e=>setMcForm({...mcForm,iterations:+e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>POSITION FRACTION</div>
+            <input type="number" step="0.01" value={mcForm.positionFraction} onChange={e=>setMcForm({...mcForm,positionFraction:+e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          </div>
+          <div style={{display:'flex',alignItems:'flex-end'}}>
+            <button className="load-btn" onClick={runMonteCarlo} disabled={loading} style={{width:'100%',fontSize:10,padding:'7px 18px',background:'var(--violet, #9d4edd)'}}>{loading?'SIMULATING...':'RUN MC'}</button>
+          </div>
+        </div>
+        <div style={{fontSize:10,color:'var(--text3)'}}>Source: {result?.id ? `replay #${result.id}` : (history[0]?.id ? `latest replay #${history[0].id}` : 'no backtest available')}</div>
       </div>
 
       {/* Results */}
@@ -5269,6 +5398,29 @@ function ReplayTab() {
             </div>
           )}
 
+          {/* Regime Breakdown (regime_adaptive only) */}
+          {result.regimeBreakdown && (
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:16}}>
+              <div style={{display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
+                <span style={{fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1,color:'var(--cyan)'}}>REGIME BREAKDOWN</span>
+                {Object.entries(result.regimeBreakdown).map(([regime, days])=>{
+                  const colors = {BULL:'var(--green)',NEUTRAL:'var(--text2)',CAUTION:'var(--amber)',CORRECTION:'var(--red)'};
+                  const total = Object.values(result.regimeBreakdown).reduce((a,b)=>a+b,0);
+                  return <span key={regime} style={{fontSize:11,color:colors[regime]||'var(--text)'}}>
+                    <strong>{regime}</strong>: {days}d ({total?(days/total*100).toFixed(0):0}%)
+                  </span>;
+                })}
+              </div>
+              <div style={{display:'flex',marginTop:8,height:6,borderRadius:3,overflow:'hidden'}}>
+                {Object.entries(result.regimeBreakdown).map(([regime, days])=>{
+                  const colors = {BULL:'#00e676',NEUTRAL:'#888',CAUTION:'#ff9800',CORRECTION:'#ff3d57'};
+                  const total = Object.values(result.regimeBreakdown).reduce((a,b)=>a+b,0);
+                  return <div key={regime} style={{width:(days/total*100)+'%',background:colors[regime]||'#555'}}/>;
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Trade summary */}
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
             <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
@@ -5301,6 +5453,7 @@ function ReplayTab() {
                 <table className="data-table">
                   <thead><tr>
                     <th>Symbol</th><th>Entry</th><th>Exit</th><th>Entry $</th><th>Exit $</th><th>P&L %</th><th>Days</th><th>Reason</th>
+                    {result.regimeBreakdown && <><th>Sub-Strategy</th><th>Regime</th></>}
                   </tr></thead>
                   <tbody>
                     {result.tradeLog.map((t,i)=>(
@@ -5313,6 +5466,10 @@ function ReplayTab() {
                         <td style={{color:pctColor(t.pnlPct),fontWeight:600}}>{t.pnlPct>0?'+':''}{t.pnlPct}%</td>
                         <td>{t.holdingDays}d</td>
                         <td style={{fontSize:10,color:'var(--text3)'}}>{t.exitReason?.replace(/_/g,' ')}</td>
+                        {result.regimeBreakdown && <>
+                          <td style={{fontSize:10,color:'var(--cyan)'}}>{t.subStrategy?.replace(/_/g,' ')||'—'}</td>
+                          <td style={{fontSize:10,color:t.entryRegime==='BULL'?'var(--green)':t.entryRegime==='CORRECTION'?'var(--red)':'var(--text3)'}}>{t.entryRegime||'—'}</td>
+                        </>}
                       </tr>
                     ))}
                   </tbody>
@@ -5351,6 +5508,163 @@ function ReplayTab() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* ─── Walk-Forward Results ────────────────────────────────────── */}
+      {wfResult && wfResult.outOfSample && (
+        <div className="panel">
+          <div className="panel-title">🔄 <span>WALK-FORWARD</span> RESULTS — {wfResult.strategyName}</div>
+          <div style={{fontSize:11,color:'var(--text3)',marginBottom:12,fontFamily:'var(--font-mono)'}}>
+            {wfResult.config.combos} param combos × {wfResult.config.windowsTested} windows · train {wfResult.config.trainDays}d / test {wfResult.config.testDays}d · optimize {wfResult.config.optimizeMetric}
+          </div>
+
+          {/* OOS KPIs */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:12}}>
+            {[
+              ['OOS Return', (wfResult.outOfSample.totalReturn>0?'+':'')+wfResult.outOfSample.totalReturn+'%', pctColor(wfResult.outOfSample.totalReturn)],
+              ['OOS Max DD', wfResult.outOfSample.maxDrawdown+'%', 'var(--red)'],
+              ['Profit Factor', wfResult.outOfSample.profitFactor, wfResult.outOfSample.profitFactor>=1.5?'var(--green)':'var(--text)'],
+              ['Win Rate', wfResult.outOfSample.winRate+'%', wfResult.outOfSample.winRate>=50?'var(--green)':'var(--red)'],
+              ['OOS Trades', wfResult.outOfSample.tradeCount, 'var(--text)'],
+              ['Avg Win', (wfResult.outOfSample.avgWin>0?'+':'')+wfResult.outOfSample.avgWin+'%', 'var(--green)'],
+              ['Avg Loss', wfResult.outOfSample.avgLoss+'%', 'var(--red)'],
+              ['Alpha vs SPY', wfResult.outOfSample.alpha!=null?(wfResult.outOfSample.alpha>0?'+':'')+wfResult.outOfSample.alpha+'%':'N/A', wfResult.outOfSample.alpha>0?'var(--green)':wfResult.outOfSample.alpha<0?'var(--red)':'var(--text3)'],
+            ].map(([label,val,color])=>(
+              <div key={label} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:'10px 12px',textAlign:'center'}}>
+                <div style={{fontSize:8,color:'var(--text3)',textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>{label}</div>
+                <div style={{fontSize:15,fontWeight:700,color,fontFamily:'var(--font-mono)'}}>{val}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Parameter stability */}
+          {wfResult.parameterStability && wfResult.parameterStability.length > 0 && (
+            <div style={{marginBottom:12}}>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:1,marginBottom:6}}>PARAMETER STABILITY ({wfResult.parameterStability.length} unique winners)</div>
+              <div style={{fontSize:10,color:'var(--text3)',marginBottom:6}}>Fewer winners = more stable. If every window picks different params, the strategy is overfitting noise.</div>
+              <div style={{maxHeight:160,overflowY:'auto'}}>
+                <table className="data-table">
+                  <thead><tr><th>Params</th><th>Windows Won</th><th>Share</th></tr></thead>
+                  <tbody>
+                    {wfResult.parameterStability.map((p,i)=>(
+                      <tr key={i}>
+                        <td style={{fontFamily:'var(--font-mono)',fontSize:10}}>{JSON.stringify(p.params)}</td>
+                        <td>{p.windows}</td>
+                        <td style={{color:p.share>=50?'var(--green)':'var(--text)'}}>{p.share}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Per-window results */}
+          <div>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:1,marginBottom:6}}>WINDOWS</div>
+            <div style={{maxHeight:300,overflowY:'auto'}}>
+              <table className="data-table">
+                <thead><tr>
+                  <th>Train</th><th>Test</th><th>Best Params</th><th>Test Return</th><th>Test Sharpe</th><th>Test DD</th><th>Trades</th><th>Win %</th>
+                </tr></thead>
+                <tbody>
+                  {wfResult.windows.map((w,i)=>(
+                    <tr key={i}>
+                      <td style={{fontSize:10,color:'var(--text3)'}}>{w.trainStart}→{w.trainEnd}</td>
+                      <td style={{fontSize:10,color:'var(--text3)'}}>{w.testStart}→{w.testEnd}</td>
+                      <td style={{fontFamily:'var(--font-mono)',fontSize:10}}>{w.bestParams?JSON.stringify(w.bestParams):w.error||'—'}</td>
+                      <td style={{color:pctColor(w.testReturn),fontWeight:700}}>{w.testReturn!=null?(w.testReturn>0?'+':'')+w.testReturn+'%':'—'}</td>
+                      <td>{w.testSharpe!=null?w.testSharpe:'—'}</td>
+                      <td style={{color:'var(--red)'}}>{w.testMaxDD!=null?w.testMaxDD+'%':'—'}</td>
+                      <td>{w.testTrades||0}</td>
+                      <td>{w.testWinRate!=null?w.testWinRate+'%':'—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Monte Carlo Results ─────────────────────────────────────── */}
+      {mcResult && (
+        <div className="panel">
+          <div className="panel-title">🎲 <span>MONTE CARLO</span> DISTRIBUTION</div>
+          <div style={{fontSize:11,color:'var(--text3)',marginBottom:12,fontFamily:'var(--font-mono)'}}>
+            {mcResult.iterations} iterations · {mcResult.method} · {mcResult.tradeCount} trades · {(mcResult.positionFraction*100).toFixed(0)}% per-trade sizing
+          </div>
+
+          {/* Baseline vs distribution */}
+          <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:12}}>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:1,marginBottom:8}}>BASELINE (AS-TRADED) vs MC DISTRIBUTION</div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:12,fontSize:12}}>
+              <div>
+                <div style={{color:'var(--text3)',fontSize:10,marginBottom:2}}>Final Return</div>
+                <div style={{fontFamily:'var(--font-mono)',fontWeight:700,color:pctColor(mcResult.baseline.finalReturn),fontSize:16}}>{mcResult.baseline.finalReturn>0?'+':''}{mcResult.baseline.finalReturn}%</div>
+                <div style={{fontSize:10,color:'var(--text3)'}}>{mcResult.finalReturnIsDeterministic ? 'order-invariant under permutation' : <>at <strong style={{color:'var(--amber)'}}>{mcResult.baselinePercentile.finalReturn}th</strong> percentile</>}</div>
+              </div>
+              <div>
+                <div style={{color:'var(--text3)',fontSize:10,marginBottom:2}}>Max Drawdown</div>
+                <div style={{fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--red)',fontSize:16}}>{mcResult.baseline.maxDrawdown}%</div>
+                <div style={{fontSize:10,color:'var(--text3)'}}>at <strong style={{color:'var(--amber)'}}>{mcResult.baselinePercentile.maxDrawdown}th</strong> percentile</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Distribution table */}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:12}}>
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--cyan)',letterSpacing:1,marginBottom:8}}>FINAL RETURN DISTRIBUTION</div>
+              {mcResult.finalReturnIsDeterministic ? (
+                <div style={{fontSize:11,color:'var(--text3)',padding:'6px 0'}}>
+                  Final return is <strong style={{color:'var(--amber)'}}>order-invariant</strong> under permutation — compounding the same trades in any order produces the same end equity ({mcResult.baseline.finalReturn>0?'+':''}{mcResult.baseline.finalReturn}%). Use the drawdown distribution on the right to see how much path risk reordering exposes. Switch to <strong>bootstrap</strong> to see a non-degenerate return distribution.
+                </div>
+              ) : (
+                <table className="data-table" style={{fontSize:11}}>
+                  <tbody>
+                    <tr><td>5th pct (worst case)</td><td style={{color:pctColor(mcResult.finalReturn.p5),fontWeight:700,textAlign:'right'}}>{mcResult.finalReturn.p5}%</td></tr>
+                    <tr><td>25th pct</td><td style={{color:pctColor(mcResult.finalReturn.p25),textAlign:'right'}}>{mcResult.finalReturn.p25}%</td></tr>
+                    <tr><td>50th pct (median)</td><td style={{color:pctColor(mcResult.finalReturn.p50),fontWeight:700,textAlign:'right'}}>{mcResult.finalReturn.p50}%</td></tr>
+                    <tr><td>75th pct</td><td style={{color:pctColor(mcResult.finalReturn.p75),textAlign:'right'}}>{mcResult.finalReturn.p75}%</td></tr>
+                    <tr><td>95th pct (best case)</td><td style={{color:pctColor(mcResult.finalReturn.p95),fontWeight:700,textAlign:'right'}}>{mcResult.finalReturn.p95}%</td></tr>
+                    <tr><td style={{color:'var(--text3)'}}>Mean</td><td style={{color:pctColor(mcResult.finalReturn.mean),textAlign:'right'}}>{mcResult.finalReturn.mean}%</td></tr>
+                    <tr><td style={{color:'var(--text3)'}}>Profitable scenarios</td><td style={{textAlign:'right',color:mcResult.profitableScenariosPct>=50?'var(--green)':'var(--red)',fontWeight:700}}>{mcResult.profitableScenariosPct}%</td></tr>
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--cyan)',letterSpacing:1,marginBottom:8}}>MAX DRAWDOWN DISTRIBUTION</div>
+              <table className="data-table" style={{fontSize:11}}>
+                <tbody>
+                  <tr><td>5th pct (mildest)</td><td style={{textAlign:'right'}}>{mcResult.maxDrawdown.p5}%</td></tr>
+                  <tr><td>50th pct (median)</td><td style={{color:'var(--amber)',fontWeight:700,textAlign:'right'}}>{mcResult.maxDrawdown.p50}%</td></tr>
+                  <tr><td>95th pct (severe)</td><td style={{color:'var(--red)',fontWeight:700,textAlign:'right'}}>{mcResult.maxDrawdown.p95}%</td></tr>
+                  <tr><td style={{color:'var(--text3)'}}>Mean</td><td style={{textAlign:'right'}}>{mcResult.maxDrawdown.mean}%</td></tr>
+                  <tr><td style={{color:'var(--text3)'}}>Worst observed</td><td style={{color:'var(--red)',textAlign:'right'}}>{mcResult.maxDrawdown.max}%</td></tr>
+                  <tr><td style={{color:'var(--text3)'}}>Max losing streak (med)</td><td style={{textAlign:'right'}}>{mcResult.losingStreak.p50}</td></tr>
+                  <tr><td style={{color:'var(--text3)'}}>Max losing streak (95th)</td><td style={{color:'var(--red)',textAlign:'right'}}>{mcResult.losingStreak.p95}</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Interpretation hint */}
+          <div style={{fontSize:10,color:'var(--text3)',padding:'8px 12px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4}}>
+            {mcResult.finalReturnIsDeterministic
+              ? (mcResult.baselinePercentile.maxDrawdown >= 75
+                ? '⚠ Baseline drawdown is in the worst quartile of possible orderings — your actual sequence was unfavorable. The strategy could see deeper drawdowns under different ordering luck.'
+                : mcResult.baselinePercentile.maxDrawdown <= 25
+                ? '✓ Baseline drawdown is in the best quartile of possible orderings — actual run was favorable. Plan for the median DD as a realistic expectation.'
+                : '○ Baseline drawdown sits near the median across orderings.')
+              : (mcResult.baselinePercentile.finalReturn >= 75
+                ? '⚠ Baseline lands in top quartile of MC distribution — original ordering may have been lucky. Median is the realistic expectation.'
+                : mcResult.baselinePercentile.finalReturn <= 25
+                ? '✓ Baseline lands in bottom quartile — actual run was unlucky relative to what this trade distribution can produce.'
+                : '○ Baseline sits near the median — original ordering was representative of the trade distribution.')}
+          </div>
         </div>
       )}
 

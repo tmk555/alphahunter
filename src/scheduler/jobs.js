@@ -22,15 +22,21 @@ registerJobType('rs_scan', {
 
     if (config.persist !== false) {
       const insert = db().prepare(`
-        INSERT OR REPLACE INTO rs_snapshots (date, symbol, type, rs_rank, swing_momentum, sepa_score, stage, price, vs_ma50, vs_ma200, volume_ratio, vcp_forming, rs_line_new_high, atr_pct)
-        VALUES (?, ?, 'stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO rs_snapshots (
+          date, symbol, type, rs_rank, swing_momentum, sepa_score, stage,
+          price, vs_ma50, vs_ma200, volume_ratio, vcp_forming, rs_line_new_high, atr_pct,
+          rs_rank_weekly, rs_rank_monthly, rs_tf_alignment, up_down_ratio_50, accumulation_50
+        )
+        VALUES (?, ?, 'stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const txn = db().transaction(() => {
         let count = 0;
         for (const r of results) {
           insert.run(date, r.ticker, r.rsRank ?? null, r.swingMomentum ?? null, r.sepaScore ?? null, r.stage ?? null,
             r.price ?? null, r.vsMA50 ?? null, r.vsMA200 ?? null, r.volumeRatio ?? null,
-            r.vcpForming ? 1 : 0, r.rsLineNewHigh ? 1 : 0, r.atrPct ?? null);
+            r.vcpForming ? 1 : 0, r.rsLineNewHigh ? 1 : 0, r.atrPct ?? null,
+            r.rsRankWeekly ?? null, r.rsRankMonthly ?? null, r.rsTimeframeAlignment ?? null,
+            r.volumeProfile?.upDownRatio50 ?? null, r.volumeProfile?.accumulation50 ?? null);
           count++;
         }
         return count;
