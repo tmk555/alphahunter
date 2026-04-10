@@ -154,26 +154,62 @@ function evaluateEntry(stock, strategy, params) {
   }
 }
 
-function evaluateExit(stock, entryStock, strategy, params, holdingDays) {
-  // Max hold period
+function evaluateExit(stock, entryStock, strategy, params, holdingDays, position) {
+  // Max hold period — last resort
   if (holdingDays >= params.holdDays) return { exit: true, reason: 'max_hold' };
 
+  // ─── ATR-based stop/target for ALL strategies (universal risk management) ──
+  // Every strategy gets price-based exits. Strategy-specific signal exits below
+  // can fire earlier, but these ensure no position runs away without a stop.
+  const atrPct = entryStock.atr_pct || 2.5;
+  const atr = entryStock.price * (atrPct / 100);
+  const isShort = position?.isShort;
+
+  if (entryStock.price && stock.price && !isShort) {
+    const stopATR = params.stopATR || 1.5;
+    const targetATR = params.targetATR || 3.0;
+    const stopPrice = entryStock.price - (stopATR * atr);
+    const targetPrice = entryStock.price + (targetATR * atr);
+    if (stock.price <= stopPrice) return { exit: true, reason: 'stop_hit' };
+    if (stock.price >= targetPrice) return { exit: true, reason: 'target_hit' };
+  }
+
+  // ─── Scale-out logic (if enabled) ─────────────────────────────────────────
+  // Partial exits: sell 1/3 at target1, move stop to breakeven, sell 1/3 at
+  // target2, trail final 1/3 with 21EMA (approximated via vs_ma50 since we
+  // don't have 21EMA in snapshots — conservative proxy).
+  if (params.scaleOut && position && entryStock.price && stock.price && !isShort) {
+    const target1ATR = params.target1ATR || 2.0;
+    const target2ATR = params.target2ATR || 3.5;
+    const target1Price = entryStock.price + (target1ATR * atr);
+    const target2Price = entryStock.price + (target2ATR * atr);
+    const tranche = position.tranche || 1;
+
+    if (tranche === 1 && stock.price >= target1Price) {
+      return { exit: true, reason: 'scale_out_t1', partial: true, sellFraction: 1/3, nextTranche: 2, moveStopToBreakeven: true };
+    }
+    if (tranche === 2 && stock.price >= target2Price) {
+      return { exit: true, reason: 'scale_out_t2', partial: true, sellFraction: 1/2, nextTranche: 3 };
+    }
+    // Tranche 3: trail with MA — exit if stock drops below 50MA
+    if (tranche === 3 && stock.vs_ma50 != null && stock.vs_ma50 < -2) {
+      return { exit: true, reason: 'trail_stop_ma', partial: false };
+    }
+    // Tranche 2+: breakeven stop
+    if (tranche >= 2 && stock.price <= entryStock.price) {
+      return { exit: true, reason: 'breakeven_stop' };
+    }
+  }
+
+  // ─── Strategy-specific signal exits ───────────────────────────────────────
   switch (strategy) {
     case 'rs_momentum':
       if (stock.rs_rank <= params.exitRS) return { exit: true, reason: 'rs_dropped' };
       break;
 
-    case 'vcp_breakout': {
-      if (!entryStock.price || !stock.price) break;
-      // Use stored atrPct from snapshot if available, otherwise approximate at 2.5%
-      const atrPct = entryStock.atr_pct || 2.5;
-      const atr = entryStock.price * (atrPct / 100);
-      const stopPrice = entryStock.price - (params.stopATR * atr);
-      const targetPrice = entryStock.price + (params.targetATR * atr);
-      if (stock.price <= stopPrice) return { exit: true, reason: 'stop_hit' };
-      if (stock.price >= targetPrice) return { exit: true, reason: 'target_hit' };
+    case 'vcp_breakout':
+      // ATR stop/target already handled above
       break;
-    }
 
     case 'sepa_trend':
       if ((stock.sepa_score || 0) <= params.exitSEPA) return { exit: true, reason: 'sepa_degraded' };
@@ -184,16 +220,14 @@ function evaluateExit(stock, entryStock, strategy, params, holdingDays) {
       break;
 
     case 'conviction':
-      break; // Pure hold-period based
+      break; // Signal exits handled by ATR stop/target above
 
     case 'short_breakdown': {
       // Cover short if RS recovers (stock is strengthening)
       if (stock.rs_rank >= params.exitRS) return { exit: true, reason: 'rs_recovered' };
       // Stop-out: price moves against us (up)
       if (entryStock.price && stock.price) {
-        const atrPct = entryStock.atr_pct || 2.5;
-        const atr = entryStock.price * (atrPct / 100);
-        const stopPrice = entryStock.price + (params.stopATR * atr);
+        const stopPrice = entryStock.price + ((params.stopATR || 1.5) * atr);
         if (stock.price >= stopPrice) return { exit: true, reason: 'stop_hit' };
       }
       break;
@@ -292,11 +326,19 @@ function getActiveUniverse(date) {
 
 // ─── Replay Engine ─────────────────────────────────────────────────────────
 
-function runReplay({ strategy, params = {}, startDate, endDate, maxPositions = 10, initialCapital = 100000, execution = {}, persistResult = true }) {
+// Swing vs Position mode overrides — position trades hold longer, use wider stops,
+// and require pullback to 50MA. Swing trades are tighter, shorter hold.
+const MODE_OVERRIDES = {
+  swing:    { holdDays: 10, stopATR: 1.0, targetATR: 2.0, target1ATR: 1.5, target2ATR: 2.5 },
+  position: { holdDays: 40, stopATR: 2.0, targetATR: 4.0, target1ATR: 2.5, target2ATR: 4.0 },
+};
+
+function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPositions = 10, initialCapital = 100000, execution = {}, persistResult = true }) {
   const stratDef = BUILT_IN_STRATEGIES[strategy];
   if (!stratDef) throw new Error(`Unknown strategy: ${strategy}. Available: ${Object.keys(BUILT_IN_STRATEGIES).join(', ')}`);
 
-  const mergedParams = { ...stratDef.defaults, ...params };
+  const modeOverrides = tradeMode && MODE_OVERRIDES[tradeMode] ? MODE_OVERRIDES[tradeMode] : {};
+  const mergedParams = { ...stratDef.defaults, ...modeOverrides, ...params };
   const exec = { ...DEFAULT_EXECUTION, ...execution };
 
   // Load data
@@ -382,7 +424,7 @@ function runReplay({ strategy, params = {}, startDate, endDate, maxPositions = 1
       // match the entry rationale, not whatever the regime is today.
       const posStrategy = pos.subStrategy || strategy;
       const posIsShort  = !!pos.isShort;
-      let exitCheck = evaluateExit(stock, pos.entryStock, posStrategy, mergedParams, holdingDays);
+      let exitCheck = evaluateExit(stock, pos.entryStock, posStrategy, mergedParams, holdingDays, pos);
 
       // Adaptive: force-exit longs when regime turns risk-off
       if (!exitCheck.exit && isAdaptive && mergedParams.forceExitOnRiskOff && !posIsShort) {
@@ -392,7 +434,43 @@ function runReplay({ strategy, params = {}, startDate, endDate, maxPositions = 1
       }
 
       if (exitCheck.exit && stock.price) {
-        // Apply exit slippage
+        // ─── Partial exit (scale-out) ──────────────────────────────────
+        if (exitCheck.partial && exitCheck.sellFraction && exitCheck.sellFraction < 1) {
+          const sellShares = Math.max(1, Math.floor(pos.shares * exitCheck.sellFraction));
+          const remainShares = pos.shares - sellShares;
+          const rawExitPrice = stock.price;
+          const exitPrice = applySlippage(rawExitPrice, exec.exitSlippageBps, 'sell');
+          const slippageCost = Math.abs(rawExitPrice - exitPrice) * sellShares;
+          totalSlippageCost += slippageCost;
+
+          const pnl = (exitPrice - pos.entryPrice) * sellShares;
+          const pnlPct = ((exitPrice / pos.entryPrice) - 1) * 100;
+          const partialCollateral = pos.collateral * (sellShares / pos.shares);
+          capital += partialCollateral + pnl;
+
+          trades.push({
+            symbol, side: 'long',
+            entryDate: pos.entryDate, exitDate: date,
+            entryPrice: pos.entryPrice, exitPrice: +exitPrice.toFixed(2),
+            shares: sellShares, pnl: +pnl.toFixed(2), pnlPct: +pnlPct.toFixed(2),
+            atrPct: pos.entryStock.atr_pct || null,
+            slippageCost: +slippageCost.toFixed(2),
+            holdingDays, exitReason: exitCheck.reason,
+            entryRS: pos.entryStock.rs_rank, exitRS: stock.rs_rank,
+            subStrategy: pos.subStrategy || null,
+            entryRegime: pos.entryRegime || null,
+          });
+          if (pnl > 0) totalWins++; else totalLosses++;
+
+          // Update position with remaining shares
+          pos.shares = remainShares;
+          pos.collateral -= partialCollateral;
+          pos.tranche = exitCheck.nextTranche || (pos.tranche || 1) + 1;
+          if (remainShares <= 0) positions.delete(symbol);
+          continue;
+        }
+
+        // ─── Full exit ──────────────────────────────────────────────────
         const rawExitPrice = stock.price;
         const exitPrice = posIsShort
           ? applySlippage(rawExitPrice, exec.exitSlippageBps, 'buy')    // Cover = buy
@@ -439,6 +517,15 @@ function runReplay({ strategy, params = {}, startDate, endDate, maxPositions = 1
         .filter(s => s.symbol !== 'SPY')
         .filter(s => !removedSymbols.has(s.symbol))  // Survivorship filter
         .filter(s => evaluateEntry(s, todayStrategy, mergedParams));
+
+      // Position mode: require pullback to 50MA (vsMA50 between -2% and +5%)
+      if (tradeMode === 'position') {
+        candidates = candidates.filter(s => s.vs_ma50 != null && s.vs_ma50 >= -2 && s.vs_ma50 <= 5);
+      }
+      // Swing mode: require momentum >= 55 (hot stocks moving NOW)
+      if (tradeMode === 'swing') {
+        candidates = candidates.filter(s => (s.swing_momentum || 0) >= 55);
+      }
 
       // For conviction strategy, take top N; for shorts, take weakest RS
       if (todayStrategy === 'conviction') {
@@ -1126,6 +1213,74 @@ function deleteReplayResult(id) {
   db().prepare('DELETE FROM replay_results WHERE id = ?').run(id);
 }
 
+// ─── Monte Carlo Persistence ─────────────────────────────────────────────
+
+function saveMCResult(replayId, mcResult) {
+  const strategy = mcResult.strategyName || null;
+  return db().prepare(`
+    INSERT INTO mc_results (replay_id, strategy, method, iterations, trade_count,
+      baseline_return, baseline_drawdown, median_return, median_drawdown, profitable_pct, result)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    replayId, strategy, mcResult.method, mcResult.iterations, mcResult.tradeCount,
+    mcResult.baseline?.finalReturn, mcResult.baseline?.maxDrawdown,
+    mcResult.finalReturn?.p50 ?? mcResult.baseline?.finalReturn,
+    mcResult.maxDrawdown?.p50, mcResult.profitableScenariosPct,
+    JSON.stringify(mcResult)
+  ).lastInsertRowid;
+}
+
+function getMCHistory(limit = 10) {
+  return db().prepare(`
+    SELECT mc.id, mc.replay_id, mc.strategy, mc.method, mc.iterations, mc.trade_count,
+      mc.baseline_return, mc.baseline_drawdown, mc.median_return, mc.median_drawdown,
+      mc.profitable_pct, mc.created_at,
+      rr.start_date, rr.end_date
+    FROM mc_results mc
+    LEFT JOIN replay_results rr ON mc.replay_id = rr.id
+    ORDER BY mc.created_at DESC LIMIT ?
+  `).all(limit);
+}
+
+function getMCResult(id) {
+  const row = db().prepare('SELECT * FROM mc_results WHERE id = ?').get(id);
+  if (!row) return null;
+  return { ...row, result: JSON.parse(row.result) };
+}
+
+// ─── Walk-Forward Persistence ────────────────────────────────────────────
+
+function saveWFResult(wfResult) {
+  return db().prepare(`
+    INSERT INTO wf_results (strategy, start_date, end_date, train_days, test_days,
+      optimize_metric, oos_return, oos_max_dd, oos_sharpe, oos_trades, oos_win_rate,
+      alpha, windows_tested, result)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    wfResult.strategyName, wfResult.config?.startDate || '', wfResult.config?.endDate || '',
+    wfResult.config?.trainDays, wfResult.config?.testDays, wfResult.config?.optimizeMetric,
+    wfResult.outOfSample?.totalReturn, wfResult.outOfSample?.maxDrawdown,
+    wfResult.outOfSample?.sharpeRatio, wfResult.outOfSample?.tradeCount,
+    wfResult.outOfSample?.winRate, wfResult.outOfSample?.alpha,
+    wfResult.config?.windowsTested, JSON.stringify(wfResult)
+  ).lastInsertRowid;
+}
+
+function getWFHistory(limit = 10) {
+  return db().prepare(`
+    SELECT id, strategy, start_date, end_date, train_days, test_days, optimize_metric,
+      oos_return, oos_max_dd, oos_sharpe, oos_trades, oos_win_rate, alpha,
+      windows_tested, created_at
+    FROM wf_results ORDER BY created_at DESC LIMIT ?
+  `).all(limit);
+}
+
+function getWFResult(id) {
+  const row = db().prepare('SELECT * FROM wf_results WHERE id = ?').get(id);
+  if (!row) return null;
+  return { ...row, result: JSON.parse(row.result) };
+}
+
 module.exports = {
   BUILT_IN_STRATEGIES,
   getAvailableDateRange,
@@ -1136,4 +1291,10 @@ module.exports = {
   getReplayHistory,
   getReplayResult,
   deleteReplayResult,
+  saveMCResult,
+  getMCHistory,
+  getMCResult,
+  saveWFResult,
+  getWFHistory,
+  getWFResult,
 };

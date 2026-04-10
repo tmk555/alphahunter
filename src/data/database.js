@@ -242,6 +242,44 @@ function initSchema() {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- Monte Carlo simulation results
+    CREATE TABLE IF NOT EXISTS mc_results (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      replay_id INTEGER NOT NULL,
+      strategy TEXT,
+      method TEXT NOT NULL,
+      iterations INTEGER,
+      trade_count INTEGER,
+      baseline_return REAL,
+      baseline_drawdown REAL,
+      median_return REAL,
+      median_drawdown REAL,
+      profitable_pct REAL,
+      result JSON,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (replay_id) REFERENCES replay_results(id)
+    );
+
+    -- Walk-Forward optimization results
+    CREATE TABLE IF NOT EXISTS wf_results (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      strategy TEXT NOT NULL,
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      train_days INTEGER,
+      test_days INTEGER,
+      optimize_metric TEXT,
+      oos_return REAL,
+      oos_max_dd REAL,
+      oos_sharpe REAL,
+      oos_trades INTEGER,
+      oos_win_rate REAL,
+      alpha REAL,
+      windows_tested INTEGER,
+      result JSON,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
     -- Create indexes for common queries
     CREATE INDEX IF NOT EXISTS idx_rs_snapshots_date ON rs_snapshots(date);
     CREATE INDEX IF NOT EXISTS idx_rs_snapshots_symbol ON rs_snapshots(symbol);
