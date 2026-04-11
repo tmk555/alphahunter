@@ -1620,7 +1620,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
               {f.label}
             </button>
           ))}
-          {strategyFilter && <span style={{fontSize:10,color:'var(--cyan)',marginLeft:4}}>Sorted by strategy ranking · Staging tags trade with "{strategyFilter}"</span>}
+          {strategyFilter && <span style={{fontSize:10,color:'var(--cyan)',marginLeft:4}}>Sorted by strategy ranking · Top 5 highlighted = replay picks · Staging tags trade with "{strategyFilter}"</span>}
         </div>
 
         {/* Sector focus filter */}
@@ -1679,13 +1679,18 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map(s => (
+                  {filtered.map((s, _idx) => {
+                    const stratRank = strategyFilter ? _idx + 1 : null;
+                    const isReplayPick = stratRank != null && stratRank <= 5;
+                    const isBeyondReplay = stratRank != null && stratRank > 5;
+                    return (
                     <React.Fragment key={s.ticker}>
                     <tr ref={el => rowRefs.current[s.ticker] = el}
                       style={{
-                        background:expandedTicker===s.ticker?'rgba(240,165,0,0.12)':'',
-                        borderLeft:expandedTicker===s.ticker?'3px solid var(--amber)':'3px solid transparent',
-                        transition:'background 0.15s',
+                        background:expandedTicker===s.ticker?'rgba(240,165,0,0.12)':isReplayPick?'rgba(0,200,150,0.06)':'',
+                        borderLeft:expandedTicker===s.ticker?'3px solid var(--amber)':isReplayPick?'3px solid var(--green)':'3px solid transparent',
+                        opacity:isBeyondReplay?0.55:1,
+                        transition:'background 0.15s,opacity 0.15s',
                       }}>
                       <td><RSBar rs={s.rsRank}/></td>
                       <td>
@@ -1719,7 +1724,10 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                         {s.stage===4 && <span title="S4: Downtrend. Avoid all longs." style={{color:'var(--red)',fontWeight:700,marginRight:3}}>S4</span>}
                         {s.sepaScore!=null && <span title={s.sepa?Object.entries(s.sepa).map(([k,v])=>`${k}:${v===true?'✓':v===false?'✗':'?'}`).join(' '):'SEPA score'} style={{color:s.sepaScore>=6?'var(--green)':s.sepaScore>=4?'var(--amber)':'var(--text3)',fontWeight:700}}>{s.sepaScore}/8</span>}
                       </td>
-                      <td><span className="td-ticker" title={s.name}>{s.ticker}</span></td>
+                      <td style={{whiteSpace:'nowrap'}}>
+                        {stratRank && <span style={{fontFamily:'var(--font-mono)',fontSize:9,fontWeight:700,color:isReplayPick?'var(--green)':'var(--text3)',marginRight:3}}>#{stratRank}</span>}
+                        <span className="td-ticker" title={s.name}>{s.ticker}</span>
+                      </td>
                       <td className="td-name" style={{maxWidth:90,overflow:'hidden',textOverflow:'ellipsis'}}>{s.name}</td>
                       <td style={{fontWeight:600}}>${fmt(s.price)}</td>
                       <td className={fmtC(s.chg1d)}>{fmtP(s.chg1d)}</td>
@@ -1786,7 +1794,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                       </tr>
                     )}
                     </React.Fragment>
-                  ))}
+                  );})}
                 </tbody>
               </table>
             </div>
