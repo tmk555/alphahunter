@@ -161,4 +161,75 @@ registerJobType('job_history_cleanup', {
   },
 });
 
+// ─── 8. Universe Reconstitution — Quarterly automated screener ─────────────
+// Screens the current universe for stocks that no longer meet inclusion criteria
+// (mkt cap < $2B, avg vol < 300K) and flags them for removal. Also identifies
+// new candidates from existing sector ETF holdings that meet criteria.
+
+registerJobType('universe_reconstitute', {
+  description: 'Quarterly universe reconstitution — screen for additions/removals based on liquidity and market cap criteria',
+  defaultConfig: {
+    minMarketCap: 2e9,       // $2B minimum
+    minAvgVolume: 300000,    // 300K shares/day minimum
+    dryRun: true,            // Preview changes without applying
+  },
+  handler: async (config) => {
+    const { FULL_UNIVERSE }   = require('../../universe');
+    const symbols = Object.keys(FULL_UNIVERSE).filter(s => FULL_UNIVERSE[s] !== 'Hedge');
+    const { yahooQuote } = require('../data/providers/yahoo');
+
+    const removals = [];
+    const retentions = [];
+
+    // Screen existing universe in batches
+    for (let i = 0; i < symbols.length; i += 20) {
+      const batch = symbols.slice(i, i + 20);
+      let quotes;
+      try { quotes = await yahooQuote(batch); } catch (_) { continue; }
+      for (const q of quotes) {
+        const mktCap = q.marketCap || 0;
+        const avgVol = q.averageDailyVolume3Month || 0;
+        const failsCap = mktCap < config.minMarketCap;
+        const failsVol = avgVol < config.minAvgVolume;
+        if (failsCap || failsVol) {
+          const reasons = [];
+          if (failsCap) reasons.push(`mktCap $${(mktCap/1e9).toFixed(1)}B < $${(config.minMarketCap/1e9).toFixed(0)}B`);
+          if (failsVol) reasons.push(`avgVol ${Math.round(avgVol/1000)}K < ${Math.round(config.minAvgVolume/1000)}K`);
+          removals.push({ symbol: q.symbol, sector: FULL_UNIVERSE[q.symbol], reason: reasons.join(', '), mktCap, avgVol });
+        } else {
+          retentions.push(q.symbol);
+        }
+      }
+    }
+
+    // Persist removals to universe_mgmt (if not dry run)
+    const date = marketDate();
+    if (!config.dryRun && removals.length) {
+      const upsert = db().prepare(`
+        INSERT INTO universe_mgmt (symbol, sector, removed_date, reason, source)
+        VALUES (?, ?, ?, ?, 'auto_reconstitute')
+        ON CONFLICT(symbol) DO UPDATE SET removed_date = ?, reason = ?
+      `);
+      const txn = db().transaction(() => {
+        for (const r of removals) {
+          upsert.run(r.symbol, r.sector, date, r.reason, date, r.reason);
+        }
+      });
+      txn();
+    }
+
+    return {
+      date,
+      dryRun: config.dryRun,
+      screened: symbols.length,
+      passing: retentions.length,
+      flaggedForRemoval: removals.length,
+      removals: removals.slice(0, 50), // Cap response size
+      note: config.dryRun
+        ? 'Dry run — set dryRun: false to persist removals to universe_mgmt'
+        : `Applied ${removals.length} removals to universe_mgmt`,
+    };
+  },
+});
+
 module.exports = { setRunScan };

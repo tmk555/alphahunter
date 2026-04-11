@@ -12,6 +12,7 @@ const {
 const { getMarketRegime } = require('../risk/regime');
 const { createStopAlert, deactivateAlertsForTrade } = require('../broker/alerts');
 const alpaca = require('../broker/alpaca');
+const { attributePerformance } = require('../signals/attribution');
 
 module.exports = function(db) {
   // ─── Portfolio Config ──────────────────────────────────────────────────────
@@ -356,68 +357,200 @@ module.exports = function(db) {
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ─── Tier 5: Performance Attribution ──────────────────────────────────────
+  // ─── Tier 5: Performance Attribution (beta/sector/stock-alpha decomposition)
   router.get('/trades/attribution', (req, res) => {
     try {
+      const { startDate, endDate } = req.query;
+      const result = attributePerformance({ startDate, endDate });
+      if (!result.totalTrades) return res.json({ message: 'No closed trades', totalTrades: 0 });
+      res.json(result);
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Journal Analytics ────────────────────────────────────────────────────
+  // Aggregate analytics across all closed trades for pattern discovery
+
+  // GET /api/trades/journal/streaks — Win/loss streak analysis
+  router.get('/trades/journal/streaks', (req, res) => {
+    try {
       const closed = db.prepare(
-        `SELECT * FROM trades WHERE exit_date IS NOT NULL`
+        'SELECT * FROM trades WHERE exit_date IS NOT NULL ORDER BY exit_date, entry_date'
       ).all();
-      if (!closed.length) return res.json({ message: 'No closed trades', buckets: {} });
+      if (!closed.length) return res.json({ message: 'No closed trades' });
 
-      const bucket = (trades, keyFn) => {
-        const acc = {};
-        for (const t of trades) {
-          const k = keyFn(t);
-          if (k == null) continue;
-          if (!acc[k]) acc[k] = { trades: 0, wins: 0, pnl: 0, totalR: 0 };
-          acc[k].trades++;
-          if ((t.pnl_percent || 0) > 0) acc[k].wins++;
-          acc[k].pnl += (t.pnl_dollars || 0);
-          acc[k].totalR += (t.r_multiple || 0);
+      let currentStreak = 0, maxWinStreak = 0, maxLossStreak = 0;
+      let streakType = null;
+      const streaks = [];
+
+      for (const t of closed) {
+        const win = (t.pnl_percent || 0) > 0;
+        if (streakType === null || win !== streakType) {
+          if (currentStreak > 0) streaks.push({ type: streakType ? 'win' : 'loss', length: currentStreak });
+          streakType = win;
+          currentStreak = 1;
+        } else {
+          currentStreak++;
         }
-        for (const k of Object.keys(acc)) {
-          acc[k].winRate = +((acc[k].wins / acc[k].trades) * 100).toFixed(1);
-          acc[k].avgR    = +(acc[k].totalR / acc[k].trades).toFixed(2);
-          acc[k].pnl     = +acc[k].pnl.toFixed(2);
-          delete acc[k].totalR;
-        }
-        return acc;
-      };
+        if (win && currentStreak > maxWinStreak)   maxWinStreak = currentStreak;
+        if (!win && currentStreak > maxLossStreak) maxLossStreak = currentStreak;
+      }
+      if (currentStreak > 0) streaks.push({ type: streakType ? 'win' : 'loss', length: currentStreak });
 
-      // Bucket trades several ways for attribution analysis
-      const bySector = bucket(closed, t => t.sector || 'Unknown');
-      const byRegime = bucket(closed, t => t.entry_regime || 'Unknown');
-      const bySide   = bucket(closed, t => t.side || 'long');
-      const byRsBand = bucket(closed, t => {
-        const rs = t.entry_rs || 0;
-        if (rs >= 90) return 'RS 90-99';
-        if (rs >= 80) return 'RS 80-89';
-        if (rs >= 70) return 'RS 70-79';
-        if (rs >= 50) return 'RS 50-69';
-        return 'RS <50';
-      });
-      const byHoldDays = bucket(closed, t => {
-        if (!t.entry_date || !t.exit_date) return null;
-        const days = Math.round((new Date(t.exit_date) - new Date(t.entry_date)) / 86400000);
-        if (days <= 5)  return '0-5 days';
-        if (days <= 15) return '6-15 days';
-        if (days <= 30) return '16-30 days';
-        if (days <= 60) return '31-60 days';
-        return '60+ days';
-      });
-
-      // Best/worst attribution
-      const bestSector = Object.entries(bySector).sort((a,b) => b[1].pnl - a[1].pnl)[0];
-      const worstSector = Object.entries(bySector).sort((a,b) => a[1].pnl - b[1].pnl)[0];
+      // Current streak
+      const current = streaks[streaks.length - 1] || null;
 
       res.json({
-        totalClosed: closed.length,
-        bySector, byRegime, bySide, byRsBand, byHoldDays,
-        insights: {
-          bestSector: bestSector ? { name: bestSector[0], ...bestSector[1] } : null,
-          worstSector: worstSector ? { name: worstSector[0], ...worstSector[1] } : null,
-        },
+        maxWinStreak, maxLossStreak,
+        currentStreak: current,
+        avgWinStreak: streaks.filter(s => s.type === 'win').length
+          ? +(streaks.filter(s => s.type === 'win').reduce((a, s) => a + s.length, 0) /
+              streaks.filter(s => s.type === 'win').length).toFixed(1) : 0,
+        avgLossStreak: streaks.filter(s => s.type === 'loss').length
+          ? +(streaks.filter(s => s.type === 'loss').reduce((a, s) => a + s.length, 0) /
+              streaks.filter(s => s.type === 'loss').length).toFixed(1) : 0,
+        recentStreaks: streaks.slice(-10),
       });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // GET /api/trades/journal/monthly — Monthly P&L breakdown
+  router.get('/trades/journal/monthly', (req, res) => {
+    try {
+      const closed = db.prepare(
+        'SELECT * FROM trades WHERE exit_date IS NOT NULL ORDER BY exit_date'
+      ).all();
+      if (!closed.length) return res.json({ message: 'No closed trades', months: [] });
+
+      const months = {};
+      let cumPnl = 0;
+      for (const t of closed) {
+        const m = t.exit_date.slice(0, 7);
+        if (!months[m]) months[m] = { pnl: 0, trades: 0, wins: 0, bestR: -Infinity, worstR: Infinity };
+        months[m].pnl += (t.pnl_dollars || 0);
+        months[m].trades++;
+        if ((t.pnl_percent || 0) > 0) months[m].wins++;
+        const r = t.r_multiple || 0;
+        if (r > months[m].bestR)  months[m].bestR = r;
+        if (r < months[m].worstR) months[m].worstR = r;
+      }
+
+      const result = Object.entries(months).sort(([a], [b]) => a.localeCompare(b)).map(([month, v]) => {
+        cumPnl += v.pnl;
+        return {
+          month,
+          pnl:      +v.pnl.toFixed(2),
+          cumPnl:   +cumPnl.toFixed(2),
+          trades:   v.trades,
+          winRate:  +((v.wins / v.trades) * 100).toFixed(1),
+          bestR:    v.bestR === -Infinity ? 0 : +v.bestR.toFixed(2),
+          worstR:   v.worstR === Infinity ? 0 : +v.worstR.toFixed(2),
+        };
+      });
+
+      res.json({ months: result });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // GET /api/trades/journal/dayofweek — Performance by entry day of week
+  router.get('/trades/journal/dayofweek', (req, res) => {
+    try {
+      const closed = db.prepare(
+        'SELECT * FROM trades WHERE exit_date IS NOT NULL'
+      ).all();
+      if (!closed.length) return res.json({ message: 'No closed trades' });
+
+      const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const byDay = {};
+      for (const t of closed) {
+        const d = days[new Date(t.entry_date + 'T12:00:00').getDay()];
+        if (!byDay[d]) byDay[d] = { trades: 0, wins: 0, pnl: 0, totalR: 0 };
+        byDay[d].trades++;
+        if ((t.pnl_percent || 0) > 0) byDay[d].wins++;
+        byDay[d].pnl += (t.pnl_dollars || 0);
+        byDay[d].totalR += (t.r_multiple || 0);
+      }
+
+      const result = {};
+      for (const [day, v] of Object.entries(byDay)) {
+        result[day] = {
+          trades:  v.trades,
+          winRate: +((v.wins / v.trades) * 100).toFixed(1),
+          pnl:     +v.pnl.toFixed(2),
+          avgR:    +(v.totalR / v.trades).toFixed(2),
+        };
+      }
+
+      res.json({ byDayOfWeek: result });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // GET /api/trades/journal/exit-reasons — Performance by exit reason
+  router.get('/trades/journal/exit-reasons', (req, res) => {
+    try {
+      const closed = db.prepare(
+        'SELECT * FROM trades WHERE exit_date IS NOT NULL'
+      ).all();
+      if (!closed.length) return res.json({ message: 'No closed trades' });
+
+      const byReason = {};
+      for (const t of closed) {
+        const reason = t.exit_reason || 'unspecified';
+        if (!byReason[reason]) byReason[reason] = { trades: 0, wins: 0, pnl: 0, totalR: 0 };
+        byReason[reason].trades++;
+        if ((t.pnl_percent || 0) > 0) byReason[reason].wins++;
+        byReason[reason].pnl += (t.pnl_dollars || 0);
+        byReason[reason].totalR += (t.r_multiple || 0);
+      }
+
+      const result = {};
+      for (const [reason, v] of Object.entries(byReason)) {
+        result[reason] = {
+          trades:  v.trades,
+          winRate: +((v.wins / v.trades) * 100).toFixed(1),
+          pnl:     +v.pnl.toFixed(2),
+          avgR:    +(v.totalR / v.trades).toFixed(2),
+        };
+      }
+
+      res.json({ byExitReason: result });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // GET /api/trades/journal/rs-band — Performance by entry RS band
+  router.get('/trades/journal/rs-band', (req, res) => {
+    try {
+      const closed = db.prepare(
+        'SELECT * FROM trades WHERE exit_date IS NOT NULL'
+      ).all();
+      if (!closed.length) return res.json({ message: 'No closed trades' });
+
+      const byBand = {};
+      for (const t of closed) {
+        const rs = t.entry_rs || 0;
+        let band;
+        if (rs >= 90) band = 'RS 90-99';
+        else if (rs >= 80) band = 'RS 80-89';
+        else if (rs >= 70) band = 'RS 70-79';
+        else if (rs >= 50) band = 'RS 50-69';
+        else band = 'RS <50';
+        if (!byBand[band]) byBand[band] = { trades: 0, wins: 0, pnl: 0, totalR: 0 };
+        byBand[band].trades++;
+        if ((t.pnl_percent || 0) > 0) byBand[band].wins++;
+        byBand[band].pnl += (t.pnl_dollars || 0);
+        byBand[band].totalR += (t.r_multiple || 0);
+      }
+
+      const result = {};
+      for (const [band, v] of Object.entries(byBand)) {
+        result[band] = {
+          trades:  v.trades,
+          winRate: +((v.wins / v.trades) * 100).toFixed(1),
+          pnl:     +v.pnl.toFixed(2),
+          avgR:    +(v.totalR / v.trades).toFixed(2),
+        };
+      }
+
+      res.json({ byRsBand: result });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
