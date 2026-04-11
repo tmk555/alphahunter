@@ -94,6 +94,13 @@ function getAvailableDateRange() {
     SELECT MIN(date) as start_date, MAX(date) as end_date, COUNT(DISTINCT date) as trading_days
     FROM rs_snapshots WHERE type = 'stock'
   `).get();
+  // Exclude today's market date — scan-generated snapshots use live/intraday
+  // quotes, not verified daily closes. Replay should only use backfill dates.
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const safeEnd = db().prepare(
+    `SELECT MAX(date) as end_date FROM rs_snapshots WHERE type = 'stock' AND date < ?`
+  ).get(today);
+  if (snapRange) snapRange.safe_end_date = safeEnd?.end_date || snapRange?.end_date;
   return { scan_results: result, rs_snapshots: snapRange };
 }
 

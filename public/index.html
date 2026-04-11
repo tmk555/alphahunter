@@ -5395,7 +5395,7 @@ function ReplayTab() {
       setMcHistory(mch.history||[]);
       setWfHistory(wfh.history||[]);
       if (r?.rs_snapshots?.start_date) {
-        setForm(f=>({...f, startDate:r.rs_snapshots.start_date, endDate:r.rs_snapshots.end_date||''}));
+        setForm(f=>({...f, startDate:r.rs_snapshots.start_date, endDate:r.rs_snapshots.safe_end_date||r.rs_snapshots.end_date||''}));
       }
     } catch(e) { setError(e.message); }
   }
