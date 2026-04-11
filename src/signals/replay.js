@@ -9,32 +9,32 @@ function db() { return getDB(); }
 const BUILT_IN_STRATEGIES = {
   rs_momentum: {
     name: 'RS Momentum',
-    description: 'Buy RS >= 80 with rising momentum, sell on RS drop below 50',
+    description: 'Buy RS >= 80 with rising momentum, sell on RS drop below 50. Regime-aware: no new longs in CAUTION/CORRECTION.',
     defaults: { minRS: 80, minMomentum: 60, exitRS: 50, holdDays: 20 },
   },
   vcp_breakout: {
     name: 'VCP Breakout',
-    description: 'Buy VCP forming stocks with high RS, sell at target or stop',
+    description: 'Buy VCP forming stocks with high RS, sell at target or stop. Regime-aware: no new longs in CAUTION/CORRECTION.',
     defaults: { minRS: 70, minVCPContractions: 2, stopATR: 1.5, targetATR: 3.0, holdDays: 15 },
   },
   sepa_trend: {
     name: 'SEPA Trend Follow',
-    description: 'Buy stocks passing 6+ SEPA rules, hold while structure intact',
+    description: 'Buy stocks passing 6+ SEPA rules, hold while structure intact. Regime-aware: no new longs in CAUTION/CORRECTION.',
     defaults: { minSEPA: 6, minRS: 70, exitSEPA: 3, holdDays: 30 },
   },
   rs_line_new_high: {
     name: 'RS Line New High',
-    description: 'Buy on RS Line new highs near 52-week highs',
+    description: 'Buy on RS Line new highs near 52-week highs. Regime-aware: no new longs in CAUTION/CORRECTION.',
     defaults: { minRS: 75, maxDistFromHigh: 0.10, holdDays: 20 },
   },
   conviction: {
     name: 'Conviction Score',
-    description: 'Buy top conviction-scored picks (regime-aware: no new longs in CAUTION/CORRECTION, force-exit on risk-off). Matches Trade Setup tab behavior.',
+    description: 'Buy top conviction-scored picks. Regime-aware: no new longs in CAUTION/CORRECTION, force-exit on risk-off. Matches Trade Setup tab behavior.',
     defaults: { minConviction: 60, topN: 5, holdDays: 20 },
   },
   short_breakdown: {
     name: 'Short Breakdown',
-    description: 'Short Stage 4 stocks with RS <= 20, cover on RS recovery or stop',
+    description: 'Short Stage 4 stocks with RS <= 20, cover on RS recovery or stop. Not affected by regime gate (shorts thrive in CAUTION/CORRECTION).',
     defaults: { maxRS: 20, maxSEPA: 2, exitRS: 40, stopATR: 1.5, holdDays: 15 },
     side: 'short',
   },
@@ -356,20 +356,16 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
   }
   const dates = Object.keys(byDate).sort();
 
-  // ─── Regime setup (adaptive + conviction) ───────────────────────────────
-  // Both regime_adaptive and conviction strategies need SPY regime context.
-  // Conviction aligns with manual staging: no new longs in CAUTION/CORRECTION
-  // (matching the Trade Setup tab's "NO NEW LONGS" gate).
+  // ─── Regime setup (ALL strategies) ──────────────────────────────────────
+  // Every long strategy respects market regime: no new longs in CAUTION/CORRECTION,
+  // force-exit when regime turns risk-off. This matches the Trade Setup tab's
+  // "NO NEW LONGS" gate. Short strategies are unaffected by the regime gate.
   const isAdaptive = strategy === 'regime_adaptive';
   const isConviction = strategy === 'conviction';
-  const needsRegime = isAdaptive || isConviction;
-  let spyByDate = null;
-  const regimeStats = needsRegime ? { BULL: 0, NEUTRAL: 0, CAUTION: 0, CORRECTION: 0 } : null;
-  if (needsRegime) {
-    spyByDate = {};
-    for (const s of snapshots) {
-      if (s.symbol === 'SPY') spyByDate[s.date] = s;
-    }
+  let spyByDate = {};
+  const regimeStats = { BULL: 0, NEUTRAL: 0, CAUTION: 0, CORRECTION: 0 };
+  for (const s of snapshots) {
+    if (s.symbol === 'SPY') spyByDate[s.date] = s;
   }
 
   // Resolves the sub-strategy for a given date. Returns null when the active
@@ -429,13 +425,11 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       const posIsShort  = !!pos.isShort;
       let exitCheck = evaluateExit(stock, pos.entryStock, posStrategy, mergedParams, holdingDays, pos);
 
-      // Adaptive / Conviction: force-exit longs when regime turns risk-off
-      if (!exitCheck.exit && (isAdaptive || isConviction) && !posIsShort) {
-        const regimeForExit = isAdaptive ? todayRegime : (spyByDate ? detectRegimeForDate(spyByDate, date) : null);
+      // Force-exit longs when regime turns risk-off (all long strategies)
+      if (!exitCheck.exit && !posIsShort) {
+        const regimeForExit = todayRegime || detectRegimeForDate(spyByDate, date);
         if (regimeForExit === 'CAUTION' || regimeForExit === 'CORRECTION') {
-          if (isAdaptive ? mergedParams.forceExitOnRiskOff : true) {
-            exitCheck = { exit: true, reason: `regime_${regimeForExit.toLowerCase()}` };
-          }
+          exitCheck = { exit: true, reason: `regime_${regimeForExit.toLowerCase()}` };
         }
       }
 
@@ -512,15 +506,13 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     }
 
     // Check entries (if we have capacity AND regime permits)
-    // Adaptive: skip when sub resolves to cash. Conviction: skip in CAUTION/CORRECTION.
+    // Adaptive: handled by sub-strategy mapping (CAUTION/CORRECTION→cash).
+    // All other long strategies: block new entries in CAUTION/CORRECTION.
     const cashToday = isAdaptive && !sub.def;
-    let convictionBlocked = false;
-    if (isConviction && spyByDate) {
-      const regime = detectRegimeForDate(spyByDate, date);
-      regimeStats[regime]++;
-      convictionBlocked = regime === 'CAUTION' || regime === 'CORRECTION';
-    }
-    if (!cashToday && !convictionBlocked && positions.size < maxPositions) {
+    const regime = detectRegimeForDate(spyByDate, date);
+    if (!isAdaptive) regimeStats[regime]++;
+    const regimeBlocked = !isAdaptive && !isShort && (regime === 'CAUTION' || regime === 'CORRECTION');
+    if (!cashToday && !regimeBlocked && positions.size < maxPositions) {
       const todayStrategy = sub.key;
       const todayDef      = sub.def;
       const todayIsShort  = todayDef.side === 'short';

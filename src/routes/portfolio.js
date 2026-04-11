@@ -246,6 +246,7 @@ module.exports = function(db) {
            AND symbol IN (SELECT symbol FROM universe_mgmt)
       `).run().changes;
 
+      const todayStr = new Date().toISOString().split('T')[0];
       const synced = [];
       const stmt = db.prepare(`
         INSERT INTO trades (symbol, side, entry_date, entry_price, shares, sector, alpaca_order_id, needs_review, notes)
@@ -255,7 +256,8 @@ module.exports = function(db) {
 
       for (const order of filled) {
         if (existingIds.has(order.id)) continue;
-        const fillDate = (order.filled_at || order.created_at).split('T')[0];
+        let fillDate = (order.filled_at || order.created_at).split('T')[0];
+        if (fillDate > todayStr) fillDate = todayStr; // clamp future dates from UTC offset
         if (openSymDates.has(`${order.symbol}:${fillDate}`)) continue;
 
         // Find matching staged order for stop/target data
@@ -295,7 +297,9 @@ module.exports = function(db) {
         ).get(sell.symbol, 'long');
         if (!trade) continue;
 
-        const exitDate = (sell.filled_at || sell.created_at).split('T')[0];
+        // Use filled_at when available; clamp to today to avoid future dates from UTC offset
+        let exitDate = (sell.filled_at || sell.created_at).split('T')[0];
+        if (exitDate > todayStr) exitDate = todayStr;
         const exitPrice = +sell.filled_avg_price;
         const pnl_dollars = (exitPrice - trade.entry_price) * (trade.shares || 0);
         const pnl_percent = +((exitPrice / trade.entry_price - 1) * 100).toFixed(2);
