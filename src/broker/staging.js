@@ -10,21 +10,24 @@ function db() { return getDB(); }
 // ─── Stage a bracket order from a trade setup ───────────────────────────────
 
 function stageOrder({ symbol, side = 'buy', order_type = 'limit', qty, entry_price, stop_price,
-                      target1_price, target2_price, time_in_force = 'gtc', source, conviction_score, notes }) {
+                      target1_price, target2_price, time_in_force = 'gtc', source, conviction_score, notes,
+                      exit_strategy = 'full_size' }) {
+  const validStrategies = ['full_size', 'scale_in_out'];
+  const strategy = validStrategies.includes(exit_strategy) ? exit_strategy : 'full_size';
   const stmt = db().prepare(`
     INSERT INTO staged_orders (symbol, side, order_type, qty, entry_price, stop_price,
-      target1_price, target2_price, time_in_force, source, conviction_score, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      target1_price, target2_price, time_in_force, source, conviction_score, notes, exit_strategy)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const result = stmt.run(
     symbol.toUpperCase(), side, order_type, qty, entry_price, stop_price,
     target1_price || null, target2_price || null, time_in_force,
-    source || 'manual', conviction_score || null, notes || null,
+    source || 'manual', conviction_score || null, notes || null, strategy,
   );
   return getStagedOrder(result.lastInsertRowid);
 }
 
-function stageFromSetup(stock, setup, sizing, source = 'swinglab') {
+function stageFromSetup(stock, setup, sizing, source = 'swinglab', exitStrategy = 'full_size') {
   // Parse numeric values from setup strings (e.g., "$185.50" → 185.50)
   const parsePrice = (s) => {
     if (typeof s === 'number') return s;
@@ -52,6 +55,7 @@ function stageFromSetup(stock, setup, sizing, source = 'swinglab') {
     target2_price: target2,
     source,
     conviction_score: stock.convictionScore || null,
+    exit_strategy: exitStrategy,
   });
 }
 

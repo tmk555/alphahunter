@@ -319,6 +319,9 @@ function initSchema() {
   safeAddColumn('rs_snapshots', 'up_down_ratio_50', 'REAL');
   safeAddColumn('rs_snapshots', 'accumulation_50', 'TEXT');
 
+  // Exit strategy on staged orders (full_size = all-in/all-out, scale_in_out = dynamic partials)
+  safeAddColumn('staged_orders', 'exit_strategy', "TEXT DEFAULT 'full_size'");
+
   // Tier 3: partial profit-taking state
   safeAddColumn('trades', 'initial_shares', 'INTEGER');
   safeAddColumn('trades', 'remaining_shares', 'INTEGER');

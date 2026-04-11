@@ -23,6 +23,7 @@
 
 const { getDB } = require('../data/database');
 const { getHistoryFull, pLimit } = require('../data/providers/manager');
+const { cacheClear } = require('../data/cache');
 const { calcRS, calcRSWeekly, calcRSMonthly, rankToRS, getTimeframeAlignment } = require('./rs');
 const { calcSwingMomentum, calcATR, calcVolumeProfile } = require('./momentum');
 const { calcVCP } = require('./vcp');
@@ -153,6 +154,11 @@ async function runBackfill({
   if (!symbols || !symbols.length) throw new Error('symbols[] required');
   const t0 = Date.now();
   const errors = [];
+
+  // Clear provider cache to ensure we fetch the latest OHLCV data from Yahoo/FMP.
+  // Without this, cached data from up to 23h ago may produce stale close prices
+  // (e.g. MU $355.64 cached vs $355.82 actual close).
+  cacheClear();
 
   // Always include SPY — we need its close series for RS Line and (optionally)
   // for the regime_adaptive backtest path.
