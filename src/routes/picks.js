@@ -7,16 +7,27 @@ const { getRSTrend } = require('../signals/rs');
 const { calcConviction } = require('../signals/conviction');
 const { computeTradeSetup } = require('../signals/candidates');
 const { getMarketRegime } = require('../risk/regime');
-const { loadHistory, RS_HISTORY } = require('../data/store');
+const { loadHistory, RS_HISTORY, SEC_HISTORY } = require('../data/store');
+const { computeRotation } = require('../signals/rotation');
+const { runETFScan } = require('../scanner');
 
 function db() { return getDB(); }
 
-module.exports = function(runRSScanFn) {
+module.exports = function(runRSScanFn, SECTOR_ETFS_ARG) {
   router.get('/daily-picks', async (req, res) => {
     try {
       const stocks  = await runRSScanFn();
       const history = loadHistory(RS_HISTORY);
       const regime  = await getMarketRegime();
+
+      // Build rotation model for sector tilt in conviction scoring
+      let rotationModel = null;
+      try {
+        if (SECTOR_ETFS_ARG) {
+          const sectorData = await runETFScan(SECTOR_ETFS_ARG, SEC_HISTORY, 'SEC_');
+          rotationModel = computeRotation(sectorData);
+        }
+      } catch (_) { /* non-critical — conviction works without rotation */ }
 
       const limit = Math.max(1, Math.min(50, parseInt(req.query.limit, 10) || 7));
 
@@ -24,7 +35,7 @@ module.exports = function(runRSScanFn) {
         .filter(s => s.rsRank >= 60 && s.swingMomentum >= 40)
         .map(s => {
           const trend = getRSTrend(s.ticker, history);
-          const { convictionScore, reasons } = calcConviction(s, trend);
+          const { convictionScore, reasons } = calcConviction(s, trend, rotationModel);
           const swingSetup    = computeTradeSetup(s, 'swing');
           const positionSetup = computeTradeSetup(s, 'position');
           return { ...s, rsTrend: trend, convictionScore, reasons, swingSetup, positionSetup };

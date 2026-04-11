@@ -1,7 +1,7 @@
 // ─── Daily Picks conviction score formula ────────────────────────────────────
 // Ranks candidates by combined signal strength for automated daily picks
 
-function calcConviction(stock, rsTrend) {
+function calcConviction(stock, rsTrend, rotationModel) {
   const accel = rsTrend?.vs4w || 0;
   const sepa  = stock.sepaScore || 0;
   const sectorRs = stock.sectorRsRank || 50;
@@ -32,6 +32,16 @@ function calcConviction(stock, rsTrend) {
   if (vp?.accumulating)     score += 6;       // 50-day up/down vol ≥ 1.2 (B+ grade)
   if (vp?.accumulation50 === 'A') score += 3; // exceptional accumulation (≥1.5)
   if (vp?.distributing)     score -= 8;       // under distribution — avoid
+
+  // Sector rotation tilt: overweight sectors get a boost, underweight get penalized
+  if (rotationModel?.sectors) {
+    const sector = stock.sector;
+    const match = rotationModel.sectors.find(s => s.sector === sector);
+    if (match) {
+      if (match.tilt === 'overweight')  score += 5;
+      if (match.tilt === 'underweight') score -= 4;
+    }
+  }
 
   if (stock.earningsRisk)   score -= 15;
   if (stock.distFromHigh > 0.15) score -= 10;
