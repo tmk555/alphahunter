@@ -30,8 +30,10 @@ registerJobType('rs_scan', {
     const date = marketDate();
 
     if (config.persist !== false) {
+      // INSERT OR IGNORE: don't overwrite backfill-generated snapshots that
+      // have verified OHLCV close prices with live/cached intraday quotes.
       const insert = db().prepare(`
-        INSERT OR REPLACE INTO rs_snapshots (
+        INSERT OR IGNORE INTO rs_snapshots (
           date, symbol, type, rs_rank, swing_momentum, sepa_score, stage,
           price, vs_ma50, vs_ma200, volume_ratio, vcp_forming, rs_line_new_high, atr_pct,
           rs_rank_weekly, rs_rank_monthly, rs_tf_alignment, up_down_ratio_50, accumulation_50
