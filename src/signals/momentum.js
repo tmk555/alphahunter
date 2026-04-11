@@ -1,43 +1,42 @@
-// ─── Short-term momentum score for SWING trades ──────────────────────────────
-// Returns a RAW score (not bounded to 1-99). Percentile-ranked against the
-// universe by the scanner/backfill after all stocks are scored, so the
-// threshold (e.g., 60) adapts to current market conditions automatically.
+// ─── Short-term momentum score for SWING trades (0-100) ──────────────────────
+// Absolute score (not percentile-ranked) — same semantics as before so
+// thresholds like "momentum >= 60" remain stable across market conditions.
 //
-// Components:
-//   1. Multi-period ROC (5d, 10d, 21d) — weighted toward recent but not dominated
-//   2. Trend consistency — ratio of up days over last 10 sessions
-//   3. Volume confirmation — moves on above-average volume score higher
+// Improvements over original:
+//   1. Reduced ROC5 spike sensitivity (3.0→2.0), increased ROC21 (0.5→1.0)
+//   2. Trend consistency bonus — steady moves score higher than gap-and-fade
+//   3. Volume confirmation — institutional moves on high volume get a boost
 //   4. Price vs 10MA — simple trend filter
 
 function calcSwingMomentum(closes, q) {
-  if (!closes || closes.length < 21) return null;
+  if (!closes || closes.length < 21) return 50;
   const n = closes.length, now = closes[n-1];
+  let score = 50;
 
-  // 1. Multi-period ROC (reduced ROC5 weight, increased ROC21)
+  // 1. Multi-period ROC (reduced spike sensitivity)
   const roc5  = (now / closes[n-5]  - 1) * 100;
   const roc10 = (now / closes[n-10] - 1) * 100;
   const roc21 = (now / closes[n-21] - 1) * 100;
-  let score = roc5 * 2.0 + roc10 * 1.5 + roc21 * 1.0;
+  score += roc5 * 2.0 + roc10 * 1.5 + roc21 * 1.0;
 
-  // 2. Trend consistency — up days / 10 sessions (0 to +10 bonus)
+  // 2. Trend consistency — up days / 10 sessions (0 to +8 bonus)
   let upDays = 0;
   for (let i = n - 10; i < n; i++) {
     if (closes[i] > closes[i - 1]) upDays++;
   }
-  score += (upDays / 10) * 10;
+  score += (upDays / 10) * 8;
 
-  // 3. Volume confirmation — moves on higher volume are more meaningful
+  // 3. Volume confirmation (only when quote available — live scan)
   const volRatio = q?.averageDailyVolume3Month && q?.regularMarketVolume
     ? q.regularMarketVolume / q.averageDailyVolume3Month : 1;
-  if (volRatio >= 2.0) score += 8;
-  else if (volRatio >= 1.5) score += 5;
-  else if (volRatio >= 1.2) score += 2;
+  if (volRatio >= 2.0) score += 6;
+  else if (volRatio >= 1.5) score += 3;
 
   // 4. Price vs 10MA
   const ma10 = closes.slice(n - 10).reduce((a, b) => a + b, 0) / 10;
   if (now > ma10) score += 5;
 
-  return +score.toFixed(2);
+  return Math.min(99, Math.max(1, Math.round(score)));
 }
 
 // Real period returns from price history

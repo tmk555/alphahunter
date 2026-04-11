@@ -125,7 +125,7 @@ function computeSnapshotForSymbolAtDate(sym, bars, date, spyClosesUpToDate) {
     rawRS,
     rawRSWeekly,
     rawRSMonthly,
-    rawSwingMomentum: swingMom,
+    swingMomentum: swingMom,
     sepaScore,
     stage: stageInfo?.stage ?? null,
     vsMA50, vsMA200,
@@ -225,7 +225,6 @@ async function runBackfill({
     rankToRS(items);
     rankToRS(items, 'rawRSWeekly', 'rsRankWeekly');
     rankToRS(items, 'rawRSMonthly', 'rsRankMonthly');
-    rankToRS(items, 'rawSwingMomentum', 'swingMomentum');
     for (const s of items) s.rsTimeframeAlignment = getTimeframeAlignment(s, 80);
 
     // Persist all rows for this date in a single transaction
