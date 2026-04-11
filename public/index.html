@@ -1441,7 +1441,7 @@ function IndustriesTab({ selectedSectors, setSelectedSectors }) {
 }
 
 // ─── RS SCANNER TAB ───────────────────────────────────────────────────────────
-function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, selectedSectors, setSelectedSectors, sigFilters, setSigFilters, quickFilter, setQuickFilter }) {
+function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, selectedSectors, setSelectedSectors, sigFilters, setSigFilters }) {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   const [rsStaging, setRsStaging] = useState(null);
@@ -1517,17 +1517,9 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
 
   useEffect(() => { if (!rsLoaded) load(); }, []);
 
-  // Quick filters — preset combinations for fastest workflow
-  // When sector focus is active, bypass minRS on "all" filter so you see every stock in that sector
-  // quickFilter from App props, persists across tab switches
+  // Base filter: min RS threshold (bypassed when sector focus active)
   const hasSectorFocus = selectedSectors && selectedSectors.size > 0;
-  const quickFilters = {
-    all:      s => hasSectorFocus ? true : s.rsRank >= minRS,
-    triple:   s => s.rsRank >= 70 && (s.rsTrend?.vs4w||0) > 0 && s.swingMomentum >= 60,
-    s2triple: s => s.rsRank >= 70 && (s.rsTrend?.vs4w||0) > 0 && s.swingMomentum >= 60 && s.stage === 2,
-    s2vcp:    s => s.rsRank >= 70 && s.stage === 2 && s.vcpForming,
-    rsline:   s => s.rsLineNewHigh && s.rsRank >= 65,
-  };
+  const baseFilter = s => hasSectorFocus ? true : s.rsRank >= minRS;
 
   // Signal chip filter — if any chips active, stock must pass ALL of them
   const sigChecks = {
@@ -1544,7 +1536,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
 
   const filtered = (() => {
     let list = rsData.filter(s => {
-      if (!(quickFilters[quickFilter] || quickFilters.all)(s)) return false;
+      if (!baseFilter(s)) return false;
       if (selectedSectors && selectedSectors.size > 0 && !selectedSectors.has(s.sector)) return false;
       for (const key of sigFilters) {
         if (sigChecks[key] && !sigChecks[key](s)) return false;
@@ -1579,35 +1571,6 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
             </button>
           </div>
         </div>
-        {/* Quick filter bar */}
-        <div style={{display:'flex',gap:6,marginBottom:12,flexWrap:'wrap',alignItems:'center'}}>
-          <span style={{fontSize:10,color:'var(--text3)',letterSpacing:1,textTransform:'uppercase',marginRight:4}}>Filter</span>
-          {[
-            {id:'all',      label:'All',
-              title:'Show all stocks at or above the Min RS threshold'},
-            {id:'triple',   label:'★ Triple (RS>70+Accel+Mom>60)',
-              title:'STEP 1 — Your daily candidate list: institutional quality (RS>70) + gaining ground vs peers (Accel>0) + moving NOW (Mom>60). ~15-25 stocks. Start here every morning.'},
-            {id:'s2triple', label:'★★ Triple + S2',
-              title:'STEP 2 — Add Stage 2 context: stock is above a RISING 150MA (confirmed uptrend). Eliminates stocks bouncing in Stage 3/4 distribution. Highest quality setups. ~8-15 stocks.'},
-            {id:'s2vcp',    label:'★★★ S2 + VCP',
-              title:'STEP 3 — Ideal entry timing: Stage 2 uptrend context (S2) + Volatility Contraction Pattern (price coiling). S2 = right context. VCP = right timing. This is the complete Minervini setup. Tightest stops, best R/R.'},
-            {id:'rsline',   label:'⭐ RS Line highs',
-              title:'RS Line (price÷SPY) at 52-week high — stock outperforming the market itself, not just peers. IBD\'s earliest institutional accumulation signal. Often leads the sector.'},
-          ].map(f => (
-            <button key={f.id} title={f.title}
-              onClick={()=>setQuickFilter(f.id)}
-              className="btn btn-sm"
-              style={{fontSize:10,padding:'3px 10px',
-                background:quickFilter===f.id?'var(--amber)':'transparent',
-                color:quickFilter===f.id?'#000':'var(--text3)',
-                border:`1px solid ${quickFilter===f.id?'var(--amber)':'var(--border)'}`,
-                fontWeight:quickFilter===f.id?700:400}}>
-              {f.label}
-            </button>
-          ))}
-          <span style={{fontSize:11,color:'var(--text3)',marginLeft:4}}>{filtered.length} shown</span>
-        </div>
-
         {/* Signal chip filters */}
         <div style={{display:'flex',gap:5,marginBottom:10,flexWrap:'wrap',alignItems:'center'}}>
           <span style={{fontSize:10,color:'var(--text3)',letterSpacing:1,textTransform:'uppercase',marginRight:2}}>Signals</span>
@@ -1632,6 +1595,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
               ✕ Clear signals
             </button>
           )}
+          <span style={{fontSize:11,color:'var(--text3)',marginLeft:4}}>{filtered.length} shown</span>
         </div>
 
         {/* Strategy filter — replay engine entry criteria + ranking */}
