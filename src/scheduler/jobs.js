@@ -3,8 +3,15 @@
 const { registerJobType } = require('./engine');
 const { getDB }           = require('../data/database');
 const { yahooQuote }      = require('../data/providers/yahoo');
+const { cacheClear }      = require('../data/cache');
 
 function db() { return getDB(); }
+
+// US market date (Eastern timezone) — avoids writing tomorrow's date when
+// running after midnight UTC (8 PM ET during EDT).
+function marketDate() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
 
 // ─── 1. RS Scan — Daily universe scan, persist snapshots ────────────────────
 
@@ -17,8 +24,10 @@ registerJobType('rs_scan', {
   defaultConfig: { persist: true },
   handler: async (config) => {
     if (!_runScan) throw new Error('Scanner not initialized — call setRunScan() at startup');
+    // Clear cache so snapshot prices reflect the latest quotes, not stale cached data
+    cacheClear();
     const results = await _runScan();
-    const date = new Date().toISOString().slice(0, 10);
+    const date = marketDate();
 
     if (config.persist !== false) {
       const insert = db().prepare(`

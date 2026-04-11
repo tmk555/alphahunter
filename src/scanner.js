@@ -2,6 +2,12 @@
 // Fetches quotes + history for entire universe, computes all signals, returns ranked results.
 
 const { cacheGet, cacheSet, TTL_QUOTE } = require('./data/cache');
+
+// US market date (Eastern timezone) — avoids writing tomorrow's date when
+// running after midnight UTC (8 PM ET during EDT, 7 PM ET during EST).
+function marketDate() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
 const { loadHistory, saveHistory, RS_HISTORY, SEC_HISTORY, IND_HISTORY } = require('./data/store');
 const { getQuotes, getHistory, getHistoryFull, pLimit } = require('./data/providers/manager');
 const { calcRS, calcRSWeekly, calcRSMonthly, rankToRS, rankBySector, getRSTrend, preGenerateHistoryFor, getTimeframeAlignment } = require('./signals/rs');
@@ -161,8 +167,8 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
   }
   results.sort((a,b) => b.rsRank - a.rsRank);
 
-  // Save today's snapshot
-  const today = new Date().toISOString().split('T')[0];
+  // Save today's snapshot (use market date to avoid UTC→tomorrow issues)
+  const today = marketDate();
   const snap  = {};
   for (const s of results) snap[s.ticker] = s.rsRank;
   saveHistory(RS_HISTORY, snap, today);
@@ -236,8 +242,8 @@ async function runETFScan(etfs, histType, prefix, extraMap) {
   // Pre-generate history
   preGenerateHistoryFor(histMap, sym => prefix + sym, histType, prefix.replace('_','').toLowerCase() || 'stock');
 
-  // Save today's snapshot
-  const todayStr = new Date().toISOString().split('T')[0];
+  // Save today's snapshot (use market date to avoid UTC→tomorrow issues)
+  const todayStr = marketDate();
   const snap = {};
   for (const r of result) snap[prefix + r.symbol] = r.rsRank;
   saveHistory(histType, snap, todayStr);

@@ -5552,7 +5552,7 @@ function ReplayTab() {
             </div>
           )}
           <div style={{display:'flex',alignItems:'center',gap:6}}>
-            <input type="number" value={bfForm.lookbackDays} onChange={e=>setBfForm({...bfForm,lookbackDays:+e.target.value})} min={1} max={252} style={{width:60,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'5px 6px',color:'var(--text)',fontSize:10,fontFamily:'var(--font-mono)',textAlign:'center'}}/>
+            <input type="number" value={bfForm.lookbackDays} onChange={e=>setBfForm({...bfForm,lookbackDays:+e.target.value})} min={1} max={366} style={{width:60,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'5px 6px',color:'var(--text)',fontSize:10,fontFamily:'var(--font-mono)',textAlign:'center'}}/>
             <span style={{fontSize:9,color:'var(--text3)'}}>days</span>
             <button className="load-btn" onClick={runBackfill} disabled={bfLoading} style={{fontSize:9,padding:'5px 12px',background:'var(--orange, #ff6d00)'}}>{bfLoading?'BACKFILLING...':'BACKFILL'}</button>
           </div>
@@ -6070,7 +6070,7 @@ function ReplayTab() {
                   <td style={{color:pctColor(h.baseline_return),fontWeight:700}}>{h.baseline_return!=null?((h.baseline_return>0?'+':'')+h.baseline_return+'%'):'—'}</td>
                   <td style={{color:pctColor(h.median_return),fontWeight:600}}>{h.median_return!=null?((h.median_return>0?'+':'')+h.median_return+'%'):'—'}</td>
                   <td style={{color:h.profitable_pct>=50?'var(--green)':'var(--red)',fontWeight:600}}>{h.profitable_pct!=null?(h.profitable_pct+'%'):'—'}</td>
-                  <td><button onClick={async()=>{try{const r=await fetch('/api/replay/mc/'+h.id);const d=await r.json();setMcResult(d);}catch(e){console.error(e);}}} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 10px',color:'var(--amber)',fontSize:10,cursor:'pointer'}}>VIEW</button></td>
+                  <td><button onClick={async()=>{try{const r=await fetch('/api/replay/mc/'+h.id);const d=await r.json();setMcResult(d.result||d);}catch(e){console.error(e);}}} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 10px',color:'var(--amber)',fontSize:10,cursor:'pointer'}}>VIEW</button></td>
                 </tr>
               ))}
             </tbody>
