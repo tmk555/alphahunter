@@ -60,7 +60,7 @@ async function yahooHistory(symbol) {
   const cached = cacheGet(key, TTL_HIST);
   if (cached) return cached;
   const { crumb, cookie } = await getYahooCrumb();
-  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1y&interval=1d&crumb=${encodeURIComponent(crumb)}`;
+  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=2y&interval=1d&crumb=${encodeURIComponent(crumb)}`;
   const r = await fetch(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 'Cookie': cookie },
   });
@@ -76,7 +76,7 @@ async function yahooHistoryFull(symbol) {
   const cached = cacheGet(key, TTL_HIST);
   if (cached) return cached;
   const { crumb, cookie } = await getYahooCrumb();
-  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1y&interval=1d&crumb=${encodeURIComponent(crumb)}`;
+  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=2y&interval=1d&crumb=${encodeURIComponent(crumb)}`;
   const r = await fetch(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 'Cookie': cookie },
   });
