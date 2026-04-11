@@ -181,7 +181,7 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 <div id="root"></div>
 <script type="text/babel">
 const { useState, useEffect, useCallback, useRef, useMemo } = React;
-const { BarChart, Bar, XAxis, YAxis, Tooltip, Cell, ResponsiveContainer } = Recharts;
+const { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, Cell, ResponsiveContainer, CartesianGrid, Legend, ReferenceLine } = Recharts;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const fmt  = (n,d=2) => n != null ? Number(n).toFixed(d) : '—';
@@ -1206,15 +1206,21 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
   const [error,   setError]   = useState('');
   const { sortData: sortSec, SH: SecSH } = useSortTable('rsRank');
   const [selSector, setSelSector] = useState(null);
+  const [rotation, setRotation] = useState(null);
   const rsData = window._rsData || [];
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); loadRotation(); }, []);
 
   async function load() {
     setLoading(true); setError('');
     try { const d = await api('/api/sectors'); setData(d.sectors || []); }
     catch(e) { setError(e.message); }
     setLoading(false);
+  }
+
+  async function loadRotation() {
+    try { const d = await api('/api/sectors/rotation'); setRotation(d); }
+    catch(_) { /* non-critical */ }
   }
 
   return (
@@ -1306,6 +1312,45 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
             {[...selectedSectors].map(sec=><span key={sec} style={{color:'var(--green)',background:'rgba(0,230,118,0.12)',padding:'1px 8px',borderRadius:3,fontSize:11}}>{sec}</span>)}
             <span style={{color:'var(--text3)'}}>· Industries + RS Dashboard tabs are now filtered.</span>
             <button onClick={()=>setSelectedSectors(new Set())} style={{marginLeft:'auto',padding:'2px 8px',fontSize:11,border:'1px solid var(--border)',borderRadius:3,background:'transparent',color:'var(--text3)',cursor:'pointer'}}>✕ Clear focus</button>
+          </div>
+        )}
+        {/* Sector Rotation Model */}
+        {rotation && rotation.sectors && (
+          <div style={{marginTop:16,padding:14,background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+              <div>
+                <span style={{fontWeight:700,fontSize:14,color:'var(--text)'}}>Sector Rotation Model</span>
+                <span style={{fontSize:11,color:'var(--text3)',marginLeft:10}}>Composite: RS 50% + 1M Mom 30% + 3M Mom 20%</span>
+              </div>
+              <button className="btn btn-sm" onClick={loadRotation}>↻</button>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))',gap:8}}>
+              {rotation.sectors.map(s => {
+                const tiltColor = s.tilt === 'overweight' ? 'var(--green)' : s.tilt === 'underweight' ? 'var(--red)' : 'var(--text3)';
+                const tiltBg = s.tilt === 'overweight' ? 'rgba(0,230,118,0.08)' : s.tilt === 'underweight' ? 'rgba(255,82,82,0.08)' : 'rgba(255,255,255,0.03)';
+                const tiltLabel = s.tilt === 'overweight' ? '▲ OW' : s.tilt === 'underweight' ? '▼ UW' : '● MW';
+                return (
+                  <div key={s.sector} style={{padding:'8px 10px',background:tiltBg,border:`1px solid ${tiltColor}33`,borderRadius:4}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+                      <span style={{fontWeight:700,fontSize:12,color:'var(--text)'}}>{s.sector}</span>
+                      <span style={{fontSize:11,fontWeight:700,color:tiltColor}}>{tiltLabel}</span>
+                    </div>
+                    <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'var(--text3)'}}>
+                      <span>Score: {s.compositeScore?.toFixed?.(1) ?? s.compositeScore}</span>
+                      <span>Rank #{s.rank}</span>
+                    </div>
+                    <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>
+                      Size boost: {((s.sizeBoost || 1) * 100 - 100).toFixed(0)}%
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {rotation.methodology && (
+              <div style={{marginTop:8,fontSize:10,color:'var(--text3)'}}>
+                Top {rotation.methodology?.overweightCount || 3} overweight · Bottom {rotation.methodology?.underweightCount || 3} underweight · Size boost applied to conviction scoring
+              </div>
+            )}
           </div>
         )}
         {selSector && (
@@ -4667,20 +4712,28 @@ function PerformanceTab() {
   const [perf, setPerf]       = useState(null);
   const [attribution, setAttribution] = useState(null);
   const [pendingScales, setPendingScales] = useState([]);
+  const [journal, setJournal] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState('');
+  const [journalView, setJournalView] = useState('streaks');
 
   async function loadPerf() {
     setLoading(true); setError('');
     try {
-      const [p, a, s] = await Promise.all([
+      const [p, a, s, streaks, monthly, dow, exits, rsBand] = await Promise.all([
         api('/api/trades/performance').catch(()=>null),
         api('/api/trades/attribution').catch(()=>null),
         api('/api/trades/scaling/pending').catch(()=>({pending:[]})),
+        api('/api/trades/journal/streaks').catch(()=>null),
+        api('/api/trades/journal/monthly').catch(()=>null),
+        api('/api/trades/journal/dayofweek').catch(()=>null),
+        api('/api/trades/journal/exit-reasons').catch(()=>null),
+        api('/api/trades/journal/rs-band').catch(()=>null),
       ]);
       setPerf(p);
       setAttribution(a);
       setPendingScales(s?.pending || []);
+      setJournal({ streaks, monthly, dow, exits, rsBand });
     } catch(e) { setError(e.message); }
     setLoading(false);
   }
@@ -4759,20 +4812,58 @@ function PerformanceTab() {
             </div>
           )}
 
-          {/* Performance Attribution (Tier 5) */}
-          {attribution && attribution.totalClosed > 0 && (
+          {/* ─── Beta / Alpha Attribution ──────────────────────────────────── */}
+          {attribution && attribution.totalTrades > 0 && attribution.summary && (
             <div className="panel" style={{marginBottom:14}}>
               <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>
-                PERFORMANCE ATTRIBUTION ({attribution.totalClosed} closed trades)
+                RETURN DECOMPOSITION ({attribution.totalTrades} trades)
               </div>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:14}}>
+              {/* Summary bar: Total = Market + Alpha */}
+              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:16}}>
+                <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12,textAlign:'center'}}>
+                  <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)',marginBottom:4}}>TOTAL P&L</div>
+                  <div style={{fontSize:22,fontWeight:800,color:attribution.summary.totalPnl>=0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)'}}>
+                    ${Number(attribution.summary.totalPnl).toLocaleString(undefined,{maximumFractionDigits:0})}
+                  </div>
+                </div>
+                <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12,textAlign:'center'}}>
+                  <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)',marginBottom:4}}>MARKET (BETA)</div>
+                  <div style={{fontSize:22,fontWeight:800,color:attribution.summary.marketComponent>=0?'var(--cyan)':'var(--red)',fontFamily:'var(--font-mono)'}}>
+                    ${Number(attribution.summary.marketComponent).toLocaleString(undefined,{maximumFractionDigits:0})}
+                  </div>
+                  <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>{attribution.summary.marketPct}% of P&L</div>
+                </div>
+                <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12,textAlign:'center'}}>
+                  <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)',marginBottom:4}}>STOCK ALPHA</div>
+                  <div style={{fontSize:22,fontWeight:800,color:attribution.summary.stockAlpha>=0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)'}}>
+                    ${Number(attribution.summary.stockAlpha).toLocaleString(undefined,{maximumFractionDigits:0})}
+                  </div>
+                  <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>{attribution.summary.alphaPct}% of P&L</div>
+                </div>
+              </div>
+              {/* Monthly P&L chart (from attribution breakdown) */}
+              {attribution.monthlyBreakdown?.length > 1 && (
+                <div style={{marginBottom:16}}>
+                  <div style={{fontSize:9,color:'var(--amber)',letterSpacing:1,fontFamily:'var(--font-mono)',marginBottom:8}}>MONTHLY P&L DECOMPOSITION</div>
+                  <ResponsiveContainer width="100%" height={180}>
+                    <BarChart data={attribution.monthlyBreakdown} margin={{top:4,right:4,bottom:4,left:4}}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/>
+                      <XAxis dataKey="month" tick={{fontSize:9,fill:'var(--text3)'}} tickFormatter={v=>v.slice(5)}/>
+                      <YAxis tick={{fontSize:9,fill:'var(--text3)'}} tickFormatter={v=>'$'+Math.round(v/1000)+'k'}/>
+                      <Tooltip contentStyle={{background:'var(--bg2)',border:'1px solid var(--border)',fontSize:11}} formatter={(v,n)=>['$'+Number(v).toLocaleString(undefined,{maximumFractionDigits:0}),n==='market'?'Market (beta)':n==='alpha'?'Stock alpha':'Total']}/>
+                      <Bar dataKey="market" stackId="a" fill="var(--cyan)" opacity={0.6} name="market"/>
+                      <Bar dataKey="alpha" stackId="a" fill="var(--green)" opacity={0.8} name="alpha"/>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+              {/* Attribution by Sector / Regime / Strategy tables */}
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(300px,1fr))',gap:14}}>
                 {[
-                  ['By Sector', attribution.bySector],
-                  ['By Regime', attribution.byRegime],
-                  ['By Side',   attribution.bySide],
-                  ['By RS Band', attribution.byRsBand],
-                  ['By Hold Period', attribution.byHoldDays],
-                ].map(([title, data]) => (
+                  ['By Sector',   attribution.bySector],
+                  ['By Regime',   attribution.byRegime],
+                  ['By Strategy', attribution.byStrategy],
+                ].map(([title, data]) => data && Object.keys(data).length > 0 && (
                   <div key={title} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:10}}>
                     <div style={{fontSize:10,color:'var(--amber)',letterSpacing:1,fontFamily:'var(--font-mono)',marginBottom:6}}>{title.toUpperCase()}</div>
                     <table style={{width:'100%',fontSize:11,borderCollapse:'collapse'}}>
@@ -4780,17 +4871,19 @@ function PerformanceTab() {
                         <th style={{textAlign:'left',padding:'2px 4px'}}>Bucket</th>
                         <th style={{textAlign:'right',padding:'2px 4px'}}>Trades</th>
                         <th style={{textAlign:'right',padding:'2px 4px'}}>Win%</th>
-                        <th style={{textAlign:'right',padding:'2px 4px'}}>AvgR</th>
                         <th style={{textAlign:'right',padding:'2px 4px'}}>P&L</th>
+                        <th style={{textAlign:'right',padding:'2px 4px'}}>Mkt</th>
+                        <th style={{textAlign:'right',padding:'2px 4px'}}>Alpha</th>
                       </tr></thead>
                       <tbody>
-                        {data && Object.entries(data).sort((a,b)=>b[1].pnl-a[1].pnl).map(([k,v])=>(
+                        {Object.entries(data).sort((a,b)=>b[1].totalPnl-a[1].totalPnl).map(([k,v])=>(
                           <tr key={k}>
                             <td style={{padding:'2px 4px',color:'var(--text2)'}}>{k}</td>
                             <td style={{padding:'2px 4px',textAlign:'right',fontFamily:'var(--font-mono)'}}>{v.trades}</td>
                             <td style={{padding:'2px 4px',textAlign:'right',fontFamily:'var(--font-mono)',color:v.winRate>=50?'var(--green)':'var(--red)'}}>{v.winRate}%</td>
-                            <td style={{padding:'2px 4px',textAlign:'right',fontFamily:'var(--font-mono)',color:v.avgR>0?'var(--green)':'var(--red)'}}>{v.avgR>0?'+':''}{v.avgR}R</td>
-                            <td style={{padding:'2px 4px',textAlign:'right',fontFamily:'var(--font-mono)',color:v.pnl>=0?'var(--green)':'var(--red)'}}>${v.pnl.toLocaleString()}</td>
+                            <td style={{padding:'2px 4px',textAlign:'right',fontFamily:'var(--font-mono)',color:v.totalPnl>=0?'var(--green)':'var(--red)'}}>${Number(v.totalPnl).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                            <td style={{padding:'2px 4px',textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--cyan)'}}>${Number(v.marketPnl).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                            <td style={{padding:'2px 4px',textAlign:'right',fontFamily:'var(--font-mono)',color:v.stockAlphaPnl>=0?'var(--green)':'var(--red)'}}>${Number(v.stockAlphaPnl).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -4798,11 +4891,170 @@ function PerformanceTab() {
                   </div>
                 ))}
               </div>
-              {attribution.insights?.bestSector && (
-                <div style={{marginTop:10,fontSize:11,color:'var(--text2)'}}>
-                  Best sector: <strong style={{color:'var(--green)'}}>{attribution.insights.bestSector.name}</strong> (${attribution.insights.bestSector.pnl.toLocaleString()}, {attribution.insights.bestSector.winRate}% win)
-                  &nbsp;·&nbsp;
-                  Worst: <strong style={{color:'var(--red)'}}>{attribution.insights.worstSector.name}</strong> (${attribution.insights.worstSector.pnl.toLocaleString()})
+            </div>
+          )}
+
+          {/* ─── Journal Analytics ─────────────────────────────────────────── */}
+          {journal.streaks && !journal.streaks.message && (
+            <div className="panel" style={{marginBottom:14}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>
+                  JOURNAL ANALYTICS
+                </div>
+                <div style={{display:'flex',gap:4}}>
+                  {[['streaks','Streaks'],['monthly','Monthly'],['dow','Day of Week'],['exits','Exit Reasons'],['rsBand','RS Band']].map(([k,label])=>(
+                    <button key={k} className={`btn btn-sm${journalView===k?' btn-primary':''}`} onClick={()=>setJournalView(k)} style={{fontSize:10,padding:'3px 8px'}}>{label}</button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Streaks view */}
+              {journalView==='streaks' && journal.streaks && (
+                <div>
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:10,marginBottom:12}}>
+                    {[
+                      {label:'Max Win Streak',val:journal.streaks.maxWinStreak,color:'var(--green)'},
+                      {label:'Max Loss Streak',val:journal.streaks.maxLossStreak,color:'var(--red)'},
+                      {label:'Avg Win Streak',val:journal.streaks.avgWinStreak,color:'var(--green)'},
+                      {label:'Avg Loss Streak',val:journal.streaks.avgLossStreak,color:'var(--red)'},
+                    ].map(m=>(
+                      <div key={m.label} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:10,textAlign:'center'}}>
+                        <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)',marginBottom:4}}>{m.label.toUpperCase()}</div>
+                        <div style={{fontSize:22,fontWeight:800,color:m.color,fontFamily:'var(--font-mono)'}}>{m.val}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {journal.streaks.currentStreak && (
+                    <div style={{fontSize:12,color:'var(--text2)'}}>
+                      Current: <strong style={{color:journal.streaks.currentStreak.type==='win'?'var(--green)':'var(--red)'}}>
+                        {journal.streaks.currentStreak.length} {journal.streaks.currentStreak.type}{journal.streaks.currentStreak.length!==1?'s':''}
+                      </strong> in a row
+                    </div>
+                  )}
+                  {journal.streaks.recentStreaks?.length > 0 && (
+                    <div style={{marginTop:10,display:'flex',gap:3,flexWrap:'wrap',alignItems:'center'}}>
+                      <span style={{fontSize:10,color:'var(--text3)',marginRight:4}}>Recent:</span>
+                      {journal.streaks.recentStreaks.map((s,i)=>(
+                        <div key={i} style={{
+                          width:Math.min(40,8+s.length*6),height:20,borderRadius:3,
+                          background:s.type==='win'?'rgba(0,230,118,0.2)':'rgba(255,61,87,0.2)',
+                          border:`1px solid ${s.type==='win'?'rgba(0,230,118,0.4)':'rgba(255,61,87,0.4)'}`,
+                          display:'flex',alignItems:'center',justifyContent:'center',
+                          fontSize:10,fontWeight:700,fontFamily:'var(--font-mono)',
+                          color:s.type==='win'?'var(--green)':'var(--red)',
+                        }}>{s.length}{s.type==='win'?'W':'L'}</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Monthly view */}
+              {journalView==='monthly' && journal.monthly?.months?.length > 0 && (
+                <div>
+                  <ResponsiveContainer width="100%" height={200}>
+                    <BarChart data={journal.monthly.months} margin={{top:4,right:4,bottom:4,left:4}}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/>
+                      <XAxis dataKey="month" tick={{fontSize:9,fill:'var(--text3)'}} tickFormatter={v=>v.slice(5)}/>
+                      <YAxis tick={{fontSize:9,fill:'var(--text3)'}} tickFormatter={v=>'$'+Math.round(v/1000)+'k'}/>
+                      <Tooltip contentStyle={{background:'var(--bg2)',border:'1px solid var(--border)',fontSize:11}} formatter={(v)=>['$'+Number(v).toLocaleString(undefined,{maximumFractionDigits:0})]}/>
+                      <ReferenceLine y={0} stroke="var(--text3)" strokeDasharray="3 3"/>
+                      <Bar dataKey="pnl" name="P&L">
+                        {journal.monthly.months.map((m,i)=>(
+                          <Cell key={i} fill={m.pnl>=0?'var(--green)':'var(--red)'} opacity={0.7}/>
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                  <table style={{width:'100%',fontSize:11,borderCollapse:'collapse',marginTop:10}}>
+                    <thead><tr style={{color:'var(--text3)',fontSize:9,borderBottom:'1px solid var(--border)'}}>
+                      {['Month','P&L','Cum P&L','Trades','Win%','Best R','Worst R'].map(h=>
+                        <th key={h} style={{padding:'4px 6px',textAlign:h==='Month'?'left':'right'}}>{h}</th>
+                      )}
+                    </tr></thead>
+                    <tbody>
+                      {journal.monthly.months.map(m=>(
+                        <tr key={m.month} style={{borderBottom:'1px solid var(--border)'}}>
+                          <td style={{padding:'4px 6px',color:'var(--text2)',fontFamily:'var(--font-mono)'}}>{m.month}</td>
+                          <td style={{padding:'4px 6px',textAlign:'right',fontFamily:'var(--font-mono)',color:m.pnl>=0?'var(--green)':'var(--red)'}}>${Number(m.pnl).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                          <td style={{padding:'4px 6px',textAlign:'right',fontFamily:'var(--font-mono)',color:m.cumPnl>=0?'var(--green)':'var(--red)'}}>${Number(m.cumPnl).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                          <td style={{padding:'4px 6px',textAlign:'right',fontFamily:'var(--font-mono)'}}>{m.trades}</td>
+                          <td style={{padding:'4px 6px',textAlign:'right',fontFamily:'var(--font-mono)',color:m.winRate>=50?'var(--green)':'var(--red)'}}>{m.winRate}%</td>
+                          <td style={{padding:'4px 6px',textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--green)'}}>{m.bestR>0?'+':''}{m.bestR}R</td>
+                          <td style={{padding:'4px 6px',textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--red)'}}>{m.worstR}R</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Day of week view */}
+              {journalView==='dow' && journal.dow?.byDayOfWeek && (
+                <div>
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(100px,1fr))',gap:8}}>
+                    {['Monday','Tuesday','Wednesday','Thursday','Friday'].map(day=>{
+                      const d = journal.dow.byDayOfWeek[day];
+                      if(!d) return <div key={day} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:10,textAlign:'center',opacity:0.4}}>
+                        <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{day.slice(0,3).toUpperCase()}</div>
+                        <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>No trades</div>
+                      </div>;
+                      return (
+                        <div key={day} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:10,textAlign:'center'}}>
+                          <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)',marginBottom:4}}>{day.slice(0,3).toUpperCase()}</div>
+                          <div style={{fontSize:16,fontWeight:800,color:d.winRate>=50?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)'}}>{d.winRate}%</div>
+                          <div style={{fontSize:10,color:'var(--text3)'}}>win rate</div>
+                          <div style={{fontSize:12,fontWeight:700,color:d.pnl>=0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)',marginTop:4}}>${Number(d.pnl).toLocaleString(undefined,{maximumFractionDigits:0})}</div>
+                          <div style={{fontSize:10,color:'var(--text3)'}}>{d.trades} trades · {d.avgR>0?'+':''}{d.avgR}R</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Exit reasons view */}
+              {journalView==='exits' && journal.exits?.byExitReason && (
+                <table style={{width:'100%',fontSize:11,borderCollapse:'collapse'}}>
+                  <thead><tr style={{color:'var(--text3)',fontSize:9,borderBottom:'1px solid var(--border)'}}>
+                    {['Exit Reason','Trades','Win%','Avg R','P&L'].map(h=>
+                      <th key={h} style={{padding:'4px 6px',textAlign:h==='Exit Reason'?'left':'right'}}>{h}</th>
+                    )}
+                  </tr></thead>
+                  <tbody>
+                    {Object.entries(journal.exits.byExitReason).sort((a,b)=>b[1].trades-a[1].trades).map(([reason,v])=>(
+                      <tr key={reason} style={{borderBottom:'1px solid var(--border)'}}>
+                        <td style={{padding:'4px 6px',color:'var(--text2)',fontFamily:'var(--font-mono)',fontSize:11}}>{reason}</td>
+                        <td style={{padding:'4px 6px',textAlign:'right',fontFamily:'var(--font-mono)'}}>{v.trades}</td>
+                        <td style={{padding:'4px 6px',textAlign:'right',fontFamily:'var(--font-mono)',color:v.winRate>=50?'var(--green)':'var(--red)'}}>{v.winRate}%</td>
+                        <td style={{padding:'4px 6px',textAlign:'right',fontFamily:'var(--font-mono)',color:v.avgR>0?'var(--green)':'var(--red)'}}>{v.avgR>0?'+':''}{v.avgR}R</td>
+                        <td style={{padding:'4px 6px',textAlign:'right',fontFamily:'var(--font-mono)',color:v.pnl>=0?'var(--green)':'var(--red)'}}>${Number(v.pnl).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {/* RS Band view */}
+              {journalView==='rsBand' && journal.rsBand?.byRsBand && (
+                <div>
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:8}}>
+                    {['RS 90-99','RS 80-89','RS 70-79','RS 50-69','RS <50'].map(band=>{
+                      const d = journal.rsBand.byRsBand[band];
+                      if(!d) return null;
+                      return (
+                        <div key={band} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:10,textAlign:'center'}}>
+                          <div style={{fontSize:10,color:'var(--amber)',fontFamily:'var(--font-mono)',marginBottom:4}}>{band}</div>
+                          <div style={{fontSize:18,fontWeight:800,color:d.winRate>=50?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)'}}>{d.winRate}%</div>
+                          <div style={{fontSize:10,color:'var(--text3)'}}>win rate ({d.trades} trades)</div>
+                          <div style={{fontSize:13,fontWeight:700,color:d.pnl>=0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)',marginTop:4}}>
+                            ${Number(d.pnl).toLocaleString(undefined,{maximumFractionDigits:0})}
+                          </div>
+                          <div style={{fontSize:10,color:'var(--text3)'}}>{d.avgR>0?'+':''}{d.avgR}R avg</div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
