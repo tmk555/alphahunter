@@ -539,10 +539,23 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
         candidates = candidates.filter(s => (s.swing_momentum || 0) >= 55);
       }
 
-      // For conviction strategy, sort by conviction proxy (RS + momentum + SEPA
-      // weighted to match calcConviction), then take top N.
+      // Rank candidates by composite score so the best setups fill slots first.
       // For shorts, take weakest RS.
-      if (todayStrategy === 'conviction') {
+      if (todayStrategy === 'rs_momentum') {
+        // RS Momentum: weight RS + momentum heavily, bonus for confirming signals
+        candidates.sort((a, b) => {
+          const scoreA = (a.rs_rank || 0) * 0.30 + (a.swing_momentum || 0) * 0.30
+            + (a.sepa_score || 0) * 1.5 + (a.volume_ratio >= 1.5 ? 5 : 0)
+            + (a.rs_line_new_high ? 6 : 0) + (a.vcp_forming ? 4 : 0)
+            + ((a.rs_tf_alignment || 0) >= 3 ? 6 : (a.rs_tf_alignment || 0) >= 2 ? 3 : 0);
+          const scoreB = (b.rs_rank || 0) * 0.30 + (b.swing_momentum || 0) * 0.30
+            + (b.sepa_score || 0) * 1.5 + (b.volume_ratio >= 1.5 ? 5 : 0)
+            + (b.rs_line_new_high ? 6 : 0) + (b.vcp_forming ? 4 : 0)
+            + ((b.rs_tf_alignment || 0) >= 3 ? 6 : (b.rs_tf_alignment || 0) >= 2 ? 3 : 0);
+          return scoreB - scoreA;
+        });
+      } else if (todayStrategy === 'conviction') {
+        // Conviction: weighted to match calcConviction
         candidates.sort((a, b) => {
           const scoreA = (a.rs_rank || 0) * 0.25 + (a.swing_momentum || 0) * 0.20
             + (a.sepa_score || 0) * 2.5 + (a.rs_line_new_high ? 8 : 0)
