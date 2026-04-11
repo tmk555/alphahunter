@@ -253,6 +253,7 @@ const DEFAULT_EXECUTION = {
   exitSlippageBps: 5,      // 5 bps on exits (more orderly)
   commissionPerShare: 0,   // Most brokers are $0 commission now; set >0 if needed
   maxGapPct: 3.0,          // Skip entries where price gaps up >3% from prior close
+  nextDayEntry: true,      // Signal on day D → fill at day D+1's price (realistic for manual traders)
 };
 
 function applySlippage(price, bps, side) {
@@ -406,6 +407,11 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
   // Build prior-day price map for gap detection
   const priorPriceMap = {};
 
+  // Next-day entry queue: signal on day D → fill at day D+1's price.
+  // Each pending entry stores the candidate info from the signal day.
+  let pendingEntries = [];  // [{ symbol, signalStock, subStrategy, isShort }]
+  let skippedNextDay = 0;   // Count of pending entries that couldn't fill (symbol missing next day)
+
   for (let i = 0; i < dates.length; i++) {
     const date = dates[i];
     const dayStocks = byDate[date];
@@ -512,7 +518,67 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       }
     }
 
-    // Check entries (if we have capacity AND regime permits)
+    // ─── Fill pending entries from yesterday's signals (next-day entry mode) ─
+    // When nextDayEntry is on, yesterday's signal candidates are filled at
+    // today's price — modeling "see signal after close, buy next morning".
+    if (exec.nextDayEntry && pendingEntries.length > 0) {
+      const slotsForPending = maxPositions - positions.size;
+      const availCapPending = Math.max(0, capital);
+      const posSizePending = availCapPending / Math.max(1, slotsForPending);
+      let filled = 0;
+
+      for (const pe of pendingEntries) {
+        if (filled >= slotsForPending) break;
+        if (positions.has(pe.symbol)) continue;  // Already in a position
+
+        const stock = stockMap[pe.symbol];
+        if (!stock || !stock.price || stock.price <= 0) {
+          skippedNextDay++;
+          continue;  // Symbol not in today's snapshot
+        }
+
+        // Gap filter: skip if today's price gapped up >maxGapPct from signal day's close
+        if (!pe.isShort && pe.signalPrice > 0) {
+          const gapPct = ((stock.price / pe.signalPrice) - 1) * 100;
+          if (gapPct > exec.maxGapPct) {
+            skippedGaps++;
+            continue;
+          }
+        }
+
+        // Regime re-check: ensure regime is still favorable on fill day
+        const fillRegime = detectRegimeForDate(spyByDate, date);
+        if (!pe.isShort && (fillRegime === 'CAUTION' || fillRegime === 'CORRECTION')) continue;
+
+        const rawEntryPrice = stock.price;
+        const entryPrice = pe.isShort
+          ? applySlippage(rawEntryPrice, exec.entrySlippageBps, 'sell')
+          : applySlippage(rawEntryPrice, exec.entrySlippageBps, 'buy');
+        const posSize = Math.max(0, capital) / Math.max(1, maxPositions - positions.size);
+        const shares = Math.floor(posSize / entryPrice);
+        if (shares <= 0 || posSize < 100) continue;
+
+        const slippageCost = Math.abs(rawEntryPrice - entryPrice) * shares;
+        totalSlippageCost += slippageCost;
+        const collateral = shares * entryPrice;
+        capital -= collateral;
+
+        positions.set(pe.symbol, {
+          entryDate: date,
+          entryPrice: +entryPrice.toFixed(4),
+          entryStock: stock,   // Use today's snapshot (fill-day data) for stop/target calc
+          shares,
+          collateral,
+          subStrategy: pe.subStrategy,
+          isShort: pe.isShort,
+          entryRegime: pe.entryRegime,
+        });
+        filled++;
+      }
+      pendingEntries = [];  // Clear queue regardless of how many filled
+    }
+
+    // ─── Generate new entry signals ──────────────────────────────────────────
     // Adaptive: handled by sub-strategy mapping (CAUTION/CORRECTION→cash).
     // All other long strategies: block new entries in CAUTION/CORRECTION.
     const cashToday = isAdaptive && !sub.def;
@@ -569,47 +635,60 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       }
 
       const slotsAvailable = maxPositions - positions.size;
-      // Use AVAILABLE capital, not total — prevents implicit leverage
-      const availableCapital = Math.max(0, capital);
-      const positionSize = availableCapital / Math.max(1, slotsAvailable);
 
-      for (const stock of candidates.slice(0, slotsAvailable)) {
-        if (positionSize < 100 || !stock.price) continue;
-
-        // Gap filter: skip if price gapped up >maxGapPct from prior close
-        const priorPrice = priorPriceMap[stock.symbol];
-        if (!todayIsShort && priorPrice && stock.price > 0) {
-          const gapPct = ((stock.price / priorPrice) - 1) * 100;
-          if (gapPct > exec.maxGapPct) {
-            skippedGaps++;
-            continue; // Missed the breakout — don't chase
-          }
-        }
-
-        // Apply entry slippage
-        const rawEntryPrice = stock.price;
-        const entryPrice = todayIsShort
-          ? applySlippage(rawEntryPrice, exec.entrySlippageBps, 'sell')   // Short = sell
-          : applySlippage(rawEntryPrice, exec.entrySlippageBps, 'buy');
-        const shares = Math.floor(positionSize / entryPrice);
-        if (shares <= 0) continue;
-
-        const slippageCost = Math.abs(rawEntryPrice - entryPrice) * shares;
-        totalSlippageCost += slippageCost;
-
-        const collateral = shares * entryPrice;
-        capital -= collateral;
-
-        positions.set(stock.symbol, {
-          entryDate: date,
-          entryPrice: +entryPrice.toFixed(4),
-          entryStock: stock,
-          shares,
-          collateral,
+      if (exec.nextDayEntry) {
+        // Queue candidates for next-day fill instead of entering today
+        pendingEntries = candidates.slice(0, slotsAvailable).map(stock => ({
+          symbol: stock.symbol,
+          signalPrice: stock.price,
+          signalStock: stock,
           subStrategy: todayStrategy,
           isShort: todayIsShort,
           entryRegime: todayRegime,
-        });
+        }));
+      } else {
+        // Same-day entry (original behavior)
+        const availableCapital = Math.max(0, capital);
+        const positionSize = availableCapital / Math.max(1, slotsAvailable);
+
+        for (const stock of candidates.slice(0, slotsAvailable)) {
+          if (positionSize < 100 || !stock.price) continue;
+
+          // Gap filter: skip if price gapped up >maxGapPct from prior close
+          const priorPrice = priorPriceMap[stock.symbol];
+          if (!todayIsShort && priorPrice && stock.price > 0) {
+            const gapPct = ((stock.price / priorPrice) - 1) * 100;
+            if (gapPct > exec.maxGapPct) {
+              skippedGaps++;
+              continue; // Missed the breakout — don't chase
+            }
+          }
+
+          // Apply entry slippage
+          const rawEntryPrice = stock.price;
+          const entryPrice = todayIsShort
+            ? applySlippage(rawEntryPrice, exec.entrySlippageBps, 'sell')   // Short = sell
+            : applySlippage(rawEntryPrice, exec.entrySlippageBps, 'buy');
+          const shares = Math.floor(positionSize / entryPrice);
+          if (shares <= 0) continue;
+
+          const slippageCost = Math.abs(rawEntryPrice - entryPrice) * shares;
+          totalSlippageCost += slippageCost;
+
+          const collateral = shares * entryPrice;
+          capital -= collateral;
+
+          positions.set(stock.symbol, {
+            entryDate: date,
+            entryPrice: +entryPrice.toFixed(4),
+            entryStock: stock,
+            shares,
+            collateral,
+            subStrategy: todayStrategy,
+            isShort: todayIsShort,
+            entryRegime: todayRegime,
+          });
+        }
       }
     }
 
@@ -768,9 +847,11 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       slippageAsReturnDrag: +(totalSlippageCost / initialCapital * 100).toFixed(3),
       skippedGaps,
       skippedSurvivorship,
+      skippedNextDay,
       entrySlippageBps: exec.entrySlippageBps,
       exitSlippageBps: exec.exitSlippageBps,
       maxGapPct: exec.maxGapPct,
+      nextDayEntry: exec.nextDayEntry,
     },
     trades: {
       total: trades.length,
