@@ -539,55 +539,31 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
         candidates = candidates.filter(s => (s.swing_momentum || 0) >= 55);
       }
 
-      // Rank candidates by strategy-specific composite score so the best
-      // setups fill slots first. For shorts, take weakest RS.
-      function compositeSort(candidates, weightFn) {
-        candidates.sort((a, b) => weightFn(b) - weightFn(a));
-      }
-
+      // Rank candidates by each strategy's core thesis — keep sorts simple
+      // and distinct so strategies don't converge toward the same picks.
+      // Conviction is the only "kitchen sink" ranker by design.
       if (todayStrategy === 'rs_momentum') {
-        // RS + momentum weighted equally, bonus for confirming signals
-        compositeSort(candidates, s =>
-          (s.rs_rank || 0) * 0.30 + (s.swing_momentum || 0) * 0.30
-          + (s.sepa_score || 0) * 1.5 + (s.volume_ratio >= 1.5 ? 5 : 0)
-          + (s.rs_line_new_high ? 6 : 0) + (s.vcp_forming ? 4 : 0)
-          + ((s.rs_tf_alignment || 0) >= 3 ? 6 : (s.rs_tf_alignment || 0) >= 2 ? 3 : 0));
+        // RS + momentum equally — the two signals in the strategy name
+        candidates.sort((a, b) =>
+          ((b.rs_rank || 0) + (b.swing_momentum || 0)) - ((a.rs_rank || 0) + (a.swing_momentum || 0)));
       } else if (todayStrategy === 'vcp_breakout') {
-        // VCP: volume dry-up + RS + near highs = best breakout setups
-        compositeSort(candidates, s =>
-          (s.rs_rank || 0) * 0.25 + (s.swing_momentum || 0) * 0.15
-          + (s.sepa_score || 0) * 2.0
-          + (s.volume_ratio <= 0.7 ? 8 : s.volume_ratio <= 1.0 ? 4 : 0)  // low vol in base = bullish
-          + (s.rs_line_new_high ? 8 : 0)
-          + ((s.vs_ma50 || 0) >= 0 && (s.vs_ma50 || 0) <= 5 ? 5 : 0)     // tight to 50MA
-          + ((s.rs_tf_alignment || 0) >= 3 ? 6 : (s.rs_tf_alignment || 0) >= 2 ? 3 : 0)
-          + ((s.accumulation_50 || 0) >= 1.2 ? 5 : 0));
+        // Volume dry-up in base = tightest pattern = best breakout
+        candidates.sort((a, b) => (a.volume_ratio || 1) - (b.volume_ratio || 1));
       } else if (todayStrategy === 'sepa_trend') {
-        // SEPA: trend template quality is king, RS + accumulation confirm
-        compositeSort(candidates, s =>
-          (s.sepa_score || 0) * 3.0 + (s.rs_rank || 0) * 0.20
-          + (s.swing_momentum || 0) * 0.15
-          + (s.rs_line_new_high ? 6 : 0) + (s.vcp_forming ? 4 : 0)
-          + ((s.rs_tf_alignment || 0) >= 3 ? 6 : (s.rs_tf_alignment || 0) >= 2 ? 3 : 0)
-          + ((s.accumulation_50 || 0) >= 1.2 ? 6 : 0)
-          + (s.volume_ratio >= 1.5 ? 4 : 0));
+        // Highest SEPA score = strongest trend template
+        candidates.sort((a, b) => (b.sepa_score || 0) - (a.sepa_score || 0));
       } else if (todayStrategy === 'rs_line_new_high') {
-        // RS Line: RS strength + proximity to 52-week high + momentum
-        compositeSort(candidates, s =>
-          (s.rs_rank || 0) * 0.30 + (s.swing_momentum || 0) * 0.20
-          + (s.sepa_score || 0) * 1.5
-          + (s.volume_ratio >= 1.5 ? 6 : 0)                               // volume confirms breakout
-          + ((s.vs_ma50 || 0) >= 0 ? 4 : 0)                               // above 50MA
-          + ((s.rs_tf_alignment || 0) >= 3 ? 8 : (s.rs_tf_alignment || 0) >= 2 ? 4 : 0)
-          + ((s.accumulation_50 || 0) >= 1.2 ? 5 : 0)
-          + (s.vcp_forming ? 5 : 0));
+        // Strongest RS rank — RS line new high is already the entry gate
+        candidates.sort((a, b) => (b.rs_rank || 0) - (a.rs_rank || 0));
       } else if (todayStrategy === 'conviction') {
-        // Conviction: weighted to match calcConviction
-        compositeSort(candidates, s =>
-          (s.rs_rank || 0) * 0.25 + (s.swing_momentum || 0) * 0.20
-          + (s.sepa_score || 0) * 2.5 + (s.rs_line_new_high ? 8 : 0)
-          + (s.vcp_forming ? 6 : 0) + ((s.rs_tf_alignment || 0) >= 3 ? 8 : (s.rs_tf_alignment || 0) >= 2 ? 4 : 0)
-          + ((s.accumulation_50 || 0) >= 1.2 ? 6 : 0));
+        // Multi-factor composite matching calcConviction weights
+        candidates.sort((a, b) => {
+          const score = s => (s.rs_rank || 0) * 0.25 + (s.swing_momentum || 0) * 0.20
+            + (s.sepa_score || 0) * 2.5 + (s.rs_line_new_high ? 8 : 0)
+            + (s.vcp_forming ? 6 : 0) + ((s.rs_tf_alignment || 0) >= 3 ? 8 : (s.rs_tf_alignment || 0) >= 2 ? 4 : 0)
+            + ((s.accumulation_50 || 0) >= 1.2 ? 6 : 0);
+          return score(b) - score(a);
+        });
       } else if (todayIsShort) {
         candidates.sort((a, b) => (a.rs_rank || 99) - (b.rs_rank || 99));
       }
