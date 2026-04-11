@@ -138,7 +138,7 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
       mktCap: q.marketCap, fwdPE: q.forwardPE,
       epsTrailing, epsForward, epsGrowthEst,
       pegRatio, trailingPE,
-      swingMomentum: swingMom,
+      rawSwingMomentum: swingMom,
       earningsDate,
       daysToEarnings,
       earningsRisk: daysToEarnings != null && daysToEarnings >= 0 && daysToEarnings <= 14,
@@ -160,6 +160,7 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
   rankToRS(results);
   rankToRS(results, 'rawRSWeekly', 'rsRankWeekly');
   rankToRS(results, 'rawRSMonthly', 'rsRankMonthly');
+  rankToRS(results, 'rawSwingMomentum', 'swingMomentum');
   rankBySector(results);
   // Multi-timeframe alignment count (0-3) — used by conviction + UI
   for (const s of results) {
@@ -228,7 +229,7 @@ async function runETFScan(etfs, histType, prefix, extraMap) {
       w52h: q.fiftyTwoWeekHigh, w52l: q.fiftyTwoWeekLow,
       volume: q.regularMarketVolume,
       rawRS: calcRS(closes),
-      swingMomentum: calcSwingMomentum(closes, q),
+      rawSwingMomentum: calcSwingMomentum(closes, q),
       ...calcVCP(closes),
       ...calcRSLine(closes, spyCloses),
       ...calcStage(closes, ma150),
@@ -237,6 +238,7 @@ async function runETFScan(etfs, histType, prefix, extraMap) {
   });
 
   rankToRS(result);
+  rankToRS(result, 'rawSwingMomentum', 'swingMomentum');
   result.sort((a,b) => b.rsRank - a.rsRank);
 
   // Pre-generate history

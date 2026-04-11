@@ -281,6 +281,7 @@ async function startStopMonitor() {
         } catch (_) {}
       }
       await checkPositionsAgainstStops();
+      await checkStrategyExits();
     }, { scheduled: true });
 
     // Expire stale staged orders every hour
@@ -312,8 +313,118 @@ function getMonitorStatus() {
   };
 }
 
+// ─── Strategy-Based Exit Monitoring ────────────────────────────────────────
+// For open trades tagged with a replay strategy, evaluate signal-based exits
+// (RS drop, SEPA degrade, regime change) using the latest scan data.
+// Runs alongside the cron stop check every 5 minutes.
+
+const STRATEGY_EXIT_RULES = {
+  rs_momentum:      { exitField: 'rsRank',        exitThreshold: 50, compare: 'below', reason: 'rs_dropped' },
+  sepa_trend:       { exitField: 'sepaScore',      exitThreshold: 3,  compare: 'below', reason: 'sepa_degraded' },
+  rs_line_new_high: { exitField: 'vsMA50',         exitThreshold: -5, compare: 'below', reason: 'below_ma50' },
+  vcp_breakout:     null,  // ATR stop/target only — no signal exit
+  conviction:       null,  // ATR stop/target only — no signal exit
+};
+
+async function checkStrategyExits() {
+  try {
+    // Get open trades with a strategy tag
+    const trades = db().prepare(
+      "SELECT * FROM trades WHERE exit_date IS NULL AND strategy IS NOT NULL"
+    ).all();
+    if (!trades.length) return [];
+
+    // Get latest scan data from cache
+    const { cacheGet, TTL_QUOTE } = require('../data/cache');
+    const scanData = cacheGet('rs:full', TTL_QUOTE);
+    if (!scanData || !scanData.length) return [];
+
+    // Build lookup by ticker
+    const scanMap = {};
+    for (const s of scanData) scanMap[s.ticker] = s;
+
+    // Check regime (applies to all long strategies)
+    const spy = scanMap['SPY'];
+    let regime = 'NEUTRAL';
+    if (spy) {
+      const above50 = (spy.vsMA50 || 0) > 0;
+      const above200 = (spy.vsMA200 || 0) > 0;
+      if (above50 && above200) regime = 'BULL';
+      else if (!above50 && above200) regime = 'NEUTRAL';
+      else if (above50 && !above200) regime = 'CAUTION';
+      else regime = 'CORRECTION';
+    }
+
+    const { configured } = alpaca.getConfig();
+    const autoExec = process.env.AUTO_STOP_EXECUTE === 'true' && configured;
+    const fired = [];
+
+    for (const trade of trades) {
+      const stock = scanMap[trade.symbol];
+      if (!stock) continue;
+
+      let exitReason = null;
+
+      // Regime force-exit for all long strategies
+      if (trade.side === 'long' && (regime === 'CAUTION' || regime === 'CORRECTION')) {
+        exitReason = `regime_${regime.toLowerCase()}`;
+      }
+
+      // Strategy-specific signal exit
+      if (!exitReason) {
+        const rule = STRATEGY_EXIT_RULES[trade.strategy];
+        if (rule) {
+          const val = stock[rule.exitField];
+          if (val != null && rule.compare === 'below' && val <= rule.exitThreshold) {
+            exitReason = rule.reason;
+          }
+        }
+      }
+
+      if (exitReason) {
+        console.log(`  Strategy exit: ${trade.symbol} (${trade.strategy}) — ${exitReason}`);
+        fired.push({ symbol: trade.symbol, strategy: trade.strategy, reason: exitReason, tradeId: trade.id });
+
+        // Auto-execute exit if enabled
+        if (autoExec) {
+          try {
+            await alpaca.submitOrder({
+              symbol: trade.symbol,
+              qty: trade.remaining_shares || trade.shares,
+              side: trade.side === 'short' ? 'buy' : 'sell',
+              type: 'market',
+              time_in_force: 'day',
+            });
+            console.log(`  ✓ Auto-exited ${trade.symbol}: ${exitReason}`);
+          } catch (e) {
+            console.error(`  Auto-exit failed for ${trade.symbol}: ${e.message}`);
+          }
+        }
+
+        // Send notification
+        try {
+          const { createAlert } = require('./alerts');
+          createAlert({
+            symbol: trade.symbol,
+            alert_type: 'strategy_exit',
+            trigger_price: stock.price,
+            direction: 'below',
+            trade_id: trade.id,
+            message: `${trade.strategy} exit signal: ${exitReason} (${trade.symbol} RS:${stock.rsRank} Mom:${stock.swingMomentum})`,
+          });
+        } catch (_) {}
+      }
+    }
+
+    return fired;
+  } catch (e) {
+    console.error(`  Strategy exit check error: ${e.message}`);
+    return [];
+  }
+}
+
 module.exports = {
   startStopMonitor, stopMonitor, getMonitorStatus,
-  checkPositionsAgainstStops, reconcilePositions,
+  checkPositionsAgainstStops, checkStrategyExits, reconcilePositions,
   priceStream, // Export for routes to expose status
 };

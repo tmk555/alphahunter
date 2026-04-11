@@ -144,21 +144,22 @@ module.exports = function(db) {
       const {
         symbol, side = 'long', entry_date, entry_price,
         stop_price, target1, target2, shares,
-        entry_rs, entry_sepa, entry_regime, wave, sector, notes,
+        entry_rs, entry_sepa, entry_regime, wave, sector, notes, strategy,
       } = req.body;
       if (!symbol || !entry_price) return res.status(400).json({ error: 'symbol and entry_price required' });
 
       const stmt = db.prepare(`
         INSERT INTO trades (symbol, side, entry_date, entry_price, stop_price, target1, target2,
                            shares, initial_shares, remaining_shares,
-                           entry_rs, entry_sepa, entry_regime, wave, sector, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                           entry_rs, entry_sepa, entry_regime, wave, sector, notes, strategy)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const result = stmt.run(
         symbol.toUpperCase(), side, entry_date || new Date().toISOString().split('T')[0],
         entry_price, stop_price, target1, target2,
         shares, shares, shares,
         entry_rs, entry_sepa, entry_regime, wave, sector, notes,
+        strategy || null,
       );
       // Auto-create stop alert if stop_price is set
       if (stop_price) {
@@ -262,7 +263,7 @@ module.exports = function(db) {
 
         // Find matching staged order for stop/target data
         const staged = db.prepare(
-          'SELECT stop_price, target1_price, target2_price, source, conviction_score FROM staged_orders WHERE alpaca_order_id = ?'
+          'SELECT stop_price, target1_price, target2_price, source, conviction_score, strategy FROM staged_orders WHERE alpaca_order_id = ?'
         ).get(order.id);
 
         // Look up sector from universe so attribution can group by it later
@@ -281,8 +282,8 @@ module.exports = function(db) {
 
         // If we have staged order data, update stop/target
         if (staged) {
-          db.prepare('UPDATE trades SET stop_price=?, target1=?, target2=? WHERE alpaca_order_id=?')
-            .run(staged.stop_price, staged.target1_price, staged.target2_price, order.id);
+          db.prepare('UPDATE trades SET stop_price=?, target1=?, target2=?, strategy=? WHERE alpaca_order_id=?')
+            .run(staged.stop_price, staged.target1_price, staged.target2_price, staged.strategy || null, order.id);
         }
 
         synced.push({ symbol: order.symbol, price: +order.filled_avg_price, qty: +order.filled_qty, date: fillDate });
