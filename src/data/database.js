@@ -322,6 +322,10 @@ function initSchema() {
   // Exit strategy on staged orders (full_size = all-in/all-out, scale_in_out = dynamic partials)
   safeAddColumn('staged_orders', 'exit_strategy', "TEXT DEFAULT 'full_size'");
 
+  // Replay strategy tag — links live trades to replay engine strategy for active management
+  safeAddColumn('staged_orders', 'strategy', 'TEXT');
+  safeAddColumn('trades', 'strategy', 'TEXT');
+
   // Tier 3: partial profit-taking state
   safeAddColumn('trades', 'initial_shares', 'INTEGER');
   safeAddColumn('trades', 'remaining_shares', 'INTEGER');
