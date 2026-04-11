@@ -5692,11 +5692,13 @@ function ReplayTab() {
       let params = {};
       try { params = JSON.parse(form.params); } catch(_) {}
       if (form.scaleOut) params.scaleOut = true;
+      const execution = {};
+      if (form.nextDayEntry === false) execution.nextDayEntry = false;  // Default is true; only override when unchecked
       const r = await api('/api/replay/run', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
           strategy: form.strategy, tradeMode: form.tradeMode || undefined, startDate: form.startDate, endDate: form.endDate,
-          maxPositions: form.maxPositions, initialCapital: form.initialCapital, params,
+          maxPositions: form.maxPositions, initialCapital: form.initialCapital, params, execution,
         }),
       });
       setResult(r); loadAll();
@@ -5887,16 +5889,25 @@ function ReplayTab() {
           </div>
         )}
 
-        {/* Scale-out option */}
-        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:10,padding:'8px 12px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4}}>
+        {/* Execution options */}
+        <div style={{display:'flex',alignItems:'center',gap:16,marginBottom:10,padding:'8px 12px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,flexWrap:'wrap'}}>
+          <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',fontSize:11,color:'var(--text2)'}}>
+            <input type="checkbox" checked={form.nextDayEntry!==false} onChange={e=>setForm({...form,nextDayEntry:e.target.checked})}/>
+            <span style={{fontWeight:600}}>Next-Day Entry</span>
+          </label>
+          <span style={{fontSize:10,color:'var(--text3)',borderRight:'1px solid var(--border)',paddingRight:12}}>
+            {form.nextDayEntry!==false
+              ? 'Signal at close → fill next day (realistic for manual trading)'
+              : 'Same-day entry at close price (optimistic)'}
+          </span>
           <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',fontSize:11,color:'var(--text2)'}}>
             <input type="checkbox" checked={form.scaleOut||false} onChange={e=>setForm({...form,scaleOut:e.target.checked})}/>
             <span style={{fontWeight:600}}>Scale-In/Out</span>
           </label>
           <span style={{fontSize:10,color:'var(--text3)'}}>
             {form.scaleOut
-              ? 'Entry: 1/3 at pivot, 1/3 follow-through, 1/3 pullback. Exit: 1/3 at T1 (move stop to breakeven), 1/3 at T2, trail final 1/3 with MA'
-              : 'Lump-sum entry and exit (default backtest mode)'}
+              ? '1/3 staged entries + partial exits at T1/T2/trail'
+              : 'Lump-sum entry and exit'}
           </span>
         </div>
 
@@ -5957,11 +5968,15 @@ function ReplayTab() {
           {result.executionCosts && (
             <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:16}}>
               <div style={{display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
-                <span style={{fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1,color:'var(--amber)'}}>EXECUTION COSTS</span>
+                <span style={{fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1,color:'var(--amber)'}}>EXECUTION MODEL</span>
+                <span style={{fontSize:11,color:result.executionCosts.nextDayEntry?'var(--green)':'var(--text3)',fontWeight:result.executionCosts.nextDayEntry?600:400}}>
+                  {result.executionCosts.nextDayEntry ? 'Next-day entry' : 'Same-day entry'}
+                </span>
                 <span style={{fontSize:11,color:'var(--text2)'}}>Slippage: <strong style={{color:'var(--red)'}}>${result.executionCosts.totalSlippage?.toLocaleString()}</strong> ({result.executionCosts.slippageAsReturnDrag}% drag)</span>
                 <span style={{fontSize:11,color:'var(--text2)'}}>Entry: {result.executionCosts.entrySlippageBps}bps</span>
                 <span style={{fontSize:11,color:'var(--text2)'}}>Exit: {result.executionCosts.exitSlippageBps}bps</span>
                 {result.executionCosts.skippedGaps > 0 && <span style={{fontSize:11,color:'var(--amber)'}}>Skipped gaps: {result.executionCosts.skippedGaps}</span>}
+                {result.executionCosts.skippedNextDay > 0 && <span style={{fontSize:11,color:'var(--amber)'}}>Missed next-day fills: {result.executionCosts.skippedNextDay}</span>}
                 <span style={{fontSize:11,color:'var(--text3)'}}>Max gap filter: {result.executionCosts.maxGapPct}%</span>
               </div>
             </div>
