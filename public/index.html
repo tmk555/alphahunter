@@ -5379,6 +5379,7 @@ function ReplayTab() {
   const [bfForm, setBfForm] = useState({ lookbackDays:180 });
   const [bfResult, setBfResult] = useState(null);
   const [bfLoading, setBfLoading] = useState(false);
+  const datesInitialized = React.useRef(false);
 
   async function loadAll() {
     try {
@@ -5394,8 +5395,10 @@ function ReplayTab() {
       setHistory(h.history||[]);
       setMcHistory(mch.history||[]);
       setWfHistory(wfh.history||[]);
-      if (r?.rs_snapshots?.start_date) {
+      // Only auto-populate dates on initial load — don't overwrite user's selections
+      if (!datesInitialized.current && r?.rs_snapshots?.start_date) {
         setForm(f=>({...f, startDate:r.rs_snapshots.start_date, endDate:r.rs_snapshots.safe_end_date||r.rs_snapshots.end_date||''}));
+        datesInitialized.current = true;
       }
     } catch(e) { setError(e.message); }
   }
