@@ -29,7 +29,7 @@ const BUILT_IN_STRATEGIES = {
   },
   conviction: {
     name: 'Conviction Score',
-    description: 'Buy top conviction-scored picks, sell after holding period',
+    description: 'Buy top conviction-scored picks (regime-aware: no new longs in CAUTION/CORRECTION, force-exit on risk-off). Matches Trade Setup tab behavior.',
     defaults: { minConviction: 60, topN: 5, holdDays: 20 },
   },
   short_breakdown: {
@@ -142,7 +142,8 @@ function evaluateEntry(stock, strategy, params) {
              stock.rs_line_new_high;
 
     case 'conviction':
-      return true; // Handled by top-N selection
+      // Minimum quality gate: RS ≥ 60 + momentum ≥ 40 (matches daily-picks filter)
+      return stock.rs_rank >= 60 && (stock.swing_momentum || 0) >= 40;
 
     case 'short_breakdown':
       return stock.rs_rank <= params.maxRS &&
@@ -355,14 +356,16 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
   }
   const dates = Object.keys(byDate).sort();
 
-  // ─── Regime adaptive setup ──────────────────────────────────────────────
-  // For regime_adaptive, build a per-date SPY view used to dispatch to a
-  // sub-strategy each day. Long-only meta — shorts only enabled if a sub
-  // strategy is explicitly set to short_breakdown.
+  // ─── Regime setup (adaptive + conviction) ───────────────────────────────
+  // Both regime_adaptive and conviction strategies need SPY regime context.
+  // Conviction aligns with manual staging: no new longs in CAUTION/CORRECTION
+  // (matching the Trade Setup tab's "NO NEW LONGS" gate).
   const isAdaptive = strategy === 'regime_adaptive';
+  const isConviction = strategy === 'conviction';
+  const needsRegime = isAdaptive || isConviction;
   let spyByDate = null;
-  const regimeStats = isAdaptive ? { BULL: 0, NEUTRAL: 0, CAUTION: 0, CORRECTION: 0 } : null;
-  if (isAdaptive) {
+  const regimeStats = needsRegime ? { BULL: 0, NEUTRAL: 0, CAUTION: 0, CORRECTION: 0 } : null;
+  if (needsRegime) {
     spyByDate = {};
     for (const s of snapshots) {
       if (s.symbol === 'SPY') spyByDate[s.date] = s;
@@ -426,10 +429,13 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       const posIsShort  = !!pos.isShort;
       let exitCheck = evaluateExit(stock, pos.entryStock, posStrategy, mergedParams, holdingDays, pos);
 
-      // Adaptive: force-exit longs when regime turns risk-off
-      if (!exitCheck.exit && isAdaptive && mergedParams.forceExitOnRiskOff && !posIsShort) {
-        if (todayRegime === 'CAUTION' || todayRegime === 'CORRECTION') {
-          exitCheck = { exit: true, reason: `regime_${todayRegime.toLowerCase()}` };
+      // Adaptive / Conviction: force-exit longs when regime turns risk-off
+      if (!exitCheck.exit && (isAdaptive || isConviction) && !posIsShort) {
+        const regimeForExit = isAdaptive ? todayRegime : (spyByDate ? detectRegimeForDate(spyByDate, date) : null);
+        if (regimeForExit === 'CAUTION' || regimeForExit === 'CORRECTION') {
+          if (isAdaptive ? mergedParams.forceExitOnRiskOff : true) {
+            exitCheck = { exit: true, reason: `regime_${regimeForExit.toLowerCase()}` };
+          }
         }
       }
 
@@ -505,9 +511,16 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       }
     }
 
-    // Check entries (if we have capacity AND adaptive isn't in cash)
+    // Check entries (if we have capacity AND regime permits)
+    // Adaptive: skip when sub resolves to cash. Conviction: skip in CAUTION/CORRECTION.
     const cashToday = isAdaptive && !sub.def;
-    if (!cashToday && positions.size < maxPositions) {
+    let convictionBlocked = false;
+    if (isConviction && spyByDate) {
+      const regime = detectRegimeForDate(spyByDate, date);
+      regimeStats[regime]++;
+      convictionBlocked = regime === 'CAUTION' || regime === 'CORRECTION';
+    }
+    if (!cashToday && !convictionBlocked && positions.size < maxPositions) {
       const todayStrategy = sub.key;
       const todayDef      = sub.def;
       const todayIsShort  = todayDef.side === 'short';
@@ -527,9 +540,21 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
         candidates = candidates.filter(s => (s.swing_momentum || 0) >= 55);
       }
 
-      // For conviction strategy, take top N; for shorts, take weakest RS
+      // For conviction strategy, sort by conviction proxy (RS + momentum + SEPA
+      // weighted to match calcConviction), then take top N.
+      // For shorts, take weakest RS.
       if (todayStrategy === 'conviction') {
-        candidates.sort((a, b) => (b.rs_rank || 0) - (a.rs_rank || 0));
+        candidates.sort((a, b) => {
+          const scoreA = (a.rs_rank || 0) * 0.25 + (a.swing_momentum || 0) * 0.20
+            + (a.sepa_score || 0) * 2.5 + (a.rs_line_new_high ? 8 : 0)
+            + (a.vcp_forming ? 6 : 0) + ((a.rs_tf_alignment || 0) >= 3 ? 8 : (a.rs_tf_alignment || 0) >= 2 ? 4 : 0)
+            + ((a.accumulation_50 || 0) >= 1.2 ? 6 : 0);
+          const scoreB = (b.rs_rank || 0) * 0.25 + (b.swing_momentum || 0) * 0.20
+            + (b.sepa_score || 0) * 2.5 + (b.rs_line_new_high ? 8 : 0)
+            + (b.vcp_forming ? 6 : 0) + ((b.rs_tf_alignment || 0) >= 3 ? 8 : (b.rs_tf_alignment || 0) >= 2 ? 4 : 0)
+            + ((b.accumulation_50 || 0) >= 1.2 ? 6 : 0);
+          return scoreB - scoreA;
+        });
       } else if (todayIsShort) {
         candidates.sort((a, b) => (a.rs_rank || 99) - (b.rs_rank || 99));
       }

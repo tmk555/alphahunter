@@ -48,7 +48,7 @@ module.exports = function(db, runScan) {
   // ─── Stage from trade setup (auto-calculate everything) ───────────────────
   router.post('/staging/from-setup', async (req, res) => {
     try {
-      const { ticker, mode = 'swing' } = req.body;
+      const { ticker, mode = 'swing', exitStrategy = 'full_size' } = req.body;
       if (!ticker) return res.status(400).json({ error: 'ticker required' });
 
       // Run scanner to get fresh stock data
@@ -77,7 +77,7 @@ module.exports = function(db, runScan) {
       });
 
       // Stage the bracket order
-      const staged = stageFromSetup(stock, setup, sizing, mode === 'swing' ? 'swinglab' : 'position');
+      const staged = stageFromSetup(stock, setup, sizing, mode === 'swing' ? 'swinglab' : 'position', exitStrategy);
 
       res.json({
         staged,
@@ -94,6 +94,7 @@ module.exports = function(db, runScan) {
           beta: sizing.beta,
           atrPct: sizing.atrPct,
         },
+        exitStrategy,
         stock: {
           ticker: stock.ticker,
           price: stock.price,

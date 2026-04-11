@@ -196,6 +196,21 @@ const fmtK = n => {
 };
 const rsColor = rs => rs >= 90 ? '#00e676' : rs >= 70 ? '#69f0ae' : rs >= 50 ? '#f0a500' : rs >= 30 ? '#ff8c00' : '#ff3d57';
 
+// Shallow JSON equality — prevents setState re-renders when data hasn't changed.
+// Serializes to JSON and compares strings. Good enough for API response objects/arrays.
+function jsonEqual(a, b) {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  try { return JSON.stringify(a) === JSON.stringify(b); } catch(_) { return false; }
+}
+// setState wrapper: only updates if value changed (prevents re-render flicker)
+function setIfChanged(setter, refObj, key, newVal) {
+  if (!jsonEqual(refObj.current[key], newVal)) {
+    refObj.current[key] = newVal;
+    setter(newVal);
+  }
+}
+
 async function api(path, opts = {}) {
   const r = await fetch(path, opts);
   if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || `HTTP ${r.status}`); }
@@ -324,6 +339,7 @@ function App() {
 
   // Badge counts — fetch periodically for tab indicators
   const [badgeCounts, setBadgeCounts] = useState({staged:0, review:0, positions:0});
+  const prevBadges = useRef({staged:0, review:0, positions:0});
   useEffect(() => {
     async function fetchBadges() {
       try {
@@ -332,11 +348,15 @@ function App() {
           api('/api/trades?status=open&limit=200').catch(()=>({trades:[]})),
           api('/api/broker/positions').catch(()=>({positions:[]})),
         ]);
-        setBadgeCounts({
+        const next = {
           staged: (st.orders||[]).length,
           review: (tr.trades||[]).filter(t=>t.needs_review).length,
           positions: (pos.positions||[]).length,
-        });
+        };
+        if (!jsonEqual(prevBadges.current, next)) {
+          prevBadges.current = next;
+          setBadgeCounts(next);
+        }
       } catch(_) {}
     }
     fetchBadges();
@@ -1769,6 +1789,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
   const [picks,   setPicks]   = useState(null);
   const [picksLoad, setPicksLoad] = useState(false);
   const [staging, setStaging] = useState(null); // ticker currently staging
+  const [exitStrategy, setExitStrategy] = useState('full_size'); // full_size | scale_in_out
 
   // Signal filters from App props — persists across tab switches
   const toggleSetupSig = key => setSetupSigFilters(prev => {
@@ -1828,9 +1849,10 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
     try {
       const r = await api('/api/staging/from-setup', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ ticker, mode: stageMode || mode }),
+        body: JSON.stringify({ ticker, mode: stageMode || mode, exitStrategy }),
       });
-      alert(`Staged ${r.staged?.symbol}: ${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk. Go to Trading tab to submit.`);
+      const stratLabel = exitStrategy === 'scale_in_out' ? ' (scale in/out)' : ' (full size)';
+      alert(`Staged ${r.staged?.symbol}: ${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk${stratLabel}. Go to Trading tab to submit.`);
     } catch(e) { alert(`Stage failed: ${e.message}`); }
     setStaging(null);
   }
@@ -1888,12 +1910,21 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
             <div className="panel-title">Trade <span>Setups</span></div>
             <div className="panel-sub">Conviction-ranked candidates with ATR-based levels. Run RS Scanner first.</div>
           </div>
-          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
             <div className="btn-group">
               {['swing','position','both'].map(m => (
                 <button key={m} className={`mode-btn ${mode===m?'active':''}`}
                   onClick={() => setMode(m)}>
                   {m === 'swing' ? '⚡ Swing' : m === 'position' ? '📈 Position' : 'Both'}
+                </button>
+              ))}
+            </div>
+            <div className="btn-group">
+              {[{k:'full_size',l:'Full Size'},{k:'scale_in_out',l:'Scale In/Out'}].map(s => (
+                <button key={s.k} className={`mode-btn ${exitStrategy===s.k?'active':''}`}
+                  onClick={() => setExitStrategy(s.k)}
+                  title={s.k==='full_size'?'Enter full position, exit all at stop/target':'Dynamic scale: 1/3 at T1 (stop→BE), 1/3 at T2, trail final 1/3'}>
+                  {s.l}
                 </button>
               ))}
             </div>
@@ -2620,7 +2651,83 @@ function MarketPulseTab() {
             </div>
           </div>
         )}
+
+        {/* ─── TRADE SETUP HISTORY (top 7 per day for last 365 days) ─── */}
+        <PicksHistoryPanel />
       </div>
+    </div>
+  );
+}
+
+function PicksHistoryPanel() {
+  const [hist, setHist] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [page, setPage] = useState(0);
+  const pageSize = 20;
+
+  async function loadHistory() {
+    setLoading(true);
+    try {
+      const d = await api('/api/daily-picks/history?days=365&topN=7');
+      setHist(d);
+    } catch(_) {}
+    setLoading(false);
+  }
+
+  const regimeColor = r => r === 'BULL' ? 'var(--green)' : r === 'NEUTRAL' ? 'var(--cyan)' : r === 'CAUTION' ? 'var(--amber)' : 'var(--red)';
+
+  return (
+    <div className="panel" style={{marginTop:14}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+        <div>
+          <div className="panel-title">📊 <span>Setup</span> History</div>
+          <div className="panel-sub">Top 7 conviction-ranked picks per day from rs_snapshots. Cross-check with replay engine.</div>
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          <button className="btn btn-primary" onClick={()=>{if(!hist) loadHistory(); setExpanded(!expanded);}} disabled={loading} style={{fontSize:10,padding:'6px 14px'}}>
+            {loading ? 'LOADING...' : expanded ? 'COLLAPSE' : 'SHOW HISTORY'}
+          </button>
+        </div>
+      </div>
+      {expanded && hist && (
+        <div>
+          <div style={{fontSize:11,color:'var(--text3)',marginBottom:8}}>{hist.dates} trading days · Top {hist.topN} per day</div>
+          <div style={{display:'flex',gap:6,marginBottom:10}}>
+            <button className="btn" disabled={page===0} onClick={()=>setPage(p=>p-1)} style={{fontSize:10,padding:'4px 10px'}}>← Prev</button>
+            <span style={{fontSize:11,color:'var(--text2)',alignSelf:'center'}}>Page {page+1}/{Math.ceil((hist.history||[]).length/pageSize)}</span>
+            <button className="btn" disabled={(page+1)*pageSize>=(hist.history||[]).length} onClick={()=>setPage(p=>p+1)} style={{fontSize:10,padding:'4px 10px'}}>Next →</button>
+          </div>
+          <div style={{overflowX:'auto'}}>
+            <table className="data-table" style={{fontSize:11}}>
+              <thead>
+                <tr>
+                  <th>Date</th><th>Regime</th><th>Longs</th>
+                  <th>#1</th><th>#2</th><th>#3</th><th>#4</th><th>#5</th><th>#6</th><th>#7</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(hist.history||[]).slice(page*pageSize, (page+1)*pageSize).map(day => (
+                  <tr key={day.date} style={{opacity: day.longsPermitted ? 1 : 0.5}}>
+                    <td style={{fontFamily:'var(--font-mono)',whiteSpace:'nowrap'}}>{day.date}</td>
+                    <td style={{color:regimeColor(day.regime),fontWeight:700,fontSize:10}}>{day.regime}</td>
+                    <td style={{color:day.longsPermitted?'var(--green)':'var(--red)',fontWeight:700,fontSize:10}}>{day.longsPermitted?'YES':'NO'}</td>
+                    {Array.from({length:7}).map((_,i) => {
+                      const p = day.picks[i];
+                      return <td key={i} style={{fontFamily:'var(--font-mono)',whiteSpace:'nowrap'}}>
+                        {p ? <span title={`RS:${p.rsRank} Mom:${p.swingMomentum} SEPA:${p.sepaScore} Conv:${p.convictionProxy}`}>
+                          <span className="td-ticker" style={{fontSize:11}}>{p.symbol}</span>
+                          <span style={{fontSize:9,color:'var(--text3)',marginLeft:3}}>{p.convictionProxy}</span>
+                        </span> : '—'}
+                      </td>;
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2636,6 +2743,7 @@ function WatchlistTab({ rsData }) {
   const [editVal,   setEditVal]  = useState('');
   const [stageFilter, setStageFilter] = useState('all');
   const [staging,   setStaging] = useState(null);
+  const [wlExitStrategy, setWlExitStrategy] = useState('full_size');
   const { sortData: sortWL, SH: WLSH } = useSortTable('addedAt', -1);
 
   useEffect(() => { loadWL(); loadStaged(); }, []);
@@ -2687,10 +2795,11 @@ function WatchlistTab({ rsData }) {
     try {
       const r = await api('/api/staging/from-setup', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ ticker, mode: mode || 'swing' }),
+        body: JSON.stringify({ ticker, mode: mode || 'swing', exitStrategy: wlExitStrategy }),
       });
       await loadStaged();
-      alert(`Staged ${r.staged?.symbol}: ${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk`);
+      const stratLabel = wlExitStrategy === 'scale_in_out' ? ' (scale in/out)' : ' (full size)';
+      alert(`Staged ${r.staged?.symbol}: ${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk${stratLabel}`);
     } catch(e) { alert(`Stage failed: ${e.message}`); }
     setStaging(null);
   }
@@ -2735,6 +2844,15 @@ function WatchlistTab({ rsData }) {
           <input value={note} onChange={e=>setNote(e.target.value)} placeholder="Thesis, key level, what triggers entry..."
             style={{flex:1,minWidth:120,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',padding:'8px 10px',fontSize:12,outline:'none'}}/>
           <button className="btn btn-primary btn-sm" onClick={add} disabled={loading||!ticker}>+ Add</button>
+          <div className="btn-group" style={{marginLeft:8}}>
+            {[{k:'full_size',l:'Full'},{k:'scale_in_out',l:'Scale'}].map(s => (
+              <button key={s.k} className={`mode-btn ${wlExitStrategy===s.k?'active':''}`}
+                onClick={() => setWlExitStrategy(s.k)} style={{fontSize:10,padding:'5px 10px'}}
+                title={s.k==='full_size'?'Full size in/out':'Dynamic scale in/out (1/3 partials)'}>
+                {s.l}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Staged orders summary (if filter is 'staged') */}
@@ -3078,6 +3196,9 @@ function ExecutionTab() {
   const [showStageForm, setShowStageForm] = useState(false);
   const [showAlertForm, setShowAlertForm] = useState(false);
 
+  // Refs to track previous values — prevents re-render when data hasn't changed
+  const prevData = useRef({broker:null,positions:[],orders:[],staged:[],subs:[],fired:[],stream:null});
+
   async function loadAll() {
     setLoading(true); setError('');
     try {
@@ -3090,16 +3211,21 @@ function ExecutionTab() {
         api('/api/alerts?limit=20').catch(()=>({alerts:[]})),
         api('/api/broker/stream/status').catch(()=>null),
       ]);
-      setBroker(b); setPositions(p.positions||[]); setOrders(o.orders||[]);
-      setStaged(s.orders||[]); setSubs(al.subscriptions||[]); setFired(fa.alerts||[]);
-      setStreamStatus(ss);
+      // Only setState when data actually changed — eliminates flicker on 30s poll
+      setIfChanged(setBroker, prevData, 'broker', b);
+      setIfChanged(setPositions, prevData, 'positions', p.positions||[]);
+      setIfChanged(setOrders, prevData, 'orders', o.orders||[]);
+      setIfChanged(setStaged, prevData, 'staged', s.orders||[]);
+      setIfChanged(setSubs, prevData, 'subs', al.subscriptions||[]);
+      setIfChanged(setFired, prevData, 'fired', fa.alerts||[]);
+      setIfChanged(setStreamStatus, prevData, 'stream', ss);
     } catch(e) { setError(e.message); }
     setLoading(false);
   }
 
   useEffect(() => {
     loadAll();
-    const interval = setInterval(loadAll, 30000); // refresh every 30s
+    const interval = setInterval(loadAll, 60000); // refresh every 60s (was 30s — less flicker)
     return () => clearInterval(interval);
   }, []);
 
@@ -3357,7 +3483,7 @@ function ExecutionTab() {
               <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
                 <thead>
                   <tr style={{borderBottom:'1px solid var(--border)'}}>
-                    {['#','Symbol','Side','Entry','Stop','Target','R:R','Risk $','Qty','Source','Status','Created','Actions'].map(h =>
+                    {['#','Symbol','Side','Entry','Stop','Target','R:R','Risk $','Qty','Strategy','Source','Status','Created','Actions'].map(h =>
                       <th key={h} style={{padding:'8px 6px',textAlign:'left',fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
                     )}
                   </tr>
@@ -3384,6 +3510,9 @@ function ExecutionTab() {
                         ${fmt(riskDollars,0)}
                       </td>
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{o.qty}</td>
+                      <td style={{padding:'8px 6px',fontSize:10,fontWeight:600,color:o.exit_strategy==='scale_in_out'?'var(--cyan)':'var(--text3)'}}>
+                        {o.exit_strategy==='scale_in_out'?'SCALE':'FULL'}
+                      </td>
                       <td style={{padding:'8px 6px',fontSize:10,color:'var(--text3)'}}>{o.source}</td>
                       <td style={{padding:'8px 6px'}}>
                         <span style={{padding:'2px 8px',borderRadius:3,fontSize:10,fontWeight:700,color:statusColor(o.status),background:`${statusColor(o.status)}15`,border:`1px solid ${statusColor(o.status)}30`}}>
@@ -3670,18 +3799,25 @@ function PortfolioTab() {
   const [editConfig, setEditConfig] = useState(false);
   const [cfgForm, setCfgForm] = useState({});
 
+  const prevPortfolio = useRef({status:null,config:null});
+
   async function loadStatus() {
     setLoading(true); setError('');
     try {
       const [s, c] = await Promise.all([api('/api/portfolio/status'), api('/api/portfolio/config')]);
-      setStatus(s); setConfig(c); setCfgForm(c);
+      setIfChanged(setStatus, prevPortfolio, 'status', s);
+      if (!jsonEqual(prevPortfolio.current.config, c)) {
+        prevPortfolio.current.config = c;
+        setConfig(c);
+        if (!editConfig) setCfgForm(c); // don't overwrite form while user is editing
+      }
     } catch(e) { setError(e.message); }
     setLoading(false);
   }
 
   useEffect(() => {
     loadStatus();
-    const interval = setInterval(loadStatus, 30000);
+    const interval = setInterval(loadStatus, 60000); // was 30s — less flicker
     return () => clearInterval(interval);
   }, []);
 
@@ -5258,7 +5394,7 @@ function ReplayTab() {
       setHistory(h.history||[]);
       setMcHistory(mch.history||[]);
       setWfHistory(wfh.history||[]);
-      if (r?.rs_snapshots?.start_date && !form.startDate) {
+      if (r?.rs_snapshots?.start_date) {
         setForm(f=>({...f, startDate:r.rs_snapshots.start_date, endDate:r.rs_snapshots.end_date||''}));
       }
     } catch(e) { setError(e.message); }
