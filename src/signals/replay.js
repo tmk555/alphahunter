@@ -539,34 +539,55 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
         candidates = candidates.filter(s => (s.swing_momentum || 0) >= 55);
       }
 
-      // Rank candidates by composite score so the best setups fill slots first.
-      // For shorts, take weakest RS.
+      // Rank candidates by strategy-specific composite score so the best
+      // setups fill slots first. For shorts, take weakest RS.
+      function compositeSort(candidates, weightFn) {
+        candidates.sort((a, b) => weightFn(b) - weightFn(a));
+      }
+
       if (todayStrategy === 'rs_momentum') {
-        // RS Momentum: weight RS + momentum heavily, bonus for confirming signals
-        candidates.sort((a, b) => {
-          const scoreA = (a.rs_rank || 0) * 0.30 + (a.swing_momentum || 0) * 0.30
-            + (a.sepa_score || 0) * 1.5 + (a.volume_ratio >= 1.5 ? 5 : 0)
-            + (a.rs_line_new_high ? 6 : 0) + (a.vcp_forming ? 4 : 0)
-            + ((a.rs_tf_alignment || 0) >= 3 ? 6 : (a.rs_tf_alignment || 0) >= 2 ? 3 : 0);
-          const scoreB = (b.rs_rank || 0) * 0.30 + (b.swing_momentum || 0) * 0.30
-            + (b.sepa_score || 0) * 1.5 + (b.volume_ratio >= 1.5 ? 5 : 0)
-            + (b.rs_line_new_high ? 6 : 0) + (b.vcp_forming ? 4 : 0)
-            + ((b.rs_tf_alignment || 0) >= 3 ? 6 : (b.rs_tf_alignment || 0) >= 2 ? 3 : 0);
-          return scoreB - scoreA;
-        });
+        // RS + momentum weighted equally, bonus for confirming signals
+        compositeSort(candidates, s =>
+          (s.rs_rank || 0) * 0.30 + (s.swing_momentum || 0) * 0.30
+          + (s.sepa_score || 0) * 1.5 + (s.volume_ratio >= 1.5 ? 5 : 0)
+          + (s.rs_line_new_high ? 6 : 0) + (s.vcp_forming ? 4 : 0)
+          + ((s.rs_tf_alignment || 0) >= 3 ? 6 : (s.rs_tf_alignment || 0) >= 2 ? 3 : 0));
+      } else if (todayStrategy === 'vcp_breakout') {
+        // VCP: volume dry-up + RS + near highs = best breakout setups
+        compositeSort(candidates, s =>
+          (s.rs_rank || 0) * 0.25 + (s.swing_momentum || 0) * 0.15
+          + (s.sepa_score || 0) * 2.0
+          + (s.volume_ratio <= 0.7 ? 8 : s.volume_ratio <= 1.0 ? 4 : 0)  // low vol in base = bullish
+          + (s.rs_line_new_high ? 8 : 0)
+          + ((s.vs_ma50 || 0) >= 0 && (s.vs_ma50 || 0) <= 5 ? 5 : 0)     // tight to 50MA
+          + ((s.rs_tf_alignment || 0) >= 3 ? 6 : (s.rs_tf_alignment || 0) >= 2 ? 3 : 0)
+          + ((s.accumulation_50 || 0) >= 1.2 ? 5 : 0));
+      } else if (todayStrategy === 'sepa_trend') {
+        // SEPA: trend template quality is king, RS + accumulation confirm
+        compositeSort(candidates, s =>
+          (s.sepa_score || 0) * 3.0 + (s.rs_rank || 0) * 0.20
+          + (s.swing_momentum || 0) * 0.15
+          + (s.rs_line_new_high ? 6 : 0) + (s.vcp_forming ? 4 : 0)
+          + ((s.rs_tf_alignment || 0) >= 3 ? 6 : (s.rs_tf_alignment || 0) >= 2 ? 3 : 0)
+          + ((s.accumulation_50 || 0) >= 1.2 ? 6 : 0)
+          + (s.volume_ratio >= 1.5 ? 4 : 0));
+      } else if (todayStrategy === 'rs_line_new_high') {
+        // RS Line: RS strength + proximity to 52-week high + momentum
+        compositeSort(candidates, s =>
+          (s.rs_rank || 0) * 0.30 + (s.swing_momentum || 0) * 0.20
+          + (s.sepa_score || 0) * 1.5
+          + (s.volume_ratio >= 1.5 ? 6 : 0)                               // volume confirms breakout
+          + ((s.vs_ma50 || 0) >= 0 ? 4 : 0)                               // above 50MA
+          + ((s.rs_tf_alignment || 0) >= 3 ? 8 : (s.rs_tf_alignment || 0) >= 2 ? 4 : 0)
+          + ((s.accumulation_50 || 0) >= 1.2 ? 5 : 0)
+          + (s.vcp_forming ? 5 : 0));
       } else if (todayStrategy === 'conviction') {
         // Conviction: weighted to match calcConviction
-        candidates.sort((a, b) => {
-          const scoreA = (a.rs_rank || 0) * 0.25 + (a.swing_momentum || 0) * 0.20
-            + (a.sepa_score || 0) * 2.5 + (a.rs_line_new_high ? 8 : 0)
-            + (a.vcp_forming ? 6 : 0) + ((a.rs_tf_alignment || 0) >= 3 ? 8 : (a.rs_tf_alignment || 0) >= 2 ? 4 : 0)
-            + ((a.accumulation_50 || 0) >= 1.2 ? 6 : 0);
-          const scoreB = (b.rs_rank || 0) * 0.25 + (b.swing_momentum || 0) * 0.20
-            + (b.sepa_score || 0) * 2.5 + (b.rs_line_new_high ? 8 : 0)
-            + (b.vcp_forming ? 6 : 0) + ((b.rs_tf_alignment || 0) >= 3 ? 8 : (b.rs_tf_alignment || 0) >= 2 ? 4 : 0)
-            + ((b.accumulation_50 || 0) >= 1.2 ? 6 : 0);
-          return scoreB - scoreA;
-        });
+        compositeSort(candidates, s =>
+          (s.rs_rank || 0) * 0.25 + (s.swing_momentum || 0) * 0.20
+          + (s.sepa_score || 0) * 2.5 + (s.rs_line_new_high ? 8 : 0)
+          + (s.vcp_forming ? 6 : 0) + ((s.rs_tf_alignment || 0) >= 3 ? 8 : (s.rs_tf_alignment || 0) >= 2 ? 4 : 0)
+          + ((s.accumulation_50 || 0) >= 1.2 ? 6 : 0));
       } else if (todayIsShort) {
         candidates.sort((a, b) => (a.rs_rank || 99) - (b.rs_rank || 99));
       }
