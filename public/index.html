@@ -2404,6 +2404,9 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
           Run <strong>RS Scanner</strong> first (RS Dashboard tab), then refresh picks here.
         </div>
       )}
+
+      {/* ─── TRADE SETUP HISTORY (top 7 per day for last 365 days) ─── */}
+      <PicksHistoryPanel />
     </div>
   );
 }
@@ -2727,8 +2730,6 @@ function MarketPulseTab() {
           </div>
         )}
 
-        {/* ─── TRADE SETUP HISTORY (top 7 per day for last 365 days) ─── */}
-        <PicksHistoryPanel />
       </div>
     </div>
   );
