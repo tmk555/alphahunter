@@ -1865,6 +1865,9 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
   const [picksLoad, setPicksLoad] = useState(false);
   const [staging, setStaging] = useState(null); // ticker currently staging
   const [exitStrategy, setExitStrategy] = useState('full_size'); // full_size | scale_in_out
+  const [convictionOverrides, setConvictionOverrides] = useState([]);
+  const [scoutData, setScoutData] = useState(null);
+  const [scoutLoading, setScoutLoading] = useState(false);
 
   // Signal filters from App props — persists across tab switches
   const toggleSetupSig = key => setSetupSigFilters(prev => {
@@ -1937,9 +1940,19 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
     try {
       const d = await api('/api/daily-picks?limit=50');
       setPicks(d.picks || []);
+      setConvictionOverrides(d.convictionOverrides || []);
       if (d.regime) setRegime(d.regime);
     } catch(_) {}
     setPicksLoad(false);
+  }
+
+  async function loadScout() {
+    setScoutLoading(true);
+    try {
+      const d = await api('/api/momentum-scout');
+      setScoutData(d);
+    } catch(_) {}
+    setScoutLoading(false);
   }
 
   async function runScan() {
@@ -2015,6 +2028,67 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
       </div>
 
       {(loading || picksLoad) && <div className="panel"><Loader msg="Scanning universe..."/></div>}
+
+      {/* ─── CONVICTION OVERRIDES — high-conviction stocks despite weak regime ─── */}
+      {convictionOverrides.length > 0 && regime && regime.sizeMultiplier < 1.0 && (
+        <div style={{marginBottom:20}}>
+          <div style={{padding:'14px 18px',background:'rgba(255,165,0,0.08)',border:'1px solid rgba(255,165,0,0.3)',borderRadius:6,marginBottom:12}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6}}>
+              <span style={{fontSize:12,fontWeight:800,color:'var(--amber)',fontFamily:'var(--font-mono)',letterSpacing:1.5}}>CONVICTION OVERRIDES</span>
+              <span style={{fontSize:10,color:'var(--text2)'}}>
+                {convictionOverrides.length} stocks with momentum too strong to ignore despite {regime.regime} regime
+              </span>
+            </div>
+            <div style={{fontSize:10,color:'var(--text3)',lineHeight:1.5}}>
+              These stocks qualify for reduced regime penalty based on elite conviction scores.
+              Regime multiplier adjusted from {regime.sizeMultiplier}x to account for individual stock strength.
+              Position size still reduced — not a full-size entry.
+            </div>
+          </div>
+          <div style={{display:'grid',gap:8}}>
+            {convictionOverrides.map((s, i) => {
+              const ov = s.convictionOverride || {};
+              const tierColor = ov.tier === 'elite' ? 'var(--green)' : 'var(--amber)';
+              const sw = s.swingSetup || {};
+              return (
+                <div key={s.ticker} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,borderLeft:`3px solid ${tierColor}`,overflow:'hidden'}}>
+                  <div style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+                    <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:tierColor,fontWeight:800,padding:'2px 8px',background:`${tierColor}15`,borderRadius:3,border:`1px solid ${tierColor}40`,letterSpacing:1}}>
+                      {ov.tier === 'elite' ? 'ELITE' : 'STRONG'}
+                    </div>
+                    <span className="td-ticker" style={{fontSize:17}}>{s.ticker}</span>
+                    <span style={{fontFamily:'var(--font-mono)',fontSize:14,color:'var(--text)',fontWeight:600}}>${s.price?.toFixed(2)}</span>
+                    <div style={{display:'flex',gap:16,flexWrap:'wrap'}}>
+                      {[{label:'CONV',val:s.convictionScore,color:scoreColor(s.convictionScore)},{label:'RS',val:s.rsRank,color:rsColor(s.rsRank)},{label:'MOM',val:s.swingMomentum,color:s.swingMomentum>=60?'var(--green)':'var(--amber)'}].map(m=>(
+                        <div key={m.label} style={{display:'flex',alignItems:'baseline',gap:4}}>
+                          <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>{m.label}</span>
+                          <span style={{fontFamily:'var(--font-mono)',fontSize:13,fontWeight:700,color:m.color}}>{m.val}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:10}}>
+                      <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--amber)'}}>
+                        {ov.originalMultiplier}x → {ov.adjustedMultiplier}x
+                      </div>
+                      <button disabled={staging===s.ticker} onClick={()=>stageFromSetup(s.ticker,'swing')}
+                        style={{padding:'5px 14px',background:tierColor,border:`1px solid ${tierColor}`,borderRadius:4,color:'#000',fontSize:11,fontWeight:800,cursor:'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
+                        {staging===s.ticker?'STAGING...':'STAGE OVERRIDE'}
+                      </button>
+                    </div>
+                  </div>
+                  {ov.reasons && (
+                    <div style={{padding:'6px 16px 10px',display:'flex',gap:8,flexWrap:'wrap'}}>
+                      {ov.reasons.map((r,j) => (
+                        <span key={j} style={{fontSize:10,color:'var(--text3)',background:'var(--bg2)',padding:'2px 8px',borderRadius:3,border:'1px solid var(--border)'}}>{r}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ─── SWING PICKS ─── */}
       {picks && swingPicks.length > 0 && (mode === 'swing' || mode === 'both') && (
@@ -2336,6 +2410,70 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
           </div>
         </div>
       )}
+
+      {/* ─── MOMENTUM SCOUT — breakout stocks outside the universe ─── */}
+      <div style={{marginBottom:20}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,paddingLeft:2}}>
+          <span style={{fontSize:10,color:'var(--purple)',letterSpacing:1.5,fontFamily:'var(--font-mono)',fontWeight:700}}>
+            MOMENTUM SCOUT — Breakouts Outside Universe
+          </span>
+          <button onClick={loadScout} disabled={scoutLoading}
+            style={{padding:'3px 12px',fontSize:10,fontFamily:'var(--font-mono)',fontWeight:700,background:'transparent',color:'var(--purple)',border:'1px solid rgba(196,77,255,0.3)',borderRadius:3,cursor:scoutLoading?'wait':'pointer',letterSpacing:.5}}>
+            {scoutLoading ? 'Scanning...' : 'Scan Expansion List'}
+          </button>
+          {scoutData && <span style={{fontSize:10,color:'var(--text3)'}}>
+            {scoutData.totalCandidates} of {scoutData.scanned} stocks passed momentum filter
+          </span>}
+        </div>
+        {scoutData && scoutData.candidates?.length > 0 && (
+          <div style={{overflowX:'auto'}}>
+            <table className="rs-table" style={{fontSize:12}}>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Ticker</th>
+                  <th>Price</th>
+                  <th>Mkt Cap</th>
+                  <th>Sector</th>
+                  <th title="Momentum score (0-100)">Score</th>
+                  <th title="% above/below 50-day MA">vs 50MA</th>
+                  <th title="% above/below 200-day MA">vs 200MA</th>
+                  <th title="% below 52-week high">From High</th>
+                  <th title="Today's volume vs 3-month average">Vol Ratio</th>
+                  <th>Signals</th>
+                </tr>
+              </thead>
+              <tbody>
+                {scoutData.candidates.map((s, i) => (
+                  <tr key={s.ticker}>
+                    <td style={{fontFamily:'var(--font-mono)',color:i<3?'var(--green)':'var(--text3)',fontWeight:700}}>{i+1}</td>
+                    <td><span className="td-ticker">{s.ticker}</span></td>
+                    <td style={{fontFamily:'var(--font-mono)'}}>${s.price?.toFixed(2)}</td>
+                    <td style={{fontFamily:'var(--font-mono)',color:'var(--text3)',fontSize:11}}>{s.mktCapLabel}</td>
+                    <td style={{fontSize:10,color:'var(--text3)'}}>{s.sector}</td>
+                    <td style={{fontFamily:'var(--font-mono)',fontWeight:700,color:s.momentumScore>=70?'var(--green)':s.momentumScore>=50?'var(--amber)':'var(--text3)'}}>{s.momentumScore}</td>
+                    <td style={{fontFamily:'var(--font-mono)',color:s.vsMA50>0?'var(--green)':'var(--red)'}}>{s.vsMA50>0?'+':''}{s.vsMA50}%</td>
+                    <td style={{fontFamily:'var(--font-mono)',color:s.vsMA200>0?'var(--green)':'var(--red)'}}>{s.vsMA200!=null?`${s.vsMA200>0?'+':''}${s.vsMA200}%`:'—'}</td>
+                    <td style={{fontFamily:'var(--font-mono)',color:s.fromHigh<10?'var(--green)':s.fromHigh<20?'var(--amber)':'var(--text3)'}}>{s.fromHigh}%</td>
+                    <td style={{fontFamily:'var(--font-mono)',color:s.volumeRatio>1.5?'var(--green)':s.volumeRatio>1.2?'var(--amber)':'var(--text3)'}}>{s.volumeRatio}x</td>
+                    <td style={{fontSize:10}}>
+                      {s.reasons?.map((r,j) => <span key={j} style={{display:'inline-block',marginRight:4,marginBottom:2,padding:'1px 5px',background:'rgba(196,77,255,0.08)',border:'1px solid rgba(196,77,255,0.2)',borderRadius:2,color:'var(--text2)',fontSize:9}}>{r}</span>)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{fontSize:10,color:'var(--text3)',marginTop:6,paddingLeft:2}}>
+              These stocks are NOT in the core universe. Strong momentum candidates may warrant adding to universe or taking a discretionary position.
+            </div>
+          </div>
+        )}
+        {scoutData && scoutData.candidates?.length === 0 && (
+          <div style={{padding:16,color:'var(--text3)',fontSize:12,background:'var(--bg3)',borderRadius:6,border:'1px solid var(--border)'}}>
+            No momentum breakouts found in expansion watchlist. All clear.
+          </div>
+        )}
+      </div>
 
       {/* Detailed swing lab results (when scan is run) */}
       {results.length > 0 && (

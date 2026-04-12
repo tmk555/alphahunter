@@ -4,7 +4,7 @@ const router  = express.Router();
 
 const { getDB } = require('../data/database');
 const { getRSTrend } = require('../signals/rs');
-const { calcConviction } = require('../signals/conviction');
+const { calcConviction, evaluateConvictionOverride } = require('../signals/conviction');
 const { computeTradeSetup } = require('../signals/candidates');
 const { getMarketRegime } = require('../risk/regime');
 const { loadHistory, RS_HISTORY, SEC_HISTORY } = require('../data/store');
@@ -38,15 +38,23 @@ module.exports = function(runRSScanFn, SECTOR_ETFS_ARG) {
           const { convictionScore, reasons } = calcConviction(s, trend, rotationModel);
           const swingSetup    = computeTradeSetup(s, 'swing');
           const positionSetup = computeTradeSetup(s, 'position');
-          return { ...s, rsTrend: trend, convictionScore, reasons, swingSetup, positionSetup };
+          // Evaluate conviction override for weak regimes
+          const convictionOverride = evaluateConvictionOverride(s, convictionScore, regime);
+          return { ...s, rsTrend: trend, convictionScore, reasons, swingSetup, positionSetup, convictionOverride };
         })
         .sort((a, b) => b.convictionScore - a.convictionScore);
 
       const totalQualified = ranked.length;
       const picks = ranked.slice(0, limit);
 
+      // Separate conviction overrides — stocks that deserve attention despite regime
+      const convictionOverrides = ranked
+        .filter(s => s.convictionOverride)
+        .slice(0, 10);
+
       res.json({
         picks,
+        convictionOverrides,
         totalQualified,
         regime,
         date: new Date().toISOString().split('T')[0],

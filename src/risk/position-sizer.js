@@ -68,6 +68,7 @@ function calculatePositionSize(params) {
     entryPrice,
     stopPrice,
     regimeMultiplier = 1.0,
+    convictionOverride,  // optional — from evaluateConvictionOverride()
     maxPositionPct = 20, // max % of account in single position
     beta,                // optional — stock beta vs SPY
     atrPct,              // optional — ATR as % of price (volatility-aware sizing)
@@ -75,10 +76,15 @@ function calculatePositionSize(params) {
 
   const base = fixedFractional(accountSize, riskPerTrade, entryPrice, stopPrice);
 
+  // Use conviction-adjusted multiplier if stock qualifies for override
+  const effectiveRegimeMult = convictionOverride?.override
+    ? convictionOverride.adjustedMultiplier
+    : regimeMultiplier;
+
   const betaMult = betaAdjustment(beta);
   const volMult  = volatilityAdjustment(atrPct);
   // Combined risk multiplier: regime × beta × vol (capped at 1.5x ceiling)
-  const totalMult = Math.min(1.5, regimeMultiplier * betaMult * volMult);
+  const totalMult = Math.min(1.5, effectiveRegimeMult * betaMult * volMult);
 
   const adjusted = {
     ...base,
@@ -97,6 +103,8 @@ function calculatePositionSize(params) {
   }
 
   adjusted.regimeMultiplier = regimeMultiplier;
+  adjusted.effectiveRegimeMult = +effectiveRegimeMult.toFixed(2);
+  adjusted.convictionOverride = convictionOverride || null;
   adjusted.betaMultiplier   = +betaMult.toFixed(2);
   adjusted.volMultiplier    = +volMult.toFixed(2);
   adjusted.totalMultiplier  = +totalMult.toFixed(2);
