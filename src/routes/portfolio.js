@@ -13,6 +13,8 @@ const { getMarketRegime } = require('../risk/regime');
 const { createStopAlert, deactivateAlertsForTrade } = require('../broker/alerts');
 const alpaca = require('../broker/alpaca');
 const { attributePerformance } = require('../signals/attribution');
+const { createTaxLot, sellTaxLots } = require('../risk/tax-engine');
+const { logExecution } = require('../risk/execution-quality');
 
 module.exports = function(db) {
   // ─── Portfolio Config ──────────────────────────────────────────────────────
@@ -283,8 +285,60 @@ module.exports = function(db) {
 
         // If we have staged order data, update stop/target
         if (staged) {
-          db.prepare('UPDATE trades SET stop_price=?, target1=?, target2=?, strategy=? WHERE alpaca_order_id=?')
+          db.prepare('UPDATE trades SET stop_price=?, target1=?, target2=?, strategy=?, was_system_signal=1 WHERE alpaca_order_id=?')
             .run(staged.stop_price, staged.target1_price, staged.target2_price, staged.strategy || null, order.id);
+        }
+
+        // Capture RS context at entry from latest snapshot
+        try {
+          const snap = db.prepare(`
+            SELECT rs_rank, sepa_score, swing_momentum FROM rs_snapshots
+            WHERE symbol = ? AND date <= ? AND type = 'stock' ORDER BY date DESC LIMIT 1
+          `).get(order.symbol, fillDate);
+          if (snap) {
+            db.prepare('UPDATE trades SET entry_rs=?, entry_sepa=? WHERE alpaca_order_id=? AND entry_rs IS NULL')
+              .run(snap.rs_rank, snap.sepa_score, order.id);
+          }
+          // Capture current regime
+          const regime = getMarketRegime();
+          if (regime?.regime) {
+            db.prepare('UPDATE trades SET regime_at_entry=? WHERE alpaca_order_id=? AND regime_at_entry IS NULL')
+              .run(regime.regime, order.id);
+          }
+        } catch (_) {}
+
+        const lastTradeId = db.prepare('SELECT id FROM trades WHERE alpaca_order_id = ?').get(order.id)?.id;
+
+        // Auto-create tax lot for this buy
+        if (lastTradeId) {
+          try {
+            createTaxLot({
+              tradeId: lastTradeId,
+              symbol: order.symbol,
+              shares: +order.filled_qty,
+              costBasis: +order.filled_avg_price,
+              acquiredDate: fillDate,
+            });
+          } catch (_) {}
+        }
+
+        // Auto-log execution quality from Alpaca fill data
+        if (lastTradeId) {
+          try {
+            const signalDate = staged?.created_at?.split('T')[0] || fillDate;
+            logExecution({
+              tradeId: lastTradeId,
+              symbol: order.symbol,
+              side: 'buy',
+              intendedPrice: staged?.stop_price ? +order.filled_avg_price : +order.filled_avg_price,
+              fillPrice: +order.filled_avg_price,
+              shares: +order.filled_qty,
+              orderType: order.type || 'market',
+              signalDate,
+              orderDate: (order.submitted_at || order.created_at)?.split('T')[0],
+              fillDate,
+            });
+          } catch (_) {}
         }
 
         synced.push({ symbol: order.symbol, price: +order.filled_avg_price, qty: +order.filled_qty, date: fillDate });
@@ -314,6 +368,33 @@ module.exports = function(db) {
             notes=COALESCE(notes,'') || ? WHERE id=?
         `).run(exitDate, exitPrice, pnl_dollars, pnl_percent, r_multiple,
           `\n[AUTO-EXIT] Sold at $${exitPrice.toFixed(2)}. Update exit reason and review.`, trade.id);
+
+        // Auto-dispose tax lots for this exit
+        try {
+          sellTaxLots({
+            symbol: sell.symbol,
+            shares: trade.shares || +sell.filled_qty,
+            salePrice: exitPrice,
+            saleDate: exitDate,
+            method: 'fifo',
+          });
+        } catch (_) {}
+
+        // Auto-log sell execution quality
+        try {
+          logExecution({
+            tradeId: trade.id,
+            symbol: sell.symbol,
+            side: 'sell',
+            intendedPrice: trade.target1 || exitPrice,
+            fillPrice: exitPrice,
+            shares: +sell.filled_qty || trade.shares,
+            orderType: sell.type || 'market',
+            signalDate: exitDate,
+            orderDate: (sell.submitted_at || sell.created_at)?.split('T')[0],
+            fillDate: exitDate,
+          });
+        } catch (_) {}
 
         exited.push({ symbol: sell.symbol, exitPrice, pnl_percent });
       }
