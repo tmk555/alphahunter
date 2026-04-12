@@ -347,6 +347,136 @@ function initSchema() {
       PRIMARY KEY (date, bucket, bucket_value)
     );
   `);
+
+  // ─── Gap 1: Edge Validation — survivorship-bias-free backtesting ──────────
+  // universe_mgmt already exists above; these support execution cost tracking
+  // in backtests and signal decay analysis results.
+
+  // ─── Gap 2a: Market Breadth Internals ─────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS breadth_snapshots (
+      date TEXT PRIMARY KEY,
+      pct_above_50ma REAL,
+      pct_above_200ma REAL,
+      new_highs INTEGER,
+      new_lows INTEGER,
+      ad_ratio REAL,
+      vol_thrust_pct REAL,
+      stage2_pct REAL,
+      stage4_pct REAL,
+      composite_score INTEGER,
+      regime TEXT,
+      mcclellan_osc REAL,
+      summation_index REAL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+
+  // ─── Gap 2c: Hedge Tracking ───────────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS hedge_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      instrument TEXT NOT NULL,
+      notional REAL,
+      cost REAL,
+      notes TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+
+  // ─── Gap 3a: Execution Quality Tracking ───────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS execution_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trade_id INTEGER,
+      symbol TEXT NOT NULL,
+      side TEXT NOT NULL,
+      intended_price REAL,
+      fill_price REAL,
+      shares INTEGER,
+      order_type TEXT,
+      slippage REAL,
+      slippage_pct REAL,
+      fill_quality REAL,
+      timing_delay_days INTEGER,
+      participation_rate REAL,
+      implementation_shortfall REAL,
+      implementation_shortfall_pct REAL,
+      signal_date TEXT,
+      order_date TEXT,
+      fill_date TEXT,
+      day_high REAL,
+      day_low REAL,
+      day_volume INTEGER,
+      avg_daily_volume INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (trade_id) REFERENCES trades(id)
+    );
+  `);
+
+  // ─── Gap 3b: Tax Lot Tracking ─────────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tax_lots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trade_id INTEGER,
+      symbol TEXT NOT NULL,
+      shares INTEGER NOT NULL,
+      remaining_shares INTEGER NOT NULL,
+      cost_basis REAL NOT NULL,
+      adjusted_basis REAL NOT NULL,
+      acquired_date TEXT NOT NULL,
+      disposed_date TEXT,
+      sale_price REAL,
+      realized_gain REAL,
+      holding_period TEXT DEFAULT 'pending',
+      wash_sale_adjustment REAL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (trade_id) REFERENCES trades(id)
+    );
+  `);
+
+  // ─── Gap 3d: Decision Quality Log ─────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS decision_log (
+      trade_id INTEGER PRIMARY KEY,
+      process_score INTEGER,
+      entry_score INTEGER,
+      regime_score INTEGER,
+      sizing_score INTEGER,
+      exit_score INTEGER,
+      risk_score INTEGER,
+      grade TEXT,
+      outcome_alignment TEXT,
+      notes JSON,
+      was_system_signal BOOLEAN,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (trade_id) REFERENCES trades(id)
+    );
+  `);
+
+  // Indexes for new tables
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_breadth_date ON breadth_snapshots(date);
+    CREATE INDEX IF NOT EXISTS idx_execution_trade ON execution_log(trade_id);
+    CREATE INDEX IF NOT EXISTS idx_execution_symbol ON execution_log(symbol);
+    CREATE INDEX IF NOT EXISTS idx_execution_fill_date ON execution_log(fill_date);
+    CREATE INDEX IF NOT EXISTS idx_tax_lots_symbol ON tax_lots(symbol);
+    CREATE INDEX IF NOT EXISTS idx_tax_lots_open ON tax_lots(remaining_shares) WHERE remaining_shares > 0;
+    CREATE INDEX IF NOT EXISTS idx_tax_lots_disposed ON tax_lots(disposed_date);
+    CREATE INDEX IF NOT EXISTS idx_decision_grade ON decision_log(grade);
+    CREATE INDEX IF NOT EXISTS idx_hedge_date ON hedge_log(date);
+  `);
+
+  // Migration: add columns to trades for decision quality context
+  safeAddColumn('trades', 'was_system_signal', 'INTEGER DEFAULT 1');
+  safeAddColumn('trades', 'regime_at_entry', 'TEXT');
+  safeAddColumn('trades', 'heat_at_entry', 'REAL');
+
+  // Migration: breadth columns
+  safeAddColumn('breadth_snapshots', 'mcclellan_osc', 'REAL');
+  safeAddColumn('breadth_snapshots', 'summation_index', 'REAL');
 }
 
 // One-time migration from legacy JSON files into SQLite

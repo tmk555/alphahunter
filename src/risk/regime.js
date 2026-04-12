@@ -111,10 +111,76 @@ async function getMarketRegime() {
       }
     } catch (_) {}
 
+    // ── Breadth-enhanced regime overlay ──────────────────────────────────────
+    // Integrates market breadth internals for earlier regime signals.
+    // Breadth leads price by days/weeks — catches divergences before MA crosses.
+    let breadthOverlay = null;
+    try {
+      const { computeBreadthFromSnapshots, computeCompositeBreadthScore,
+              assessVIXTermStructure, detectBreadthDivergence } = require('../signals/breadth');
+      const { getDB } = require('../data/database');
+      const _db = getDB();
+      const latestDate = _db.prepare(
+        `SELECT MAX(date) as date FROM rs_snapshots WHERE type = 'stock'`
+      ).get()?.date;
+
+      if (latestDate) {
+        const breadth = computeBreadthFromSnapshots(latestDate);
+        if (breadth) {
+          const vixHistory = _db.prepare(
+            `SELECT price FROM rs_snapshots WHERE symbol = '^VIX' AND type = 'sector' AND price > 0
+             ORDER BY date DESC LIMIT 252`
+          ).all().map(r => r.price).reverse();
+          const vixStruct = vixHistory.length > 20
+            ? assessVIXTermStructure(vixLevel, vixHistory) : null;
+
+          const composite = computeCompositeBreadthScore(breadth, vixStruct, null);
+          const divergence = detectBreadthDivergence(40);
+
+          breadthOverlay = {
+            score: composite.score,
+            regime: composite.regime,
+            sizeMultiplier: composite.sizeMultiplier,
+            divergence: divergence.divergence,
+            divergenceType: divergence.type,
+            pctAbove50MA: breadth.pctAbove50MA,
+            pctAbove200MA: breadth.pctAbove200MA,
+            adRatio: breadth.adRatio,
+            vixStructure: vixStruct?.signal,
+          };
+
+          // Breadth can DOWNGRADE regime (never upgrade — that's the FTD's job)
+          if (composite.sizeMultiplier < sizeMultiplier && composite.score < 40) {
+            const prevRegime = regime;
+            sizeMultiplier = Math.max(sizeMultiplier * 0.7, composite.sizeMultiplier);
+            if (sizeMultiplier < 0.5 && regime === 'BULL / RISK ON') {
+              regime = 'NEUTRAL'; color = '#f0a500';
+              warning = `Breadth deteriorating (score ${composite.score}/100) — reducing exposure`;
+            }
+            breadthOverlay.override = {
+              applied: true, from: prevRegime, to: regime,
+              reason: `Breadth score ${composite.score}/100 forced downgrade`,
+            };
+          }
+
+          // Bearish divergence warning: SPY near highs but breadth fading
+          if (divergence.divergence) {
+            breadthOverlay.divergenceWarning = divergence.message;
+            if (sizeMultiplier >= 0.75) {
+              sizeMultiplier *= 0.85;
+              warning = (warning ? warning + '. ' : '') + 'BREADTH DIVERGENCE detected — reduce new entries';
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // Breadth integration failed — proceed with basic + cycle regime
+    }
+
     const result = {
       regime, color, swingOk, positionOk, sizeMultiplier, warning, vixLevel,
       spyPrice, spyChg1d, spy50, spy200, above50, above200,
-      cycleOverride, exposureRamp,
+      cycleOverride, exposureRamp, breadthOverlay,
       qqqChg1d: qqq?.regularMarketChangePercent,
       iwmChg1d: iwm?.regularMarketChangePercent,
       tltChg1d: tlt?.regularMarketChangePercent,
@@ -122,11 +188,14 @@ async function getMarketRegime() {
         above50    && 'SPY above 50MA',
         above200   && 'SPY above 200MA',
         vixLevel < 20 && `VIX calm at ${vixLevel.toFixed(0)}`,
+        breadthOverlay?.score >= 70 && `Breadth healthy (${breadthOverlay.score}/100)`,
       ].filter(Boolean),
       riskOffSignals: [
         !above50   && 'SPY below 50MA',
         !above200  && 'SPY below 200MA',
         vixLevel > 25 && `VIX elevated at ${vixLevel.toFixed(0)}`,
+        breadthOverlay?.score < 40 && `Breadth weak (${breadthOverlay.score}/100)`,
+        breadthOverlay?.divergence && 'BREADTH DIVERGENCE — internals fading',
       ].filter(Boolean),
     };
     cacheSet('regime', result);
