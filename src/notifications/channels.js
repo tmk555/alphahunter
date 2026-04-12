@@ -268,6 +268,55 @@ function getDeliveryStats() {
   return stats;
 }
 
+// ─── Trade Event Notifications ────────────────────────────────────────────
+// Sends notifications for trade lifecycle events (stage, execute, scale, stop, exit)
+
+const TRADE_EVENT_EMOJIS = {
+  staged: '📋', submitted: '🚀', filled: '✅', buy: '✅',
+  sell: '💰', exit: '💰', scale_in: '➕', scale_out: '➖',
+  partial_exit: '➖', auto_stop: '🛑', force_stop: '🛑',
+  stop_violation: '🛑', strategy_exit: '⚠️', adjustment: '🔧',
+  pullback_entry: '🎯',
+};
+
+async function notifyTradeEvent({ event, symbol, details = {} }) {
+  const emoji = TRADE_EVENT_EMOJIS[event] || '🔔';
+  const label = event.replace(/_/g, ' ').toUpperCase();
+  const lines = [`${emoji} ${symbol} — ${label}`];
+
+  if (details.shares) lines.push(`Shares: ${details.shares}`);
+  if (details.price) lines.push(`Price: $${details.price}`);
+  if (details.stop) lines.push(`Stop: $${details.stop}`);
+  if (details.pnl != null) lines.push(`P&L: ${details.pnl >= 0 ? '+' : ''}$${details.pnl.toFixed(2)}`);
+  if (details.pnl_pct != null) lines.push(`Return: ${details.pnl_pct >= 0 ? '+' : ''}${details.pnl_pct.toFixed(1)}%`);
+  if (details.reason) lines.push(`Reason: ${details.reason}`);
+  if (details.message) lines.push(details.message);
+
+  const payload = {
+    type: `trade_${event}`,
+    symbol,
+    message: lines.join('\n'),
+    current_price: details.price || 0,
+    trigger_price: details.stop || details.price || 0,
+    timestamp: new Date().toISOString(),
+    ...details,
+  };
+
+  // Log to alerts table
+  try {
+    db().prepare('INSERT INTO alerts (type, symbol, message, data) VALUES (?, ?, ?, ?)')
+      .run(`trade_${event}`, symbol, lines[0], JSON.stringify(payload));
+  } catch (_) {}
+
+  // Deliver to all enabled channels
+  const channels = getEnabledChannels(`trade_${event}`);
+  if (channels.length) {
+    try { await deliverAlert(payload, channels); } catch (_) {}
+  }
+
+  return payload;
+}
+
 // ─── Available Channels Info ───────────────────────────────────────────────
 
 function getAvailableChannels() {
@@ -287,4 +336,6 @@ module.exports = {
   getAvailableChannels,
   // Individual senders for direct use
   sendSlack, sendTelegram, sendWebhook,
+  // Trade event notifications
+  notifyTradeEvent,
 };

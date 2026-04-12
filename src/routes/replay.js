@@ -138,7 +138,7 @@ router.post('/replay/monte-carlo', (req, res) => {
 // real historical data instead of just today's tail.
 router.post('/replay/backfill', async (req, res) => {
   try {
-    const { lookbackDays = 180, symbols, concurrency = 5 } = req.body || {};
+    const { lookbackDays = 365, symbols, concurrency = 5 } = req.body || {};
     const useSymbols = Array.isArray(symbols) && symbols.length
       ? symbols
       : Object.keys(FULL_UNIVERSE);

@@ -4,6 +4,7 @@ const { getDB } = require('../data/database');
 const alpaca = require('./alpaca');
 const { preTradeCheck } = require('../risk/portfolio');
 const { getMarketRegime } = require('../risk/regime');
+const { notifyTradeEvent } = require('../notifications/channels');
 
 function db() { return getDB(); }
 
@@ -25,7 +26,9 @@ function stageOrder({ symbol, side = 'buy', order_type = 'limit', qty, entry_pri
     source || 'manual', conviction_score || null, notes || null, exitStrat,
     replayStrategy || null,
   );
-  return getStagedOrder(result.lastInsertRowid);
+  const order = getStagedOrder(result.lastInsertRowid);
+  notifyTradeEvent({ event: 'staged', symbol: symbol.toUpperCase(), details: { shares: qty, price: entry_price, stop: stop_price, source: source || 'manual' } }).catch(() => {});
+  return order;
 }
 
 function stageFromSetup(stock, setup, sizing, source = 'swinglab', exitStrategy = 'full_size', strategy = null) {
@@ -138,7 +141,9 @@ async function submitStagedOrder(stagedId) {
     UPDATE staged_orders SET status = 'submitted', alpaca_order_id = ?, submitted_at = ? WHERE id = ?
   `).run(order.id, now, stagedId);
 
-  return { staged: getStagedOrder(stagedId), alpacaOrder: order, riskCheck };
+  const result = { staged: getStagedOrder(stagedId), alpacaOrder: order, riskCheck };
+  notifyTradeEvent({ event: 'submitted', symbol: staged.symbol, details: { shares: staged.qty, price: staged.entry_price, stop: staged.stop_price, message: `Order submitted to broker (${order.id})` } }).catch(() => {});
+  return result;
 }
 
 // ─── Sync Status ────────────────────────────────────────────────────────────
