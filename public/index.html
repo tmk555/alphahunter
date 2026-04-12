@@ -6404,7 +6404,7 @@ function ReplayTab() {
   const [mcForm, setMcForm] = useState({ iterations:1000, method:'permutation', positionFraction:0.10, selectedReplayId:null });
   const [mcHistory, setMcHistory] = useState([]);
   const [wfHistory, setWfHistory] = useState([]);
-  const [bfForm, setBfForm] = useState({ lookbackDays:180 });
+  const [bfForm, setBfForm] = useState({ lookbackDays:365 });
   const [bfResult, setBfResult] = useState(null);
   const [bfLoading, setBfLoading] = useState(false);
   const datesInitialized = React.useRef(false);

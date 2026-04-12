@@ -147,7 +147,7 @@ function computeSnapshotForSymbolAtDate(sym, bars, date, spyClosesUpToDate) {
 // Returns a summary: { dates, symbols, rowsWritten, durationMs, errors }.
 async function runBackfill({
   symbols,
-  lookbackDays = 180,
+  lookbackDays = 365,
   concurrency = 5,
   onProgress = null,
 } = {}) {
