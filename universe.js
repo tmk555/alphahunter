@@ -14,7 +14,7 @@
 // via the /api/universe endpoints backed by SQLite.
 
 const FULL_UNIVERSE = {
-  // ── Technology — Software & Cloud (40) ─────────────────────────────────────
+  // ── Technology — Software & Cloud (42) ─────────────────────────────────────
   MSFT:'Technology', ORCL:'Technology', CRM:'Technology',  NOW:'Technology',
   PLTR:'Technology', DDOG:'Technology', MDB:'Technology',  SNOW:'Technology',
   ZS:'Technology',   FTNT:'Technology', TEAM:'Technology', WDAY:'Technology',
@@ -25,6 +25,7 @@ const FULL_UNIVERSE = {
   VEEV:'Technology', MNDY:'Technology', ZI:'Technology',   CFLT:'Technology',
   PATH:'Technology', ESTC:'Technology', DOCU:'Technology', APPF:'Technology',
   TYL:'Technology',  GWRE:'Technology', GEN:'Technology',  OTEX:'Technology',
+  DUOL:'Technology', TOST:'Technology',
 
   // ── Technology — Semiconductors (22) ───────────────────────────────────────
   NVDA:'Technology', AMD:'Technology',  AVGO:'Technology', TSM:'Technology',
@@ -45,9 +46,10 @@ const FULL_UNIVERSE = {
   CYBR:'Technology', OKTA:'Technology', RPD:'Technology',  TENB:'Technology',
   QLYS:'Technology', VRNS:'Technology',
 
-  // ── Technology — AI / Robotics / Infrastructure (8) ────────────────────────
+  // ── Technology — AI / Robotics / Infrastructure (9) ────────────────────────
   CGNX:'Technology', TER:'Technology',  KEYS:'Technology', COHR:'Technology',
   MKSI:'Technology', ENTG:'Technology', ALGM:'Technology', ACLS:'Technology',
+  CRWV:'Technology',
 
   // ── Communication Services (16) ────────────────────────────────────────────
   META:'Comm Services', GOOGL:'Comm Services', GOOG:'Comm Services',
@@ -57,7 +59,7 @@ const FULL_UNIVERSE = {
   VZ:'Comm Services',   ROKU:'Comm Services', ZM:'Comm Services',
   MTCH:'Comm Services',
 
-  // ── Consumer Discretionary (35) ────────────────────────────────────────────
+  // ── Consumer Discretionary (39) ────────────────────────────────────────────
   AMZN:'Consumer Disc', TSLA:'Consumer Disc', BKNG:'Consumer Disc',
   LULU:'Consumer Disc', COST:'Consumer Disc', NKE:'Consumer Disc',
   ORLY:'Consumer Disc', ROST:'Consumer Disc', TJX:'Consumer Disc',
@@ -69,51 +71,58 @@ const FULL_UNIVERSE = {
   SBUX:'Consumer Disc', MCD:'Consumer Disc',  YUM:'Consumer Disc',
   DPZ:'Consumer Disc',  POOL:'Consumer Disc', WSM:'Consumer Disc',
   RH:'Consumer Disc',   AZO:'Consumer Disc',  GPC:'Consumer Disc',
-  BBY:'Consumer Disc',  GRMN:'Consumer Disc',
+  BBY:'Consumer Disc',  GRMN:'Consumer Disc', BIRK:'Consumer Disc',
+  CART:'Consumer Disc',  DKNG:'Consumer Disc', MELI:'Consumer Disc',
 
-  // ── Industrials — Defense & Aerospace (12) ─────────────────────────────────
+  // ── Industrials — Defense & Aerospace (15) ─────────────────────────────────
   GEV:'Industrials',  PWR:'Industrials',  ETN:'Industrials',  AXON:'Industrials',
   LMT:'Industrials',  RTX:'Industrials',  NOC:'Industrials',  GD:'Industrials',
   BA:'Industrials',   HEI:'Industrials',  TDG:'Industrials',  HWM:'Industrials',
+  LHX:'Industrials',  LDOS:'Industrials', KTOS:'Industrials',
 
-  // ── Industrials — Infrastructure & Capital Goods (22) ──────────────────────
+  // ── Industrials — Infrastructure & Capital Goods (27) ──────────────────────
   CAT:'Industrials',  DE:'Industrials',   HON:'Industrials',  EMR:'Industrials',
   ROK:'Industrials',  IR:'Industrials',   GNRC:'Industrials', AME:'Industrials',
   GE:'Industrials',   MMM:'Industrials',  ITW:'Industrials',  PH:'Industrials',
   SWK:'Industrials',  CMI:'Industrials',  PCAR:'Industrials', FAST:'Industrials',
   WM:'Industrials',   RSG:'Industrials',  VRSK:'Industrials', TT:'Industrials',
-  XYL:'Industrials',  NDSN:'Industrials',
+  XYL:'Industrials',  NDSN:'Industrials', VRT:'Industrials',  EME:'Industrials',
+  FIX:'Industrials',  PRIM:'Industrials', MTZ:'Industrials',
 
   // ── Industrials — Transport & Logistics (10) ──────────────────────────────
   UNP:'Industrials',  CSX:'Industrials',  NSC:'Industrials',  FDX:'Industrials',
   UPS:'Industrials',  ODFL:'Industrials', JBHT:'Industrials', DAL:'Industrials',
   UAL:'Industrials',  AAL:'Industrials',
 
-  // ── Energy — Traditional (12) ──────────────────────────────────────────────
+  // ── Energy — Traditional (13) ──────────────────────────────────────────────
   XOM:'Energy',  CVX:'Energy',  OXY:'Energy',  LNG:'Energy',
   COP:'Energy',  PXD:'Energy',  HAL:'Energy',  SLB:'Energy',
   EOG:'Energy',  MPC:'Energy',  VLO:'Energy',  PSX:'Energy',
+  TRGP:'Energy',
 
-  // ── Energy — Power & Clean (10) ────────────────────────────────────────────
+  // ── Energy — Power & Clean / Nuclear (14) ──────────────────────────────────
   CEG:'Energy',  VST:'Energy',  FSLR:'Energy', BE:'Energy',
   NEE:'Energy',  AES:'Energy',  ENPH:'Energy', SEDG:'Energy',
-  NRG:'Energy',  EXC:'Energy',
+  NRG:'Energy',  EXC:'Energy',  CCJ:'Energy',  UEC:'Energy',
+  TLN:'Energy',  CWEN:'Energy',
 
-  // ── Financials (25) ────────────────────────────────────────────────────────
+  // ── Financials (29) ────────────────────────────────────────────────────────
   JPM:'Financials', GS:'Financials',   V:'Financials',    MA:'Financials',
   AXP:'Financials', BX:'Financials',   KKR:'Financials',  SCHW:'Financials',
   COIN:'Financials',COF:'Financials',  SQ:'Financials',   HOOD:'Financials',
   MS:'Financials',  BAC:'Financials',  WFC:'Financials',  C:'Financials',
   BLK:'Financials', ICE:'Financials',  CME:'Financials',  SPGI:'Financials',
   MCO:'Financials', MSCI:'Financials', FI:'Financials',   APO:'Financials',
-  PYPL:'Financials',
+  PYPL:'Financials',IBKR:'Financials', UPST:'Financials', AFRM:'Financials',
+  SOFI:'Financials',
 
-  // ── Healthcare — Biopharma (18) ────────────────────────────────────────────
+  // ── Healthcare — Biopharma (21) ────────────────────────────────────────────
   LLY:'Healthcare',  NVO:'Healthcare',  ABBV:'Healthcare', VRTX:'Healthcare',
   REGN:'Healthcare', MRNA:'Healthcare', AMGN:'Healthcare', GILD:'Healthcare',
   BIIB:'Healthcare', INCY:'Healthcare', BMY:'Healthcare',  PFE:'Healthcare',
   MRK:'Healthcare',  JNJ:'Healthcare',  AZN:'Healthcare',  SNY:'Healthcare',
-  ZTS:'Healthcare',  ALNY:'Healthcare',
+  ZTS:'Healthcare',  ALNY:'Healthcare', ARGX:'Healthcare', NBIX:'Healthcare',
+  SRPT:'Healthcare',
 
   // ── Healthcare — Devices & Services (16) ───────────────────────────────────
   ISRG:'Healthcare', DXCM:'Healthcare', TMO:'Healthcare',  IDXX:'Healthcare',
@@ -121,11 +130,12 @@ const FULL_UNIVERSE = {
   ABT:'Healthcare',  MDT:'Healthcare',  SYK:'Healthcare',  EW:'Healthcare',
   BSX:'Healthcare',  DHR:'Healthcare',  A:'Healthcare',    IQV:'Healthcare',
 
-  // ── Materials — Metals & Mining (14) ───────────────────────────────────────
+  // ── Materials — Metals & Mining (17) ───────────────────────────────────────
   FCX:'Materials',  NEM:'Materials',  LIN:'Materials',   APD:'Materials',
   ALB:'Materials',  MP:'Materials',   SCCO:'Materials',  VALE:'Materials',
   CLF:'Materials',  AA:'Materials',   NUE:'Materials',   STLD:'Materials',
-  ECL:'Materials',  SHW:'Materials',
+  ECL:'Materials',  SHW:'Materials',  WPM:'Materials',   RGLD:'Materials',
+  GOLD:'Materials',
 
   // ── Consumer Staples (16) ──────────────────────────────────────────────────
   PG:'Cons Staples',  KO:'Cons Staples',  PEP:'Cons Staples', PM:'Cons Staples',
@@ -207,22 +217,22 @@ const INDUSTRY_STOCKS = {
   IGV:  ['MSFT','ORCL','CRM','NOW','PLTR','DDOG','SNOW','MDB','TEAM','WDAY','ADBE','INTU','HUBS','CDNS','SNPS'],
   HACK: ['CRWD','PANW','NET','ZS','FTNT','CYBR','OKTA','S','TENB','QLYS'],
   ROBO: ['AXON','HON','ETN','GEV','CGNX','TER','KEYS'],
-  ITA:  ['LMT','RTX','NOC','GD','BA','HEI','TDG','HWM'],
-  GRID: ['GEV','PWR','ETN','CEG','VST','NEE','AES','NRG'],
+  ITA:  ['LMT','RTX','NOC','GD','BA','HEI','TDG','HWM','LHX','LDOS','KTOS'],
+  GRID: ['GEV','PWR','ETN','CEG','VST','NEE','AES','NRG','VRT','EME','FIX'],
   ITB:  ['HD','LOW','POOL','WSM','W'],
   IBB:  ['ABBV','REGN','VRTX','AMGN','GILD','BIIB','MRNA','MRK','BMY','ALNY'],
-  XBI:  ['MRNA','DXCM','VRTX','REGN','INCY','ALNY'],
+  XBI:  ['MRNA','DXCM','VRTX','REGN','INCY','ALNY','ARGX','NBIX','SRPT'],
   IHF:  ['UNH','HUM','CVS','MCK','ISRG'],
   XOP:  ['XOM','CVX','COP','OXY','LNG','HAL','SLB','EOG','MPC','VLO'],
   ICLN: ['FSLR','BE','NEE','ENPH','AES','SEDG'],
-  URA:  ['CEG','VST','NRG'],
-  GDX:  ['NEM','FCX','SCCO'],
+  URA:  ['CEG','VST','NRG','CCJ','UEC','TLN'],
+  GDX:  ['NEM','FCX','SCCO','WPM','RGLD','GOLD'],
   COPX: ['FCX','SCCO','MP','AA','CLF','NUE','STLD'],
   LIT:  ['ALB','MP'],
   JETS: ['DAL','UAL','AAL'],
   XRT:  ['AMZN','COST','NKE','LULU','ROST','TJX','HD','LOW','TGT','BBY'],
   KRE:  ['JPM','COF','SCHW','BAC','WFC','C'],
-  FINX: ['V','MA','COIN','SQ','HOOD','PYPL','FI'],
+  FINX: ['V','MA','COIN','SQ','HOOD','PYPL','FI','IBKR','UPST','AFRM','SOFI'],
   IAK:  ['AXP','MA','SPGI','MCO'],
   IYT:  ['UNP','CSX','FDX','UPS','ODFL','JBHT','DAL','UAL'],
   XHB:  ['HD','LOW','POOL','WSM','SHW'],
