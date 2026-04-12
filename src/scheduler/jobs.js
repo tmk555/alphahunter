@@ -252,4 +252,73 @@ registerJobType('universe_reconstitute', {
   },
 });
 
+// ─── 9. Pullback Watch — Auto-create alerts for pending pullback stocks ────
+// After each RS scan, identifies stocks with strong RS + structure that are
+// 5-20% above their 50MA.  Creates a price_below alert at the 5% threshold
+// so the trader gets notified when the stock pulls back into the entry zone.
+
+registerJobType('pullback_watch', {
+  description: 'Create pullback entry alerts for stocks approaching 50MA support',
+  defaultConfig: {},
+  handler: async () => {
+    const { createAlert, getActiveAlerts, deactivateAlert } = require('../broker/alerts');
+
+    // Get latest RS snapshot data
+    const latestDate = db().prepare(
+      "SELECT MAX(date) as date FROM rs_snapshots WHERE type = 'stock'"
+    ).get()?.date;
+    if (!latestDate) return { message: 'No snapshot data', created: 0 };
+
+    const snapshots = db().prepare(`
+      SELECT symbol, price, rs_rank, swing_momentum, sepa_score, stage,
+             vs_ma50, vs_ma200, volume_ratio, vcp_forming
+      FROM rs_snapshots
+      WHERE date = ? AND type = 'stock' AND price > 0
+    `).all(latestDate);
+
+    // Apply the same pending-pullback filter as the UI
+    const candidates = snapshots.filter(s =>
+      s.rs_rank >= 70 &&
+      s.vs_ma200 > 0 &&
+      s.vs_ma50 > 5 && s.vs_ma50 <= 20 &&
+      (s.sepa_score >= 4 || s.vcp_forming || s.stage === 2)
+    );
+
+    // Get existing pullback alerts to avoid duplicates
+    const existing = getActiveAlerts().filter(a => a.alert_type === 'pullback_entry');
+    const existingSymbols = new Set(existing.map(a => a.symbol));
+
+    // Deactivate alerts for stocks no longer qualifying
+    const candidateSymbols = new Set(candidates.map(c => c.symbol));
+    let deactivated = 0;
+    for (const alert of existing) {
+      if (!candidateSymbols.has(alert.symbol)) {
+        deactivateAlert(alert.id);
+        deactivated++;
+      }
+    }
+
+    // Create alerts for new candidates
+    let created = 0;
+    for (const s of candidates) {
+      if (existingSymbols.has(s.symbol)) continue;
+
+      // Trigger price = 5% above 50MA (the entry zone threshold)
+      const ma50 = s.price / (1 + s.vs_ma50 / 100);
+      const triggerPrice = +(ma50 * 1.05).toFixed(2);
+
+      createAlert({
+        symbol: s.symbol,
+        alert_type: 'pullback_entry',
+        trigger_price: triggerPrice,
+        direction: 'below',
+        message: `PULLBACK ENTRY: ${s.symbol} near 50MA zone ($${ma50.toFixed(2)}) — RS ${s.rs_rank}, SEPA ${s.sepa_score}/8`,
+      });
+      created++;
+    }
+
+    return { date: latestDate, candidates: candidates.length, created, deactivated, existing: existingSymbols.size };
+  },
+});
+
 module.exports = { setRunScan };
