@@ -32,6 +32,8 @@ registerJobType('rs_scan', {
     if (config.persist !== false) {
       // INSERT OR IGNORE: don't overwrite backfill-generated snapshots that
       // have verified OHLCV close prices with live/cached intraday quotes.
+      // Then UPDATE any rows where price is still NULL — fills gaps from
+      // partial/crashed runs without clobbering verified backfill closes.
       const insert = db().prepare(`
         INSERT OR IGNORE INTO rs_snapshots (
           date, symbol, type, rs_rank, swing_momentum, sepa_score, stage,
@@ -39,6 +41,15 @@ registerJobType('rs_scan', {
           rs_rank_weekly, rs_rank_monthly, rs_tf_alignment, up_down_ratio_50, accumulation_50
         )
         VALUES (?, ?, 'stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const updateNull = db().prepare(`
+        UPDATE rs_snapshots
+        SET price = ?, rs_rank = COALESCE(rs_rank, ?), swing_momentum = COALESCE(swing_momentum, ?),
+            sepa_score = COALESCE(sepa_score, ?), stage = COALESCE(stage, ?),
+            vs_ma50 = COALESCE(vs_ma50, ?), vs_ma200 = COALESCE(vs_ma200, ?),
+            volume_ratio = COALESCE(volume_ratio, ?), vcp_forming = COALESCE(vcp_forming, ?),
+            rs_line_new_high = COALESCE(rs_line_new_high, ?), atr_pct = COALESCE(atr_pct, ?)
+        WHERE date = ? AND symbol = ? AND type = 'stock' AND price IS NULL
       `);
       const txn = db().transaction(() => {
         let count = 0;
@@ -48,6 +59,15 @@ registerJobType('rs_scan', {
             r.vcpForming ? 1 : 0, r.rsLineNewHigh ? 1 : 0, r.atrPct ?? null,
             r.rsRankWeekly ?? null, r.rsRankMonthly ?? null, r.rsTimeframeAlignment ?? null,
             r.volumeProfile?.upDownRatio50 ?? null, r.volumeProfile?.accumulation50 ?? null);
+          // Fill NULL prices on existing rows (from partial/crashed prior runs)
+          if (r.price != null) {
+            updateNull.run(r.price, r.rsRank ?? null, r.swingMomentum ?? null,
+              r.sepaScore ?? null, r.stage ?? null,
+              r.vsMA50 ?? null, r.vsMA200 ?? null,
+              r.volumeRatio ?? null, r.vcpForming ? 1 : 0,
+              r.rsLineNewHigh ? 1 : 0, r.atrPct ?? null,
+              date, r.ticker);
+          }
           count++;
         }
         return count;
