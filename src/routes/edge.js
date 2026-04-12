@@ -464,5 +464,19 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ─── Momentum Scout: discover breakout stocks outside the universe ────────
+  const { runMomentumScout, getExpansionWatchlist } = require('../signals/momentum-scout');
+
+  router.get('/momentum-scout', async (req, res) => {
+    try {
+      const result = await runMomentumScout(UNIVERSE);
+      res.json(result);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.get('/momentum-scout/watchlist', (req, res) => {
+    res.json(getExpansionWatchlist());
+  });
+
   return router;
 };

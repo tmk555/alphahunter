@@ -63,4 +63,64 @@ function calcConviction(stock, rsTrend, rotationModel) {
   return { convictionScore: +score.toFixed(1), reasons };
 }
 
-module.exports = { calcConviction };
+// ─── Conviction Override for Weak Regimes ──────────────────────────────────
+// When regime is CAUTION or worse, strong-conviction stocks shouldn't be
+// treated the same as marginal picks. This evaluates whether a stock qualifies
+// for reduced regime penalty based on conviction strength.
+//
+// Philosophy: waiting for regime to flip back to BULL before buying an elite
+// momentum stock means missing the bulk of the move. The move IS the catalyst.
+
+function evaluateConvictionOverride(stock, convictionScore, regime) {
+  if (!regime) return null;
+  const regimeName = regime.regime || '';
+  const sizeMult = regime.sizeMultiplier ?? 1;
+
+  // Only applies in weakened regimes (CAUTION, NEUTRAL with distribution pressure)
+  if (sizeMult >= 1.0) return null;
+
+  // Conviction thresholds for override — stock must be genuinely elite
+  const isElite = convictionScore >= 65
+    && (stock.rsRank || 0) >= 80
+    && (stock.swingMomentum || 0) >= 60;
+
+  const isStrong = convictionScore >= 55
+    && (stock.rsRank || 0) >= 75
+    && (stock.swingMomentum || 0) >= 55
+    && (stock.rsLineNewHigh || stock.vcpForming || (stock.sepaScore || 0) >= 5);
+
+  if (!isElite && !isStrong) return null;
+
+  const tier = isElite ? 'elite' : 'strong';
+
+  // Adjusted regime multiplier: reduce the penalty but don't eliminate it
+  // Elite: 75% of normal size in CAUTION (vs 50%), 50% in BEAR (vs 0%)
+  // Strong: 65% in CAUTION, 35% in BEAR
+  let adjustedMultiplier;
+  if (regimeName.includes('BEAR') || regimeName.includes('HIGH RISK')) {
+    adjustedMultiplier = tier === 'elite' ? 0.50 : 0.35;
+  } else if (regimeName === 'CAUTION') {
+    adjustedMultiplier = tier === 'elite' ? 0.75 : 0.65;
+  } else {
+    // NEUTRAL with pressure — mild adjustment
+    adjustedMultiplier = Math.min(1.0, sizeMult * 1.15);
+  }
+
+  const reasons = [];
+  if (isElite) reasons.push(`Elite conviction (${convictionScore}) overrides regime penalty`);
+  else reasons.push(`Strong conviction (${convictionScore}) reduces regime penalty`);
+  if (stock.rsRank >= 90) reasons.push(`RS ${stock.rsRank} — top decile momentum`);
+  if (stock.rsLineNewHigh) reasons.push('RS line new high — institutional demand confirmed');
+  if (stock.swingMomentum >= 70) reasons.push(`Momentum ${stock.swingMomentum} — trend too strong to ignore`);
+  reasons.push(`Regime: ${regimeName} (${sizeMult}x → ${adjustedMultiplier}x)`);
+
+  return {
+    override: true,
+    tier,
+    originalMultiplier: sizeMult,
+    adjustedMultiplier: +adjustedMultiplier.toFixed(2),
+    reasons,
+  };
+}
+
+module.exports = { calcConviction, evaluateConvictionOverride };

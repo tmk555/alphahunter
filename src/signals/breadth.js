@@ -402,12 +402,32 @@ function detectBreadthDivergence(days = 60) {
   if (dates.length < 20) return { divergence: false, message: 'Insufficient data' };
 
   // Get SPY prices and breadth for each date
+  // SPY may be stored as type='sector' OR type='stock' — try both
   const series = [];
   for (const date of dates) {
-    const spy = db().prepare(`
-      SELECT price FROM rs_snapshots WHERE date = ? AND symbol = 'SPY' AND type = 'sector'
-    `).get(date);
-    const breadth = computeBreadthFromSnapshots(date);
+    let spy = db().prepare(
+      `SELECT price FROM rs_snapshots WHERE date = ? AND symbol = 'SPY' AND type = 'sector'`
+    ).get(date);
+    if (!spy?.price) {
+      spy = db().prepare(
+        `SELECT price FROM rs_snapshots WHERE date = ? AND symbol = 'SPY' AND type = 'stock'`
+      ).get(date);
+    }
+
+    // Try live computation first, fall back to cached breadth_snapshots (populated by backfill)
+    let breadth = computeBreadthFromSnapshots(date);
+    if (!breadth) {
+      const cached = db().prepare(
+        `SELECT pct_above_50ma, new_highs, new_lows FROM breadth_snapshots WHERE date = ?`
+      ).get(date);
+      if (cached) {
+        breadth = {
+          pctAbove50MA: cached.pct_above_50ma,
+          hlDiff: (cached.new_highs || 0) - (cached.new_lows || 0),
+        };
+      }
+    }
+
     if (spy?.price && breadth) {
       series.push({ date, spyPrice: spy.price, pctAbove50: breadth.pctAbove50MA, hlDiff: breadth.hlDiff });
     }

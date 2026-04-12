@@ -7,6 +7,9 @@ const { stageOrder, stageFromSetup, getStagedOrders, getStagedOrder,
         submitStagedOrder, syncOrderStatus, cancelStagedOrder } = require('../broker/staging');
 const { computeTradeSetup } = require('../signals/candidates');
 const { calculatePositionSize } = require('../risk/position-sizer');
+const { calcConviction, evaluateConvictionOverride } = require('../signals/conviction');
+const { getRSTrend } = require('../signals/rs');
+const { loadHistory, RS_HISTORY } = require('../data/store');
 const { getConfig } = require('../risk/portfolio');
 const { getMarketRegime } = require('../risk/regime');
 
@@ -65,12 +68,22 @@ module.exports = function(db, runScan) {
       const entryPrice = stock.price;
       const stopPrice = parseFloat(setup.stopLevel.replace(/[^0-9.]/g, ''));
 
+      // Evaluate conviction override for weak regimes
+      let convictionOverride = null;
+      try {
+        const history = loadHistory(RS_HISTORY);
+        const trend = getRSTrend(stock.ticker, history);
+        const { convictionScore } = calcConviction(stock, trend, null);
+        convictionOverride = evaluateConvictionOverride(stock, convictionScore, regime);
+      } catch (_) { /* non-critical */ }
+
       const sizing = calculatePositionSize({
         accountSize: config.accountSize,
         riskPerTrade: config.riskPerTrade,
         entryPrice,
         stopPrice,
         regimeMultiplier: regime.sizeMultiplier,
+        convictionOverride,
         maxPositionPct: config.maxPositionPct,
         beta: stock.beta,
         atrPct: stock.atrPct,
@@ -88,6 +101,8 @@ module.exports = function(db, runScan) {
           positionValue: sizing.positionValue,
           portfolioPct: sizing.portfolioPct,
           regimeMultiplier: regime.sizeMultiplier,
+          effectiveRegimeMult: sizing.effectiveRegimeMult,
+          convictionOverride: sizing.convictionOverride,
           betaMultiplier: sizing.betaMultiplier,
           volMultiplier: sizing.volMultiplier,
           totalMultiplier: sizing.totalMultiplier,
