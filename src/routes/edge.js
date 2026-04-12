@@ -95,14 +95,6 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // Breadth for a specific date
-  router.get('/breadth/:date', (req, res) => {
-    try {
-      const breadth = computeBreadthFromSnapshots(req.params.date);
-      res.json(breadth || { error: 'No data for this date' });
-    } catch (e) { res.status(500).json({ error: e.message }); }
-  });
-
   // McClellan oscillator
   router.get('/breadth/mcclellan', (req, res) => {
     try {
@@ -132,6 +124,38 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
     try {
       const result = backfillBreadthHistory();
       res.json(result);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Breadth Early Warning System ───────────────────────────────────────
+
+  const {
+    evaluateBreadthWarning, computeStopAdjustments,
+    applyStopAdjustments, runBreadthEarlyWarning,
+  } = require('../signals/breadth-warning');
+
+  // Get current breadth warning status
+  router.get('/breadth/early-warning', (req, res) => {
+    try {
+      const warning = evaluateBreadthWarning();
+      const { adjustments, actions } = computeStopAdjustments(warning.label);
+      res.json({ ...warning, pendingAdjustments: adjustments, actions });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Apply breadth-based stop tightening (manual trigger)
+  router.post('/breadth/early-warning/apply', (req, res) => {
+    try {
+      const result = runBreadthEarlyWarning({ autoApply: true });
+      res.json(result);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Breadth for a specific date (must be AFTER all /breadth/* named routes)
+  router.get('/breadth/:date', (req, res) => {
+    try {
+      const breadth = computeBreadthFromSnapshots(req.params.date);
+      res.json(breadth || { error: 'No data for this date' });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

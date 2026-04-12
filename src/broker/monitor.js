@@ -9,11 +9,13 @@ const { priceStream } = require('./stream');
 const { getDB } = require('../data/database');
 const { yahooQuote } = require('../data/providers/yahoo');
 const { evaluateScalingAction, applyScalingAction } = require('../risk/scaling');
+const { runBreadthEarlyWarning } = require('../signals/breadth-warning');
 
 let monitorTask = null;
 let lastCheck = null;
 let checkCount = 0;
 let streamingActive = false;
+let lastBreadthWarning = null;
 
 function db() { return getDB(); }
 
@@ -282,6 +284,7 @@ async function startStopMonitor() {
       }
       await checkPositionsAgainstStops();
       await checkStrategyExits();
+      await checkBreadthEarlyWarning();
     }, { scheduled: true });
 
     // Expire stale staged orders every hour
@@ -303,6 +306,30 @@ function stopMonitor() {
   }
 }
 
+// ─── Breadth Early Warning Check ──────────────────────────────────────────
+// Runs during the cron cycle. Evaluates breadth deterioration and
+// auto-applies stop tightening when AUTO_BREADTH_TIGHTEN is enabled.
+
+async function checkBreadthEarlyWarning() {
+  try {
+    const autoApply = process.env.AUTO_BREADTH_TIGHTEN === 'true';
+    const result = runBreadthEarlyWarning({ autoApply });
+    lastBreadthWarning = {
+      time: new Date().toISOString(),
+      ...result.warning,
+      adjustmentCount: result.adjustments?.length || 0,
+      applied: result.applied?.applied || 0,
+    };
+    if (result.warning.level > 0) {
+      console.log(`  Breadth Warning: ${result.warning.message}`);
+    }
+    return result;
+  } catch (e) {
+    console.error(`  Breadth warning check error: ${e.message}`);
+    return null;
+  }
+}
+
 function getMonitorStatus() {
   return {
     running: !!monitorTask || streamingActive,
@@ -310,6 +337,7 @@ function getMonitorStatus() {
     lastCheck,
     totalChecks: checkCount,
     activeAlerts: getActiveAlerts().length,
+    breadthWarning: lastBreadthWarning,
   };
 }
 
@@ -491,6 +519,7 @@ async function checkStrategyExits() {
 
 module.exports = {
   startStopMonitor, stopMonitor, getMonitorStatus,
-  checkPositionsAgainstStops, checkStrategyExits, reconcilePositions,
+  checkPositionsAgainstStops, checkStrategyExits, checkBreadthEarlyWarning,
+  reconcilePositions,
   priceStream, // Export for routes to expose status
 };

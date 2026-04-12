@@ -711,15 +711,30 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     equityCurve.push({ date, equity: +(capital + positionValue).toFixed(2), positions: positions.size });
   }
 
-  // Close remaining positions at last known price (with exit slippage)
+  // Close remaining positions at last known price (with exit slippage).
+  // If the last date has NULL price, walk backwards to find the most recent
+  // valid price — avoids distorted P&L from falling back to entry price.
   const lastDate = dates[dates.length - 1];
   const lastDayStocks = byDate[lastDate] || [];
   const lastStockMap = {};
   for (const s of lastDayStocks) lastStockMap[s.symbol] = s;
 
+  // Build a lookup of last valid price per symbol across all dates
+  const lastValidPrice = {};
+  for (let d = dates.length - 1; d >= 0; d--) {
+    const dayStocks = byDate[dates[d]] || [];
+    for (const s of dayStocks) {
+      if (s.price > 0 && !lastValidPrice[s.symbol]) {
+        lastValidPrice[s.symbol] = s.price;
+      }
+    }
+    // Stop once we've found prices for all open positions
+    if ([...positions.keys()].every(sym => lastValidPrice[sym])) break;
+  }
+
   for (const [symbol, pos] of positions) {
     const stock = lastStockMap[symbol];
-    const rawExitPrice = stock?.price || pos.entryPrice;
+    const rawExitPrice = stock?.price || lastValidPrice[symbol] || pos.entryPrice;
     const posIsShort = !!pos.isShort;
     const exitPrice = posIsShort
       ? applySlippage(rawExitPrice, exec.exitSlippageBps, 'buy')
