@@ -84,6 +84,7 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
   const {
     computeBreadthFromSnapshots, computeMcClellanOscillator,
     detectBreadthDivergence, getBreadthHistory, getFullBreadthDashboard,
+    backfillBreadthHistory,
   } = require('../signals/breadth');
 
   // Full breadth dashboard
@@ -123,6 +124,14 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
     try {
       const days = parseInt(req.query.days) || 90;
       res.json(getBreadthHistory(days));
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Backfill breadth snapshots from all historical RS scan data
+  router.post('/breadth/backfill', (req, res) => {
+    try {
+      const result = backfillBreadthHistory();
+      res.json(result);
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -282,6 +291,48 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // Backfill tax lots from existing trades that don't have them yet
+  router.post('/tax/backfill', (req, res) => {
+    try {
+      const trades = db.prepare(`
+        SELECT t.* FROM trades t
+        LEFT JOIN tax_lots tl ON t.id = tl.trade_id
+        WHERE tl.trade_id IS NULL AND t.entry_price > 0
+        ORDER BY t.entry_date ASC
+      `).all();
+
+      let created = 0;
+      let disposed = 0;
+      for (const t of trades) {
+        try {
+          createTaxLot({
+            tradeId: t.id,
+            symbol: t.symbol,
+            shares: t.shares || t.initial_shares,
+            costBasis: t.entry_price,
+            acquiredDate: t.entry_date,
+          });
+          created++;
+
+          // If the trade is closed, also dispose the tax lot
+          if (t.exit_date && t.exit_price) {
+            try {
+              sellTaxLots({
+                symbol: t.symbol,
+                shares: t.shares || t.initial_shares,
+                salePrice: t.exit_price,
+                saleDate: t.exit_date,
+                method: 'fifo',
+              });
+              disposed++;
+            } catch (_) {}
+          }
+        } catch (_) {}
+      }
+      res.json({ backfilled: created, disposed, total: trades.length });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // YTD tax summary
   router.get('/tax/ytd', (_, res) => {
     try { res.json(getYTDTaxSummary()); } catch (e) { res.status(500).json({ error: e.message }); }
@@ -310,25 +361,82 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // Batch score all unscored trades
+  // Batch score all unscored trades (enriches missing context from rs_snapshots)
   router.post('/decisions/score-all', (req, res) => {
     try {
-      const unscored = db.prepare(`
-        SELECT t.* FROM trades t
-        LEFT JOIN decision_log d ON t.id = d.trade_id
-        WHERE t.exit_date IS NOT NULL AND d.trade_id IS NULL
-        ORDER BY t.exit_date DESC LIMIT 100
-      `).all();
+      // Include already-scored trades if rescore=true, so we can fix stale scores
+      const rescore = req.query.rescore === 'true' || req.body.rescore;
+      const query = rescore
+        ? `SELECT t.* FROM trades t WHERE t.exit_date IS NOT NULL ORDER BY t.exit_date DESC LIMIT 100`
+        : `SELECT t.* FROM trades t LEFT JOIN decision_log d ON t.id = d.trade_id
+           WHERE t.exit_date IS NOT NULL AND d.trade_id IS NULL
+           ORDER BY t.exit_date DESC LIMIT 100`;
+      const unscored = db.prepare(query).all();
 
       const results = [];
       for (const trade of unscored) {
+        // Enrich context from rs_snapshots at entry time
+        const snapshot = db.prepare(`
+          SELECT swing_momentum, sepa_score, rs_rank, stage
+          FROM rs_snapshots
+          WHERE symbol = ? AND date <= ? AND type = 'stock'
+          ORDER BY date DESC LIMIT 1
+        `).get(trade.symbol, trade.entry_date);
+
+        // Calculate portfolio heat at entry: sum of open risk as % of account
+        let portfolioHeatAtEntry = null;
+        try {
+          const openAtEntry = db.prepare(`
+            SELECT entry_price, stop_price, shares FROM trades
+            WHERE entry_date <= ? AND (exit_date IS NULL OR exit_date > ?) AND id != ?
+          `).all(trade.entry_date, trade.entry_date, trade.id);
+          if (openAtEntry.length > 0) {
+            const { getConfig } = require('../risk/portfolio');
+            const cfg = getConfig();
+            const accountValue = cfg.accountValue || 100000;
+            let totalRisk = 0;
+            for (const t of openAtEntry) {
+              const risk = Math.abs(t.entry_price - (t.stop_price || t.entry_price * 0.95)) * (t.shares || 0);
+              totalRisk += risk;
+            }
+            portfolioHeatAtEntry = +(totalRisk / accountValue * 100).toFixed(1);
+          }
+        } catch (_) {}
+
+        // Determine if this was a system signal (had staged order with conviction score)
+        const staged = trade.alpaca_order_id
+          ? db.prepare('SELECT conviction_score, strategy FROM staged_orders WHERE alpaca_order_id = ?').get(trade.alpaca_order_id)
+          : null;
+        const wasSystemSignal = staged?.conviction_score > 0 || trade.was_system_signal === 1 || trade.strategy != null;
+
+        // Check if sizing followed rules (within 20% of recommended size)
+        let followedSizingRules = null;
+        if (trade.stop_price && trade.entry_price && trade.shares) {
+          try {
+            const { getConfig } = require('../risk/portfolio');
+            const cfg = getConfig();
+            const riskPerShare = Math.abs(trade.entry_price - trade.stop_price);
+            const maxRiskDollars = (cfg.accountValue || 100000) * (cfg.maxRiskPerTrade || 0.01);
+            const recommendedShares = riskPerShare > 0 ? Math.floor(maxRiskDollars / riskPerShare) : 0;
+            if (recommendedShares > 0) {
+              const ratio = trade.shares / recommendedShares;
+              followedSizingRules = ratio >= 0.5 && ratio <= 1.5; // within 50-150% of recommended
+            }
+          } catch (_) {}
+        }
+
         const context = {
           regimeAtEntry: trade.regime_at_entry || trade.entry_regime,
-          rsAtEntry: trade.entry_rs,
-          sepaAtEntry: trade.entry_sepa,
+          rsAtEntry: trade.entry_rs || snapshot?.rs_rank,
+          momentumAtEntry: snapshot?.swing_momentum || null,
+          sepaAtEntry: trade.entry_sepa || snapshot?.sepa_score,
+          portfolioHeatAtEntry,
           exitReason: trade.exit_reason,
           rMultiple: trade.r_multiple,
-          wasSystemSignal: trade.was_system_signal !== 0,
+          wasSystemSignal,
+          followedSizingRules,
+          plannedStop: trade.stop_price,
+          actualExit: trade.exit_price,
         };
         const quality = scoreTrade(trade, context);
         logDecisionQuality(trade.id, quality);

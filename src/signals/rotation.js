@@ -78,6 +78,11 @@ function computeRotation(sectorScanResults) {
 
   sectors.sort((a, b) => b.compositeScore - a.compositeScore);
 
+  // Assign rank position
+  for (let i = 0; i < sectors.length; i++) {
+    sectors[i].rank = i + 1;
+  }
+
   // Assign tilt
   const n = sectors.length;
   const overweightCount  = Math.max(2, Math.floor(n / 3));
@@ -101,6 +106,7 @@ function computeRotation(sectorScanResults) {
     sectors: sectors.map(s => ({
       etf:            s.etf,
       sector:         s.sector,
+      rank:           s.rank,
       rsRank:         s.rsRank,
       chg1m:          s.chg1m,
       chg3m:          s.chg3m,

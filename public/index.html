@@ -6460,6 +6460,7 @@ function BreadthSection() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [backfilling, setBackfilling] = useState(false);
 
   async function load() {
     setLoading(true); setError('');
@@ -6469,6 +6470,17 @@ function BreadthSection() {
     } catch(e) { setError(e.message); }
     setLoading(false);
   }
+
+  async function backfillHistory() {
+    setBackfilling(true);
+    try {
+      const r = await api('/api/breadth/backfill',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      alert(`${r.message}`);
+      load();
+    } catch(e) { setError(e.message); }
+    setBackfilling(false);
+  }
+
   useEffect(()=>{ load(); },[]);
 
   const scoreColor = s => s>=80?'var(--green)':s>=60?'#8bc34a':s>=40?'var(--amber)':s>=20?'#ff8c00':'var(--red)';
@@ -6477,7 +6489,10 @@ function BreadthSection() {
     <div style={{marginTop:14}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
         <div style={{fontSize:12,color:'var(--text2)'}}>Market breadth leads price by days/weeks — catches divergences before moving average crosses</div>
-        <button className="btn btn-sm" onClick={load} disabled={loading}>Refresh</button>
+        <div style={{display:'flex',gap:6}}>
+          <button className="btn btn-sm" onClick={backfillHistory} disabled={backfilling}>{backfilling?'Backfilling...':'Backfill History'}</button>
+          <button className="btn btn-sm" onClick={load} disabled={loading}>Refresh</button>
+        </div>
       </div>
       {loading && <div className="panel"><Loader msg="Computing breadth internals..."/></div>}
       {error && <ErrorBox msg={error}/>}
@@ -6894,6 +6909,7 @@ function TaxEngineSection() {
   const [config, setConfig] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [syncing, setSyncing] = useState(false);
 
   async function load() {
     setLoading(true); setError('');
@@ -6906,13 +6922,27 @@ function TaxEngineSection() {
     } catch(e) { setError(e.message); }
     setLoading(false);
   }
+
+  async function syncTaxLots() {
+    setSyncing(true);
+    try {
+      const r = await api('/api/tax/backfill',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      alert(`Created ${r.backfilled} tax lots, disposed ${r.disposed} from ${r.total} trades`);
+      load();
+    } catch(e) { setError(e.message); }
+    setSyncing(false);
+  }
+
   useEffect(()=>{ load(); },[]);
 
   return (
     <div style={{marginTop:14}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
         <div style={{fontSize:12,color:'var(--text2)'}}>After-tax returns are what matter. Short-term vs long-term = 17% tax rate difference.</div>
-        <button className="btn btn-sm" onClick={load} disabled={loading}>Refresh</button>
+        <div style={{display:'flex',gap:6}}>
+          <button className="btn btn-sm" onClick={syncTaxLots} disabled={syncing}>{syncing?'Syncing...':'Sync from Trades'}</button>
+          <button className="btn btn-sm" onClick={load} disabled={loading}>Refresh</button>
+        </div>
       </div>
       {loading && <div className="panel"><Loader msg="Loading tax data..."/></div>}
       {error && <ErrorBox msg={error}/>}
@@ -6999,11 +7029,12 @@ function DecisionQualitySection() {
     setLoading(false);
   }
 
-  async function scoreAll() {
+  async function scoreAll(rescore) {
     setScoring(true);
     try {
-      const r = await api('/api/decisions/score-all',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-      alert(`Scored ${r.scored} trades`);
+      const url = rescore ? '/api/decisions/score-all?rescore=true' : '/api/decisions/score-all';
+      const r = await api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      alert(`Scored ${r.scored} trades${rescore ? ' (rescored with enriched context)' : ''}`);
       load();
     } catch(e) { setError(e.message); }
     setScoring(false);
@@ -7018,7 +7049,8 @@ function DecisionQualitySection() {
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
         <div style={{fontSize:12,color:'var(--text2)'}}>Process quality vs outcome quality. Good process compounds — luck doesn't.</div>
         <div style={{display:'flex',gap:6}}>
-          <button className="btn btn-sm" onClick={scoreAll} disabled={scoring}>{scoring?'Scoring...':'Score Unscored Trades'}</button>
+          <button className="btn btn-sm" onClick={()=>scoreAll(false)} disabled={scoring}>{scoring?'Scoring...':'Score Unscored'}</button>
+          <button className="btn btn-sm" onClick={()=>scoreAll(true)} disabled={scoring} title="Re-score all trades with enriched context from RS snapshots">Rescore All</button>
           <button className="btn btn-sm" onClick={load} disabled={loading}>Refresh</button>
         </div>
       </div>

@@ -31,7 +31,7 @@ function computeBreadthFromSnapshots(date) {
     WHERE date = ? AND type = 'stock' AND price > 0
   `).all(date);
 
-  if (snapshots.length < 50) return null;
+  if (snapshots.length < 20) return null;
 
   const total = snapshots.length;
 
@@ -536,6 +536,47 @@ async function getFullBreadthDashboard(quotes) {
   return dashboard;
 }
 
+// ─── Backfill Breadth History ─────────────────────────────────────────────
+// Retroactively compute and save breadth snapshots for all dates that have
+// rs_snapshots data. This builds the divergence history in one shot.
+
+function backfillBreadthHistory() {
+  // Get all distinct dates that have stock-type RS snapshots
+  const dates = db().prepare(`
+    SELECT DISTINCT date FROM rs_snapshots WHERE type = 'stock'
+    ORDER BY date ASC
+  `).all().map(r => r.date);
+
+  // Get dates we already have breadth for
+  const existing = new Set(
+    db().prepare('SELECT DISTINCT date FROM breadth_snapshots').all().map(r => r.date)
+  );
+
+  let saved = 0;
+  let skipped = 0;
+  for (const date of dates) {
+    if (existing.has(date)) { skipped++; continue; }
+
+    const breadth = computeBreadthFromSnapshots(date);
+    if (!breadth) continue;
+
+    const composite = computeCompositeBreadthScore(breadth, null, null);
+    saveBreadthSnapshot(date, {
+      ...breadth,
+      compositeScore: composite.score,
+      regime: composite.regime,
+    });
+    saved++;
+  }
+
+  return {
+    totalDates: dates.length,
+    alreadyExisted: skipped,
+    newlySaved: saved,
+    message: `Backfilled ${saved} breadth snapshots from ${dates.length} RS scan dates`,
+  };
+}
+
 module.exports = {
   computeBreadthFromSnapshots,
   computeMcClellanOscillator,
@@ -546,4 +587,5 @@ module.exports = {
   saveBreadthSnapshot,
   getBreadthHistory,
   getFullBreadthDashboard,
+  backfillBreadthHistory,
 };
