@@ -7049,6 +7049,8 @@ function TaxEngineSection() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [syncing, setSyncing] = useState(false);
+  const [editingTax, setEditingTax] = useState(false);
+  const [taxForm, setTaxForm] = useState({});
 
   async function load() {
     setLoading(true); setError('');
@@ -7089,15 +7091,61 @@ function TaxEngineSection() {
       {/* Tax Rates Config */}
       {config && (
         <div className="panel" style={{marginBottom:14}}>
-          <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>TAX RATES</div>
-          <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
-            <div><span style={{fontSize:10,color:'var(--text3)'}}>Short-term: </span><span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--red)'}}>{(config.shortTermRate*100).toFixed(0)}%</span></div>
-            <div><span style={{fontSize:10,color:'var(--text3)'}}>Long-term: </span><span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--green)'}}>{(config.longTermRate*100).toFixed(0)}%</span></div>
-            <div><span style={{fontSize:10,color:'var(--text3)'}}>NIIT: </span><span style={{fontFamily:'var(--font-mono)',fontWeight:600,color:'var(--text2)'}}>{(config.netInvestmentIncome*100).toFixed(1)}%</span></div>
-            <div><span style={{fontSize:10,color:'var(--text3)'}}>State: </span><span style={{fontFamily:'var(--font-mono)',fontWeight:600,color:'var(--text2)'}}>{(config.stateRate*100).toFixed(0)}%</span></div>
-            <div><span style={{fontSize:10,color:'var(--text3)'}}>Effective ST: </span><span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--red)'}}>{((config.shortTermRate+config.netInvestmentIncome+config.stateRate)*100).toFixed(1)}%</span></div>
-            <div><span style={{fontSize:10,color:'var(--text3)'}}>Effective LT: </span><span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--green)'}}>{((config.longTermRate+config.netInvestmentIncome+config.stateRate)*100).toFixed(1)}%</span></div>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+            <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',color:'var(--text3)'}}>TAX RATES</div>
+            {!editingTax && (
+              <button className="btn btn-sm" onClick={() => { setEditingTax(true); setTaxForm({ shortTermRate: (config.shortTermRate*100), longTermRate: (config.longTermRate*100), netInvestmentIncome: (config.netInvestmentIncome*100), stateRate: (config.stateRate*100) }); }}>
+                Edit Rates
+              </button>
+            )}
           </div>
+          {editingTax ? (
+            <div>
+              <div style={{display:'flex',gap:12,flexWrap:'wrap',alignItems:'flex-end',marginBottom:10}}>
+                {[
+                  {key:'shortTermRate', label:'Short-term %', color:'var(--red)'},
+                  {key:'longTermRate', label:'Long-term %', color:'var(--green)'},
+                  {key:'netInvestmentIncome', label:'NIIT %', color:'var(--text2)'},
+                  {key:'stateRate', label:'State %', color:'var(--text2)'},
+                ].map(f => (
+                  <div key={f.key} style={{display:'flex',flexDirection:'column',gap:3}}>
+                    <label style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>{f.label}</label>
+                    <input type="number" step="0.1" min="0" max="100"
+                      value={taxForm[f.key] ?? ''}
+                      onChange={e => setTaxForm(prev => ({...prev, [f.key]: e.target.value}))}
+                      style={{width:70,padding:'5px 8px',fontSize:13,fontFamily:'var(--font-mono)',fontWeight:700,color:f.color,background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:4,textAlign:'right'}}
+                    />
+                  </div>
+                ))}
+              </div>
+              <div style={{fontSize:11,color:'var(--text3)',marginBottom:8}}>
+                Effective ST: <strong style={{color:'var(--red)'}}>{(+(taxForm.shortTermRate||0) + +(taxForm.netInvestmentIncome||0) + +(taxForm.stateRate||0)).toFixed(1)}%</strong>
+                {' · '}Effective LT: <strong style={{color:'var(--green)'}}>{(+(taxForm.longTermRate||0) + +(taxForm.netInvestmentIncome||0) + +(taxForm.stateRate||0)).toFixed(1)}%</strong>
+              </div>
+              <div style={{display:'flex',gap:6}}>
+                <button className="btn btn-primary" onClick={async () => {
+                  try {
+                    const updated = await api('/api/tax/config', {
+                      method:'POST', headers:{'Content-Type':'application/json'},
+                      body: JSON.stringify({ shortTermRate: +(taxForm.shortTermRate)/100, longTermRate: +(taxForm.longTermRate)/100, netInvestmentIncome: +(taxForm.netInvestmentIncome)/100, stateRate: +(taxForm.stateRate)/100 }),
+                    });
+                    setConfig(updated);
+                    setEditingTax(false);
+                  } catch(e) { alert('Save failed: ' + e.message); }
+                }}>Save</button>
+                <button className="btn btn-sm" onClick={() => setEditingTax(false)}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
+              <div><span style={{fontSize:10,color:'var(--text3)'}}>Short-term: </span><span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--red)'}}>{(config.shortTermRate*100).toFixed(0)}%</span></div>
+              <div><span style={{fontSize:10,color:'var(--text3)'}}>Long-term: </span><span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--green)'}}>{(config.longTermRate*100).toFixed(0)}%</span></div>
+              <div><span style={{fontSize:10,color:'var(--text3)'}}>NIIT: </span><span style={{fontFamily:'var(--font-mono)',fontWeight:600,color:'var(--text2)'}}>{(config.netInvestmentIncome*100).toFixed(1)}%</span></div>
+              <div><span style={{fontSize:10,color:'var(--text3)'}}>State: </span><span style={{fontFamily:'var(--font-mono)',fontWeight:600,color:'var(--text2)'}}>{(config.stateRate*100).toFixed(0)}%</span></div>
+              <div><span style={{fontSize:10,color:'var(--text3)'}}>Effective ST: </span><span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--red)'}}>{((config.shortTermRate+config.netInvestmentIncome+config.stateRate)*100).toFixed(1)}%</span></div>
+              <div><span style={{fontSize:10,color:'var(--text3)'}}>Effective LT: </span><span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--green)'}}>{((config.longTermRate+config.netInvestmentIncome+config.stateRate)*100).toFixed(1)}%</span></div>
+            </div>
+          )}
         </div>
       )}
 
