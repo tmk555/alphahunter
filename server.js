@@ -60,6 +60,7 @@ const notificationRoutes  = require('./src/routes/notifications');
 const providerRoutes      = require('./src/routes/providers');
 const replayRoutes        = require('./src/routes/replay');
 const hedgeRoutes         = require('./src/routes/hedge')(runScan);
+const edgeRoutes          = require('./src/routes/edge')(db, runScan, UNIVERSE, SECTOR_MAP);
 
 app.use('/api', scanRoutes);
 app.use('/api', sectorRoutes);
@@ -80,6 +81,7 @@ app.use('/api', notificationRoutes);
 app.use('/api', providerRoutes);
 app.use('/api', replayRoutes);
 app.use('/api', hedgeRoutes);
+app.use('/api', edgeRoutes);
 
 // ─── SPA fallback ────────────────────────────────────────────────────────────
 app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
@@ -109,6 +111,11 @@ app.listen(PORT, () => {
   console.log(`   Market Cycle: O'Neil distribution days + FTD detection`);
   console.log(`   Notifications: Slack / Telegram / Webhook delivery channels`);
   console.log(`   Replay: Signal backtest engine (5 built-in strategies)`);
+  console.log(`   Edge: Survivorship tracking + execution cost model + signal decay`);
+  console.log(`   Breadth: McClellan osc + A/D + %above MA + VIX term structure`);
+  console.log(`   Risk: Correlation matrix + factor decomposition + VaR + hedge framework`);
+  console.log(`   Tax: Lot tracking + wash sales + after-tax returns + TLH scanner`);
+  console.log(`   Quality: Decision scoring + process trend + system vs discretionary`);
   console.log(`   Claude: ${anthropic?'✓ sonnet-4-6 / haiku-4-5':'⚠ Set ANTHROPIC_API_KEY'}`);
   console.log(`   Broker: ${alpacaConfig.configured ? '✓ Alpaca' + (alpacaConfig.base.includes('paper') ? ' (paper)' : ' (LIVE)') : '⚠ Set ALPACA_API_KEY'}`);
   console.log(`   Sectors: ${JSON.stringify(counts)}\n`);

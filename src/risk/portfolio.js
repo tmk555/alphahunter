@@ -247,13 +247,35 @@ function preTradeCheck(candidate, openPositions, regime, currentPrices = {}) {
     checks.push({ rule: 'Sector Exposure', pass: true, detail: 'Within limits' });
   }
 
-  // 3. Correlation risk
+  // 3. Correlation risk (basic sector check)
   const correlation = getCorrelationRisk(candidate, openPositions);
   if (correlation.warnings.length > 0) {
     checks.push({ rule: 'Correlation Risk', pass: false, detail: correlation.warnings.join('; ') });
     approved = false;
   } else {
     checks.push({ rule: 'Correlation Risk', pass: true, detail: 'No concentration issues' });
+  }
+
+  // 3b. Enhanced correlation check (if price data available)
+  if (candidate.closesMap && openPositions.length >= 2) {
+    try {
+      const { correlationAdjustedSize } = require('./correlation');
+      const adjResult = correlationAdjustedSize(
+        candidate.shares, candidate.symbol || candidate.ticker,
+        candidate.closesMap, openPositions
+      );
+      if (adjResult.correlationPenalty < 0.7) {
+        checks.push({
+          rule: 'Return Correlation',
+          pass: false,
+          detail: `Avg ${(adjResult.avgCorrelationWithPortfolio * 100).toFixed(0)}% correlated with portfolio — size reduced to ${adjResult.adjustedShares} shares`,
+        });
+      } else {
+        checks.push({ rule: 'Return Correlation', pass: true, detail: adjResult.reason });
+      }
+    } catch (_) {
+      // Correlation module not available — skip
+    }
   }
 
   // 4. Earnings blackout

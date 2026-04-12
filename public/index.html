@@ -401,6 +401,7 @@ function App() {
     { id:'trading',   label:'💼 Trading', badge: badgeCounts.positions || null },
     { id:'journal',   label:'📒 Journal', badge: badgeCounts.review || null, badgeWarn: !!badgeCounts.review },
     { id:'replay',    label:'🔁 Replay' },
+    { id:'edge',      label:'📈 Analytics' },
     { id:'settings',  label:'⚙ Settings' },
   ];
 
@@ -479,6 +480,7 @@ function App() {
         {tab==='trading'    && <><PortfolioTab /><ExecutionTab /></>}
         {tab==='journal'    && <><PerformanceTab /><TradeJournalTab /></>}
         {tab==='replay'     && <ReplayTab />}
+        {tab==='edge'       && <EdgeDashboardTab />}
         {tab==='settings'   && <SettingsTab />}
       </div>
     </div>
@@ -6409,6 +6411,895 @@ function ReplayTab() {
           <div style={{fontSize:12,color:'var(--text3)'}}>Run RS scans to build up snapshot history for backtesting. The replay engine uses stored rs_snapshots and scan_results.</div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── EDGE DASHBOARD TAB — Gaps 1/2/3 ────────────────────────────────────────
+// Unified tab for: Breadth, Correlation, Hedging, Execution Quality,
+// Tax Engine, Decision Quality, Edge Validation
+
+function EdgeDashboardTab() {
+  const [section, setSection] = useState('breadth');
+  const SECTIONS = [
+    { id:'breadth',     label:'Breadth Internals' },
+    { id:'correlation', label:'Correlation & Risk' },
+    { id:'hedge',       label:'Hedge Framework' },
+    { id:'execution',   label:'Execution Quality' },
+    { id:'tax',         label:'Tax Engine' },
+    { id:'decisions',   label:'Decision Quality' },
+    { id:'edge',        label:'Edge Validation' },
+  ];
+  return (
+    <div>
+      <div className="panel" style={{marginBottom:0,paddingBottom:8}}>
+        <div className="panel-title" style={{marginBottom:4}}>PROFESSIONAL <span>ANALYTICS</span></div>
+        <div className="panel-sub">Breadth internals, portfolio risk, hedging, execution quality, tax, decision analysis, edge validation</div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:8}}>
+          {SECTIONS.map(s=>(
+            <button key={s.id} className={`mode-btn ${section===s.id?'active':''}`}
+              onClick={()=>setSection(s.id)} style={{fontSize:11,padding:'5px 14px'}}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {section==='breadth'     && <BreadthSection />}
+      {section==='correlation' && <CorrelationSection />}
+      {section==='hedge'       && <HedgeFrameworkSection />}
+      {section==='execution'   && <ExecutionQualitySection />}
+      {section==='tax'         && <TaxEngineSection />}
+      {section==='decisions'   && <DecisionQualitySection />}
+      {section==='edge'        && <EdgeValidationSection />}
+    </div>
+  );
+}
+
+// ─── BREADTH INTERNALS ───────────────────────────────────────────────────────
+function BreadthSection() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function load() {
+    setLoading(true); setError('');
+    try {
+      const d = await api('/api/breadth');
+      setData(d);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+  useEffect(()=>{ load(); },[]);
+
+  const scoreColor = s => s>=80?'var(--green)':s>=60?'#8bc34a':s>=40?'var(--amber)':s>=20?'#ff8c00':'var(--red)';
+
+  return (
+    <div style={{marginTop:14}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+        <div style={{fontSize:12,color:'var(--text2)'}}>Market breadth leads price by days/weeks — catches divergences before moving average crosses</div>
+        <button className="btn btn-sm" onClick={load} disabled={loading}>Refresh</button>
+      </div>
+      {loading && <div className="panel"><Loader msg="Computing breadth internals..."/></div>}
+      {error && <ErrorBox msg={error}/>}
+
+      {data?.composite && (
+        <div>
+          {/* Composite Score Banner */}
+          <div className="panel" style={{borderColor:data.composite.color+'66',background:data.composite.color+'0a'}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
+              <div>
+                <div style={{fontSize:10,color:'var(--text3)',letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:4}}>COMPOSITE BREADTH SCORE</div>
+                <div style={{display:'flex',alignItems:'baseline',gap:12}}>
+                  <span style={{fontSize:48,fontWeight:800,color:scoreColor(data.composite.score),fontFamily:'var(--font-mono)'}}>{data.composite.score}</span>
+                  <span style={{fontSize:14,fontWeight:700,color:data.composite.color,fontFamily:'var(--font-mono)',letterSpacing:2}}>{data.composite.regime}</span>
+                  <span style={{fontSize:12,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{data.composite.sizeMultiplier}x sizing</span>
+                </div>
+              </div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)',marginBottom:4}}>COMPONENTS</div>
+                {data.composite.components?.map(c=>(
+                  <div key={c.name} style={{fontSize:11,fontFamily:'var(--font-mono)',color:'var(--text2)'}}>
+                    {c.name}: <span style={{color:scoreColor(c.score/c.weight*100),fontWeight:600}}>{c.score.toFixed(1)}</span>/{c.weight}
+                    {c.value != null && typeof c.value !== 'string' && <span style={{color:'var(--text3)',marginLeft:6}}>({typeof c.value==='number'?c.value.toFixed(1):c.value})</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Breadth Metrics Grid */}
+          {data.breadth && (
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10,marginBottom:14}}>
+              {[
+                {label:'% Above 50MA',val:`${data.breadth.pctAbove50MA}%`,color:data.breadth.pctAbove50MA>60?'var(--green)':data.breadth.pctAbove50MA>40?'var(--amber)':'var(--red)',sub:'Participation breadth'},
+                {label:'% Above 200MA',val:`${data.breadth.pctAbove200MA}%`,color:data.breadth.pctAbove200MA>55?'var(--green)':data.breadth.pctAbove200MA>35?'var(--amber)':'var(--red)',sub:'Structural health'},
+                {label:'New Highs',val:data.breadth.newHighs,color:'var(--green)',sub:`vs ${data.breadth.newLows} new lows`},
+                {label:'H/L Ratio',val:data.breadth.hlRatio,color:data.breadth.hlRatio>1.5?'var(--green)':data.breadth.hlRatio>0.7?'var(--amber)':'var(--red)',sub:'Momentum breadth'},
+                {label:'A/D Ratio',val:data.breadth.adRatio,color:data.breadth.adRatio>1.2?'var(--green)':data.breadth.adRatio>0.8?'var(--amber)':'var(--red)',sub:`${data.breadth.advancing} adv / ${data.breadth.declining} dec`},
+                {label:'Vol Thrust',val:`${data.breadth.volThrustPct}%`,color:data.breadth.volThrustPct>15?'var(--green)':'var(--text2)',sub:'Uptrend + volume'},
+                {label:'Stage 2 %',val:`${data.breadth.stage2Pct}%`,color:data.breadth.stage2Pct>40?'var(--green)':'var(--amber)',sub:'Stocks in uptrend'},
+                {label:'Stage 4 %',val:`${data.breadth.stage4Pct}%`,color:data.breadth.stage4Pct<15?'var(--green)':data.breadth.stage4Pct<25?'var(--amber)':'var(--red)',sub:'Stocks in decline'},
+                {label:'RS Breadth',val:`${data.breadth.rsBreadthPct}%`,color:'var(--cyan)',sub:'RS 80+ stocks'},
+              ].map(m=>(
+                <div key={m.label} className="panel" style={{padding:12,textAlign:'center'}}>
+                  <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>{m.label.toUpperCase()}</div>
+                  <div style={{fontSize:22,fontWeight:700,color:m.color,fontFamily:'var(--font-mono)'}}>{m.val}</div>
+                  <div style={{fontSize:9,color:'var(--text3)',marginTop:3}}>{m.sub}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Divergence Alert */}
+          {data.divergence && (
+            <div className="panel" style={{borderColor:data.divergence.divergence?'rgba(255,61,87,0.4)':'var(--border)',background:data.divergence.divergence?'rgba(255,61,87,0.06)':'var(--bg2)'}}>
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:6,color:data.divergence.divergence?'var(--red)':'var(--text3)'}}>
+                BREADTH DIVERGENCE CHECK
+              </div>
+              <div style={{fontSize:13,color:data.divergence.divergence?'var(--red)':'var(--text2)',lineHeight:1.7}}>
+                {data.divergence.message}
+              </div>
+              {data.divergence.divergence && (
+                <div style={{marginTop:8,fontSize:11,color:'var(--amber)',padding:'6px 10px',background:'rgba(240,165,0,0.06)',borderRadius:4}}>
+                  SPY vs High: {data.divergence.spyVsHigh}% | Breadth recent: {data.divergence.breadthRecent}% | Prior: {data.divergence.breadthPrior}% | Delta: {data.divergence.breadthDelta}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* McClellan Oscillator */}
+          {data.mcclellan && (
+            <div className="panel">
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>MCCLELLAN OSCILLATOR</div>
+              <div style={{display:'flex',gap:20,alignItems:'center',flexWrap:'wrap'}}>
+                <div>
+                  <span style={{fontSize:28,fontWeight:700,color:data.mcclellan.current>0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)'}}>{data.mcclellan.current}</span>
+                  <span style={{fontSize:11,color:'var(--text3)',marginLeft:8}}>({data.mcclellan.trend})</span>
+                </div>
+                <div style={{fontSize:11,color:'var(--text2)',fontFamily:'var(--font-mono)'}}>
+                  Summation: <span style={{color:data.mcclellan.summationIndex>0?'var(--green)':'var(--red)',fontWeight:600}}>{data.mcclellan.summationIndex}</span>
+                </div>
+                <div style={{fontSize:11,color:'var(--text3)'}}>
+                  Previous: {data.mcclellan.previous}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* VIX Structure + Credit */}
+          <div className="grid-2">
+            {data.vixStructure && (
+              <div className="panel">
+                <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>VIX TERM STRUCTURE</div>
+                <div style={{fontSize:20,fontWeight:700,color:data.vixStructure.signal==='panic'?'var(--red)':data.vixStructure.signal==='stress'?'#ff8c00':data.vixStructure.signal==='very_calm'?'var(--cyan)':'var(--text)',fontFamily:'var(--font-mono)',marginBottom:4}}>
+                  {data.vixStructure.structure?.replace(/_/g,' ').toUpperCase()}
+                </div>
+                <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.7}}>{data.vixStructure.interpretation}</div>
+                <div style={{marginTop:8,fontSize:11,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>
+                  VIX: {data.vixStructure.vixCurrent} | 20-SMA: {data.vixStructure.vix20SMA} | Ratio: {data.vixStructure.ratio} | Pctl: {data.vixStructure.percentile}
+                </div>
+              </div>
+            )}
+            {data.creditSpread && (
+              <div className="panel">
+                <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>CREDIT SPREAD (TLT/HYG)</div>
+                <div style={{fontSize:20,fontWeight:700,color:data.creditSpread.signal==='risk_off'?'var(--red)':data.creditSpread.signal==='risk_on'?'var(--green)':'var(--text)',fontFamily:'var(--font-mono)',marginBottom:4}}>
+                  {data.creditSpread.signal?.replace(/_/g,' ').toUpperCase()}
+                </div>
+                <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.7}}>{data.creditSpread.interpretation}</div>
+                <div style={{marginTop:8,fontSize:11,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>
+                  TLT/HYG: {data.creditSpread.tltHygRatio} | 20d chg: {data.creditSpread.ratioChange20d}% | Trend: {data.creditSpread.trend}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Interpretation */}
+          {data.composite.interpretation && (
+            <div className="panel">
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>INTERPRETATION</div>
+              {data.composite.interpretation.strengths?.length > 0 && (
+                <div style={{marginBottom:8}}>
+                  {data.composite.interpretation.strengths.map((s,i)=>(
+                    <div key={i} style={{fontSize:12,color:'var(--green)',marginBottom:3}}>+ {s}</div>
+                  ))}
+                </div>
+              )}
+              {data.composite.interpretation.warnings?.length > 0 && (
+                <div>
+                  {data.composite.interpretation.warnings.map((w,i)=>(
+                    <div key={i} style={{fontSize:12,color:'var(--red)',marginBottom:3}}>- {w}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!loading && !data?.composite && !error && (
+        <div className="panel" style={{textAlign:'center',padding:30,color:'var(--text3)'}}>
+          No breadth data available. Run RS scans to build snapshot data for breadth calculations.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── CORRELATION & RISK SECTION ──────────────────────────────────────────────
+function CorrelationSection() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function load() {
+    setLoading(true); setError('');
+    try {
+      const status = await api('/api/portfolio/status');
+      if (status) setData(status);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+  useEffect(()=>{ load(); },[]);
+
+  return (
+    <div style={{marginTop:14}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+        <div style={{fontSize:12,color:'var(--text2)'}}>Real correlation structure, factor exposure, VaR — what risks are you actually taking?</div>
+        <button className="btn btn-sm" onClick={load} disabled={loading}>Refresh</button>
+      </div>
+      {loading && <div className="panel"><Loader msg="Analyzing portfolio risk..."/></div>}
+      {error && <ErrorBox msg={error}/>}
+
+      {data && (
+        <div>
+          {/* Portfolio Heat & Drawdown */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10,marginBottom:14}}>
+            {[
+              {label:'Portfolio Heat',val:`${data.heat?.heatPct||0}%`,color:data.heat?.withinLimits?'var(--green)':'var(--red)',sub:`max ${data.heat?.maxHeat||8}%`},
+              {label:'Positions',val:data.heat?.positionCount||0,color:'var(--cyan)',sub:'open positions'},
+              {label:'$ At Risk',val:`$${Number(data.heat?.totalDollarRisk||0).toLocaleString()}`,color:'var(--amber)',sub:'total dollar risk'},
+              {label:'Drawdown',val:`${data.drawdown?.drawdownPct||0}%`,color:data.drawdown?.severity==='ok'?'var(--green)':data.drawdown?.severity==='moderate'?'var(--amber)':'var(--red)',sub:data.drawdown?.action||''},
+            ].map(m=>(
+              <div key={m.label} className="panel" style={{padding:12,textAlign:'center'}}>
+                <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>{m.label.toUpperCase()}</div>
+                <div style={{fontSize:22,fontWeight:700,color:m.color,fontFamily:'var(--font-mono)'}}>{m.val}</div>
+                <div style={{fontSize:9,color:'var(--text3)',marginTop:3,maxWidth:140,overflow:'hidden',textOverflow:'ellipsis'}}>{m.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Sector Exposure */}
+          {data.sectorExposure?.sectors && Object.keys(data.sectorExposure.sectors).length > 0 && (
+            <div className="panel">
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:10,color:'var(--text3)'}}>SECTOR EXPOSURE</div>
+              <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+                {Object.entries(data.sectorExposure.sectors).sort((a,b)=>b[1].pct-a[1].pct).map(([sector,info])=>(
+                  <div key={sector} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:'8px 12px',minWidth:120}}>
+                    <div style={{fontSize:10,color:'var(--text3)',marginBottom:3}}>{sector}</div>
+                    <div style={{fontSize:16,fontWeight:700,fontFamily:'var(--font-mono)',color:info.pct>25?'var(--red)':info.pct>15?'var(--amber)':'var(--text)'}}>{info.pct}%</div>
+                    <div style={{fontSize:9,color:'var(--text3)'}}>${Number(info.value).toLocaleString()}</div>
+                  </div>
+                ))}
+              </div>
+              {data.sectorExposure.warnings?.length > 0 && (
+                <div style={{marginTop:10}}>
+                  {data.sectorExposure.warnings.map((w,i)=>(<div key={i} style={{fontSize:11,color:'var(--red)'}}>! {w}</div>))}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="panel" style={{padding:20,textAlign:'center',color:'var(--text3)'}}>
+            <div style={{fontSize:12,marginBottom:6}}>Correlation matrix, factor decomposition, and VaR require open positions with price history.</div>
+            <div style={{fontSize:11}}>Use <code style={{color:'var(--cyan)'}}>POST /api/portfolio/correlation</code>, <code style={{color:'var(--cyan)'}}>POST /api/portfolio/factors</code>, <code style={{color:'var(--cyan)'}}>POST /api/portfolio/var</code> with position data.</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── HEDGE FRAMEWORK SECTION ─────────────────────────────────────────────────
+function HedgeFrameworkSection() {
+  const [reco, setReco] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [params, setParams] = useState({portfolioBeta:1.1,breadthScore:50,vixLevel:20,drawdownPct:0,maxDrawdownTarget:10,portfolioValue:100000,spyPrice:450,qqqPrice:380,timeHorizon:30});
+
+  async function compute() {
+    setLoading(true); setError('');
+    try {
+      const d = await api('/api/hedge/recommend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(params)});
+      setReco(d);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  return (
+    <div style={{marginTop:14}}>
+      {/* Input Form */}
+      <div className="panel">
+        <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:10,color:'var(--text3)'}}>HEDGE PARAMETERS</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:10}}>
+          {[
+            {key:'portfolioValue',label:'Portfolio $',step:10000},
+            {key:'portfolioBeta',label:'Portfolio Beta',step:0.1},
+            {key:'breadthScore',label:'Breadth Score',step:5},
+            {key:'vixLevel',label:'VIX Level',step:1},
+            {key:'drawdownPct',label:'Drawdown %',step:0.5},
+            {key:'spyPrice',label:'SPY Price',step:5},
+            {key:'qqqPrice',label:'QQQ Price',step:5},
+          ].map(f=>(
+            <div key={f.key}>
+              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>{f.label.toUpperCase()}</div>
+              <input type="number" step={f.step} value={params[f.key]} onChange={e=>setParams(p=>({...p,[f.key]:parseFloat(e.target.value)||0}))}
+                style={{width:'100%',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontFamily:'var(--font-mono)',fontSize:12}}/>
+            </div>
+          ))}
+        </div>
+        <button className="btn btn-primary" onClick={compute} disabled={loading} style={{marginTop:12}}>Compute Hedge Recommendations</button>
+      </div>
+
+      {loading && <div className="panel"><Loader msg="Computing hedge strategy..."/></div>}
+      {error && <ErrorBox msg={error}/>}
+
+      {reco && (
+        <div>
+          {/* Hedge Ratio */}
+          <div className="panel" style={{borderColor:'var(--amber)44'}}>
+            <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>RECOMMENDED HEDGE</div>
+            <div style={{display:'flex',gap:24,alignItems:'center',flexWrap:'wrap'}}>
+              <div>
+                <span style={{fontSize:36,fontWeight:800,color:'var(--amber)',fontFamily:'var(--font-mono)'}}>{(reco.ratio.recommendedHedgeRatio*100).toFixed(1)}%</span>
+                <span style={{fontSize:12,color:'var(--text3)',marginLeft:6}}>of portfolio</span>
+              </div>
+              <div style={{fontSize:11,color:'var(--text2)',fontFamily:'var(--font-mono)'}}>
+                ${Number(reco.ratio.hedgeDollars).toLocaleString()} hedge notional
+              </div>
+            </div>
+            {reco.ratio.reasoning?.length > 0 && (
+              <div style={{marginTop:10}}>
+                {reco.ratio.reasoning.map((r,i)=><div key={i} style={{fontSize:11,color:'var(--text2)',marginBottom:2}}>• {r}</div>)}
+              </div>
+            )}
+          </div>
+
+          {/* Instrument Recommendations */}
+          {reco.instruments?.recommendations?.map((inst,i)=>(
+            <div key={i} className="panel">
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                <div>
+                  <span style={{fontSize:12,fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)',marginRight:8}}>P{inst.priority}</span>
+                  <span style={{fontSize:13,fontWeight:600,color:'var(--text)'}}>{inst.type?.replace(/_/g,' ')}</span>
+                </div>
+                {inst.estimatedCost && <span style={{fontSize:12,color:'var(--amber)',fontFamily:'var(--font-mono)'}}>Cost: ${Number(inst.estimatedCost).toLocaleString()}</span>}
+              </div>
+              {inst.instrument && <div style={{fontSize:12,color:'var(--text2)',fontFamily:'var(--font-mono)',marginBottom:4}}>{inst.instrument}</div>}
+              {inst.contracts && <div style={{fontSize:11,color:'var(--text3)'}}>Contracts: {inst.contracts} | Cost: {inst.costPct}% of portfolio</div>}
+              {inst.maxProtection && <div style={{fontSize:11,color:'var(--green)'}}>Max protection: ${Number(inst.maxProtection).toLocaleString()} ({inst.protectionPct}%)</div>}
+              {inst.payoffRatio && <div style={{fontSize:11,color:'var(--text3)'}}>Payoff ratio: {inst.payoffRatio}x</div>}
+              {inst.breakeven && <div style={{fontSize:11,color:'var(--text3)'}}>Breakeven: {inst.breakeven}</div>}
+              {inst.description && <div style={{fontSize:11,color:'var(--text3)',marginTop:4,fontStyle:'italic'}}>{inst.description}</div>}
+              {inst.warning && <div style={{fontSize:11,color:'var(--red)',marginTop:4}}>{inst.warning}</div>}
+              {inst.condition && <div style={{fontSize:11,color:'var(--amber)',marginTop:4}}>{inst.condition}</div>}
+            </div>
+          ))}
+
+          {/* Summary */}
+          {reco.instruments?.summary && (
+            <div className="panel" style={{background:'rgba(240,165,0,0.04)'}}>
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>HEDGE SUMMARY</div>
+              {Object.entries(reco.instruments.summary).map(([k,v])=>(
+                <div key={k} style={{fontSize:12,color:'var(--text2)',marginBottom:3}}>
+                  <span style={{color:'var(--text3)',marginRight:8}}>{k.replace(/([A-Z])/g,' $1').trim()}:</span>
+                  <span style={{fontFamily:'var(--font-mono)',fontWeight:600}}>{v}</span>
+                </div>
+              ))}
+              {reco.instruments.monthlyCost && (
+                <div style={{marginTop:8,fontSize:11,color:'var(--amber)'}}>
+                  Monthly hedge cost: ${reco.instruments.monthlyCost.totalDollars} ({reco.instruments.monthlyCost.totalPct}% of portfolio)
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── EXECUTION QUALITY SECTION ───────────────────────────────────────────────
+function ExecutionQualitySection() {
+  const [report, setReport] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function load() {
+    setLoading(true); setError('');
+    try {
+      const r = await api('/api/execution/report');
+      setReport(r);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+  useEffect(()=>{ load(); },[]);
+
+  return (
+    <div style={{marginTop:14}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+        <div style={{fontSize:12,color:'var(--text2)'}}>Slippage, fill quality, implementation shortfall — is your execution eating the edge?</div>
+        <button className="btn btn-sm" onClick={load} disabled={loading}>Refresh</button>
+      </div>
+      {loading && <div className="panel"><Loader msg="Loading execution data..."/></div>}
+      {error && <ErrorBox msg={error}/>}
+
+      {report?.summary ? (
+        <div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10,marginBottom:14}}>
+            {[
+              {label:'Grade',val:report.summary.grade,color:report.summary.grade==='A'?'var(--green)':report.summary.grade==='B'?'#8bc34a':report.summary.grade==='C'?'var(--amber)':'var(--red)',sub:`${report.summary.totalExecutions} executions`},
+              {label:'Avg Slippage',val:`${report.summary.slippage.avg||0}%`,color:Math.abs(report.summary.slippage.avg||0)<0.1?'var(--green)':'var(--red)',sub:`worst: ${report.summary.slippage.worst||0}%`},
+              {label:'Fill Quality',val:`${report.summary.fillQuality.avg||0}%`,color:(report.summary.fillQuality.avg||0)>60?'var(--green)':'var(--amber)',sub:'0=worst, 100=best'},
+              {label:'Impl Shortfall',val:`$${report.summary.implementationShortfall.totalDollars||0}`,color:(report.summary.implementationShortfall.totalDollars||0)<500?'var(--green)':'var(--red)',sub:`${report.summary.implementationShortfall.totalPct||0}%`},
+              {label:'Avg Delay',val:`${report.summary.timingDelay.avg||0}d`,color:(report.summary.timingDelay.avg||0)<2?'var(--green)':'var(--amber)',sub:'signal to fill'},
+            ].map(m=>(
+              <div key={m.label} className="panel" style={{padding:12,textAlign:'center'}}>
+                <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>{m.label.toUpperCase()}</div>
+                <div style={{fontSize:22,fontWeight:700,color:m.color,fontFamily:'var(--font-mono)'}}>{m.val}</div>
+                <div style={{fontSize:9,color:'var(--text3)',marginTop:3}}>{m.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* By Order Type */}
+          {report.summary.byOrderType && Object.keys(report.summary.byOrderType).length > 0 && (
+            <div className="panel">
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>BY ORDER TYPE</div>
+              <table className="data-table"><thead><tr><th>Type</th><th>Count</th><th>Avg Slippage</th><th>Avg Fill Quality</th></tr></thead>
+                <tbody>
+                  {Object.entries(report.summary.byOrderType).map(([type,d])=>(
+                    <tr key={type}>
+                      <td style={{fontWeight:600,color:'var(--cyan)'}}>{type}</td>
+                      <td>{d.count}</td>
+                      <td style={{color:Math.abs(d.avgSlippage||0)<0.1?'var(--green)':'var(--red)'}}>{d.avgSlippage||'—'}%</td>
+                      <td>{d.avgFillQuality||'—'}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Warnings */}
+          {report.summary.warnings?.length > 0 && (
+            <div className="panel" style={{borderColor:'rgba(255,61,87,0.3)'}}>
+              {report.summary.warnings.map((w,i)=><div key={i} style={{fontSize:12,color:'var(--red)',marginBottom:4}}>! {w}</div>)}
+            </div>
+          )}
+        </div>
+      ) : !loading && !error ? (
+        <div className="panel" style={{textAlign:'center',padding:30,color:'var(--text3)'}}>
+          <div style={{fontSize:14,marginBottom:8}}>No execution data yet</div>
+          <div style={{fontSize:12}}>Executions are logged automatically when orders fill via the broker, or manually via <code style={{color:'var(--cyan)'}}>POST /api/execution/log</code></div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ─── TAX ENGINE SECTION ──────────────────────────────────────────────────────
+function TaxEngineSection() {
+  const [ytd, setYtd] = useState(null);
+  const [config, setConfig] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function load() {
+    setLoading(true); setError('');
+    try {
+      const [y, c] = await Promise.all([
+        api('/api/tax/ytd').catch(()=>null),
+        api('/api/tax/config').catch(()=>null),
+      ]);
+      setYtd(y); setConfig(c);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+  useEffect(()=>{ load(); },[]);
+
+  return (
+    <div style={{marginTop:14}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+        <div style={{fontSize:12,color:'var(--text2)'}}>After-tax returns are what matter. Short-term vs long-term = 17% tax rate difference.</div>
+        <button className="btn btn-sm" onClick={load} disabled={loading}>Refresh</button>
+      </div>
+      {loading && <div className="panel"><Loader msg="Loading tax data..."/></div>}
+      {error && <ErrorBox msg={error}/>}
+
+      {/* Tax Rates Config */}
+      {config && (
+        <div className="panel" style={{marginBottom:14}}>
+          <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>TAX RATES</div>
+          <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
+            <div><span style={{fontSize:10,color:'var(--text3)'}}>Short-term: </span><span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--red)'}}>{(config.shortTermRate*100).toFixed(0)}%</span></div>
+            <div><span style={{fontSize:10,color:'var(--text3)'}}>Long-term: </span><span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--green)'}}>{(config.longTermRate*100).toFixed(0)}%</span></div>
+            <div><span style={{fontSize:10,color:'var(--text3)'}}>NIIT: </span><span style={{fontFamily:'var(--font-mono)',fontWeight:600,color:'var(--text2)'}}>{(config.netInvestmentIncome*100).toFixed(1)}%</span></div>
+            <div><span style={{fontSize:10,color:'var(--text3)'}}>State: </span><span style={{fontFamily:'var(--font-mono)',fontWeight:600,color:'var(--text2)'}}>{(config.stateRate*100).toFixed(0)}%</span></div>
+            <div><span style={{fontSize:10,color:'var(--text3)'}}>Effective ST: </span><span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--red)'}}>{((config.shortTermRate+config.netInvestmentIncome+config.stateRate)*100).toFixed(1)}%</span></div>
+            <div><span style={{fontSize:10,color:'var(--text3)'}}>Effective LT: </span><span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--green)'}}>{((config.longTermRate+config.netInvestmentIncome+config.stateRate)*100).toFixed(1)}%</span></div>
+          </div>
+        </div>
+      )}
+
+      {/* YTD Tax Summary */}
+      {ytd && (
+        <div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10,marginBottom:14}}>
+            {[
+              {label:`${ytd.year} Total Gain`,val:`$${Number(ytd.totalGain).toLocaleString()}`,color:ytd.totalGain>=0?'var(--green)':'var(--red)',sub:`${ytd.shortTermTrades+ytd.longTermTrades} trades`},
+              {label:'Short-Term',val:`$${Number(ytd.shortTermGain).toLocaleString()}`,color:ytd.shortTermGain>=0?'var(--amber)':'var(--red)',sub:`${ytd.shortTermTrades} trades @ ${(config?.shortTermRate*100||37)}%`},
+              {label:'Long-Term',val:`$${Number(ytd.longTermGain).toLocaleString()}`,color:ytd.longTermGain>=0?'var(--green)':'var(--red)',sub:`${ytd.longTermTrades} trades @ ${(config?.longTermRate*100||20)}%`},
+              {label:'Estimated Tax',val:`$${Number(ytd.estimatedTax).toLocaleString()}`,color:'var(--red)',sub:`${ytd.effectiveTaxRate}% effective`},
+              {label:'After-Tax Gain',val:`$${Number(ytd.afterTaxGain).toLocaleString()}`,color:ytd.afterTaxGain>=0?'var(--green)':'var(--red)',sub:'what you actually keep'},
+              {label:'Tax Drag',val:ytd.totalGain>0?`${ytd.effectiveTaxRate}%`:'0%',color:ytd.effectiveTaxRate>25?'var(--red)':ytd.effectiveTaxRate>15?'var(--amber)':'var(--green)',sub:'% of gains lost to tax'},
+            ].map(m=>(
+              <div key={m.label} className="panel" style={{padding:12,textAlign:'center'}}>
+                <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>{m.label.toUpperCase()}</div>
+                <div style={{fontSize:20,fontWeight:700,color:m.color,fontFamily:'var(--font-mono)'}}>{m.val}</div>
+                <div style={{fontSize:9,color:'var(--text3)',marginTop:3}}>{m.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Wash Sale + Loss Info */}
+          <div className="panel">
+            <div style={{display:'flex',gap:20,flexWrap:'wrap',fontSize:12,color:'var(--text2)'}}>
+              <div>Wash Sale Adjustments: <span style={{fontFamily:'var(--font-mono)',fontWeight:600}}>${ytd.washSaleAdjustments}</span></div>
+              <div>Loss Deduction: <span style={{fontFamily:'var(--font-mono)',fontWeight:600,color:ytd.lossDeduction<0?'var(--green)':'var(--text3)'}}>${ytd.lossDeduction}</span></div>
+              <div>Loss Carryforward: <span style={{fontFamily:'var(--font-mono)',fontWeight:600}}>${ytd.lossCarryforward}</span></div>
+            </div>
+          </div>
+
+          {ytd.totalGain > 0 && ytd.shortTermGain > 0 && (
+            <div className="info-box">
+              Tax optimization opportunity: ${Number(ytd.shortTermGain).toLocaleString()} in short-term gains taxed at {((config?.shortTermRate||0.37)*100).toFixed(0)}% instead of {((config?.longTermRate||0.20)*100).toFixed(0)}%. Holding longer saves ${Number(ytd.shortTermGain * ((config?.shortTermRate||0.37)-(config?.longTermRate||0.20))).toLocaleString()} in taxes.
+            </div>
+          )}
+        </div>
+      )}
+
+      {!loading && !ytd && !error && (
+        <div className="panel" style={{textAlign:'center',padding:30,color:'var(--text3)'}}>
+          <div style={{fontSize:14,marginBottom:8}}>No tax data yet</div>
+          <div style={{fontSize:12}}>Tax lots are created when trades are logged. Close trades to see YTD tax impact.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── DECISION QUALITY SECTION ────────────────────────────────────────────────
+function DecisionQualitySection() {
+  const [analytics, setAnalytics] = useState(null);
+  const [trend, setTrend] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [scoring, setScoring] = useState(false);
+
+  async function load() {
+    setLoading(true); setError('');
+    try {
+      const [a, t] = await Promise.all([
+        api('/api/decisions/analytics').catch(()=>null),
+        api('/api/decisions/trend').catch(()=>null),
+      ]);
+      setAnalytics(a); setTrend(t);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  async function scoreAll() {
+    setScoring(true);
+    try {
+      const r = await api('/api/decisions/score-all',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      alert(`Scored ${r.scored} trades`);
+      load();
+    } catch(e) { setError(e.message); }
+    setScoring(false);
+  }
+
+  useEffect(()=>{ load(); },[]);
+
+  const gradeColor = g => g==='A'?'var(--green)':g==='B'?'#8bc34a':g==='C'?'var(--amber)':g==='D'?'#ff8c00':'var(--red)';
+
+  return (
+    <div style={{marginTop:14}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+        <div style={{fontSize:12,color:'var(--text2)'}}>Process quality vs outcome quality. Good process compounds — luck doesn't.</div>
+        <div style={{display:'flex',gap:6}}>
+          <button className="btn btn-sm" onClick={scoreAll} disabled={scoring}>{scoring?'Scoring...':'Score Unscored Trades'}</button>
+          <button className="btn btn-sm" onClick={load} disabled={loading}>Refresh</button>
+        </div>
+      </div>
+      {loading && <div className="panel"><Loader msg="Loading decision analytics..."/></div>}
+      {error && <ErrorBox msg={error}/>}
+
+      {analytics?.summary ? (
+        <div>
+          {/* Key Metrics */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10,marginBottom:14}}>
+            {[
+              {label:'Avg Process Score',val:`${analytics.summary.avgProcessScore}/100`,color:analytics.summary.avgProcessScore>=70?'var(--green)':analytics.summary.avgProcessScore>=50?'var(--amber)':'var(--red)',sub:`${analytics.totalDecisions} scored trades`},
+              {label:'Win Rate',val:`${analytics.summary.winRate}%`,color:analytics.summary.winRate>=50?'var(--green)':'var(--red)',sub:'all scored trades'},
+              {label:'Avg P&L',val:`${analytics.summary.avgPnlPercent}%`,color:analytics.summary.avgPnlPercent>=0?'var(--green)':'var(--red)',sub:'per trade'},
+            ].map(m=>(
+              <div key={m.label} className="panel" style={{padding:12,textAlign:'center'}}>
+                <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>{m.label.toUpperCase()}</div>
+                <div style={{fontSize:22,fontWeight:700,color:m.color,fontFamily:'var(--font-mono)'}}>{m.val}</div>
+                <div style={{fontSize:9,color:'var(--text3)',marginTop:3}}>{m.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* System vs Discretionary — the key question */}
+          {analytics.summary.systemVsDiscretionary && (
+            <div className="panel" style={{borderColor:'var(--cyan)33'}}>
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:10,color:'var(--text3)'}}>SYSTEM vs DISCRETIONARY</div>
+              <div className="grid-2">
+                <div style={{background:'var(--bg3)',borderRadius:4,padding:14,textAlign:'center'}}>
+                  <div style={{fontSize:10,color:'var(--cyan)',letterSpacing:1.5,marginBottom:8}}>SYSTEM TRADES</div>
+                  <div style={{fontSize:24,fontWeight:700,color:'var(--text)',fontFamily:'var(--font-mono)'}}>{analytics.summary.systemVsDiscretionary.system.count}</div>
+                  <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
+                    Score: {analytics.summary.systemVsDiscretionary.system.avgScore} | Win: {analytics.summary.systemVsDiscretionary.system.winRate}% | PnL: {analytics.summary.systemVsDiscretionary.system.avgPnl}%
+                  </div>
+                </div>
+                <div style={{background:'var(--bg3)',borderRadius:4,padding:14,textAlign:'center'}}>
+                  <div style={{fontSize:10,color:'var(--purple)',letterSpacing:1.5,marginBottom:8}}>DISCRETIONARY</div>
+                  <div style={{fontSize:24,fontWeight:700,color:'var(--text)',fontFamily:'var(--font-mono)'}}>{analytics.summary.systemVsDiscretionary.discretionary.count}</div>
+                  <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
+                    Score: {analytics.summary.systemVsDiscretionary.discretionary.avgScore} | Win: {analytics.summary.systemVsDiscretionary.discretionary.winRate}% | PnL: {analytics.summary.systemVsDiscretionary.discretionary.avgPnl}%
+                  </div>
+                </div>
+              </div>
+              <div style={{marginTop:10,fontSize:12,color:'var(--amber)',fontStyle:'italic',textAlign:'center'}}>
+                {analytics.summary.systemVsDiscretionary.verdict}
+              </div>
+            </div>
+          )}
+
+          {/* Grade Distribution */}
+          {analytics.summary.gradeDistribution && (
+            <div className="panel">
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:10,color:'var(--text3)'}}>GRADE DISTRIBUTION</div>
+              <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
+                {['A','B','C','D','F'].map(g=>(
+                  <div key={g} style={{textAlign:'center',minWidth:50}}>
+                    <div style={{fontSize:24,fontWeight:800,color:gradeColor(g),fontFamily:'var(--font-mono)'}}>{analytics.summary.gradeDistribution[g]||0}</div>
+                    <div style={{fontSize:12,color:gradeColor(g),fontFamily:'var(--font-mono)',fontWeight:700}}>{g}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Outcome Alignment */}
+          {analytics.summary.outcomeAlignment && (
+            <div className="panel">
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:10,color:'var(--text3)'}}>OUTCOME ALIGNMENT</div>
+              <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
+                {[
+                  {key:'deserved_win',label:'Deserved Wins',color:'var(--green)',desc:'Good process + profit'},
+                  {key:'lucky_win',label:'Lucky Wins',color:'var(--amber)',desc:'Bad process + profit'},
+                  {key:'unlucky_loss',label:'Unlucky Losses',color:'var(--cyan)',desc:'Good process + loss'},
+                  {key:'deserved_loss',label:'Deserved Losses',color:'var(--red)',desc:'Bad process + loss'},
+                ].map(a=>(
+                  <div key={a.key} style={{background:'var(--bg3)',borderRadius:4,padding:10,textAlign:'center',minWidth:110,flex:1}}>
+                    <div style={{fontSize:22,fontWeight:700,color:a.color,fontFamily:'var(--font-mono)'}}>{analytics.summary.outcomeAlignment[a.key]||0}</div>
+                    <div style={{fontSize:10,color:a.color,fontWeight:600}}>{a.label}</div>
+                    <div style={{fontSize:9,color:'var(--text3)',marginTop:2}}>{a.desc}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Weakest Area */}
+          {analytics.summary.weakestArea && (
+            <div className="panel" style={{borderColor:'rgba(240,165,0,0.3)'}}>
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:6,color:'var(--amber)'}}>WEAKEST AREA: {analytics.summary.weakestArea.component.toUpperCase()}</div>
+              <div style={{fontSize:12,color:'var(--text2)',marginBottom:4}}>{analytics.summary.weakestArea.score}</div>
+              <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.7}}>{analytics.summary.weakestArea.recommendation}</div>
+            </div>
+          )}
+
+          {/* Process Trend */}
+          {trend && trend.trend !== 'insufficient_data' && (
+            <div className="panel">
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>PROCESS QUALITY TREND</div>
+              <div style={{fontSize:14,color:trend.trend==='improving'?'var(--green)':trend.trend==='deteriorating'?'var(--red)':'var(--text2)',fontWeight:600}}>
+                {trend.message}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : !loading && !error ? (
+        <div className="panel" style={{textAlign:'center',padding:30,color:'var(--text3)'}}>
+          <div style={{fontSize:14,marginBottom:8}}>No decision quality data yet</div>
+          <div style={{fontSize:12}}>Click "Score Unscored Trades" to analyze all closed trades, or trades are scored automatically going forward.</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ─── EDGE VALIDATION SECTION ─────────────────────────────────────────────────
+function EdgeValidationSection() {
+  const [report, setReport] = useState(null);
+  const [decay, setDecay] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [decayLoading, setDecayLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [selectedSignal, setSelectedSignal] = useState('rs_high');
+
+  const SIGNALS = [
+    {id:'rs_high',label:'RS High (>=80)'},
+    {id:'momentum_high',label:'Momentum High (>=60)'},
+    {id:'rs_and_momentum',label:'RS + Momentum'},
+    {id:'vcp',label:'VCP Forming'},
+    {id:'rs_line_new_high',label:'RS Line New High'},
+    {id:'sepa_strong',label:'SEPA Strong (>=6)'},
+  ];
+
+  async function loadReport() {
+    setLoading(true); setError('');
+    try {
+      const r = await api('/api/edge/report');
+      setReport(r);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  async function loadDecay() {
+    setDecayLoading(true);
+    try {
+      const r = await api(`/api/edge/signal-decay/${selectedSignal}`);
+      setDecay(r);
+    } catch(e) { setError(e.message); }
+    setDecayLoading(false);
+  }
+
+  async function initUniverse() {
+    try {
+      const r = await api('/api/edge/universe-init',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      alert(`Universe tracking: ${r.status} (${r.count} stocks)`);
+      loadReport();
+    } catch(e) { setError(e.message); }
+  }
+
+  useEffect(()=>{ loadReport(); },[]);
+
+  return (
+    <div style={{marginTop:14}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+        <div style={{fontSize:12,color:'var(--text2)'}}>Does the edge actually exist? Survivorship bias, execution costs, signal decay — the hard truths.</div>
+        <div style={{display:'flex',gap:6}}>
+          <button className="btn btn-sm" onClick={initUniverse}>Init Universe Tracking</button>
+          <button className="btn btn-sm" onClick={loadReport} disabled={loading}>Refresh</button>
+        </div>
+      </div>
+      {loading && <div className="panel"><Loader msg="Generating edge report..."/></div>}
+      {error && <ErrorBox msg={error}/>}
+
+      {report && (
+        <div>
+          {/* Survivorship Assessment */}
+          {report.sections?.survivorship && (
+            <div className="panel" style={{borderColor:report.sections.survivorship.severity==='critical'?'rgba(255,61,87,0.4)':'var(--border)'}}>
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:report.sections.survivorship.severity==='critical'?'var(--red)':'var(--text3)'}}>SURVIVORSHIP BIAS</div>
+              <div style={{fontSize:13,color:report.sections.survivorship.severity==='critical'?'var(--red)':'var(--text2)',fontWeight:600,marginBottom:6}}>
+                {report.sections.survivorship.warning}
+              </div>
+              <div style={{fontSize:11,color:'var(--text3)'}}>
+                Tracked: {report.sections.survivorship.tracked} | Removed: {report.sections.survivorship.removed}
+              </div>
+            </div>
+          )}
+
+          {/* Execution Costs */}
+          {report.sections?.executionCosts && (
+            <div className="panel">
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>EXECUTION COST ESTIMATE</div>
+              <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
+                <div>
+                  <div style={{fontSize:10,color:'var(--text3)'}}>Typical round-trip</div>
+                  <div style={{fontSize:18,fontWeight:700,color:'var(--amber)',fontFamily:'var(--font-mono)'}}>{report.sections.executionCosts.typicalRoundTrip}%</div>
+                </div>
+                <div>
+                  <div style={{fontSize:10,color:'var(--text3)'}}>Annual @ 200 trades</div>
+                  <div style={{fontSize:18,fontWeight:700,color:'var(--red)',fontFamily:'var(--font-mono)'}}>{report.sections.executionCosts.annualizedAt200Trades}%</div>
+                </div>
+              </div>
+              <div style={{fontSize:11,color:'var(--text3)',marginTop:6}}>{report.sections.executionCosts.note}</div>
+            </div>
+          )}
+
+          {/* Data Quality */}
+          {report.sections?.dataQuality && (
+            <div className="panel">
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>DATA QUALITY</div>
+              <div style={{display:'flex',gap:20,flexWrap:'wrap',fontSize:12}}>
+                <div>Snapshot days: <span style={{fontFamily:'var(--font-mono)',fontWeight:600,color:report.sections.dataQuality.sufficient?'var(--green)':'var(--amber)'}}>{report.sections.dataQuality.snapshotDays}</span></div>
+                <div>Scan result days: <span style={{fontFamily:'var(--font-mono)',fontWeight:600}}>{report.sections.dataQuality.scanResultDays}</span></div>
+                <div>Minimum for validation: <span style={{fontFamily:'var(--font-mono)',fontWeight:600}}>{report.sections.dataQuality.minimumForValidation}</span></div>
+                <div>Sufficient: <span style={{fontWeight:600,color:report.sections.dataQuality.sufficient?'var(--green)':'var(--red)'}}>{report.sections.dataQuality.sufficient?'YES':'NO'}</span></div>
+              </div>
+            </div>
+          )}
+
+          {/* Signal Volume */}
+          {report.sections?.signalVolume && (
+            <div className="panel">
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>SIGNAL FREQUENCY</div>
+              <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
+                {Object.entries(report.sections.signalVolume).map(([sig,cnt])=>(
+                  <div key={sig} style={{background:'var(--bg3)',borderRadius:4,padding:'8px 14px',textAlign:'center'}}>
+                    <div style={{fontSize:18,fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{cnt.toLocaleString()}</div>
+                    <div style={{fontSize:9,color:'var(--text3)',marginTop:2}}>{sig.replace(/_/g,' ')}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Signal Decay Analysis */}
+      <div className="panel" style={{marginTop:14}}>
+        <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:10,color:'var(--text3)'}}>SIGNAL DECAY ANALYSIS</div>
+        <div style={{fontSize:11,color:'var(--text2)',marginBottom:10}}>How quickly does a signal's predictive power fade? Critical for optimal holding period.</div>
+        <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+          <select value={selectedSignal} onChange={e=>setSelectedSignal(e.target.value)}
+            style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,padding:'6px 10px',color:'var(--text)',fontSize:12,fontFamily:'var(--font-mono)'}}>
+            {SIGNALS.map(s=><option key={s.id} value={s.id}>{s.label}</option>)}
+          </select>
+          <button className="btn btn-sm btn-primary" onClick={loadDecay} disabled={decayLoading}>
+            {decayLoading?'Analyzing...':'Analyze Decay'}
+          </button>
+        </div>
+      </div>
+
+      {decay && !decay.error && (
+        <div className="panel">
+          <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:4,color:'var(--cyan)'}}>
+            {decay.signal?.replace(/_/g,' ').toUpperCase()} — {decay.totalFireings} signal firings
+          </div>
+          {decay.optimalHorizon && (
+            <div style={{fontSize:12,color:'var(--green)',marginBottom:10}}>
+              Optimal holding period: <strong>{decay.optimalHorizon}</strong> (Sharpe: {decay.bestSharpe})
+            </div>
+          )}
+          <table className="data-table">
+            <thead><tr><th>Horizon</th><th>Trades</th><th>Avg Return</th><th>Hit Rate</th><th>Sharpe</th><th>Std Dev</th><th>P10</th><th>P50</th><th>P90</th></tr></thead>
+            <tbody>
+              {Object.entries(decay.decay).filter(([,s])=>s.count>0).map(([horizon,s])=>(
+                <tr key={horizon} style={horizon===decay.optimalHorizon?{background:'rgba(0,230,118,0.06)'}:{}}>
+                  <td style={{fontWeight:600,color:horizon===decay.optimalHorizon?'var(--green)':'var(--cyan)'}}>{horizon}</td>
+                  <td>{s.count}</td>
+                  <td style={{color:s.avgReturn>=0?'var(--green)':'var(--red)',fontWeight:600}}>{s.avgReturn>0?'+':''}{s.avgReturn}%</td>
+                  <td style={{color:s.hitRate>=50?'var(--green)':'var(--red)'}}>{s.hitRate}%</td>
+                  <td style={{color:s.sharpe>0.5?'var(--green)':s.sharpe>0?'var(--amber)':'var(--red)'}}>{s.sharpe}</td>
+                  <td>{s.stdDev}%</td>
+                  <td style={{color:'var(--red)'}}>{s.percentiles?.p10}%</td>
+                  <td>{s.percentiles?.p50}%</td>
+                  <td style={{color:'var(--green)'}}>{s.percentiles?.p90}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {decay?.error && <div className="panel" style={{color:'var(--text3)',textAlign:'center',padding:20}}>{decay.error}</div>}
     </div>
   );
 }
