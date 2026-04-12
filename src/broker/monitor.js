@@ -315,16 +315,62 @@ function getMonitorStatus() {
 
 // ─── Strategy-Based Exit Monitoring ────────────────────────────────────────
 // For open trades tagged with a replay strategy, evaluate signal-based exits
-// (RS drop, SEPA degrade, regime change) using the latest scan data.
+// (RS drop, SEPA degrade, regime change, VCP failure, conviction degradation)
+// using live regime data + scan cache with DB fallback.
 // Runs alongside the cron stop check every 5 minutes.
 
 const STRATEGY_EXIT_RULES = {
   rs_momentum:      { exitField: 'rsRank',        exitThreshold: 50, compare: 'below', reason: 'rs_dropped' },
   sepa_trend:       { exitField: 'sepaScore',      exitThreshold: 3,  compare: 'below', reason: 'sepa_degraded' },
   rs_line_new_high: { exitField: 'vsMA50',         exitThreshold: -5, compare: 'below', reason: 'below_ma50' },
-  vcp_breakout:     null,  // ATR stop/target only — no signal exit
-  conviction:       null,  // ATR stop/target only — no signal exit
+  vcp_breakout:     { exitField: 'rsRank',         exitThreshold: 50, compare: 'below', reason: 'vcp_rs_failed' },
+  conviction:       { exitField: 'rsRank',         exitThreshold: 50, compare: 'below', reason: 'conviction_rs_failed' },
 };
+
+// Build signal data map from scan cache with rs_snapshots DB fallback.
+// This ensures strategy exits work even when the scan cache has expired.
+function _getSignalMap() {
+  const { cacheGet, TTL_QUOTE } = require('../data/cache');
+  const scanData = cacheGet('rs:full', TTL_QUOTE);
+
+  if (scanData && scanData.length) {
+    const map = {};
+    for (const s of scanData) map[s.ticker] = s;
+    return { map, source: 'cache' };
+  }
+
+  // Fallback: load latest day from rs_snapshots DB table
+  try {
+    const latestDate = db().prepare(
+      "SELECT date FROM rs_snapshots WHERE type='stock' ORDER BY date DESC LIMIT 1"
+    ).pluck().get();
+    if (!latestDate) return { map: {}, source: 'none' };
+
+    const rows = db().prepare(
+      "SELECT symbol, rs_rank, swing_momentum, sepa_score, vs_ma50, vs_ma200, price, atr_pct, vcp_forming, stage FROM rs_snapshots WHERE date=? AND type='stock'"
+    ).all(latestDate);
+
+    const map = {};
+    for (const r of rows) {
+      map[r.symbol] = {
+        ticker: r.symbol,
+        rsRank: r.rs_rank,
+        swingMomentum: r.swing_momentum,
+        sepaScore: r.sepa_score,
+        vsMA50: r.vs_ma50,
+        vsMA200: r.vs_ma200,
+        price: r.price,
+        atrPct: r.atr_pct,
+        vcpForming: r.vcp_forming,
+        stage: r.stage,
+      };
+    }
+    return { map, source: `db:${latestDate}` };
+  } catch (e) {
+    console.error(`  Signal map DB fallback failed: ${e.message}`);
+    return { map: {}, source: 'error' };
+  }
+}
 
 async function checkStrategyExits() {
   try {
@@ -334,25 +380,38 @@ async function checkStrategyExits() {
     ).all();
     if (!trades.length) return [];
 
-    // Get latest scan data from cache
-    const { cacheGet, TTL_QUOTE } = require('../data/cache');
-    const scanData = cacheGet('rs:full', TTL_QUOTE);
-    if (!scanData || !scanData.length) return [];
+    // Gap fix 3: scan cache with rs_snapshots DB fallback
+    const { map: scanMap, source } = _getSignalMap();
+    if (!Object.keys(scanMap).length) {
+      console.log('  Strategy exit check: no signal data (cache expired, no DB snapshots)');
+      return [];
+    }
+    if (source !== 'cache') {
+      console.log(`  Strategy exit check: using fallback data (${source})`);
+    }
 
-    // Build lookup by ticker
-    const scanMap = {};
-    for (const s of scanData) scanMap[s.ticker] = s;
-
-    // Check regime (applies to all long strategies)
-    const spy = scanMap['SPY'];
+    // Gap fix 1: use getMarketRegime() for live regime detection
+    // This fetches a fresh SPY quote (10-min cache) instead of relying on stale scan data
+    const { getMarketRegime } = require('../risk/regime');
     let regime = 'NEUTRAL';
-    if (spy) {
-      const above50 = (spy.vsMA50 || 0) > 0;
-      const above200 = (spy.vsMA200 || 0) > 0;
-      if (above50 && above200) regime = 'BULL';
-      else if (!above50 && above200) regime = 'NEUTRAL';
-      else if (above50 && !above200) regime = 'CAUTION';
-      else regime = 'CORRECTION';
+    try {
+      const regimeData = await getMarketRegime();
+      regime = regimeData?.regime || 'NEUTRAL';
+      // Normalize regime names for comparison
+      if (regime === 'HIGH RISK' || regime === 'BEAR') regime = 'CORRECTION';
+      if (regime === 'BULL' || regime === 'RISK ON') regime = 'BULL';
+    } catch (e) {
+      // If live regime fetch fails, fall back to scan-derived regime
+      const spy = scanMap['SPY'];
+      if (spy) {
+        const above50 = (spy.vsMA50 || 0) > 0;
+        const above200 = (spy.vsMA200 || 0) > 0;
+        if (above50 && above200) regime = 'BULL';
+        else if (!above50 && above200) regime = 'NEUTRAL';
+        else if (above50 && !above200) regime = 'CAUTION';
+        else regime = 'CORRECTION';
+      }
+      console.log(`  Live regime fetch failed, using scan-derived: ${regime}`);
     }
 
     const { configured } = alpaca.getConfig();
@@ -378,6 +437,13 @@ async function checkStrategyExits() {
           if (val != null && rule.compare === 'below' && val <= rule.exitThreshold) {
             exitReason = rule.reason;
           }
+        }
+      }
+
+      // Gap fix 2: additional VCP exit — breakout failure (price back below entry)
+      if (!exitReason && trade.strategy === 'vcp_breakout' && stock.price && trade.entry_price) {
+        if (stock.price < trade.entry_price * 0.97) {
+          exitReason = 'vcp_breakout_failed';
         }
       }
 

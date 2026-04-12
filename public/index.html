@@ -491,17 +491,35 @@ function App() {
 function GlobalTradingGuide({ onClose }) {
   const [section, setSection] = useState('workflow');
   const sections = [
-    {id:'workflow', label:'🗓 Workflow'},
-    {id:'setup',    label:'⚡ Checklists'},
-    {id:'signals',  label:'📊 Signals'},
-    {id:'risk',     label:'⚠ Risk & Sizing'},
-    {id:'tools',    label:'🛠 Tool Map'},
+    {id:'workflow', label:'Daily Workflow'},
+    {id:'setup',    label:'Trade Checklists'},
+    {id:'signals',  label:'Signals & Scoring'},
+    {id:'risk',     label:'Risk & Sizing'},
+    {id:'tools',    label:'Tool Map'},
+    {id:'glossary', label:'Glossary'},
   ];
+
+  const GBlock = ({title, color, border, children}) => (
+    <div style={{background:'var(--bg3)',border:`1px solid ${border||'var(--border)'}`,borderRadius:5,padding:12}}>
+      {title && <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:color||'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:8}}>{title}</div>}
+      {children}
+    </div>
+  );
+  const GRow = ({label, val, color, mono}) => (
+    <div style={{display:'flex',gap:8,marginBottom:4,fontSize:12}}>
+      <span style={{color:color||'var(--cyan)',fontWeight:700,minWidth:mono?100:85,flexShrink:0,fontFamily:mono?'var(--font-mono)':undefined,fontSize:mono?11:undefined}}>{label}</span>
+      <span style={{color:'var(--text2)',lineHeight:1.4}}>{val}</span>
+    </div>
+  );
+  const GDivider = ({label,color}) => (
+    <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:color||'var(--cyan)',letterSpacing:2,fontWeight:700,marginTop:10,marginBottom:6,paddingTop:6,borderTop:'1px solid var(--border)'}}>{label}</div>
+  );
+
   return (
-    <div style={{background:'var(--bg2)',borderBottom:'2px solid var(--amber)',flexShrink:0,maxHeight:420,overflowY:'auto'}}>
+    <div style={{background:'var(--bg2)',borderBottom:'2px solid var(--amber)',flexShrink:0,maxHeight:'70vh',overflowY:'auto'}}>
       <div style={{padding:'10px 16px',display:'flex',alignItems:'center',gap:10,borderBottom:'1px solid var(--border)',position:'sticky',top:0,background:'var(--bg2)',zIndex:1}}>
-        <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--amber)',letterSpacing:2,fontWeight:700}}>📖 TRADING REFERENCE</span>
-        <div style={{display:'flex',gap:5,marginLeft:10,flexWrap:'wrap'}}>
+        <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--amber)',letterSpacing:2,fontWeight:700}}>TRADING REFERENCE GUIDE</span>
+        <div style={{display:'flex',gap:4,marginLeft:10,flexWrap:'wrap'}}>
           {sections.map(s=>(
             <button key={s.id} onClick={()=>setSection(s.id)}
               style={{padding:'4px 12px',border:`1px solid ${section===s.id?'var(--amber)':'var(--border)'}`,borderRadius:3,background:section===s.id?'rgba(240,165,0,0.12)':'transparent',color:section===s.id?'var(--amber)':'var(--text3)',cursor:'pointer',fontSize:11,fontWeight:600,letterSpacing:.5}}>
@@ -509,180 +527,653 @@ function GlobalTradingGuide({ onClose }) {
             </button>
           ))}
         </div>
-        <button onClick={onClose} style={{marginLeft:'auto',background:'transparent',border:'none',color:'var(--text3)',cursor:'pointer',fontSize:16,padding:'0 4px'}}>✕</button>
+        <button onClick={onClose} style={{marginLeft:'auto',background:'transparent',border:'none',color:'var(--text3)',cursor:'pointer',fontSize:16,padding:'0 4px'}}>&#10005;</button>
       </div>
       <div style={{padding:'12px 16px'}}>
-        {section==='setup' && (
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-            <div style={{background:'var(--bg3)',border:'1px solid rgba(0,212,255,0.25)',borderRadius:4,padding:12}}>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--cyan)',letterSpacing:2,fontWeight:700,marginBottom:8}}>⚡ SWING (2-10 days)</div>
-              {[['Regime','BULL or CAUTION. VIX < 25. SPY above 50MA.'],['RS','≥70, Accel >+5. Avoid RS >95 (crowded).'],['RS Line','⭐ at 52wk high = earliest signal.'],['Stage','S2 only. S3/S4 = no longs.'],['VCP','2+ contractions. Breakout on volume.'],['Momentum','SwingMom ≥55.'],['Price','Within 5-7% of 52wk high.'],['Volume','≥1.5× avg on breakout day.'],['Stop','1.5×ATR below entry. >5% risk = skip.'],['Target','T1=2.5×ATR, T2=4×ATR. Sell 50% at T1.'],['Size','1% risk ÷ (entry−stop) = shares.'],['Earnings','NEVER hold swings through earnings.']].map(([k,v])=>(
-                <div key={k} style={{display:'flex',gap:8,marginBottom:4,fontSize:12}}>
-                  <span style={{color:'var(--cyan)',fontWeight:700,minWidth:80,flexShrink:0}}>{k}:</span>
-                  <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
-                </div>
-              ))}
-            </div>
-            <div style={{background:'var(--bg3)',border:'1px solid rgba(0,230,118,0.25)',borderRadius:4,padding:12}}>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--green)',letterSpacing:2,fontWeight:700,marginBottom:8}}>📈 POSITION (3-8 weeks)</div>
-              {[['Regime','BULL only. SPY above 200MA. VIX <20.'],['RS','≥70 AND rising 4+ weeks.'],['SEPA','≥5/8. All MAs aligned.'],['Stage','S2 confirmed: above RISING 150MA.'],['CAN SLIM','C≥25% qtr EPS, A≥25% annual 3+ yrs.'],['Entry','Pullback to 50MA in uptrend.'],['Stop','2×ATR below 50MA.'],['Target','T1=4×ATR, T2=6×ATR.'],['Earnings','OK to hold. Cut to 50% size before.'],['Size','Max 10% of account per position.']].map(([k,v])=>(
-                <div key={k} style={{display:'flex',gap:8,marginBottom:4,fontSize:12}}>
-                  <span style={{color:'var(--green)',fontWeight:700,minWidth:80,flexShrink:0}}>{k}:</span>
-                  <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        {section==='signals' && (
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:8}}>SCANNER SIGNALS</div>
-              {[['IBD RS (1-99)','Percentile rank vs universe. RS 85 = beats 85% of stocks.'],['Sector RS','Percentile within sector peer group. ≥90 = sector leader (+4 conviction bonus).'],['RS Accel','Rank change over 28 days. Sort descending to find fastest movers.'],['RS Line ⭐','Price÷SPY at 52wk high. Outperforming the market — earliest signal.'],['SwingMom','5/10-day rate of change, 0-99. ≥60=fast, ≥45=ok, <40=stalling.'],['PEAD','Post-earnings drift: gap ≥3% holding gains = institutional accumulation.'],['★ Triple','RS≥70 + Accel>0 + Mom≥60. All aligned = daily candidate list.'],['↗ EMRG','RS 55-70 + Accel>+5. Emerging strength — watchlist add.'],['VCP','2+ shrinking contractions. Breakout on volume = entry.'],['⚡ Vol Surge','Volume >2× avg near 52wk high. Institutional confirmation.']].map(([k,v])=>(
-                <div key={k} style={{display:'flex',gap:8,marginBottom:6,fontSize:12,borderBottom:'1px solid var(--border)',paddingBottom:4}}>
-                  <span style={{color:'var(--amber)',fontWeight:700,minWidth:100,flexShrink:0,fontFamily:'var(--font-mono)',fontSize:11}}>{k}</span>
-                  <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
-                </div>
-              ))}
-            </div>
-            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--green)',letterSpacing:2,fontWeight:700,marginBottom:8}}>SEPA TREND TEMPLATE (Minervini)</div>
-              {[['Price > 150MA','Above medium-term trend.'],['Price > 200MA','Above long-term trend.'],['150MA > 200MA','Uptrend structure confirmed.'],['200MA rising','Long-term trend rising ≥1 month.'],['Price > 50MA','Above short-term trend.'],['50MA > 150MA & 200MA','All MAs stacked bullishly.'],['Near 52wk high','Within 25% of high.'],['RS ≥70','Top 30% relative strength.']].map(([k,v])=>(
-                <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
-                  <span style={{color:'var(--green)',fontWeight:700,minWidth:145,flexShrink:0}}>{k}:</span>
-                  <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
-                </div>
-              ))}
-              <div style={{marginTop:8,padding:'6px 8px',background:'rgba(0,230,118,0.07)',borderRadius:3,fontSize:11,color:'var(--text3)'}}>≥5/8 = tradeable. 7-8/8 = ideal. &lt;4/8 = skip.</div>
-              <div style={{marginTop:8,fontFamily:'var(--font-mono)',fontSize:10,color:'var(--cyan)',letterSpacing:2,fontWeight:700,marginBottom:6}}>CAN SLIM QUICK CHECK</div>
-              {[['C+A','EPS ≥25% quarterly + annual growth.'],['N','New product/breakout/catalyst.'],['S+L','Volume confirms demand. RS≥70 = leader.'],['I+M','Institutional buying + BULL regime.']].map(([k,v])=>(
-                <div key={k} style={{display:'flex',gap:8,marginBottom:4,fontSize:12}}>
-                  <span style={{color:'var(--cyan)',fontWeight:700,minWidth:40,flexShrink:0}}>{k}:</span>
-                  <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+
+        {/* ════════════════════════════════════════════════════════════════════
+            SECTION 1: DAILY WORKFLOW — the complete morning-to-close routine
+            ════════════════════════════════════════════════════════════════════ */}
         {section==='workflow' && (
-          <div style={{display:'grid',gap:10}}>
-            <div style={{background:'var(--bg3)',border:'1px solid rgba(240,165,0,0.3)',borderRadius:4,padding:'8px 12px',fontSize:11,color:'var(--text2)'}}>
-              <strong style={{color:'var(--amber)'}}>Daily flow:</strong> Pulse → Sectors → Hedge check → Scanner → Setups → Stage → Trading → Journal. ~10 minutes pre-open, ~5 minutes mid-day, 5 minutes EOD.
+          <div style={{display:'grid',gap:12}}>
+            {/* Philosophy banner */}
+            <div style={{background:'rgba(240,165,0,0.06)',border:'1px solid rgba(240,165,0,0.3)',borderRadius:5,padding:'10px 14px',fontSize:12,color:'var(--text2)',lineHeight:1.5}}>
+              <strong style={{color:'var(--amber)'}}>Trading philosophy:</strong> We trade <strong>relative strength momentum</strong> — buying the strongest stocks in the strongest sectors during confirmed uptrends, and stepping aside (or hedging) when the market environment deteriorates.
+              No fundamental analysis required for swing trades. Price action + RS + regime gating IS the edge. The system enforces discipline so you don't have to rely on willpower.
             </div>
-            <div style={{display:'grid',gap:6,gridTemplateColumns:'1fr 1fr'}}>
-              {[
-                ['1. ⚡ Market Pulse','Read regime + cycle (BEAR/CAUTION/NEUTRAL/BULL) and exposure ramp (PILOT→FULL). BEAR = no longs, hedges only.'],
-                ['2. 🔄 Sectors / Industries','Sort by RS Accel. Focus top 2-3 accelerating sectors. Skip declining ones entirely.'],
-                ['3. 🛡 Hedge','Always check before adding longs. In BEAR/CAUTION the recommended hedge tells you sizing; short candidates surface stage-4 breakdowns.'],
-                ['4. 📊 Scanner','Filter by focused sectors. Sort by RS Accel (or IBD RS / Mom). Look for ★Triple + sector-leader badge + VCP. Conviction ranking happens in step 5.'],
-                ['5. 🎯 Trade Setups','Auto-generated entries with ATR stops/targets. Verify SEPA ≥5/8, Stage 2, earnings clear.'],
-                ['6. 📋 Pipeline → STAGE','Click STAGE — system sizes position (regime × beta × ATR%), runs all 6 pre-trade gates, builds bracket order.'],
-                ['7. 💼 Trading → SUBMIT','Review risk_check JSON. One-click sends limit + stop + target as bracket to Alpaca.'],
-                ['8. Auto-manage','WebSocket monitor watches every tick. Sells 1/3 at T1 (stop→breakeven), 1/3 at T2 (stop→halfway), trails final 1/3 with 8%.'],
-                ['9. 📒 Journal','Log thesis. Mid-day check Pending Scaling. EOD review Performance Attribution to learn what is paying.'],
-                ['10. 🔁 Replay (weekly)','Backtest any strategy vs SPY. Read alpha + slippage drag. Tune params, then deploy.'],
-              ].map(([step,desc])=>(
-                <div key={step} style={{padding:'6px 10px',background:'var(--bg3)',borderRadius:4,borderLeft:'2px solid var(--amber)'}}>
-                  <div style={{fontSize:12,color:'var(--text)',fontWeight:700,marginBottom:2}}>{step}</div>
-                  <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.4}}>{desc}</div>
-                </div>
-              ))}
+
+            {/* TIME BLOCK: Pre-Open (8:00-9:15 AM) */}
+            <GBlock title="PRE-MARKET ROUTINE (8:00 - 9:15 AM EST) ~15 minutes" color="var(--amber)" border="rgba(240,165,0,0.3)">
+              <div style={{display:'grid',gap:8}}>
+                {[
+                  ['Step 1','Market Pulse tab','Read the REGIME banner first — it tells you what kind of day this is. Check: (1) Regime = BULL/NEUTRAL/CAUTION/BEAR, (2) Size multiplier (1.0x/0.75x/0.5x/0x), (3) Exposure ramp stage (PILOT/HALF/THREE_QUARTER/FULL). If regime = BEAR or CAUTION, your job today is to protect capital, not find new longs.',
+                   'var(--cyan)'],
+                  ['Step 2','O\'Neil Cycle check','Still on Market Pulse. Read Distribution Day count (3+ = danger), FTD status (confirmed = green light for new buys), and Rally Day count. This is your market cycle GPS — it tells you where you are in the bull/bear cycle.',
+                   'var(--cyan)'],
+                  ['Step 3','Cross-asset dashboard','Glance at SPY/QQQ/IWM for index trend, VIX for fear level, TLT for bond flows, Yield Curve for recession signal. If VIX >25 or yield curve inverted = extra caution.',
+                   'var(--cyan)'],
+                  ['Step 4','Sectors tab','Sort by RS Accel (highest first). Note the top 2-3 accelerating sectors — these are where your next trades come from. Skip declining sectors entirely. Check if your open positions are in leading or lagging sectors.',
+                   'var(--green)'],
+                  ['Step 5','Industries tab','Drill into leading sectors. Sort industries by RS rank. The best trades come from the #1 industry within the #1 sector. Note any industry showing fresh RS acceleration.',
+                   'var(--green)'],
+                ].map(([step,where,desc,col])=>(
+                  <div key={step} style={{padding:'6px 10px',background:'var(--bg)',borderRadius:4,borderLeft:`3px solid ${col}`}}>
+                    <div style={{display:'flex',gap:8,alignItems:'baseline',marginBottom:2}}>
+                      <span style={{fontSize:11,color:col,fontWeight:800,fontFamily:'var(--font-mono)'}}>{step}</span>
+                      <span style={{fontSize:12,color:'var(--text)',fontWeight:700}}>{where}</span>
+                    </div>
+                    <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5}}>{desc}</div>
+                  </div>
+                ))}
+              </div>
+            </GBlock>
+
+            {/* TIME BLOCK: Trade Discovery (9:15-9:30 AM) */}
+            <GBlock title="TRADE DISCOVERY (9:15 - 9:30 AM) ~15 minutes" color="var(--green)" border="rgba(0,230,118,0.3)">
+              <div style={{display:'grid',gap:8}}>
+                {[
+                  ['Step 6','Scanner tab','Run RS Scanner. Filter by your leading sectors. Sort by RS Accel to find stocks gaining strength fastest. Look for: (1) RS Line New High badge = earliest institutional signal, (2) Triple badge (RS>70 + Accel + Mom>60) = aligned setup, (3) VCP badge = coiling spring ready to break out. Expand any interesting row to see ATR levels.',
+                   'var(--amber)'],
+                  ['Step 7','Trade Setups tab','System auto-generates today\'s conviction-ranked picks with pre-calculated entry, stop (1.5x ATR), and targets (T1=2.5x ATR, T2=4x ATR). Review the top 5-7 picks. Check: SEPA score >= 5/8, Stage 2 uptrend, no earnings within 14 days. The conviction score has already factored in RS, momentum, sector rotation, accumulation, and multi-timeframe alignment.',
+                   'var(--amber)'],
+                  ['Step 8','Decision: trade or wait','If regime = BULL and you have heat room (<8%), pick 1-2 highest conviction setups. If regime = NEUTRAL, only take the single best setup at half size. If CAUTION/BEAR, build your watchlist but do NOT enter new longs.',
+                   'var(--amber)'],
+                ].map(([step,where,desc,col])=>(
+                  <div key={step} style={{padding:'6px 10px',background:'var(--bg)',borderRadius:4,borderLeft:`3px solid ${col}`}}>
+                    <div style={{display:'flex',gap:8,alignItems:'baseline',marginBottom:2}}>
+                      <span style={{fontSize:11,color:col,fontWeight:800,fontFamily:'var(--font-mono)'}}>{step}</span>
+                      <span style={{fontSize:12,color:'var(--text)',fontWeight:700}}>{where}</span>
+                    </div>
+                    <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5}}>{desc}</div>
+                  </div>
+                ))}
+              </div>
+            </GBlock>
+
+            {/* TIME BLOCK: Execution (9:30-10:00 AM) */}
+            <GBlock title="TRADE EXECUTION (9:30 - 10:00 AM) ~10 minutes" color="var(--purple)" border="rgba(187,134,252,0.3)">
+              <div style={{display:'grid',gap:8}}>
+                {[
+                  ['Step 9','Pipeline tab: STAGE','Click STAGE on your chosen setup. The system automatically: (1) calculates position size using risk formula (regime x beta x ATR volatility adjustments), (2) runs all 6 pre-trade gates (heat, sector, correlation, earnings, regime, position cap), (3) builds a bracket order (limit entry + stop-loss + profit targets). Review the risk_check JSON — every gate shows green/red.',
+                   'var(--purple)'],
+                  ['Step 10','Trading tab: SUBMIT','Review final order. One-click sends the full bracket to Alpaca: limit entry + stop-loss OCO + target exits. The WebSocket monitor takes over from here — it watches every tick and auto-manages your scaling pyramid (sell 1/3 at T1, move stop to breakeven, sell 1/3 at T2, trail final 1/3 with 8%).',
+                   'var(--purple)'],
+                ].map(([step,where,desc,col])=>(
+                  <div key={step} style={{padding:'6px 10px',background:'var(--bg)',borderRadius:4,borderLeft:`3px solid ${col}`}}>
+                    <div style={{display:'flex',gap:8,alignItems:'baseline',marginBottom:2}}>
+                      <span style={{fontSize:11,color:col,fontWeight:800,fontFamily:'var(--font-mono)'}}>{step}</span>
+                      <span style={{fontSize:12,color:'var(--text)',fontWeight:700}}>{where}</span>
+                    </div>
+                    <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5}}>{desc}</div>
+                  </div>
+                ))}
+              </div>
+            </GBlock>
+
+            {/* TIME BLOCK: Mid-Day (12:00-12:15 PM) */}
+            <GBlock title="MID-DAY CHECK (12:00 PM) ~5 minutes" color="var(--cyan)" border="rgba(0,212,255,0.3)">
+              <div style={{display:'grid',gap:8}}>
+                {[
+                  ['Step 11','Trading tab','Check open positions. Are any approaching T1 (scale-out level)? Any stop alerts triggered? If AUTO_SCALE_EXECUTE is on, the system handles this. If manual, execute any pending scaling actions.',
+                   'var(--cyan)'],
+                  ['Step 12','Market Pulse (quick glance)','Has regime changed since open? If distribution day occurred or VIX spiked, the regime may have downgraded. If regime shifts to CAUTION mid-day, the system will force-exit longs if running Regime Adaptive strategy.',
+                   'var(--cyan)'],
+                ].map(([step,where,desc,col])=>(
+                  <div key={step} style={{padding:'6px 10px',background:'var(--bg)',borderRadius:4,borderLeft:`3px solid ${col}`}}>
+                    <div style={{display:'flex',gap:8,alignItems:'baseline',marginBottom:2}}>
+                      <span style={{fontSize:11,color:col,fontWeight:800,fontFamily:'var(--font-mono)'}}>{step}</span>
+                      <span style={{fontSize:12,color:'var(--text)',fontWeight:700}}>{where}</span>
+                    </div>
+                    <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5}}>{desc}</div>
+                  </div>
+                ))}
+              </div>
+            </GBlock>
+
+            {/* TIME BLOCK: End of Day (3:45-4:15 PM) */}
+            <GBlock title="END OF DAY REVIEW (3:45 - 4:15 PM) ~15 minutes" color="var(--text2)" border="var(--border)">
+              <div style={{display:'grid',gap:8}}>
+                {[
+                  ['Step 13','Trading tab: Sync','Click Sync Trades to pull all filled orders from Alpaca. This auto-closes any positions that were sold and logs exit prices, P&L, and R-multiples. Review any trades marked needs_review and set proper exit reasons (target_hit, stopped_out, etc.).',
+                   'var(--text2)'],
+                  ['Step 14','Journal tab','Review today\'s closed trades. Check the grade (A/B/C/D/F) — it scores your process, not your outcome. A "lucky win" (profit but bad process) should concern you more than an "unlucky loss" (loss but good process). Look at your weakest scoring area and address it tomorrow.',
+                   'var(--text2)'],
+                  ['Step 15','Analytics tab','Check Return Decomposition: how much P&L was Market (Beta) vs Stock Alpha? You want alpha >60% — otherwise you\'re paying for SPY exposure with extra risk. Check execution cost drag to ensure friction isn\'t eating your edge.',
+                   'var(--text2)'],
+                ].map(([step,where,desc,col])=>(
+                  <div key={step} style={{padding:'6px 10px',background:'var(--bg)',borderRadius:4,borderLeft:`3px solid ${col}`}}>
+                    <div style={{display:'flex',gap:8,alignItems:'baseline',marginBottom:2}}>
+                      <span style={{fontSize:11,color:col,fontWeight:800,fontFamily:'var(--font-mono)'}}>{step}</span>
+                      <span style={{fontSize:12,color:'var(--text)',fontWeight:700}}>{where}</span>
+                    </div>
+                    <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5}}>{desc}</div>
+                  </div>
+                ))}
+              </div>
+            </GBlock>
+
+            {/* TIME BLOCK: Weekly */}
+            <GBlock title="WEEKLY REVIEW (Weekend) ~30 minutes" color="var(--gold)" border="rgba(255,215,0,0.3)">
+              <div style={{display:'grid',gap:8}}>
+                {[
+                  ['Step 16','Replay tab','Backtest your active strategy against SPY over the last 3-6 months. Compare Sharpe ratios, max drawdown, and alpha. If the strategy underperforms SPY on a risk-adjusted basis, investigate why. Check signal decay analysis to confirm your optimal holding period.',
+                   'var(--gold)'],
+                  ['Step 17','Analytics: Breadth','Review Composite Breadth Score trend over the past 30 days. Is breadth expanding (more stocks participating in the rally) or contracting (fewer stocks holding up the index)? Breadth divergences — SPY at highs but breadth fading — precede corrections by 2-8 weeks.',
+                   'var(--gold)'],
+                  ['Step 18','Journal: Patterns','Check monthly P&L curve, win/loss streaks, day-of-week performance, exit reason breakdown, and RS band analysis. Are you more profitable entering at RS 80+ or RS 70-79? Which exit reasons produce the best R-multiples? Use data to refine your edge.',
+                   'var(--gold)'],
+                ].map(([step,where,desc,col])=>(
+                  <div key={step} style={{padding:'6px 10px',background:'var(--bg)',borderRadius:4,borderLeft:`3px solid ${col}`}}>
+                    <div style={{display:'flex',gap:8,alignItems:'baseline',marginBottom:2}}>
+                      <span style={{fontSize:11,color:col,fontWeight:800,fontFamily:'var(--font-mono)'}}>{step}</span>
+                      <span style={{fontSize:12,color:'var(--text)',fontWeight:700}}>{where}</span>
+                    </div>
+                    <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5}}>{desc}</div>
+                  </div>
+                ))}
+              </div>
+            </GBlock>
+
+            {/* Decision tree summary */}
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:12}}>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:8}}>DAILY DECISION TREE (cheat sheet)</div>
+              <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.7,fontFamily:'var(--font-mono)'}}>
+                <div>1. Regime = BEAR/CORRECTION? <span style={{color:'var(--red)',fontWeight:700}}>&#8594; STOP. No new longs. Review hedge tab. Build watchlist only.</span></div>
+                <div>2. Regime = CAUTION? <span style={{color:'var(--amber)',fontWeight:700}}>&#8594; Half-size only. Only best setup (conviction >80). Tighter stops.</span></div>
+                <div>3. Portfolio heat >= 8%? <span style={{color:'var(--red)',fontWeight:700}}>&#8594; STOP. No new positions until heat drops.</span></div>
+                <div>4. Drawdown > -5%? <span style={{color:'var(--red)',fontWeight:700}}>&#8594; REDUCE. Cut weakest positions. Tighten all stops.</span></div>
+                <div>5. Top setup conviction > 70? <span style={{color:'var(--green)',fontWeight:700}}>&#8594; STAGE + SUBMIT. System handles sizing and risk gates.</span></div>
+                <div>6. No setups pass gates? <span style={{color:'var(--text3)',fontWeight:700}}>&#8594; DO NOTHING. Cash is a position. Wait for better setups.</span></div>
+              </div>
             </div>
           </div>
         )}
+
+        {/* ════════════════════════════════════════════════════════════════════
+            SECTION 2: TRADE CHECKLISTS — Swing vs Position trade types
+            ════════════════════════════════════════════════════════════════════ */}
+        {section==='setup' && (
+          <div style={{display:'grid',gap:12}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              <GBlock title="SWING TRADE (2-10 day hold)" color="var(--cyan)" border="rgba(0,212,255,0.25)">
+                {[['Regime','BULL or NEUTRAL. VIX < 25. SPY above 50MA. Exposure ramp >= HALF.'],
+                  ['RS Rank','>=70, Accel >+5 (strengthening). Avoid RS >95 (overcrowded).'],
+                  ['RS Line','At 52wk high = strongest signal. Stock outperforming SPY.'],
+                  ['Stage','Stage 2 uptrend ONLY. Stage 3/4 = no longs ever.'],
+                  ['SEPA','>=5/8 criteria met. All key MAs aligned bullishly.'],
+                  ['Momentum','SwingMom >=55. Below 40 = stalling, skip.'],
+                  ['VCP','2+ volatility contractions. Breakout on volume surge.'],
+                  ['Price','Within 5-7% of 52wk high. Tight base preferred.'],
+                  ['Volume','>=1.5x avg on breakout day = institutional buying.'],
+                  ['Stop','1.5x ATR below entry. If stop distance >5% of price, skip.'],
+                  ['Targets','T1=2.5x ATR (sell 1/3), T2=4x ATR (sell 1/3), trail last 1/3.'],
+                  ['Size','1.5% risk / (entry - stop) = shares. Adjusted by beta + vol.'],
+                  ['Earnings','NEVER hold swings through earnings. Exit before report.'],
+                ].map(([k,v])=>(
+                  <GRow key={k} label={k+':'} val={v} color="var(--cyan)"/>
+                ))}
+              </GBlock>
+              <GBlock title="POSITION TRADE (3-8 week hold)" color="var(--green)" border="rgba(0,230,118,0.25)">
+                {[['Regime','BULL only. SPY above 200MA. VIX <20. Exposure ramp = FULL.'],
+                  ['RS Rank','>=70 AND rising for 4+ consecutive weeks.'],
+                  ['SEPA','>=6/8. All MAs stacked: 50 > 150 > 200, all rising.'],
+                  ['Stage','Stage 2 confirmed: above RISING 150MA and 200MA.'],
+                  ['Conviction','>= 80. Multi-timeframe alignment (daily/weekly/monthly).'],
+                  ['Accumulation','U/D volume ratio >= 1.2 (institutional buying confirmed).'],
+                  ['Entry','Pullback to rising 50MA in uptrend = buy-the-dip entry.'],
+                  ['Stop','2x ATR below 50MA. Wider stop = longer hold timeframe.'],
+                  ['Targets','T1=4x ATR, T2=6x ATR. Trail final 1/3 with 50MA.'],
+                  ['Earnings','OK to hold through IF position trimmed to 50% pre-report.'],
+                  ['Max Size','Max 10% of account per single position trade.'],
+                ].map(([k,v])=>(
+                  <GRow key={k} label={k+':'} val={v} color="var(--green)"/>
+                ))}
+              </GBlock>
+            </div>
+
+            {/* Strategy comparison */}
+            <GBlock title="STRATEGY SELECTION GUIDE" color="var(--amber)" border="rgba(240,165,0,0.25)">
+              <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5,marginBottom:8}}>
+                AlphaHunter offers 6 built-in strategies. Each has different entry signals and optimal conditions. <strong>Recommendation: use "Regime Adaptive"</strong> — it auto-switches based on market regime so you don't need to manually interpret conditions.
+              </div>
+              <div style={{overflowX:'auto'}}>
+                <table style={{width:'100%',fontSize:11,borderCollapse:'collapse'}}>
+                  <thead><tr style={{borderBottom:'1px solid var(--border)'}}>
+                    {['Strategy','Entry Signal','Best Regime','Optimal Hold','When to Use'].map(h=>(
+                      <th key={h} style={{textAlign:'left',padding:'4px 8px',color:'var(--text3)',fontFamily:'var(--font-mono)',fontSize:10,letterSpacing:1}}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {[
+                      ['RS Momentum','RS >= 80 + Mom >= 60','BULL','10 days','Default swing strategy. Buys the strongest stocks.'],
+                      ['RS Line New High','RS >= 75 + RS Line at 52wk high','BULL/NEUTRAL','10-20 days','Earliest signal. Stock outperforming SPY at new extremes.'],
+                      ['Conviction Score','Top-N by multi-factor score','BULL/NEUTRAL','10-20 days','Composite ranking. Same as Daily Picks. Best all-rounder.'],
+                      ['VCP Breakout','RS >= 70 + VCP pattern forming','BULL','5-15 days','Minervini-style coiling spring. Needs volume confirmation.'],
+                      ['SEPA Trend','SEPA >= 6 + RS >= 70','BULL/NEUTRAL','20-30 days','Position-style. Longer hold using Minervini trend template.'],
+                      ['Regime Adaptive','Auto-selects per regime','ALL','Varies','RS Momentum in BULL, SEPA in NEUTRAL, cash in CAUTION/BEAR.'],
+                    ].map(([s,entry,regime,hold,use])=>(
+                      <tr key={s} style={{borderBottom:'1px solid var(--border)'}}>
+                        <td style={{padding:'4px 8px',color:'var(--amber)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{s}</td>
+                        <td style={{padding:'4px 8px',color:'var(--text2)'}}>{entry}</td>
+                        <td style={{padding:'4px 8px',color:regime.includes('ALL')?'var(--green)':'var(--text2)'}}>{regime}</td>
+                        <td style={{padding:'4px 8px',color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{hold}</td>
+                        <td style={{padding:'4px 8px',color:'var(--text2)'}}>{use}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </GBlock>
+
+            {/* SEPA */}
+            <GBlock title="SEPA TREND TEMPLATE (Minervini) — 8-Point Checklist" color="var(--green)" border="rgba(0,230,118,0.2)">
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+                {[['1. Price > 150MA','Above medium-term trend'],['2. Price > 200MA','Above long-term trend'],['3. 150MA > 200MA','Uptrend structure confirmed'],['4. 200MA rising 1mo+','Long-term trend rising'],['5. Price > 50MA','Above short-term trend'],['6. 50MA > 150MA & 200MA','All MAs stacked bullishly'],['7. Within 25% of 52wk high','Not extended from base'],['8. RS Rank >= 70','Top 30% relative strength']].map(([k,v])=>(
+                  <div key={k} style={{display:'flex',gap:6,fontSize:11}}>
+                    <span style={{color:'var(--green)',fontWeight:600,minWidth:160,flexShrink:0}}>{k}</span>
+                    <span style={{color:'var(--text3)'}}>{v}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{marginTop:8,padding:'5px 8px',background:'rgba(0,230,118,0.07)',borderRadius:3,fontSize:11,color:'var(--text3)'}}>
+                <strong>7-8/8 = ideal setup.</strong> 5-6/8 = tradeable with higher conviction signals. &lt;5/8 = skip.
+              </div>
+            </GBlock>
+          </div>
+        )}
+
+        {/* ════════════════════════════════════════════════════════════════════
+            SECTION 3: SIGNALS & SCORING — what every badge and number means
+            ════════════════════════════════════════════════════════════════════ */}
+        {section==='signals' && (
+          <div style={{display:'grid',gap:12}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              <GBlock title="SCANNER SIGNALS (what the badges mean)" color="var(--amber)" border="var(--border)">
+                {[['IBD RS (1-99)','Percentile rank vs full universe. RS 85 = stock outperforms 85% of all stocks over the last 12 months. The single most predictive metric for momentum.'],
+                  ['Sector RS','Percentile within sector peer group. >=90 = sector leader (+4 conviction bonus). Helps find the best stock WITHIN the best sector.'],
+                  ['RS Accel','RS rank change vs 28 days ago. Positive = strengthening. Sort descending to find stocks GAINING momentum fastest — these are tomorrow\'s leaders.'],
+                  ['RS Line New High','Price/SPY ratio at 52wk high. Stock outperforming the market at new extremes. IBD\'s #1 early institutional signal.'],
+                  ['SwingMom','Short-term velocity score (5/10-day ROC), 0-99. >=60 = fast mover. 45-60 = ok. <40 = stalling or reversing.'],
+                  ['Triple','RS>=70 + Accel>0 + Mom>=60. All three aligned = strong candidate. This is your daily long candidate filter.'],
+                  ['EMRG (Emerging)','RS 55-70 + Accel>+5. Not yet a leader but gaining strength fast. Add to watchlist and wait for RS to cross 70.'],
+                  ['VCP','Volatility Contraction Pattern. 2+ shrinking price ranges. Breakout on volume = Minervini spring entry.'],
+                  ['Vol Surge','Volume >2x daily average near 52wk high. Institutional buying confirmation.'],
+                  ['PEAD','Post-Earnings Acceleration Drift. Gap >=3% on earnings + holding gains = institutional accumulation.'],
+                ].map(([k,v])=>(
+                  <div key={k} style={{marginBottom:6,fontSize:11,borderBottom:'1px solid var(--border)',paddingBottom:5}}>
+                    <div style={{color:'var(--amber)',fontWeight:700,fontFamily:'var(--font-mono)',fontSize:11,marginBottom:2}}>{k}</div>
+                    <div style={{color:'var(--text2)',lineHeight:1.4}}>{v}</div>
+                  </div>
+                ))}
+              </GBlock>
+
+              <div style={{display:'grid',gap:12}}>
+                <GBlock title="CONVICTION SCORE FORMULA (0-99)" color="var(--purple)" border="rgba(187,134,252,0.25)">
+                  <div style={{fontSize:11,color:'var(--text3)',marginBottom:6,lineHeight:1.4}}>Multi-factor composite that ranks every stock daily. Higher = more factors aligned. The Trade Setups tab sorts by this score.</div>
+                  <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text2)',lineHeight:1.8,background:'var(--bg)',padding:8,borderRadius:3}}>
+                    <div><span style={{color:'var(--cyan)'}}>BASE</span> = RS_Rank x 0.25</div>
+                    <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+ Sector_RS x 0.10</div>
+                    <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+ RS_Accel x 1.25 <span style={{color:'var(--text3)'}}>(capped at 20)</span></div>
+                    <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+ SwingMom x 0.20</div>
+                    <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+ SEPA_Score x 2.5 <span style={{color:'var(--text3)'}}>(highest weight)</span></div>
+                    <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+ Earnings_Drift x 0.10</div>
+                    <div style={{marginTop:4}}><span style={{color:'var(--green)'}}>BONUSES</span></div>
+                    <div>&nbsp;&nbsp;RS Line New High: <span style={{color:'var(--green)'}}>+8</span>&nbsp;&nbsp;VCP: <span style={{color:'var(--green)'}}>+6</span></div>
+                    <div>&nbsp;&nbsp;Vol Surge: <span style={{color:'var(--green)'}}>+5</span>&nbsp;&nbsp;PEAD strong: <span style={{color:'var(--green)'}}>+6</span></div>
+                    <div>&nbsp;&nbsp;Sector leader: <span style={{color:'var(--green)'}}>+4</span>&nbsp;&nbsp;Sector overweight: <span style={{color:'var(--green)'}}>+5</span></div>
+                    <div>&nbsp;&nbsp;3/3 timeframe align: <span style={{color:'var(--green)'}}>+8</span>&nbsp;&nbsp;Accumulating: <span style={{color:'var(--green)'}}>+6</span></div>
+                    <div style={{marginTop:4}}><span style={{color:'var(--red)'}}>PENALTIES</span></div>
+                    <div>&nbsp;&nbsp;Distribution: <span style={{color:'var(--red)'}}>-8</span>&nbsp;&nbsp;Earnings risk: <span style={{color:'var(--red)'}}>-15</span></div>
+                    <div>&nbsp;&nbsp;>15% from high: <span style={{color:'var(--red)'}}>-10</span>&nbsp;&nbsp;Sector underweight: <span style={{color:'var(--red)'}}>-4</span></div>
+                  </div>
+                </GBlock>
+
+                <GBlock title="TRADE GRADING (A/B/C/D/F)" color="var(--text2)" border="var(--border)">
+                  <div style={{fontSize:11,color:'var(--text3)',marginBottom:6,lineHeight:1.4}}>Scores your <strong>process quality</strong>, not outcome. A losing trade with perfect process gets an A. A winning trade with bad process gets a D.</div>
+                  <div style={{display:'grid',gap:3}}>
+                    {[['Entry Quality','25 pts','RS>=70 (+8), Mom>=60 (+5), SEPA>=5 (+7), System signal (+5)'],
+                      ['Regime Compliance','20 pts','Long in BULL=20, NEUTRAL=15, CAUTION=5, BEAR=0'],
+                      ['Position Sizing','20 pts','Followed rules=15, Heat<=8% (+5)'],
+                      ['Exit Quality','25 pts','Hit target=25, Stopped near plan=20, Manual+profit=10'],
+                      ['Risk Management','10 pts','Stop 1-5%=5, R-multiple>=2R=5'],
+                    ].map(([k,pts,detail])=>(
+                      <div key={k} style={{display:'flex',gap:6,fontSize:10,padding:'2px 0'}}>
+                        <span style={{color:'var(--text)',fontWeight:600,minWidth:115,flexShrink:0}}>{k}</span>
+                        <span style={{color:'var(--amber)',fontFamily:'var(--font-mono)',minWidth:38,flexShrink:0}}>{pts}</span>
+                        <span style={{color:'var(--text3)'}}>{detail}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{marginTop:6,fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>
+                    A: 85-100 | B: 70-84 | C: 55-69 | D: 40-54 | F: &lt;40
+                  </div>
+                </GBlock>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ════════════════════════════════════════════════════════════════════
+            SECTION 4: RISK & SIZING — position sizing, portfolio heat, circuit breakers
+            ════════════════════════════════════════════════════════════════════ */}
         {section==='risk' && (
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-            <div style={{background:'var(--bg3)',border:'1px solid rgba(255,61,87,0.25)',borderRadius:4,padding:12}}>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--red)',letterSpacing:2,fontWeight:700,marginBottom:8}}>PRE-TRADE GATES</div>
-              {[
-                ['Portfolio Heat','Total open risk < 8% of account.'],
-                ['Sector Limit','Max 25% in one sector. Max 3 correlated positions.'],
-                ['Correlation','Pairs >0.8 flagged. View in Portfolio → Correlations.'],
-                ['Earnings','No swings within 10 days of earnings.'],
-                ['Regime','BEAR = blocked. CAUTION = 50% size. BULL = full.'],
-                ['Position Cap','Single position max 20% of account.'],
-                ['Drawdown','Circuit breaker: 10% DD blocks new entries.'],
-              ].map(([k,v])=>(
-                <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
-                  <span style={{color:'var(--red)',fontWeight:700,minWidth:100,flexShrink:0}}>{k}:</span>
-                  <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
-                </div>
-              ))}
-            </div>
-            <div style={{background:'var(--bg3)',border:'1px solid rgba(0,212,255,0.25)',borderRadius:4,padding:12}}>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--cyan)',letterSpacing:2,fontWeight:700,marginBottom:8}}>REGIME RULES</div>
-              {[
-                ['BULL','Full position size. All setups valid. Trail winners.'],
-                ['CAUTION','Half position size. Only ★Triple + S2 setups. Tighter stops.'],
-                ['BEAR','NO new longs. Build watchlist. Rising RS in BEAR = first buys when regime shifts.'],
-              ].map(([k,v])=>(
-                <div key={k} style={{display:'flex',gap:8,marginBottom:6,fontSize:12}}>
-                  <span style={{color:k==='BULL'?'var(--green)':k==='CAUTION'?'var(--amber)':'var(--red)',fontWeight:700,minWidth:70,flexShrink:0}}>{k}:</span>
-                  <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
-                </div>
-              ))}
-              <div style={{marginTop:10,fontFamily:'var(--font-mono)',fontSize:10,color:'var(--green)',letterSpacing:2,fontWeight:700,marginBottom:6}}>POSITION SIZING FORMULA</div>
-              <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5,marginBottom:6}}>
-                <strong>shares</strong> = (1% risk ÷ (entry−stop)) × regime × <strong>beta_mult</strong> × <strong>vol_mult</strong><br/>
-                <strong>beta_mult</strong> = 1/β clamped [0.4–1.5] (high-β = smaller). <strong>vol_mult</strong> = 2/ATR% clamped [0.33–1.0] (volatile = smaller). ATR%≤2 = full size.
+          <div style={{display:'grid',gap:12}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              <GBlock title="PRE-TRADE GATES (all must pass)" color="var(--red)" border="rgba(255,61,87,0.25)">
+                <div style={{fontSize:11,color:'var(--text3)',marginBottom:8,lineHeight:1.4}}>Every trade passes through 6 automated gates before it can be submitted. If ANY gate fails, the trade is blocked.</div>
+                {[
+                  ['1. Portfolio Heat','Total open dollar risk must be < 8% of account. Heat = sum of (shares x (entry - stop)) for all positions. Exposure ramp may reduce this to 2-6% in early-cycle stages.'],
+                  ['2. Sector Limit','Max 25% of account value in any single sector. Max 3 positions in the same industry. Prevents concentrated bets.'],
+                  ['3. Correlation','Flags pairs with >0.8 return correlation. If you already own NVDA and AMD, the system warns that adding AVGO is essentially tripling the same bet.'],
+                  ['4. Earnings Blackout','No new swing entries within 10 days of earnings. Binary risk is unhedgeable and violates the edge (momentum, not event-driven).'],
+                  ['5. Regime Gate','BEAR = all longs blocked (sizeMultiplier = 0). CAUTION = half size (0.5x). NEUTRAL = 75%. BULL = full size (1.0x).'],
+                  ['6. Position Cap','Single position max 20% of account. Prevents one stock from dominating P&L.'],
+                ].map(([k,v])=>(
+                  <div key={k} style={{marginBottom:6,fontSize:11}}>
+                    <span style={{color:'var(--red)',fontWeight:700}}>{k}: </span>
+                    <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
+                  </div>
+                ))}
+              </GBlock>
+              <div style={{display:'grid',gap:12}}>
+                <GBlock title="POSITION SIZING FORMULA" color="var(--cyan)" border="rgba(0,212,255,0.25)">
+                  <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--text2)',lineHeight:1.8,background:'var(--bg)',padding:8,borderRadius:3}}>
+                    <div><span style={{color:'var(--cyan)'}}>dollarRisk</span> = accountSize x riskPerTrade%</div>
+                    <div><span style={{color:'var(--cyan)'}}>baseShares</span> = dollarRisk / (entryPrice - stopPrice)</div>
+                    <div style={{marginTop:4}}><span style={{color:'var(--text3)'}}>// Adjustments:</span></div>
+                    <div><span style={{color:'var(--amber)'}}>betaMult</span> = 1/beta, clamped [0.4 - 1.5]</div>
+                    <div style={{color:'var(--text3)'}}>&nbsp;&nbsp;beta 1.5 = 0.67x smaller, beta 0.7 = 1.43x larger</div>
+                    <div><span style={{color:'var(--amber)'}}>volMult</span> = 2/ATR%, clamped [0.33 - 1.0]</div>
+                    <div style={{color:'var(--text3)'}}>&nbsp;&nbsp;ATR 2% = full size, ATR 4% = half, ATR 6% = 1/3</div>
+                    <div style={{marginTop:4}}><span style={{color:'var(--green)'}}>finalShares</span> = baseShares x regimeMult x betaMult x volMult</div>
+                    <div style={{color:'var(--text3)'}}>&nbsp;&nbsp;capped at maxPositionPct% of account</div>
+                  </div>
+                </GBlock>
+                <GBlock title="DRAWDOWN CIRCUIT BREAKERS" color="var(--red)" border="rgba(255,61,87,0.2)">
+                  <div style={{display:'grid',gap:4}}>
+                    {[
+                      ['-3% from peak','TIGHTEN — move all stops to breakeven where possible','var(--amber)'],
+                      ['-5% from peak','REDUCE 50% — cut weakest positions, only keep cleanest setups','var(--red)'],
+                      ['-8% from peak','REDUCE 75% — exit most positions, preserve capital','var(--red)'],
+                      ['-10% from peak','FULL CASH — close everything. No new entries until drawdown recovers','#ff3d57'],
+                    ].map(([lvl,action,col])=>(
+                      <div key={lvl} style={{display:'flex',gap:8,fontSize:11,padding:'3px 0'}}>
+                        <span style={{color:col,fontWeight:700,fontFamily:'var(--font-mono)',minWidth:95,flexShrink:0}}>{lvl}</span>
+                        <span style={{color:'var(--text2)'}}>{action}</span>
+                      </div>
+                    ))}
+                  </div>
+                </GBlock>
+                <GBlock title="SCALING PYRAMID (auto-managed)" color="var(--green)" border="rgba(0,230,118,0.2)">
+                  <div style={{display:'grid',gap:3,fontSize:11}}>
+                    <div style={{color:'var(--text2)'}}><span style={{color:'var(--green)',fontWeight:700}}>T1 hit (2.5x ATR):</span> Sell 1/3, move stop to breakeven. Locks in partial profit, eliminates risk on remainder.</div>
+                    <div style={{color:'var(--text2)'}}><span style={{color:'var(--green)',fontWeight:700}}>T2 hit (4x ATR):</span> Sell 1/3, move stop to halfway point. Activate 8% trailing stop on final third.</div>
+                    <div style={{color:'var(--text2)'}}><span style={{color:'var(--green)',fontWeight:700}}>Final 1/3:</span> Trail with 8% close-based stop OR exit if price drops below 50MA. Lets winners run.</div>
+                  </div>
+                </GBlock>
               </div>
-              <div style={{marginTop:6,fontFamily:'var(--font-mono)',fontSize:10,color:'var(--green)',letterSpacing:2,fontWeight:700,marginBottom:6}}>SCALING PYRAMID (auto)</div>
-              <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5}}>
-                Sell 1/3 at T1 → stop to breakeven. Sell 1/3 at T2 → stop to halfway + 8% trail activates. Trail final 1/3 with 8% close trail. WebSocket monitor applies live.
-              </div>
-              <div style={{marginTop:10,fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:6}}>ALERTS</div>
-              {[
-                ['Stop alerts','Auto-created with every trade. No setup needed.'],
-                ['Price alerts','Set from any stock row. Fires when crossed.'],
-                ['Delivery','In-app + webhook (Slack/Discord). Optional auto-sell.'],
-              ].map(([k,v])=>(
-                <div key={k} style={{display:'flex',gap:8,marginBottom:4,fontSize:12}}>
-                  <span style={{color:'var(--amber)',fontWeight:700,minWidth:80,flexShrink:0}}>{k}:</span>
-                  <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
-                </div>
-              ))}
             </div>
+
+            {/* Regime rules */}
+            <GBlock title="REGIME RULES & EXPOSURE RAMP (O'Neil graduated exposure)" color="var(--amber)" border="rgba(240,165,0,0.2)">
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+                <div>
+                  <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text3)',letterSpacing:1,marginBottom:6}}>MARKET REGIMES</div>
+                  {[
+                    ['BULL / RISK ON','SPY > 50MA & 200MA, VIX < 18','1.0x','Full deploy. All strategies active.','var(--green)'],
+                    ['NEUTRAL','Mixed signals, VIX 18-25','0.75x','3/4 size. Favor quality (SEPA, conviction).','var(--text2)'],
+                    ['CAUTION','SPY < 50MA or VIX 25-35','0.50x','Half size. Only best setup. Tighten all stops.','var(--amber)'],
+                    ['BEAR / HIGH RISK','SPY < 200MA or VIX > 35','0.0x','NO new longs. Hedges/shorts only. Cash is king.','var(--red)'],
+                  ].map(([r,cond,mult,action,col])=>(
+                    <div key={r} style={{marginBottom:6,fontSize:11,borderBottom:'1px solid var(--border)',paddingBottom:4}}>
+                      <div style={{color:col,fontWeight:700,fontFamily:'var(--font-mono)'}}>{r} <span style={{color:'var(--text3)',fontWeight:400}}>({mult})</span></div>
+                      <div style={{color:'var(--text3)',fontSize:10}}>{cond}</div>
+                      <div style={{color:'var(--text2)',marginTop:1}}>{action}</div>
+                    </div>
+                  ))}
+                </div>
+                <div>
+                  <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text3)',letterSpacing:1,marginBottom:6}}>O'NEIL EXPOSURE RAMP (how fast to deploy capital after correction)</div>
+                  {[
+                    ['PILOT','2% max heat','Rally days 1-3. FTD not confirmed yet. Test with 1 small position.','var(--text3)'],
+                    ['HALF','4% max heat','Rally days 4-7. <=1 distribution day. Add a second position.','var(--amber)'],
+                    ['THREE_QUARTER','6% max heat','Rally days 8-15. <=2 dist days. SPY above 50MA. Add third.','var(--cyan)'],
+                    ['FULL','8% max heat','Sustained uptrend. SPY > 50MA & 200MA. <=2 dist days. Full deploy.','var(--green)'],
+                    ['REDUCED','4% max heat','3+ distribution days. Market weakening. Scale back to half.','var(--red)'],
+                  ].map(([lvl,heat,when,col])=>(
+                    <div key={lvl} style={{marginBottom:5,fontSize:11,borderBottom:'1px solid var(--border)',paddingBottom:4}}>
+                      <div style={{display:'flex',gap:8}}>
+                        <span style={{color:col,fontWeight:700,fontFamily:'var(--font-mono)',minWidth:100}}>{lvl}</span>
+                        <span style={{color:'var(--amber)',fontFamily:'var(--font-mono)',minWidth:70}}>{heat}</span>
+                      </div>
+                      <div style={{color:'var(--text3)',fontSize:10,marginTop:1}}>{when}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </GBlock>
           </div>
         )}
+
+        {/* ════════════════════════════════════════════════════════════════════
+            SECTION 5: TOOL MAP — every tab explained
+            ════════════════════════════════════════════════════════════════════ */}
         {section==='tools' && (
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:2,fontWeight:700,marginBottom:8}}>RESEARCH TABS</div>
-              {[
-                ['⚡ Market Pulse','Regime (BULL/CAUTION/BEAR) + cycle + exposure ramp. FTD tracker.'],
-                ['🔄 Sectors','Sector RS ranks + accel. Rotation view.'],
-                ['🏭 Industries','Industry RS — leading groups within sectors.'],
-                ['📊 Scanner','Full universe scan. Filter by sector, sort by RS Accel / IBD RS / Mom.'],
-                ['🎯 Trade Setups','Auto-built entry/stop/target from ATR per candidate.'],
-                ['👁 Watchlist','Manual follow list. Tracks RS deltas daily.'],
-              ].map(([k,v])=>(
-                <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
-                  <span style={{color:'var(--amber)',fontWeight:700,minWidth:110,flexShrink:0}}>{k}</span>
-                  <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
+          <div style={{display:'grid',gap:12}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              <GBlock title="RESEARCH & DISCOVERY" color="var(--amber)" border="var(--border)">
+                {[
+                  ['Market Pulse','Your starting point every day. Shows regime (BULL/CAUTION/BEAR), O\'Neil cycle stage, exposure ramp, cross-asset dashboard (SPY/VIX/bonds/gold/yields), and sector leaders/laggards. Make no decisions before reading this.'],
+                  ['Sectors','11 GICS sectors ranked by RS with acceleration delta. Identifies sector rotation — money flowing from one sector to another. Top 2-3 accelerating sectors = where your trades come from.'],
+                  ['Industries','Granular industry-level RS within each sector. The #1 industry in the #1 sector produces the best-performing stocks. Sort by RS Accel.'],
+                  ['Scanner','Full universe RS scan. Filter by sector, sort by any metric. Shows every signal badge (Triple, RS Line High, VCP, Emerging, Vol Surge). Expand any row for ATR trade levels.'],
+                  ['Trade Setups','System-generated daily picks ranked by conviction score with pre-calculated entry/stop/target levels. Includes Top 7 conviction history (365-day backtest). This is your "what to buy today" answer.'],
+                ].map(([k,v])=>(
+                  <div key={k} style={{marginBottom:8,fontSize:11}}>
+                    <div style={{color:'var(--amber)',fontWeight:700,marginBottom:1}}>{k}</div>
+                    <div style={{color:'var(--text2)',lineHeight:1.4}}>{v}</div>
+                  </div>
+                ))}
+              </GBlock>
+              <GBlock title="EXECUTION & REVIEW" color="var(--cyan)" border="var(--border)">
+                {[
+                  ['Pipeline','Stage orders before sending. System auto-sizes position (regime x beta x ATR), runs 6 pre-trade gates, builds bracket order. Review risk_check JSON before proceeding.'],
+                  ['Trading','One-click submit to Alpaca. Shows live positions, open orders, P&L. Sync button pulls all filled orders from broker. WebSocket auto-manages scaling pyramid.'],
+                  ['Hedge','Regime-aware hedge recommendations with instrument suggestions (put spreads, inverse ETFs, VIX calls). Short candidates show Stage 4 breakdowns with weak RS.'],
+                  ['Journal','Trade journal with streaks, monthly P&L, day-of-week analysis, exit reason breakdown, RS band performance, and process grading (A-F). Identifies lucky wins vs deserved losses.'],
+                  ['Replay','Backtest any strategy against SPY benchmark. Shows alpha, Sharpe, max drawdown, win rate. Uses realistic slippage model. Compare strategies head-to-head.'],
+                  ['Analytics','Edge validation suite: signal decay analysis, composite breadth score, execution cost estimates, return decomposition (alpha vs beta), conviction weight optimizer.'],
+                  ['Settings','Alpaca API keys, account size, risk parameters (risk per trade, max heat, max position), notification webhooks, and automation flags (AUTO_STOP_EXECUTE, AUTO_SCALE_EXECUTE).'],
+                ].map(([k,v])=>(
+                  <div key={k} style={{marginBottom:8,fontSize:11}}>
+                    <div style={{color:'var(--cyan)',fontWeight:700,marginBottom:1}}>{k}</div>
+                    <div style={{color:'var(--text2)',lineHeight:1.4}}>{v}</div>
+                  </div>
+                ))}
+                <div style={{marginTop:6,padding:'5px 8px',background:'rgba(0,212,255,0.07)',borderRadius:3,fontSize:10,color:'var(--text3)',lineHeight:1.4}}>
+                  <strong style={{color:'var(--cyan)'}}>Automation:</strong> Set <code>AUTO_STOP_EXECUTE=true</code> for auto stop-loss execution and <code>AUTO_SCALE_EXECUTE=true</code> for automatic T1/T2 partial exits. Both run via WebSocket monitor.
                 </div>
-              ))}
-            </div>
-            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--cyan)',letterSpacing:2,fontWeight:700,marginBottom:8}}>EXECUTION & REVIEW</div>
-              {[
-                ['📋 Pipeline','Stage pre-sized bracket orders with pre-trade gates + risk_check JSON.'],
-                ['💼 Trading','One-click submit to Alpaca. Live positions, orders, P&L.'],
-                ['🛡 Hedge','Regime-aware hedge size. Stage-4 short candidates.'],
-                ['📒 Journal','Open trades, thesis, Pending Scaling, Performance Attribution.'],
-                ['🔁 Replay','Backtest any strategy on SQLite history vs SPY benchmark.'],
-                ['⚙ Settings','Alpaca keys, risk params, notification channels, auto-exec flags.'],
-              ].map(([k,v])=>(
-                <div key={k} style={{display:'flex',gap:8,marginBottom:5,fontSize:12}}>
-                  <span style={{color:'var(--cyan)',fontWeight:700,minWidth:90,flexShrink:0}}>{k}</span>
-                  <span style={{color:'var(--text2)',lineHeight:1.4}}>{v}</span>
-                </div>
-              ))}
-              <div style={{marginTop:10,padding:'6px 8px',background:'rgba(0,212,255,0.07)',borderRadius:3,fontSize:11,color:'var(--text3)',lineHeight:1.4}}>
-                <strong style={{color:'var(--cyan)'}}>Automation env flags:</strong> <code>AUTO_STOP_EXECUTE=true</code> (auto-sell on stop), <code>AUTO_SCALE_EXECUTE=true</code> (auto partial-exits at T1/T2).
-              </div>
+              </GBlock>
             </div>
           </div>
         )}
+
+        {/* ════════════════════════════════════════════════════════════════════
+            SECTION 6: GLOSSARY — every concept and metric explained
+            ════════════════════════════════════════════════════════════════════ */}
+        {section==='glossary' && (
+          <div style={{display:'grid',gap:12}}>
+            {/* Composite Breadth Score */}
+            <GBlock title="COMPOSITE BREADTH SCORE (0-100)" color="var(--green)" border="rgba(0,230,118,0.25)">
+              <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5,marginBottom:8}}>
+                A single number that answers: <strong>"How healthy is the market beneath the surface?"</strong> The S&P 500 can be at all-time highs while most stocks are actually declining — this is a bearish divergence. Breadth catches this before moving averages do, typically leading price by days to weeks.
+              </div>
+              <div style={{overflowX:'auto'}}>
+                <table style={{width:'100%',fontSize:11,borderCollapse:'collapse'}}>
+                  <thead><tr style={{borderBottom:'1px solid var(--border)'}}>
+                    {['Component','Weight','What It Measures','How to Read It'].map(h=>(
+                      <th key={h} style={{textAlign:'left',padding:'4px 6px',color:'var(--text3)',fontFamily:'var(--font-mono)',fontSize:10}}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {[
+                      ['% Above 50MA','25%','How many stocks in the universe are above their 50-day moving average','70%+ = healthy broad rally. 40-70% = mixed. <40% = weak participation, be cautious even if SPY is up.'],
+                      ['% Above 200MA','15%','How many stocks are in long-term uptrends','65%+ = structurally healthy. <45% = bear market conditions underneath.'],
+                      ['New Highs / Lows','20%','Ratio of stocks making 52-week highs vs lows','>=3.0 = strong expansion. 1.5-3.0 = healthy. <1.0 = more stocks breaking down than up.'],
+                      ['Advance / Decline','15%','Ratio of advancing vs declining stocks today','>=2.0 = broad participation. <0.8 = more stocks falling than rising.'],
+                      ['VIX Structure','15%','VIX vs its 20-day average (contango/backwardation)','Contango (VIX < avg) = calm. Backwardation (VIX >> avg) = fear/panic.'],
+                      ['Credit Spread','10%','TLT/HYG ratio trend (Treasury vs Junk bonds)','Tightening = risk-on. Widening = flight to safety, risk-off.'],
+                    ].map(([c,w,what,how])=>(
+                      <tr key={c} style={{borderBottom:'1px solid var(--border)'}}>
+                        <td style={{padding:'4px 6px',color:'var(--green)',fontWeight:600,fontFamily:'var(--font-mono)',fontSize:10}}>{c}</td>
+                        <td style={{padding:'4px 6px',color:'var(--amber)',fontFamily:'var(--font-mono)',fontSize:10}}>{w}</td>
+                        <td style={{padding:'4px 6px',color:'var(--text2)',fontSize:10}}>{what}</td>
+                        <td style={{padding:'4px 6px',color:'var(--text3)',fontSize:10}}>{how}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{marginTop:8,display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:4}}>
+                {[['80-100','STRONG','1.0x','#00e676'],['60-80','HEALTHY','0.85x','#8bc34a'],['40-60','MIXED','0.60x','#f0a500'],['20-40','DETERIORATING','0.30x','#ff8c00'],['0-20','BROKEN','0.0x','#ff3d57']].map(([range,label,mult,col])=>(
+                  <div key={range} style={{textAlign:'center',padding:4,background:'var(--bg)',borderRadius:3,border:`1px solid ${col}33`}}>
+                    <div style={{fontSize:10,fontFamily:'var(--font-mono)',color:col,fontWeight:700}}>{range}</div>
+                    <div style={{fontSize:9,color:col}}>{label}</div>
+                    <div style={{fontSize:9,color:'var(--text3)'}}>{mult} sizing</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{marginTop:8,padding:'5px 8px',background:'rgba(0,230,118,0.07)',borderRadius:3,fontSize:10,color:'var(--text3)',lineHeight:1.5}}>
+                <strong>Key insight:</strong> Breadth divergence = SPY making new highs but composite score declining. This historically precedes corrections by 2-8 weeks. When you see it, tighten stops and reduce new entries even if the regime still says BULL.
+              </div>
+            </GBlock>
+
+            {/* Signal Decay Analysis */}
+            <GBlock title="SIGNAL DECAY ANALYSIS" color="var(--cyan)" border="rgba(0,212,255,0.25)">
+              <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5,marginBottom:8}}>
+                Answers: <strong>"How long does a signal's edge last?"</strong> After a signal fires (e.g., RS crosses 80), the system measures forward returns at 5, 10, 20, 40, and 60-day horizons. The horizon with the highest Sharpe ratio = your optimal holding period.
+              </div>
+              <div style={{overflowX:'auto'}}>
+                <table style={{width:'100%',fontSize:10,borderCollapse:'collapse'}}>
+                  <thead><tr style={{borderBottom:'1px solid var(--border)'}}>
+                    {['Column','What It Means','How to Use It'].map(h=>(
+                      <th key={h} style={{textAlign:'left',padding:'4px 6px',color:'var(--text3)',fontFamily:'var(--font-mono)',fontSize:10}}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {[
+                      ['Horizon','Days held after signal fires (5d, 10d, 20d, 40d, 60d)','Shortest horizon with good Sharpe = ideal swing hold.'],
+                      ['Trades','Number of historical signal firings in the sample','More trades = more statistical confidence. <100 = treat results cautiously.'],
+                      ['Avg Return','Mean forward return (%) from entry to horizon close','Higher is better but must check Sharpe (risk-adjusted). +1% with 3% std dev is worse than +0.5% with 0.5% std dev.'],
+                      ['Hit Rate','% of trades with positive return at this horizon','Above 53% with positive avg return = real edge. 50% = coin flip.'],
+                      ['Sharpe','Risk-adjusted return: (avg / std_dev) x sqrt(252/horizon)','THE key metric. Highest Sharpe row (highlighted green) = your optimal holding period. >0.5 is good, >1.0 is excellent.'],
+                      ['Std Dev','Standard deviation of returns — how volatile outcomes are','Low std dev = consistent results. High std dev = wide range of outcomes even if avg is good.'],
+                      ['P10','10th percentile return — your worst 10% of trades','This is your tail risk. If P10 = -15%, one in ten trades will lose 15%+. Size accordingly.'],
+                      ['P50','Median return — the "typical" trade outcome','More representative than avg (not skewed by outliers). If P50 is negative but avg is positive, a few big winners are masking many small losers.'],
+                      ['P90','90th percentile return — your best 10% of trades','This is your upside potential. Combined with P10, shows the full range of outcomes.'],
+                    ].map(([col,what,how])=>(
+                      <tr key={col} style={{borderBottom:'1px solid var(--border)'}}>
+                        <td style={{padding:'4px 6px',color:'var(--cyan)',fontWeight:600,fontFamily:'var(--font-mono)'}}>{col}</td>
+                        <td style={{padding:'4px 6px',color:'var(--text2)'}}>{what}</td>
+                        <td style={{padding:'4px 6px',color:'var(--text3)'}}>{how}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{marginTop:6,padding:'5px 8px',background:'rgba(0,212,255,0.07)',borderRadius:3,fontSize:10,color:'var(--text3)',lineHeight:1.5}}>
+                <strong>Example:</strong> If RS+Momentum shows Sharpe of 0.53 at 10d (highest) and 0.41 at 60d, the signal's edge peaks at 10 days. Holding longer adds return but proportionally more risk. Set your default hold to 10 days.
+              </div>
+            </GBlock>
+
+            {/* Return Decomposition */}
+            <GBlock title="RETURN DECOMPOSITION (Market Beta vs Stock Alpha)" color="var(--purple)" border="rgba(187,134,252,0.25)">
+              <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5,marginBottom:8}}>
+                Answers: <strong>"Am I actually picking good stocks, or just riding the market?"</strong> Every closed trade's P&L is split into two parts.
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+                <div style={{background:'var(--bg)',padding:8,borderRadius:3}}>
+                  <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text3)',marginBottom:4}}>MARKET (BETA)</div>
+                  <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.4}}>
+                    The portion of your return explained by SPY's movement during your trade. Formula: <code style={{color:'var(--cyan)'}}>beta x SPY_return x position_size</code>. If SPY rose 2% during your trade and your stock has beta 1.0, Market gave you ~2% for free. <strong>You want this to be a SMALL % of total P&L.</strong>
+                  </div>
+                </div>
+                <div style={{background:'var(--bg)',padding:8,borderRadius:3}}>
+                  <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text3)',marginBottom:4}}>STOCK ALPHA</div>
+                  <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.4}}>
+                    Your actual edge — the return ABOVE what the market gave you. Formula: <code style={{color:'var(--green)'}}>total_return - market_component</code>. If your trade returned 8% and SPY gave 2% via beta, your alpha is 6%. <strong>Alpha >60% of total P&L = you're genuinely picking winners, not just buying SPY with extra risk.</strong>
+                  </div>
+                </div>
+              </div>
+            </GBlock>
+
+            {/* Execution Cost */}
+            <GBlock title="EXECUTION COST ESTIMATE" color="var(--amber)" border="rgba(240,165,0,0.25)">
+              <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5,marginBottom:8}}>
+                Answers: <strong>"How much does trading friction eat from my returns?"</strong> Backtests don't include real-world costs. This model estimates them.
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+                {[
+                  ['Spread Cost','Half the bid-ask spread. Tighter for liquid stocks (>5M ADV = 0.02%) vs illiquid (<300K ADV = 0.20%). Trade liquid names to minimize.'],
+                  ['Slippage','Price moves against you while your order fills. Worse for volatile stocks (high ATR), illiquid stocks (low ADV), and urgent orders (chasing breakouts = 2.5x worse).'],
+                  ['Market Impact','Your order itself moves the price. Almgren-Chriss model. Worse when your shares are a large % of daily volume.'],
+                  ['Commission','$0.005/share (conservative IBKR). Alpaca = $0. Negligible vs other costs.'],
+                ].map(([k,v])=>(
+                  <div key={k} style={{background:'var(--bg)',padding:6,borderRadius:3,fontSize:10}}>
+                    <div style={{color:'var(--amber)',fontWeight:700,marginBottom:2}}>{k}</div>
+                    <div style={{color:'var(--text3)',lineHeight:1.4}}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{marginTop:8,padding:'5px 8px',background:'rgba(240,165,0,0.07)',borderRadius:3,fontSize:10,color:'var(--text3)',lineHeight:1.5}}>
+                <strong>Annual impact:</strong> typical 0.16% round-trip x 200 trades = <strong>32% annual drag</strong>. This must be subtracted from backtest returns. A backtest showing 50% annual return realistically yields ~18%. Trade fewer, more liquid names to reduce.
+              </div>
+            </GBlock>
+
+            {/* O'Neil Cycle */}
+            <GBlock title="O'NEIL MARKET CYCLE (Distribution Days, FTD, Rally Attempts)" color="var(--cyan)" border="rgba(0,212,255,0.2)">
+              <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5,marginBottom:8}}>
+                William O'Neil's system for reading market health through institutional selling behavior. The cycle repeats: Uptrend &#8594; Distribution &#8594; Correction &#8594; Rally Attempt &#8594; Follow-Through Day &#8594; New Uptrend.
+              </div>
+              <div style={{display:'grid',gap:6}}>
+                {[
+                  ['Distribution Day','A day where the index closes down >=0.2% on volume higher than the 50-day average. This means institutions are selling. Tracked over a rolling 25-session window (they expire). 3 distribution days = caution. 4-5 = correction likely. 6+ = bear territory.'],
+                  ['Follow-Through Day (FTD)','After a correction, a rally attempt starts from the swing low. On days 4-7 of that rally, if the index gains >=1.25% on volume higher than the prior day, that is an FTD. It signals the correction may be ending. ~75% of bull markets start with an FTD, but not all FTDs lead to new bull markets.'],
+                  ['FTD Confirmation','After an FTD fires, the system watches the next 5 sessions. If <=1 distribution day occurs, the FTD is "confirmed" — green light to begin deploying capital. If 2+ distribution days follow, the FTD failed.'],
+                  ['Rally Attempt','Counts days since the swing low (lowest close in last 20 sessions). Days 1-3 = too early. Days 4-7 = FTD window (watch closely). Day 8+ = past FTD window without confirmation = still uncertain.'],
+                  ['Exposure Ramp','After an FTD confirms, you don\'t go from 0 to 100. O\'Neil method: start with PILOT (2% heat, 1 small position), graduate to HALF (4%), THREE_QUARTER (6%), then FULL (8%) as the rally proves itself over days/weeks without new distribution.'],
+                ].map(([k,v])=>(
+                  <div key={k} style={{fontSize:11}}>
+                    <span style={{color:'var(--cyan)',fontWeight:700}}>{k}: </span>
+                    <span style={{color:'var(--text2)',lineHeight:1.5}}>{v}</span>
+                  </div>
+                ))}
+              </div>
+            </GBlock>
+
+            {/* Kelly, auto_sync, other terms */}
+            <GBlock title="OTHER KEY TERMS" color="var(--text2)" border="var(--border)">
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+                {[
+                  ['Kelly Optimal %','The mathematically optimal % of account to risk per trade, based on your win rate and avg win/loss ratio. Formula: kelly = winRate - (1-winRate) / (avgWin/avgLoss). System uses Half-Kelly (50% of full) for safety. Needs 20+ trades to be meaningful; shows 0% with insufficient data.'],
+                  ['Exit Reason: auto_sync','Trade was closed automatically when the broker sync detected a filled sell order in Alpaca. P&L and R-multiple are auto-calculated. The trade is flagged "needs_review" so you can set the real exit reason (target_hit, stopped_out, manual, etc.).'],
+                  ['R-Multiple','Return expressed as multiples of initial risk. If you risked $100 (entry - stop) and made $250, that\'s a 2.5R trade. Normalizes returns across different position sizes. Goal: average R-multiple > 1.5R.'],
+                  ['Portfolio Heat','Sum of dollar risk across all open positions as % of account. Dollar risk per position = shares x (entry_price - stop_price). Max heat = 8% at full deployment. Exposure ramp may cap it lower (2-6%) in early cycle stages.'],
+                  ['Outcome Alignment','Compares process quality (grade) with outcome (profit/loss). Deserved Win = good process + profit. Lucky Win = bad process + profit (be concerned). Unlucky Loss = good process + loss (don\'t change anything). Deserved Loss = bad process + loss (fix your process).'],
+                  ['Weinstein Stages','Stage 1 = base building (accumulation). Stage 2 = uptrend (BUY ZONE). Stage 3 = top/distribution (SELL/avoid). Stage 4 = downtrend (SHORT candidates). Only buy Stage 2. Never buy Stage 3 or 4.'],
+                  ['Sector Rotation','Money flows between sectors in cycles. The system ranks sectors by RS and acceleration, applies +15% conviction boost to overweight (leading) sectors and -15% to underweight (lagging) ones. Buying the best stock in the worst sector rarely works.'],
+                  ['McClellan Oscillator','EMA(19) minus EMA(39) of daily advance/decline difference. Positive = breadth momentum expanding. Negative = contracting. Extreme readings signal overbought (pullback due) or oversold (bounce due).'],
+                ].map(([k,v])=>(
+                  <div key={k} style={{fontSize:10}}>
+                    <div style={{color:'var(--amber)',fontWeight:700,marginBottom:1,fontFamily:'var(--font-mono)',fontSize:10}}>{k}</div>
+                    <div style={{color:'var(--text3)',lineHeight:1.4}}>{v}</div>
+                  </div>
+                ))}
+              </div>
+            </GBlock>
+          </div>
+        )}
+
       </div>
     </div>
   );
@@ -6660,6 +7151,81 @@ function BreadthSection() {
               </div>
             </div>
           </div>
+
+          {/* 30-Day Breadth Trend Chart */}
+          {data.history?.length > 1 && (() => {
+            const hist = data.history;
+            const maxScore = 100;
+            const chartW = 800, chartH = 120, padL = 36, padR = 8, padT = 6, padB = 18;
+            const drawW = chartW - padL - padR, drawH = chartH - padT - padB;
+            const stepX = drawW / Math.max(hist.length - 1, 1);
+
+            const scorePts = hist.map((h,i) => `${padL + i*stepX},${padT + drawH - (((h.composite_score??h.compositeScore??0)/maxScore)*drawH)}`).join(' ');
+            const ma50Pts = hist.map((h,i) => `${padL + i*stepX},${padT + drawH - (((h.pct_above_50ma??h.pctAbove50MA??50)/100)*drawH)}`).join(' ');
+
+            // Score color zones
+            const zones = [
+              {y1:0, y2:20, fill:'rgba(255,61,87,0.06)'},
+              {y1:20, y2:40, fill:'rgba(255,140,0,0.06)'},
+              {y1:40, y2:60, fill:'rgba(240,165,0,0.05)'},
+              {y1:60, y2:80, fill:'rgba(139,195,74,0.05)'},
+              {y1:80, y2:100, fill:'rgba(0,230,118,0.05)'},
+            ];
+
+            const first = hist[0]?.composite_score ?? hist[0]?.compositeScore ?? 0;
+            const last = hist[hist.length-1]?.composite_score ?? hist[hist.length-1]?.compositeScore ?? 0;
+            const delta = last - first;
+
+            return (
+              <div className="panel" style={{marginBottom:14}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                  <div>
+                    <div style={{fontSize:10,color:'var(--text3)',letterSpacing:2,fontFamily:'var(--font-mono)'}}>30-DAY COMPOSITE BREADTH TREND</div>
+                    <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>Breadth leads price by days/weeks — catches divergences before MA crosses</div>
+                  </div>
+                  <div style={{textAlign:'right'}}>
+                    <span style={{fontSize:13,fontFamily:'var(--font-mono)',fontWeight:700,color:delta>=0?'var(--green)':'var(--red)'}}>
+                      {delta>=0?'+':''}{delta} pts
+                    </span>
+                    <div style={{fontSize:9,color:'var(--text3)'}}>30d change</div>
+                  </div>
+                </div>
+                <svg viewBox={`0 0 ${chartW} ${chartH}`} style={{width:'100%',height:chartH}}>
+                  {/* Zone backgrounds */}
+                  {zones.map(z => (
+                    <rect key={z.y1} x={padL} y={padT + drawH - (z.y2/100*drawH)} width={drawW} height={(z.y2-z.y1)/100*drawH} fill={z.fill}/>
+                  ))}
+                  {/* Grid lines */}
+                  {[20,40,60,80].map(v => (
+                    <g key={v}>
+                      <line x1={padL} y1={padT + drawH - (v/100*drawH)} x2={padL+drawW} y2={padT + drawH - (v/100*drawH)} stroke="var(--border)" strokeWidth="0.5" strokeDasharray="3,3"/>
+                      <text x={padL-4} y={padT + drawH - (v/100*drawH)+3} fill="var(--text3)" fontSize="8" textAnchor="end" fontFamily="var(--font-mono)">{v}</text>
+                    </g>
+                  ))}
+                  {/* % Above 50MA line (secondary) */}
+                  <polyline points={ma50Pts} fill="none" stroke="rgba(0,212,255,0.3)" strokeWidth="1" strokeDasharray="3,2"/>
+                  {/* Composite score line (primary) */}
+                  <polyline points={scorePts} fill="none" stroke={scoreColor(last)} strokeWidth="2.5"/>
+                  {/* Endpoint dot */}
+                  {(() => {
+                    const lastX = padL + (hist.length-1)*stepX;
+                    const lastY = padT + drawH - ((last/maxScore)*drawH);
+                    return <circle cx={lastX} cy={lastY} r="3.5" fill={scoreColor(last)} stroke="var(--bg)" strokeWidth="1.5"/>;
+                  })()}
+                  {/* Date labels */}
+                  {hist.filter((_,i) => i===0 || i===hist.length-1 || i===Math.floor(hist.length/2)).map((h,idx) => {
+                    const i = idx===0 ? 0 : idx===1 ? Math.floor(hist.length/2) : hist.length-1;
+                    const d = hist[i]?.date || '';
+                    return <text key={i} x={padL + i*stepX} y={chartH-2} fill="var(--text3)" fontSize="8" textAnchor="middle" fontFamily="var(--font-mono)">{d.slice(5)}</text>;
+                  })}
+                </svg>
+                <div style={{display:'flex',gap:16,justifyContent:'center',marginTop:4}}>
+                  <span style={{fontSize:9,color:'var(--text3)'}}><span style={{display:'inline-block',width:16,height:2,background:scoreColor(last),verticalAlign:'middle',marginRight:4,borderRadius:1}}></span>Composite Score</span>
+                  <span style={{fontSize:9,color:'var(--text3)'}}><span style={{display:'inline-block',width:16,height:2,background:'rgba(0,212,255,0.3)',verticalAlign:'middle',marginRight:4,borderRadius:1,borderTop:'1px dashed rgba(0,212,255,0.5)'}}></span>% Above 50MA</span>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Breadth Metrics Grid */}
           {data.breadth && (
