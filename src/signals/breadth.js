@@ -280,7 +280,23 @@ function assessCreditSpread(tltPrice, hygPrice, tltHistory, hygHistory) {
 // 0-20   = broken (defensive)
 
 function computeCompositeBreadthScore(breadthData, vixStructure, creditSpread) {
-  if (!breadthData) return { score: 50, regime: 'UNKNOWN', detail: 'No breadth data' };
+  if (!breadthData) {
+    // Fall back to last known breadth snapshot instead of returning UNKNOWN
+    const last = db().prepare(
+      'SELECT composite_score, regime FROM breadth_snapshots WHERE composite_score IS NOT NULL ORDER BY date DESC LIMIT 1'
+    ).get();
+    if (last) {
+      const score = last.composite_score;
+      let regime = last.regime, sizeMultiplier, color;
+      if (score >= 80) { regime = regime || 'STRONG BREADTH'; sizeMultiplier = 1.0; color = '#00e676'; }
+      else if (score >= 60) { regime = regime || 'HEALTHY'; sizeMultiplier = 0.85; color = '#8bc34a'; }
+      else if (score >= 40) { regime = regime || 'MIXED'; sizeMultiplier = 0.60; color = '#f0a500'; }
+      else if (score >= 20) { regime = regime || 'DETERIORATING'; sizeMultiplier = 0.30; color = '#ff8c00'; }
+      else { regime = regime || 'BROKEN'; sizeMultiplier = 0.0; color = '#ff3d57'; }
+      return { score, regime, sizeMultiplier, color, components: [], detail: 'From cached breadth snapshot' };
+    }
+    return { score: 50, regime: 'UNKNOWN', detail: 'No breadth data' };
+  }
 
   let score = 0;
   const components = [];

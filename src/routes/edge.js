@@ -493,7 +493,7 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
 
   router.get('/momentum-scout', async (req, res) => {
     try {
-      const result = await runMomentumScout(UNIVERSE);
+      const result = await runMomentumScout(SECTOR_MAP);
       res.json(result);
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

@@ -19,24 +19,20 @@ const EXPANSION_WATCHLIST = {
   // Recent IPOs / SPACs with momentum potential
   RKLB: 'Industrials', IONQ: 'Technology', RGTI: 'Technology',
   LUNR: 'Industrials', RDW: 'Industrials', ACHR: 'Industrials',
-  ASTS: 'Communication', GOOG: 'Technology', RDDT: 'Technology',
-  BIRK: 'Consumer', CART: 'Technology', CAVA: 'Consumer',
-  VRT: 'Technology', DUOL: 'Technology', CELH: 'Consumer',
-  TOST: 'Technology', RIVN: 'Consumer', GRAB: 'Technology',
+  ASTS: 'Communication', CAVA: 'Consumer', CELH: 'Consumer',
+  RIVN: 'Consumer', GRAB: 'Technology',
 
   // Mid-cap growth not in core universe
   SOUN: 'Technology', APLD: 'Technology', BTDR: 'Technology',
   WULF: 'Technology', CLSK: 'Technology', IREN: 'Technology',
   HIMS: 'Healthcare', DOCS: 'Healthcare', GMED: 'Healthcare',
   VERX: 'Technology', BRZE: 'Technology', CWAN: 'Technology',
-  GTLB: 'Technology', DOCN: 'Technology', DLO: 'Technology',
+  DOCN: 'Technology', DLO: 'Technology',
 
   // Sector disruptors / turnarounds
-  HOOD: 'Financials', SOFI: 'Financials', AFRM: 'Financials',
-  UPST: 'Financials', U: 'Technology', DKNG: 'Consumer',
-  JOBY: 'Industrials', BLDE: 'Industrials',
+  U: 'Technology', JOBY: 'Industrials', BLDE: 'Industrials',
   OKLO: 'Energy', SMR: 'Energy', NNE: 'Energy', LEU: 'Energy',
-  UUUU: 'Energy', CCJ: 'Energy', VST: 'Utilities',
+  UUUU: 'Energy',
   TMDX: 'Healthcare', NUVL: 'Healthcare', RXRX: 'Healthcare',
 };
 
