@@ -38,6 +38,11 @@ const BUILT_IN_STRATEGIES = {
     defaults: { maxRS: 20, maxSEPA: 2, exitRS: 40, stopATR: 1.5, holdDays: 15 },
     side: 'short',
   },
+  emerging_leader: {
+    name: 'Emerging Leader',
+    description: 'Buy RS 65-79 with 4-week RS acceleration >= +5. Catches leaders early before they hit RS 80+. Regime-aware: no new longs in CAUTION/CORRECTION.',
+    defaults: { minRS: 65, maxRS: 79, minAccel: 5, exitRS: 50, holdDays: 25 },
+  },
   regime_adaptive: {
     name: 'Regime Adaptive',
     description: 'Switches sub-strategy daily based on SPY regime: BULL→rs_momentum, NEUTRAL→sepa_trend, CAUTION→cash, CORRECTION→cash. New entries blocked outside risk-on regimes; existing positions force-exit when regime turns risk-off.',
@@ -152,6 +157,11 @@ function evaluateEntry(stock, strategy, params) {
       // Minimum quality gate: RS ≥ 60 + momentum ≥ 40 (matches daily-picks filter)
       return stock.rs_rank >= 60 && (stock.swing_momentum || 0) >= 40;
 
+    case 'emerging_leader':
+      return stock.rs_rank >= params.minRS &&
+             stock.rs_rank <= params.maxRS &&
+             (stock._rs_accel_4w || 0) >= params.minAccel;
+
     case 'short_breakdown':
       return stock.rs_rank <= params.maxRS &&
              (stock.sepa_score || 8) <= params.maxSEPA &&
@@ -221,6 +231,11 @@ function evaluateExit(stock, entryStock, strategy, params, holdingDays, position
 
     case 'sepa_trend':
       if ((stock.sepa_score || 0) <= params.exitSEPA) return { exit: true, reason: 'sepa_degraded' };
+      break;
+
+    case 'emerging_leader':
+      // Exit if RS drops below threshold (thesis broken)
+      if (stock.rs_rank <= params.exitRS) return { exit: true, reason: 'rs_dropped' };
       break;
 
     case 'rs_line_new_high':
@@ -364,6 +379,31 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
   }
   const dates = Object.keys(byDate).sort();
 
+  // ─── RS acceleration lookup (for emerging_leader strategy) ─────────────
+  // Build per-symbol RS rank history so we can compute 4-week RS change.
+  // rsHistory[symbol] = [{date, rs_rank}, ...] sorted by date
+  const isEmerging = strategy === 'emerging_leader' ||
+    (strategy === 'regime_adaptive' && Object.values(mergedParams).includes('emerging_leader'));
+  let rsHistory = {};
+  if (isEmerging) {
+    for (const s of snapshots) {
+      if (s.symbol === 'SPY') continue;
+      if (!rsHistory[s.symbol]) rsHistory[s.symbol] = [];
+      rsHistory[s.symbol].push({ date: s.date, rs: s.rs_rank });
+    }
+  }
+
+  function computeRsAccel4w(symbol, date) {
+    const hist = rsHistory[symbol];
+    if (!hist) return 0;
+    const dateIdx = hist.findIndex(h => h.date === date);
+    if (dateIdx < 0) return 0;
+    // Look back ~20 trading days (≈ 4 calendar weeks)
+    const lookback = dateIdx - 20;
+    if (lookback < 0) return 0;
+    return hist[dateIdx].rs - hist[lookback].rs;
+  }
+
   // ─── Regime setup (ALL strategies) ──────────────────────────────────────
   // Every long strategy respects market regime: no new longs in CAUTION/CORRECTION,
   // force-exit when regime turns risk-off. This matches the Trade Setup tab's
@@ -416,7 +456,11 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     const date = dates[i];
     const dayStocks = byDate[date];
     const stockMap = {};
-    for (const s of dayStocks) stockMap[s.symbol] = s;
+    for (const s of dayStocks) {
+      stockMap[s.symbol] = s;
+      // Attach 4-week RS acceleration for emerging_leader strategy
+      if (isEmerging) s._rs_accel_4w = computeRsAccel4w(s.symbol, date);
+    }
 
     // Survivorship filter: skip stocks removed from universe before this date
     const removedSymbols = getActiveUniverse(date);
@@ -608,7 +652,10 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       // Rank candidates by each strategy's core thesis — keep sorts simple
       // and distinct so strategies don't converge toward the same picks.
       // Conviction is the only "kitchen sink" ranker by design.
-      if (todayStrategy === 'rs_momentum') {
+      if (todayStrategy === 'emerging_leader') {
+        // Highest RS acceleration first — fastest rising relative strength
+        candidates.sort((a, b) => (b._rs_accel_4w || 0) - (a._rs_accel_4w || 0));
+      } else if (todayStrategy === 'rs_momentum') {
         // RS + momentum equally — the two signals in the strategy name
         candidates.sort((a, b) =>
           ((b.rs_rank || 0) + (b.swing_momentum || 0)) - ((a.rs_rank || 0) + (a.swing_momentum || 0)));
