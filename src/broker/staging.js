@@ -27,7 +27,7 @@ function stageOrder({ symbol, side = 'buy', order_type = 'limit', qty, entry_pri
     replayStrategy || null,
   );
   const order = getStagedOrder(result.lastInsertRowid);
-  notifyTradeEvent({ event: 'staged', symbol: symbol.toUpperCase(), details: { shares: qty, price: entry_price, stop: stop_price, source: source || 'manual' } }).catch(e => console.error('Notification error:', e.message));
+  // Don't send Telegram for staging — only notify on actual fills/stops/exits
   return order;
 }
 

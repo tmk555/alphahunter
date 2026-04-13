@@ -2617,7 +2617,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                         <span style={{fontSize:10,color:'var(--text3)',marginLeft:'auto'}}>{s.sector}</span>
                         <button disabled={noLongs||staging===s.ticker} onClick={()=>stageFromSetup(s.ticker,'swing')}
                           style={{padding:'5px 14px',background:noLongs?'var(--bg3)':'var(--cyan)',border:`1px solid ${noLongs?'var(--border)':'var(--cyan)'}`,borderRadius:4,color:noLongs?'var(--text3)':'#000',fontSize:11,fontWeight:800,cursor:noLongs?'not-allowed':'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
-                          {staging===s.ticker?'STAGING...':'STAGE SWING'}
+                          {staging===s.ticker?'STAGING...':`STAGE${exitStrategy==='scale_in_out'?' ⅓':''}`}
                         </button>
                       </div>
                       <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
@@ -2680,7 +2680,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                         <span style={{fontSize:10,color:'var(--text3)',marginLeft:'auto'}}>{s.sector}</span>
                         <button disabled={noLongs||staging===s.ticker} onClick={()=>stageFromSetup(s.ticker,'position')}
                           style={{padding:'5px 14px',background:noLongs?'var(--bg3)':'var(--green)',border:`1px solid ${noLongs?'var(--border)':'var(--green)'}`,borderRadius:4,color:noLongs?'var(--text3)':'#000',fontSize:11,fontWeight:800,cursor:noLongs?'not-allowed':'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
-                          {staging===s.ticker?'STAGING...':'STAGE POSITION'}
+                          {staging===s.ticker?'STAGING...':`STAGE${exitStrategy==='scale_in_out'?' ⅓':''}`}
                         </button>
                       </div>
                       <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
@@ -3043,8 +3043,8 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                       </div>
                     )}
                     <button disabled={noLongs || staging===s.ticker} onClick={()=>stageFromSetup(s.ticker)}
-                      style={{width:'100%',marginTop:8,padding:'6px 0',background:noLongs?'var(--bg3)':'var(--green)',border:`1px solid ${noLongs?'var(--border)':'var(--green)'}`,borderRadius:4,color:noLongs?'var(--text3)':'#000',fontSize:11,fontWeight:800,cursor:noLongs?'not-allowed':'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
-                      {staging===s.ticker ? 'STAGING...' : 'STAGE'}
+                      style={{width:'100%',marginTop:8,padding:'6px 0',background:noLongs?'var(--bg3)':exitStrategy==='scale_in_out'?'var(--cyan)':'var(--green)',border:`1px solid ${noLongs?'var(--border)':exitStrategy==='scale_in_out'?'var(--cyan)':'var(--green)'}`,borderRadius:4,color:noLongs?'var(--text3)':'#000',fontSize:11,fontWeight:800,cursor:noLongs?'not-allowed':'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
+                      {staging===s.ticker ? 'STAGING...' : exitStrategy==='scale_in_out' ? 'STAGE PILOT ⅓' : 'STAGE FULL'}
                     </button>
                   </div>
                 </div>
@@ -4048,7 +4048,8 @@ function IntradayTimingSection() {
   return (
     <div style={{marginTop:14}}>
       <div className="panel">
-        <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>INTRADAY TIMING CHECK</div>
+        <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:4}}>INTRADAY TIMING CHECK</div>
+        <div style={{fontSize:10,color:'var(--text3)',marginBottom:10}}>Scores entry timing 0-100 across 4 factors: VWAP proximity (25pts), ORB status (25pts), S/R alignment (25pts), volume pattern (25pts). Excellent ≥80, Good ≥60, Wait ≥40, Avoid &lt;40.</div>
         <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap',marginBottom:14}}>
           <div>
             <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Symbol</label>
@@ -4656,30 +4657,7 @@ function ExecutionTab() {
             </div>
           </div>
 
-          {/* Recent Fired Alerts */}
-          {firedAlerts.length > 0 && (
-            <div className="panel" style={{marginTop:14}}>
-              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>RECENT ALERTS</div>
-              {firedAlerts.slice(0,5).map(a => (
-                <div key={a.id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
-                  <div style={{display:'flex',alignItems:'center',gap:10}}>
-                    <span style={{fontSize:14}}>{a.type==='stop_violation'?'🛑':a.type==='price_above'?'📈':'📉'}</span>
-                    <div>
-                      <div style={{fontSize:12,color:'var(--text)',fontWeight:600}}>{a.symbol}</div>
-                      <div style={{fontSize:10,color:'var(--text3)'}}>{a.message}</div>
-                    </div>
-                  </div>
-                  <div style={{display:'flex',alignItems:'center',gap:8}}>
-                    <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{a.created_at}</span>
-                    {!a.acknowledged && (
-                      <button onClick={()=>acknowledgeAlert(a.id)}
-                        style={{padding:'2px 8px',background:'rgba(240,165,0,0.12)',border:'1px solid rgba(240,165,0,0.3)',borderRadius:3,color:'var(--amber)',fontSize:9,cursor:'pointer',fontWeight:700}}>ACK</button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          {/* Recent alerts moved to Alerts section */}
         </div>
       )}
 
