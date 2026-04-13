@@ -117,7 +117,7 @@ async function _checkScalingForSymbol(symbol, price) {
     // Persist the action (move stops, record partial fills)
     const applied = applyScalingAction(t.id, action);
     console.log(`  📤 Scaling ${t.symbol}: ${action.reason}`);
-    notifyTradeEvent({ event: action.action === 'full_exit' ? 'auto_stop' : 'scale_out', symbol: t.symbol, details: { shares: action.shares, price, reason: action.reason, level: action.level } }).catch(() => {});
+    notifyTradeEvent({ event: action.action === 'full_exit' ? 'auto_stop' : 'scale_out', symbol: t.symbol, details: { shares: action.shares, price, reason: action.reason, level: action.level } }).catch(e => console.error('Notification error:', e.message));
 
     // Auto-execute partial sell at the broker if enabled
     if (autoExec && action.action === 'partial_exit' && action.shares > 0) {
@@ -154,7 +154,7 @@ async function _autoExecuteStops(firedAlerts) {
           time_in_force: 'day',
         });
         console.log(`  Auto-sold ${alert.symbol} on stop violation (price: $${alert.current_price})`);
-        notifyTradeEvent({ event: 'force_stop', symbol: alert.symbol, details: { price: alert.current_price, stop: alert.trigger_price, reason: 'Auto-stop executed at broker' } }).catch(() => {});
+        notifyTradeEvent({ event: 'force_stop', symbol: alert.symbol, details: { price: alert.current_price, stop: alert.trigger_price, reason: 'Auto-stop executed at broker' } }).catch(e => console.error('Notification error:', e.message));
       } catch (e) {
         console.error(`  Auto-stop failed for ${alert.symbol}: ${e.message}`);
       }

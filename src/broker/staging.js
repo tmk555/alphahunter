@@ -27,7 +27,7 @@ function stageOrder({ symbol, side = 'buy', order_type = 'limit', qty, entry_pri
     replayStrategy || null,
   );
   const order = getStagedOrder(result.lastInsertRowid);
-  notifyTradeEvent({ event: 'staged', symbol: symbol.toUpperCase(), details: { shares: qty, price: entry_price, stop: stop_price, source: source || 'manual' } }).catch(() => {});
+  notifyTradeEvent({ event: 'staged', symbol: symbol.toUpperCase(), details: { shares: qty, price: entry_price, stop: stop_price, source: source || 'manual' } }).catch(e => console.error('Notification error:', e.message));
   return order;
 }
 
@@ -142,7 +142,7 @@ async function submitStagedOrder(stagedId) {
   `).run(order.id, now, stagedId);
 
   const result = { staged: getStagedOrder(stagedId), alpacaOrder: order, riskCheck };
-  notifyTradeEvent({ event: 'submitted', symbol: staged.symbol, details: { shares: staged.qty, price: staged.entry_price, stop: staged.stop_price, message: `Order submitted to broker (${order.id})` } }).catch(() => {});
+  notifyTradeEvent({ event: 'submitted', symbol: staged.symbol, details: { shares: staged.qty, price: staged.entry_price, stop: staged.stop_price, message: `Order submitted to broker (${order.id})` } }).catch(e => console.error('Notification error:', e.message));
   return result;
 }
 

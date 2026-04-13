@@ -109,7 +109,7 @@ async function sendTelegram(alert, config) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      chat_id: chatId,
+      chat_id: Number(chatId) || chatId,
       text: formatTelegramMessage(alert),
       parse_mode: 'HTML',
       disable_web_page_preview: true,
@@ -308,10 +308,28 @@ async function notifyTradeEvent({ event, symbol, details = {} }) {
       .run(`trade_${event}`, symbol, lines[0], JSON.stringify(payload));
   } catch (_) {}
 
-  // Deliver to all enabled channels
-  const channels = getEnabledChannels(`trade_${event}`);
+  // Deliver to all enabled channels (DB-configured)
+  let channels = getEnabledChannels(`trade_${event}`);
+
+  // Fallback: if no DB channels configured, use env-var channels directly
+  if (!channels.length) {
+    if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+      channels.push({ channel: 'telegram', config: { bot_token: process.env.TELEGRAM_BOT_TOKEN, chat_id: process.env.TELEGRAM_CHAT_ID } });
+    }
+    if (process.env.SLACK_WEBHOOK_URL) {
+      channels.push({ channel: 'slack', config: { webhook_url: process.env.SLACK_WEBHOOK_URL } });
+    }
+    if (process.env.ALERT_WEBHOOK_URL) {
+      channels.push({ channel: 'webhook', config: { url: process.env.ALERT_WEBHOOK_URL } });
+    }
+  }
+
   if (channels.length) {
-    try { await deliverAlert(payload, channels); } catch (_) {}
+    try {
+      await deliverAlert(payload, channels);
+    } catch (e) {
+      console.error(`  Trade event notification failed (${event} ${symbol}): ${e.message}`);
+    }
   }
 
   return payload;

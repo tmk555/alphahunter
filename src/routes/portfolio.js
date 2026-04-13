@@ -170,7 +170,7 @@ module.exports = function(db) {
         try { createStopAlert(result.lastInsertRowid); } catch (_) {}
       }
 
-      notifyTradeEvent({ event: 'buy', symbol: symbol.toUpperCase(), details: { shares, price: entry_price, stop: stop_price, strategy } }).catch(() => {});
+      notifyTradeEvent({ event: 'buy', symbol: symbol.toUpperCase(), details: { shares, price: entry_price, stop: stop_price, strategy } }).catch(e => console.error('Notification error:', e.message));
       res.json({ ok: true, id: result.lastInsertRowid });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
@@ -211,7 +211,7 @@ module.exports = function(db) {
       // Deactivate any stop alerts for this trade
       try { deactivateAlertsForTrade(+req.params.id); } catch (_) {}
 
-      notifyTradeEvent({ event: 'exit', symbol: trade.symbol, details: { shares: trade.shares, price: exit_price, pnl: pnl_dollars, pnl_pct: pnl_percent, reason: exit_reason } }).catch(() => {});
+      notifyTradeEvent({ event: 'exit', symbol: trade.symbol, details: { shares: trade.shares, price: exit_price, pnl: pnl_dollars, pnl_pct: pnl_percent, reason: exit_reason } }).catch(e => console.error('Notification error:', e.message));
       res.json({ ok: true, pnl_dollars, pnl_percent, r_multiple });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
@@ -437,7 +437,7 @@ module.exports = function(db) {
       const action = forcedAction || evaluateScalingAction(trade, currentPrice);
       if (!action) return res.json({ message: 'No action available at this price' });
       const result = applyScalingAction(+req.params.id, action);
-      notifyTradeEvent({ event: action.action === 'full_exit' ? 'auto_stop' : 'scale_out', symbol: trade.symbol, details: { shares: action.shares, price: currentPrice, reason: action.reason, level: action.level } }).catch(() => {});
+      notifyTradeEvent({ event: action.action === 'full_exit' ? 'auto_stop' : 'scale_out', symbol: trade.symbol, details: { shares: action.shares, price: currentPrice, reason: action.reason, level: action.level } }).catch(e => console.error('Notification error:', e.message));
       res.json({ ok: true, action: result });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });

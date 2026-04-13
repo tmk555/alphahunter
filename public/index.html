@@ -2521,7 +2521,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
         {error && <ErrorBox msg={error}/>}
       </div>
 
-      {(loading || picksLoad) && <div className="panel"><Loader msg="Scanning universe..."/></div>}
+      {(loading || picksLoad) && !picks && <div className="panel"><Loader msg="Scanning universe..."/></div>}
 
       {/* ─── CONVICTION OVERRIDES — high-conviction stocks despite weak regime ─── */}
       {convictionOverrides.length > 0 && regime && regime.sizeMultiplier < 1.0 && (
@@ -2589,7 +2589,10 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
         <div style={{marginBottom:20}}>
           <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:10,paddingLeft:2,flexWrap:'wrap'}}>
             <span style={{fontSize:10,color:'var(--cyan)',letterSpacing:1.5,fontFamily:'var(--font-mono)',fontWeight:700}}>
-              ⚡ SWING PICKS — {swingPicks.length} candidates · Momentum ≥ 55, 2-10 day holds
+              ⚡ SWING SETUPS — TRADE NOW · {swingPicks.length} candidates
+            </span>
+            <span style={{fontSize:10,color:'var(--text3)'}}>
+              High momentum (≥55), near highs, 2-10 day holds. Click STAGE to create bracket order.
             </span>
           </div>
           <div style={{display:'grid',gap:10}}>
@@ -2649,7 +2652,10 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
         <div style={{marginBottom:20}}>
           <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:10,paddingLeft:2,flexWrap:'wrap'}}>
             <span style={{fontSize:10,color:'var(--green)',letterSpacing:1.5,fontFamily:'var(--font-mono)',fontWeight:700}}>
-              📈 POSITION PICKS — {positionPicks.length} candidates · Near 50MA pullback zone, 3-8 week holds
+              📈 POSITION SETUPS — TRADE NOW · {positionPicks.length} candidates
+            </span>
+            <span style={{fontSize:10,color:'var(--text3)'}}>
+              Within 5% of 50MA, RS ≥ 70, 3-8 week holds. Click STAGE to create bracket order.
             </span>
           </div>
           <div style={{display:'grid',gap:10}}>
@@ -2853,11 +2859,11 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
       {pendingPullback.length > 0 && (
         <div style={{marginBottom:20}}>
           <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,paddingLeft:2}}>
-            <span style={{fontSize:10,color:'var(--amber)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>
-              PENDING PULLBACK — {pendingPullback.length} stocks watching for 50MA entry
+            <span style={{fontSize:10,color:'var(--amber)',letterSpacing:1.5,fontFamily:'var(--font-mono)',fontWeight:700}}>
+              ⏳ WATCHLIST — WAIT FOR 50MA PULLBACK · {pendingPullback.length} stocks
             </span>
             <span style={{fontSize:10,color:'var(--text3)'}}>
-              Strong RS + structure but too extended for position entry. Alert when vsMA50 drops below 5%.
+              Strong RS + structure but 5-20% above 50MA — too extended to buy. You will get a Telegram alert when they pull back to entry zone.
             </span>
           </div>
           <div style={{overflowX:'auto'}}>
@@ -2909,7 +2915,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
       <div style={{marginBottom:20}}>
         <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,paddingLeft:2}}>
           <span style={{fontSize:10,color:'var(--purple)',letterSpacing:1.5,fontFamily:'var(--font-mono)',fontWeight:700}}>
-            MOMENTUM SCOUT — Breakouts Outside Universe
+            🔍 DISCOVERY — Breakouts Outside Universe
           </span>
           <button onClick={loadScout} disabled={scoutLoading}
             style={{padding:'3px 12px',fontSize:10,fontFamily:'var(--font-mono)',fontWeight:700,background:'transparent',color:'var(--purple)',border:'1px solid rgba(196,77,255,0.3)',borderRadius:3,cursor:scoutLoading?'wait':'pointer',letterSpacing:.5}}>
@@ -2958,7 +2964,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
               </tbody>
             </table>
             <div style={{fontSize:10,color:'var(--text3)',marginTop:6,paddingLeft:2}}>
-              These stocks are NOT in the core universe. Strong momentum candidates may warrant adding to universe or taking a discretionary position.
+              These stocks are NOT in your universe. To add one: edit universe.js and add the ticker to the appropriate sector. Or take a discretionary position without adding.
             </div>
           </div>
         )}
@@ -2972,7 +2978,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
       {/* Detailed swing lab results (when scan is run) */}
       {results.length > 0 && (
         <div>
-          <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>DETAILED SCAN RESULTS ({scanned} candidates)</div>
+          <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>🔬 DEEP SCAN — AI ENRICHED SETUPS ({scanned} candidates · stricter filters: RS≥70, within 7% of high, volume surge)</div>
           <div className="sl-grid">
             {results.map(s => {
               const b = s.brief || {};
@@ -4155,7 +4161,7 @@ function ExecutionTab() {
         </div>
       </div>
 
-      {loading && <div className="panel"><Loader msg="Loading execution data..."/></div>}
+      {loading && !broker && <div className="panel"><Loader msg="Loading execution data..."/></div>}
 
       {/* ─── OVERVIEW ─────────────────────────────── */}
       {section==='overview' && broker && (
@@ -4695,7 +4701,7 @@ function PortfolioTab() {
         </div>
       </div>
 
-      {loading && <div className="panel"><Loader msg="Loading portfolio status..."/></div>}
+      {loading && !status && <div className="panel"><Loader msg="Loading portfolio status..."/></div>}
 
       {/* Config Editor */}
       {editConfig && config && (
@@ -7667,7 +7673,7 @@ function ExecutionQualitySection() {
         <div style={{fontSize:12,color:'var(--text2)'}}>Slippage, fill quality, implementation shortfall — is your execution eating the edge?</div>
         <button className="btn btn-sm" onClick={load} disabled={loading}>Refresh</button>
       </div>
-      {loading && <div className="panel"><Loader msg="Loading execution data..."/></div>}
+      {loading && !report && <div className="panel"><Loader msg="Loading execution data..."/></div>}
       {error && <ErrorBox msg={error}/>}
 
       {report?.summary ? (
