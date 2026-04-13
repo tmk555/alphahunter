@@ -502,5 +502,43 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
     res.json(getExpansionWatchlist());
   });
 
+  // ─── Phase 1: Universe Tracking (Survivorship Bias Fix) ──────────────────
+
+  router.post('/edge/universe-sync', (req, res) => {
+    try {
+      const { syncUniverse } = require('../signals/universe-tracker');
+      const allSymbols = Object.keys(UNIVERSE).filter(s => UNIVERSE[s] !== 'Hedge');
+      const result = syncUniverse(allSymbols, UNIVERSE);
+      res.json(result);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.get('/edge/universe-frozen', (req, res) => {
+    try {
+      const { getFrozenSnapshots } = require('../signals/universe-tracker');
+      const limit = parseInt(req.query.limit) || 50;
+      const snapshots = getFrozenSnapshots(limit);
+      res.json({ snapshots, count: snapshots.length });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.get('/edge/universe-size', (req, res) => {
+    try {
+      const { getUniverseSizeOverTime } = require('../signals/universe-tracker');
+      const { start, end } = req.query;
+      const sizes = getUniverseSizeOverTime(start, end);
+      res.json({ sizes });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.get('/edge/universe-changes', (req, res) => {
+    try {
+      const { getUniverseChanges } = require('../signals/universe-tracker');
+      const { start, end } = req.query;
+      const changes = getUniverseChanges(start, end);
+      res.json(changes);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   return router;
 };

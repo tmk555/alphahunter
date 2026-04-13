@@ -321,4 +321,131 @@ registerJobType('pullback_watch', {
   },
 });
 
+// ─── 10. Equity Snapshot — Daily portfolio alpha tracking ──────────────────
+
+registerJobType('equity_snapshot', {
+  description: 'Record daily equity snapshot for portfolio alpha tracking (TWR, Sharpe, SPY-relative)',
+  defaultConfig: {},
+  handler: async () => {
+    const { recordEquitySnapshot } = require('../risk/alpha-tracker');
+    const alpaca = require('../broker/alpaca');
+
+    let equity, cashFlow = 0, spyClose, openPositions = 0, heatPct = 0;
+
+    // Get equity from broker (or portfolio_state fallback)
+    const { configured } = alpaca.getConfig();
+    if (configured) {
+      try {
+        const account = await alpaca.getAccount();
+        equity = +account.equity;
+        const positions = await alpaca.getPositions();
+        openPositions = positions.length;
+      } catch (_) {}
+    }
+
+    // Fallback to portfolio_state
+    if (!equity) {
+      try {
+        const row = db().prepare("SELECT value FROM portfolio_state WHERE key = 'account_size'").get();
+        equity = row ? +row.value : null;
+      } catch (_) {}
+    }
+    if (!equity) return { error: 'No equity data — configure Alpaca or set account_size' };
+
+    // Get SPY close
+    try {
+      const quotes = await yahooQuote(['SPY']);
+      spyClose = quotes[0]?.regularMarketPrice;
+    } catch (_) {}
+
+    // Get portfolio heat
+    try {
+      const heatRow = db().prepare("SELECT value FROM portfolio_state WHERE key = 'current_heat'").get();
+      heatPct = heatRow ? +heatRow.value : 0;
+    } catch (_) {}
+
+    const snapshot = recordEquitySnapshot(equity, cashFlow, spyClose, openPositions, heatPct);
+    return { date: snapshot.date, equity, spyClose, openPositions, heatPct };
+  },
+});
+
+// ─── 11. Conditional Entry Check — Monitor pullback/breakout entries ───────
+
+registerJobType('conditional_entry_check', {
+  description: 'Check conditional entries against current prices and auto-stage triggered orders',
+  defaultConfig: {},
+  handler: async () => {
+    try {
+      const { checkConditionalEntries, expireOldEntries } = require('../broker/auto-stage');
+
+      // Get current prices for conditional entry symbols
+      const pending = db().prepare(
+        "SELECT DISTINCT symbol FROM conditional_entries WHERE status = 'pending'"
+      ).all();
+      if (!pending.length) return { checked: 0, triggered: 0, expired: 0 };
+
+      const symbols = pending.map(r => r.symbol);
+      const quotes = await yahooQuote(symbols);
+      const currentPrices = {};
+      for (const q of quotes) {
+        if (q.regularMarketPrice) currentPrices[q.symbol] = q.regularMarketPrice;
+      }
+
+      const { triggered, expired: expiredByPrice } = await checkConditionalEntries(currentPrices);
+      const expiredByTime = expireOldEntries();
+
+      return {
+        checked: symbols.length,
+        triggered: triggered.length,
+        triggeredSymbols: triggered.map(t => t.symbol),
+        expired: (expiredByPrice?.length || 0) + expiredByTime,
+      };
+    } catch (e) {
+      return { error: e.message };
+    }
+  },
+});
+
+// ─── 12. Scale-In Check — Monitor active scale-in plans ────────────────────
+
+registerJobType('scale_in_check', {
+  description: 'Check active scale-in plans and trigger next tranche when conditions are met',
+  defaultConfig: {},
+  handler: async () => {
+    try {
+      const { checkAllActivePlans } = require('../risk/scale-in');
+
+      // Get current prices for all active plan symbols
+      const plans = db().prepare(
+        "SELECT DISTINCT symbol FROM scale_in_plans WHERE status = 'active'"
+      ).all();
+      if (!plans.length) return { checked: 0, triggered: 0 };
+
+      const symbols = plans.map(r => r.symbol);
+      const quotes = await yahooQuote(symbols);
+      const currentPrices = {};
+      for (const q of quotes) {
+        if (q.regularMarketPrice) currentPrices[q.symbol] = q.regularMarketPrice;
+      }
+
+      // Build scan data from latest snapshots for trigger evaluation
+      const scanData = {};
+      const latestDate = db().prepare(
+        "SELECT MAX(date) as date FROM rs_snapshots WHERE type = 'stock'"
+      ).get()?.date;
+      if (latestDate) {
+        const snapshots = db().prepare(
+          "SELECT symbol, rs_rank, swing_momentum, volume_ratio FROM rs_snapshots WHERE date = ? AND type = 'stock'"
+        ).all(latestDate);
+        for (const s of snapshots) scanData[s.symbol] = s;
+      }
+
+      const result = await checkAllActivePlans(currentPrices, scanData);
+      return result;
+    } catch (e) {
+      return { error: e.message };
+    }
+  },
+});
+
 module.exports = { setRunScan };

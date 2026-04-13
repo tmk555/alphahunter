@@ -60,6 +60,50 @@ function regimeAdjusted(baseShares, regimeMultiplier) {
   return Math.floor(baseShares * regimeMultiplier);
 }
 
+// ─── Factor Concentration Penalty ──────────────────────────────────────────
+// Reduces position size when adding this stock would breach concentration limits.
+// Checks: sector weight, portfolio beta, average correlation.
+function factorConcentrationPenalty(candidateSector, existingPositions, closesMap, benchmarkCloses) {
+  if (!existingPositions?.length) return { penalty: 1.0, reasons: [] };
+
+  const reasons = [];
+  let penalty = 1.0;
+
+  // 1. Sector concentration check
+  if (candidateSector && existingPositions.length >= 2) {
+    const sectorCount = existingPositions.filter(p => p.sector === candidateSector).length;
+    const sectorWeight = sectorCount / existingPositions.length;
+    if (sectorWeight > 0.40) {
+      penalty *= 0.6;
+      reasons.push(`Sector ${candidateSector} at ${(sectorWeight * 100).toFixed(0)}% — heavy concentration`);
+    } else if (sectorWeight > 0.30) {
+      penalty *= 0.8;
+      reasons.push(`Sector ${candidateSector} at ${(sectorWeight * 100).toFixed(0)}% — moderate concentration`);
+    }
+  }
+
+  // 2. Portfolio beta check
+  if (closesMap && benchmarkCloses && existingPositions.length >= 2) {
+    let totalBeta = 0, betaCount = 0;
+    for (const pos of existingPositions) {
+      const beta = closesMap[pos.symbol] ? calcBeta(closesMap[pos.symbol], benchmarkCloses, 90) : null;
+      if (beta != null) { totalBeta += beta; betaCount++; }
+    }
+    if (betaCount > 0) {
+      const avgBeta = totalBeta / betaCount;
+      if (avgBeta > 1.3) {
+        penalty *= 0.8;
+        reasons.push(`Portfolio beta ${avgBeta.toFixed(2)} — over-leveraged to market`);
+      } else if (avgBeta > 1.5) {
+        penalty *= 0.6;
+        reasons.push(`Portfolio beta ${avgBeta.toFixed(2)} — dangerously high beta`);
+      }
+    }
+  }
+
+  return { penalty: Math.max(0.3, penalty), reasons };
+}
+
 // Full position sizing calculation
 function calculatePositionSize(params) {
   const {
@@ -72,6 +116,12 @@ function calculatePositionSize(params) {
     maxPositionPct = 20, // max % of account in single position
     beta,                // optional — stock beta vs SPY
     atrPct,              // optional — ATR as % of price (volatility-aware sizing)
+    // Phase 1: Correlation-aware sizing
+    existingPositions,   // optional — array of {symbol, sector, shares, currentPrice, entry_price}
+    closesMap,           // optional — {symbol: [closes]} for correlation calc
+    benchmarkCloses,     // optional — SPY closes for factor analysis
+    candidateSymbol,     // optional — symbol being sized
+    candidateSector,     // optional — sector of candidate
   } = params;
 
   const base = fixedFractional(accountSize, riskPerTrade, entryPrice, stopPrice);
@@ -83,8 +133,36 @@ function calculatePositionSize(params) {
 
   const betaMult = betaAdjustment(beta);
   const volMult  = volatilityAdjustment(atrPct);
-  // Combined risk multiplier: regime × beta × vol (capped at 1.5x ceiling)
-  const totalMult = Math.min(1.5, effectiveRegimeMult * betaMult * volMult);
+
+  // Phase 1: Correlation-aware sizing
+  let correlationMult = 1.0;
+  let correlationDetails = null;
+  if (existingPositions?.length && closesMap && candidateSymbol) {
+    try {
+      const { correlationAdjustedSize } = require('./correlation');
+      const corrResult = correlationAdjustedSize(100, candidateSymbol, closesMap, existingPositions);
+      correlationMult = corrResult.correlationPenalty;
+      correlationDetails = {
+        penalty: corrResult.correlationPenalty,
+        avgCorrelation: corrResult.avgCorrelationWithPortfolio,
+        reason: corrResult.reason,
+      };
+    } catch (_) {}
+  }
+
+  // Factor concentration penalty (sector, beta)
+  let factorMult = 1.0;
+  let factorDetails = null;
+  if (existingPositions?.length >= 2) {
+    const factorResult = factorConcentrationPenalty(candidateSector, existingPositions, closesMap, benchmarkCloses);
+    factorMult = factorResult.penalty;
+    if (factorResult.reasons.length) {
+      factorDetails = { penalty: factorResult.penalty, reasons: factorResult.reasons };
+    }
+  }
+
+  // Combined risk multiplier: regime × beta × vol × correlation × factor (capped at 1.5x ceiling)
+  const totalMult = Math.min(1.5, effectiveRegimeMult * betaMult * volMult * correlationMult * factorMult);
 
   const adjusted = {
     ...base,
@@ -105,11 +183,15 @@ function calculatePositionSize(params) {
   adjusted.regimeMultiplier = regimeMultiplier;
   adjusted.effectiveRegimeMult = +effectiveRegimeMult.toFixed(2);
   adjusted.convictionOverride = convictionOverride || null;
-  adjusted.betaMultiplier   = +betaMult.toFixed(2);
-  adjusted.volMultiplier    = +volMult.toFixed(2);
-  adjusted.totalMultiplier  = +totalMult.toFixed(2);
-  adjusted.beta             = beta || null;
-  adjusted.atrPct           = atrPct || null;
+  adjusted.betaMultiplier     = +betaMult.toFixed(2);
+  adjusted.volMultiplier      = +volMult.toFixed(2);
+  adjusted.correlationMultiplier = +correlationMult.toFixed(2);
+  adjusted.correlationDetails = correlationDetails;
+  adjusted.factorMultiplier   = +factorMult.toFixed(2);
+  adjusted.factorDetails      = factorDetails;
+  adjusted.totalMultiplier    = +totalMult.toFixed(2);
+  adjusted.beta               = beta || null;
+  adjusted.atrPct             = atrPct || null;
   return adjusted;
 }
 
@@ -196,4 +278,5 @@ function calcCorrelationMatrix(closesMap, periods = 60) {
 module.exports = {
   fixedFractional, kellyOptimal, regimeAdjusted, calculatePositionSize,
   betaAdjustment, volatilityAdjustment, calcBeta, calcCorrelationMatrix,
+  factorConcentrationPenalty,
 };

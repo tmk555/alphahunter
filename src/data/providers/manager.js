@@ -1,13 +1,14 @@
 // ─── Multi-Provider Manager ─────────────────────────────────────────────────
-// Cascading fallback: Yahoo → FMP → Alpha Vantage
+// Cascading fallback: Polygon → Yahoo → FMP → Alpha Vantage
 // Tracks provider health, auto-promotes/demotes based on success rate
 const { getDB } = require('../database');
 const { cacheGet, cacheSet } = require('../cache');
 
 function db() { return getDB(); }
 
-// Provider registry — order = priority
+// Provider registry — order = priority (Polygon first for reliability)
 const providers = [
+  { key: 'polygon',       name: 'Polygon.io',      module: () => require('./polygon') },
   { key: 'yahoo',         name: 'Yahoo Finance',   module: () => require('./yahoo') },
   { key: 'fmp',           name: 'FMP',             module: () => require('./fmp') },
   { key: 'alphavantage',  name: 'Alpha Vantage',   module: () => require('./alphavantage') },
@@ -24,6 +25,7 @@ const CIRCUIT_BREAKER_RESET_MS = 5 * 60 * 1000; // 5 min cooldown
 
 function isAvailable(providerKey) {
   const h = health[providerKey];
+  if (!h) return false;
   if (!h.disabled) return true;
   // Auto-reset circuit breaker after cooldown
   if (h.disabledAt && Date.now() - h.disabledAt > CIRCUIT_BREAKER_RESET_MS) {
@@ -66,7 +68,8 @@ async function withFallback(operation, methodMap) {
     const mod = provider.module();
 
     // Check if provider is configured (has API key)
-    if (provider.key !== 'yahoo' && mod.isConfigured && !mod.isConfigured()) continue;
+    if (provider.key !== 'yahoo' && provider.key !== 'polygon' && mod.isConfigured && !mod.isConfigured()) continue;
+    if (provider.key === 'polygon' && mod.isConfigured && !mod.isConfigured()) continue;
 
     const method = methodMap(mod, provider.key);
     if (!method) continue;
@@ -89,6 +92,7 @@ async function withFallback(operation, methodMap) {
 
 async function getQuotes(symbols) {
   const { data } = await withFallback(`quote(${symbols.length} symbols)`, (mod, key) => {
+    if (key === 'polygon') return () => mod.polygonQuote(symbols);
     if (key === 'yahoo') return () => mod.yahooQuote(symbols);
     if (key === 'fmp') return () => mod.fmpQuote(symbols);
     if (key === 'alphavantage') return () => mod.avQuote(symbols);
@@ -99,6 +103,7 @@ async function getQuotes(symbols) {
 
 async function getHistory(symbol) {
   const { data } = await withFallback(`history(${symbol})`, (mod, key) => {
+    if (key === 'polygon') return () => mod.polygonHistory(symbol);
     if (key === 'yahoo') return () => mod.yahooHistory(symbol);
     if (key === 'fmp') return () => mod.fmpHistory(symbol);
     if (key === 'alphavantage') return () => mod.avHistory(symbol);
@@ -109,6 +114,7 @@ async function getHistory(symbol) {
 
 async function getHistoryFull(symbol) {
   const { data } = await withFallback(`historyFull(${symbol})`, (mod, key) => {
+    if (key === 'polygon') return () => mod.polygonHistoryFull(symbol);
     if (key === 'yahoo') return () => mod.yahooHistoryFull(symbol);
     if (key === 'fmp') return () => mod.fmpHistoryFull(symbol);
     if (key === 'alphavantage') return () => mod.avHistoryFull(symbol);
@@ -118,10 +124,25 @@ async function getHistoryFull(symbol) {
 }
 
 async function getFundamentals(symbol) {
-  // Only Yahoo has full fundamentals; FMP has partial
   const { data } = await withFallback(`fundamentals(${symbol})`, (mod, key) => {
+    if (key === 'polygon') return () => mod.polygonFundamentals(symbol);
     if (key === 'yahoo') return () => mod.getYahooFundamentals(symbol);
     // FMP and AV don't have CAN SLIM fundamentals — skip
+    return null;
+  });
+  return data;
+}
+
+// ─── Intraday bars (Phase 2: entry timing) ─────────────────────────────────
+// Polygon primary, Yahoo fallback (free)
+async function getIntradayBars(symbol, timespan = 'minute', multiplier = 5, from, to) {
+  const { data } = await withFallback(`intraday(${symbol} ${multiplier}${timespan})`, (mod, key) => {
+    if (key === 'polygon' && mod.polygonIntradayBars) {
+      return () => mod.polygonIntradayBars(symbol, timespan, multiplier, from, to);
+    }
+    if (key === 'yahoo' && mod.yahooIntradayBars) {
+      return () => mod.yahooIntradayBars(symbol, timespan, multiplier, from, to);
+    }
     return null;
   });
   return data;
@@ -189,6 +210,7 @@ function getProviderLog(limit = 100) {
 
 module.exports = {
   getQuotes, getHistory, getHistoryFull, getFundamentals,
+  getIntradayBars,
   getProviderHealth, resetProviderHealth, setProviderPriority,
   getProviderLog,
   // Re-export pLimit from yahoo for scanner compatibility

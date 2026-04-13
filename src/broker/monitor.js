@@ -288,6 +288,7 @@ async function startStopMonitor() {
       await checkPositionsAgainstStops();
       await checkStrategyExits();
       await checkBreadthEarlyWarning();
+      await checkConditionalAndScaleIn();
     }, { scheduled: true });
 
     // Expire stale staged orders every hour
@@ -520,9 +521,100 @@ async function checkStrategyExits() {
   }
 }
 
+// ─── Phase 2: Conditional Entry + Scale-In Monitoring ──────────────────────
+// Checks conditional entries (pullback/breakout triggers) and active scale-in
+// plans on every cron cycle. Real-time stream triggers are handled separately.
+
+async function checkConditionalAndScaleIn() {
+  try {
+    // Conditional entries
+    const pendingEntries = db().prepare(
+      "SELECT DISTINCT symbol FROM conditional_entries WHERE status = 'pending'"
+    ).all();
+
+    if (pendingEntries.length > 0) {
+      const symbols = pendingEntries.map(r => r.symbol);
+      const currentPrices = {};
+
+      // Get prices from stream first, then fill gaps
+      if (streamingActive) {
+        for (const s of symbols) {
+          const streamPrice = priceStream.getPrice(s);
+          if (streamPrice) currentPrices[s] = streamPrice.price;
+        }
+      }
+
+      const missing = symbols.filter(s => !currentPrices[s]);
+      if (missing.length) {
+        try {
+          const quotes = await yahooQuote(missing);
+          for (const q of quotes) {
+            if (q.regularMarketPrice) currentPrices[q.symbol] = q.regularMarketPrice;
+          }
+        } catch (_) {}
+      }
+
+      if (Object.keys(currentPrices).length > 0) {
+        try {
+          const { checkConditionalEntries, expireOldEntries } = require('./auto-stage');
+          const result = await checkConditionalEntries(currentPrices);
+          expireOldEntries();
+          if (result.triggered?.length > 0) {
+            console.log(`  Conditional: ${result.triggered.length} entry/entries triggered`);
+          }
+        } catch (e) {
+          console.error(`  Conditional entry check error: ${e.message}`);
+        }
+      }
+    }
+
+    // Scale-in plans
+    const activePlans = db().prepare(
+      "SELECT DISTINCT symbol FROM scale_in_plans WHERE status = 'active'"
+    ).all();
+
+    if (activePlans.length > 0) {
+      const symbols = activePlans.map(r => r.symbol);
+      const currentPrices = {};
+
+      if (streamingActive) {
+        for (const s of symbols) {
+          const streamPrice = priceStream.getPrice(s);
+          if (streamPrice) currentPrices[s] = streamPrice.price;
+        }
+      }
+
+      const missing = symbols.filter(s => !currentPrices[s]);
+      if (missing.length) {
+        try {
+          const quotes = await yahooQuote(missing);
+          for (const q of quotes) {
+            if (q.regularMarketPrice) currentPrices[q.symbol] = q.regularMarketPrice;
+          }
+        } catch (_) {}
+      }
+
+      if (Object.keys(currentPrices).length > 0) {
+        try {
+          const { checkAllActivePlans } = require('../risk/scale-in');
+          const result = await checkAllActivePlans(currentPrices);
+          if (result.triggered?.length > 0) {
+            console.log(`  Scale-in: ${result.triggered.length} tranche(s) triggered`);
+          }
+        } catch (e) {
+          console.error(`  Scale-in check error: ${e.message}`);
+        }
+      }
+    }
+  } catch (e) {
+    console.error(`  Conditional/Scale-in check error: ${e.message}`);
+  }
+}
+
 module.exports = {
   startStopMonitor, stopMonitor, getMonitorStatus,
   checkPositionsAgainstStops, checkStrategyExits, checkBreadthEarlyWarning,
+  checkConditionalAndScaleIn,
   reconcilePositions,
   priceStream, // Export for routes to expose status
 };

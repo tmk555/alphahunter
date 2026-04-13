@@ -1,0 +1,335 @@
+// ─── Portfolio Alpha Tracking Engine ─────────────────────────────────────────
+// Time-weighted returns, rolling Sharpe/Sortino, SPY-relative equity curve,
+// max drawdown duration. Answers: "Am I actually generating alpha?"
+const { getDB } = require('../data/database');
+
+function db() { return getDB(); }
+
+function marketDate() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+
+// ─── Time-Weighted Return (TWR) ─────────────────────────────────────────────
+// Sub-period linking: eliminates the effect of deposits/withdrawals.
+// Each sub-period ends at a cash flow event; the overall return is the
+// geometric product of sub-period returns.
+
+function calculateTWR(snapshots) {
+  if (!snapshots?.length || snapshots.length < 2) {
+    return { twr: 0, annualized: 0, periods: 0, subPeriodReturns: [] };
+  }
+
+  const subPeriodReturns = [];
+  let periodStart = 0;
+
+  for (let i = 1; i < snapshots.length; i++) {
+    const prevEquity = snapshots[i - 1].equity;
+    const currEquity = snapshots[i].equity;
+    const cashFlow = snapshots[i].cash_flow || 0;
+
+    // Sub-period return: (end - cashFlow) / start - 1
+    // cashFlow adjusts for deposits/withdrawals during the period
+    const adjustedEnd = currEquity - cashFlow;
+    if (prevEquity > 0) {
+      const subReturn = (adjustedEnd / prevEquity) - 1;
+      subPeriodReturns.push({ date: snapshots[i].date, return: +subReturn.toFixed(6) });
+    }
+
+    // Start new sub-period at each cash flow event
+    if (Math.abs(cashFlow) > 0) periodStart = i;
+  }
+
+  // Geometric linking
+  const twr = subPeriodReturns.reduce((product, sp) => product * (1 + sp.return), 1) - 1;
+
+  // Annualize
+  const tradingDays = snapshots.length - 1;
+  const years = tradingDays / 252;
+  const annualized = years > 0 ? Math.pow(1 + twr, 1 / years) - 1 : twr;
+
+  return {
+    twr: +(twr * 100).toFixed(2),
+    annualized: +(annualized * 100).toFixed(2),
+    periods: subPeriodReturns.length,
+    subPeriodReturns: subPeriodReturns.slice(-30), // Last 30 for chart
+  };
+}
+
+// ─── Rolling Sharpe Ratio ───────────────────────────────────────────────────
+// (mean_return - risk_free_rate) / std_dev * sqrt(252)
+
+function calculateRollingSharpe(snapshots, windowDays = 30, riskFreeRate = 0.05) {
+  if (!snapshots?.length || snapshots.length < windowDays + 1) return [];
+
+  const dailyRf = riskFreeRate / 252;
+  const results = [];
+
+  for (let i = windowDays; i < snapshots.length; i++) {
+    const window = snapshots.slice(i - windowDays, i + 1);
+    const returns = [];
+    for (let j = 1; j < window.length; j++) {
+      if (window[j - 1].equity > 0) {
+        returns.push(window[j].equity / window[j - 1].equity - 1);
+      }
+    }
+
+    if (returns.length < 10) continue;
+
+    const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+    const variance = returns.reduce((a, r) => a + (r - mean) ** 2, 0) / (returns.length - 1);
+    const std = Math.sqrt(variance);
+
+    const sharpe = std > 0 ? ((mean - dailyRf) / std) * Math.sqrt(252) : 0;
+    results.push({
+      date: snapshots[i].date,
+      sharpe: +sharpe.toFixed(2),
+    });
+  }
+
+  return results;
+}
+
+// ─── Rolling Sortino Ratio ──────────────────────────────────────────────────
+// Like Sharpe but only penalizes downside deviation (returns below target)
+
+function calculateRollingSortino(snapshots, windowDays = 30, riskFreeRate = 0.05) {
+  if (!snapshots?.length || snapshots.length < windowDays + 1) return [];
+
+  const dailyRf = riskFreeRate / 252;
+  const results = [];
+
+  for (let i = windowDays; i < snapshots.length; i++) {
+    const window = snapshots.slice(i - windowDays, i + 1);
+    const returns = [];
+    for (let j = 1; j < window.length; j++) {
+      if (window[j - 1].equity > 0) {
+        returns.push(window[j].equity / window[j - 1].equity - 1);
+      }
+    }
+
+    if (returns.length < 10) continue;
+
+    const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+    const downside = returns.filter(r => r < 0);
+    const downsideVariance = downside.length > 0
+      ? downside.reduce((a, r) => a + r ** 2, 0) / downside.length
+      : 0;
+    const downsideDev = Math.sqrt(downsideVariance);
+
+    const sortino = downsideDev > 0 ? ((mean - dailyRf) / downsideDev) * Math.sqrt(252) : 0;
+    results.push({
+      date: snapshots[i].date,
+      sortino: +sortino.toFixed(2),
+    });
+  }
+
+  return results;
+}
+
+// ─── SPY-Relative Equity Curve ──────────────────────────────────────────────
+
+function calculateSPYRelativeCurve(snapshots) {
+  if (!snapshots?.length || snapshots.length < 2) return [];
+
+  // Filter to snapshots with both equity and spy_close
+  const valid = snapshots.filter(s => s.equity > 0 && s.spy_close > 0);
+  if (valid.length < 2) return [];
+
+  const results = [];
+  let cumulativeAlpha = 0;
+
+  for (let i = 1; i < valid.length; i++) {
+    const portfolioReturn = (valid[i].equity / valid[i - 1].equity) - 1;
+    const spyReturn = (valid[i].spy_close / valid[i - 1].spy_close) - 1;
+    const dailyAlpha = portfolioReturn - spyReturn;
+    cumulativeAlpha += dailyAlpha;
+
+    results.push({
+      date: valid[i].date,
+      portfolioReturn: +(portfolioReturn * 100).toFixed(3),
+      spyReturn: +(spyReturn * 100).toFixed(3),
+      dailyAlpha: +(dailyAlpha * 100).toFixed(3),
+      cumulativeAlpha: +(cumulativeAlpha * 100).toFixed(2),
+    });
+  }
+
+  return results;
+}
+
+// ─── Max Drawdown Duration ──────────────────────────────────────────────────
+
+function calculateMaxDrawdownDuration(snapshots) {
+  if (!snapshots?.length) {
+    return { maxDrawdownPct: 0, maxDrawdownDuration: 0, currentDrawdownPct: 0, currentDrawdownDays: 0 };
+  }
+
+  let peak = snapshots[0].equity;
+  let peakDate = snapshots[0].date;
+  let maxDD = 0, maxDDDuration = 0;
+  let maxDDPeakDate = null, maxDDTroughDate = null, maxDDRecoveryDate = null;
+
+  let currentDDStart = null;
+  let currentDDDays = 0;
+  let trough = peak, troughDate = peakDate;
+
+  for (let i = 0; i < snapshots.length; i++) {
+    const eq = snapshots[i].equity;
+    const dt = snapshots[i].date;
+
+    if (eq >= peak) {
+      // New high — check if we were in a drawdown
+      if (currentDDStart && currentDDDays > maxDDDuration) {
+        maxDDDuration = currentDDDays;
+        maxDDRecoveryDate = dt;
+      }
+      peak = eq;
+      peakDate = dt;
+      currentDDStart = null;
+      currentDDDays = 0;
+      trough = peak;
+      troughDate = dt;
+    } else {
+      // In drawdown
+      if (!currentDDStart) currentDDStart = dt;
+      currentDDDays++;
+
+      const dd = ((peak - eq) / peak) * 100;
+      if (dd > maxDD) {
+        maxDD = dd;
+        maxDDPeakDate = peakDate;
+      }
+      if (eq < trough) {
+        trough = eq;
+        troughDate = dt;
+        maxDDTroughDate = dt;
+      }
+    }
+  }
+
+  // Current drawdown state
+  const lastEquity = snapshots[snapshots.length - 1].equity;
+  const currentDD = peak > 0 ? ((peak - lastEquity) / peak) * 100 : 0;
+
+  return {
+    maxDrawdownPct: +maxDD.toFixed(2),
+    maxDrawdownDuration: maxDDDuration,
+    currentDrawdownPct: +currentDD.toFixed(2),
+    currentDrawdownDays: currentDDDays,
+    peakDate: maxDDPeakDate,
+    troughDate: maxDDTroughDate,
+    recoveryDate: maxDDRecoveryDate,
+    currentPeak: +peak.toFixed(2),
+    currentPeakDate: peakDate,
+  };
+}
+
+// ─── Record Daily Equity Snapshot ────────────────────────────────────────────
+
+function recordEquitySnapshot(equity, cashFlow = 0, spyClose = null, openPositions = 0, heatPct = 0) {
+  const date = marketDate();
+  db().prepare(`
+    INSERT OR REPLACE INTO equity_snapshots (date, equity, cash_flow, spy_close, open_positions, total_heat_pct)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(date, equity, cashFlow, spyClose, openPositions, heatPct);
+  return { date, equity, cashFlow, spyClose, openPositions, heatPct };
+}
+
+// ─── Query Equity Snapshots ──────────────────────────────────────────────────
+
+function getEquitySnapshots(startDate, endDate) {
+  let query = 'SELECT * FROM equity_snapshots';
+  const params = [];
+  const conditions = [];
+
+  if (startDate) { conditions.push('date >= ?'); params.push(startDate); }
+  if (endDate) { conditions.push('date <= ?'); params.push(endDate); }
+  if (conditions.length) query += ' WHERE ' + conditions.join(' AND ');
+  query += ' ORDER BY date ASC';
+
+  return db().prepare(query).all(...params);
+}
+
+// ─── Period Return Helper ────────────────────────────────────────────────────
+
+function computePeriodReturn(snapshots, days) {
+  if (!snapshots?.length || snapshots.length < 2) return null;
+  const end = snapshots[snapshots.length - 1];
+  const startIdx = Math.max(0, snapshots.length - 1 - days);
+  const start = snapshots[startIdx];
+  if (!start.equity || start.equity === 0) return null;
+  return +((end.equity / start.equity - 1) * 100).toFixed(2);
+}
+
+// ─── Full Alpha Report ──────────────────────────────────────────────────────
+
+function generateAlphaReport(windowDays = 30) {
+  const snapshots = getEquitySnapshots();
+
+  if (!snapshots.length) {
+    return {
+      error: 'No equity snapshots. Run the equity_snapshot scheduled job or POST /api/portfolio/equity-snapshot.',
+      snapshotCount: 0,
+    };
+  }
+
+  const twr = calculateTWR(snapshots);
+  const sharpeRolling = calculateRollingSharpe(snapshots, windowDays);
+  const sortinoRolling = calculateRollingSortino(snapshots, windowDays);
+  const spyRelative = calculateSPYRelativeCurve(snapshots);
+  const drawdown = calculateMaxDrawdownDuration(snapshots);
+
+  const currentSharpe = sharpeRolling.length ? sharpeRolling[sharpeRolling.length - 1].sharpe : null;
+  const currentSortino = sortinoRolling.length ? sortinoRolling[sortinoRolling.length - 1].sortino : null;
+
+  return {
+    twr: {
+      total: twr.twr,
+      annualized: twr.annualized,
+    },
+    sharpe: {
+      current: currentSharpe,
+      window: windowDays,
+      rolling: sharpeRolling.slice(-60), // Last 60 data points for chart
+    },
+    sortino: {
+      current: currentSortino,
+      window: windowDays,
+      rolling: sortinoRolling.slice(-60),
+    },
+    spyRelative: {
+      totalAlpha: spyRelative.length ? spyRelative[spyRelative.length - 1].cumulativeAlpha : 0,
+      curve: spyRelative.slice(-60),
+    },
+    drawdown,
+    periodReturns: {
+      '1w': computePeriodReturn(snapshots, 5),
+      '1m': computePeriodReturn(snapshots, 21),
+      '3m': computePeriodReturn(snapshots, 63),
+      '6m': computePeriodReturn(snapshots, 126),
+      '1y': computePeriodReturn(snapshots, 252),
+      ytd: computePeriodReturn(snapshots, _daysSinceYearStart()),
+      mtd: computePeriodReturn(snapshots, new Date().getDate()),
+    },
+    snapshotCount: snapshots.length,
+    firstDate: snapshots[0].date,
+    lastDate: snapshots[snapshots.length - 1].date,
+  };
+}
+
+function _daysSinceYearStart() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), 0, 1);
+  return Math.floor((now - start) / (1000 * 60 * 60 * 24));
+}
+
+module.exports = {
+  calculateTWR,
+  calculateRollingSharpe,
+  calculateRollingSortino,
+  calculateSPYRelativeCurve,
+  calculateMaxDrawdownDuration,
+  recordEquitySnapshot,
+  getEquitySnapshots,
+  computePeriodReturn,
+  generateAlphaReport,
+};

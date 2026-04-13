@@ -145,5 +145,119 @@ module.exports = function(db, runScan) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ─── Phase 2: Conditional Entries ──────────────────────────────────────────
+
+  router.post('/staging/conditional', (req, res) => {
+    try {
+      const { createConditionalEntry } = require('../broker/auto-stage');
+      const { symbol, conditionType = 'pullback', triggerPrice, entryPrice, stopPrice,
+              target1Price, target2Price, qty, side = 'buy', source = 'manual',
+              convictionScore, expiryDate } = req.body;
+      if (!symbol || !triggerPrice || !entryPrice || !stopPrice || !qty) {
+        return res.status(400).json({ error: 'symbol, triggerPrice, entryPrice, stopPrice, qty required' });
+      }
+      const entry = createConditionalEntry({
+        symbol, conditionType, triggerPrice, entryPrice, stopPrice,
+        target1Price, target2Price, qty, side, source, convictionScore, expiryDate,
+      });
+      res.json(entry);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.get('/staging/conditional', (req, res) => {
+    try {
+      const { getConditionalEntries } = require('../broker/auto-stage');
+      const status = req.query.status || null;
+      const entries = getConditionalEntries(status);
+      res.json({ entries, count: entries.length });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.delete('/staging/conditional/:id', (req, res) => {
+    try {
+      const { cancelConditionalEntry } = require('../broker/auto-stage');
+      cancelConditionalEntry(+req.params.id);
+      res.json({ cancelled: true, id: +req.params.id });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Phase 2: Auto-Stage from Trade Briefs ─────────────────────────────────
+
+  router.post('/staging/from-brief', (req, res) => {
+    try {
+      const { autoStageFromTradeBriefs } = require('../broker/auto-stage');
+      const briefs = req.body.briefs || [req.body];
+      const result = autoStageFromTradeBriefs(briefs);
+      res.json(result);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Phase 2: Auto-Stage from Watchlist ─────────────────────────────────────
+
+  router.post('/staging/auto-stage', async (req, res) => {
+    try {
+      const { autoStageFromWatchlist } = require('../broker/auto-stage');
+      const { cacheGet, TTL_QUOTE } = require('../data/cache');
+      const scanData = cacheGet('rs:full', TTL_QUOTE);
+      if (!scanData?.length) return res.status(400).json({ error: 'No scan data available — run RS scan first' });
+
+      // Get watchlist symbols
+      let watchlistSymbols = req.body.symbols || [];
+      if (!watchlistSymbols.length) {
+        try {
+          const fs = require('fs');
+          const path = require('path');
+          const wlPath = path.join(__dirname, '..', '..', 'data', 'watchlist.json');
+          if (fs.existsSync(wlPath)) {
+            const wl = JSON.parse(fs.readFileSync(wlPath, 'utf8'));
+            watchlistSymbols = Array.isArray(wl) ? wl.map(w => w.symbol || w) : [];
+          }
+        } catch (_) {}
+      }
+
+      if (!watchlistSymbols.length) return res.status(400).json({ error: 'No watchlist symbols — pass symbols in body or add to watchlist.json' });
+
+      const regime = await getMarketRegime();
+      const config = getConfig();
+      const result = autoStageFromWatchlist(watchlistSymbols, scanData, {
+        accountSize: config.accountSize,
+        riskPerTrade: config.riskPerTrade,
+        regimeMultiplier: regime.sizeMultiplier,
+      });
+      res.json(result);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Phase 2: Stage with Scale-In Plan ─────────────────────────────────────
+
+  router.post('/staging/from-setup-scaled', async (req, res) => {
+    try {
+      const { symbol, entry_price, stop_price, target1_price, target2_price,
+              total_qty, side = 'buy', source = 'scaled' } = req.body;
+      if (!symbol || !entry_price || !stop_price || !total_qty) {
+        return res.status(400).json({ error: 'symbol, entry_price, stop_price, total_qty required' });
+      }
+
+      // Stage pilot tranche (1/3)
+      const pilotQty = Math.max(1, Math.ceil(total_qty / 3));
+      const staged = stageOrder({
+        symbol, side, order_type: 'limit', qty: pilotQty,
+        entry_price, stop_price, target1_price, target2_price,
+        source: `${source}_pilot`, notes: `Pilot tranche (1/3 of ${total_qty}). Scale-in plan pending.`,
+      });
+
+      res.json({
+        staged,
+        scaleInNote: `Pilot ${pilotQty}/${total_qty} shares staged. Create scale-in plan after trade entry.`,
+        totalShares: total_qty,
+        tranches: {
+          pilot: pilotQty,
+          confirmation: Math.ceil((total_qty - pilotQty) / 2),
+          breakout: total_qty - pilotQty - Math.ceil((total_qty - pilotQty) / 2),
+        },
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   return router;
 };

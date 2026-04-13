@@ -332,20 +332,48 @@ function calcSPYBenchmark(startDate, endDate) {
   };
 }
 
-// ─── Point-in-Time Universe Filter ────────────────────────────────────────
-// Excludes stocks that were removed from the universe before a given date
-// to reduce survivorship bias. Only effective if universe_mgmt is populated.
+// ─── Point-in-Time Universe Filter (Phase 1 — Survivorship Bias Fix) ──────
+// Uses universe-tracker module for proper point-in-time universe membership.
+// Excludes stocks that were removed from the universe before a given date AND
+// stocks that were added AFTER the given date (prevents look-ahead bias).
+// Falls back to basic universe_mgmt check if tracker module unavailable.
 
 function getActiveUniverse(date) {
+  try {
+    // Phase 1: use universe-tracker for comprehensive filtering
+    const { getActiveUniverseForDate } = require('./universe-tracker');
+    const activeSymbols = getActiveUniverseForDate(date);
+    if (activeSymbols && activeSymbols.length > 0) {
+      // Return a Set of REMOVED symbols (for backward compat with existing filter)
+      // Any symbol NOT in the active universe is effectively "removed"
+      return { activeSet: new Set(activeSymbols), mode: 'tracker' };
+    }
+  } catch (_) {
+    // universe-tracker not available — fall back
+  }
+
+  // Legacy fallback: basic removed-date check
   try {
     const removed = db().prepare(`
       SELECT symbol FROM universe_mgmt
       WHERE removed_date IS NOT NULL AND removed_date <= ?
     `).all(date).map(r => r.symbol);
-    return new Set(removed);
+    return { removedSet: new Set(removed), mode: 'legacy' };
   } catch (_) {
-    return new Set(); // No universe tracking = can't filter
+    return { removedSet: new Set(), mode: 'none' };
   }
+}
+
+// Check if a symbol passes the universe filter for a given date
+function isInUniverse(symbol, universeFilter) {
+  if (!universeFilter) return true;
+  if (universeFilter.mode === 'tracker' && universeFilter.activeSet) {
+    return universeFilter.activeSet.has(symbol);
+  }
+  if (universeFilter.removedSet) {
+    return !universeFilter.removedSet.has(symbol);
+  }
+  return true;
 }
 
 // ─── Replay Engine ─────────────────────────────────────────────────────────
@@ -462,8 +490,8 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       if (isEmerging) s._rs_accel_4w = computeRsAccel4w(s.symbol, date);
     }
 
-    // Survivorship filter: skip stocks removed from universe before this date
-    const removedSymbols = getActiveUniverse(date);
+    // Survivorship filter: skip stocks not in the universe on this date
+    const universeFilter = getActiveUniverse(date);
 
     // For adaptive strategies, resolve today's sub-strategy + regime context.
     // Non-adaptive strategies see { key: strategy, def: stratDef, regime: null }.
@@ -637,7 +665,7 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       let candidates = dayStocks
         .filter(s => !positions.has(s.symbol) && s.price > 0)
         .filter(s => s.symbol !== 'SPY')
-        .filter(s => !removedSymbols.has(s.symbol))  // Survivorship filter
+        .filter(s => isInUniverse(s.symbol, universeFilter))  // Survivorship filter
         .filter(s => evaluateEntry(s, todayStrategy, mergedParams));
 
       // Position mode: require pullback to 50MA (vsMA50 between -2% and +5%)

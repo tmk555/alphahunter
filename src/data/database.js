@@ -13,8 +13,11 @@ let db = null;
 function getDB() {
   if (db) return db;
   db = new Database(DB_PATH);
-  db.pragma('journal_mode = WAL');  // Write-Ahead Logging for concurrency
+  db.pragma('journal_mode = WAL');        // Write-Ahead Logging for concurrency
   db.pragma('foreign_keys = ON');
+  db.pragma('synchronous = NORMAL');      // Safe with WAL, fewer fsync calls
+  db.pragma('cache_size = 10000');         // ~40MB cache for faster reads
+  db.pragma('temp_store = MEMORY');        // Temp tables in RAM
   initSchema();
   return db;
 }
@@ -283,6 +286,7 @@ function initSchema() {
     -- Create indexes for common queries
     CREATE INDEX IF NOT EXISTS idx_rs_snapshots_date ON rs_snapshots(date);
     CREATE INDEX IF NOT EXISTS idx_rs_snapshots_symbol ON rs_snapshots(symbol);
+    CREATE INDEX IF NOT EXISTS idx_rs_snapshots_date_type ON rs_snapshots(date, type);
     CREATE INDEX IF NOT EXISTS idx_scan_results_date ON scan_results(date);
     CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
     CREATE INDEX IF NOT EXISTS idx_trades_open ON trades(exit_date) WHERE exit_date IS NULL;
@@ -477,6 +481,109 @@ function initSchema() {
   // Migration: breadth columns
   safeAddColumn('breadth_snapshots', 'mcclellan_osc', 'REAL');
   safeAddColumn('breadth_snapshots', 'summation_index', 'REAL');
+
+  // ─── Phase 1: Equity Snapshots & Alpha Metrics ──────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS equity_snapshots (
+      date TEXT PRIMARY KEY,
+      equity REAL NOT NULL,
+      cash_flow REAL DEFAULT 0,
+      spy_close REAL,
+      open_positions INTEGER,
+      total_heat_pct REAL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_equity_date ON equity_snapshots(date);
+
+    CREATE TABLE IF NOT EXISTS alpha_metrics (
+      date TEXT PRIMARY KEY,
+      twr REAL,
+      rolling_sharpe_30 REAL,
+      rolling_sharpe_90 REAL,
+      rolling_sortino_30 REAL,
+      rolling_sortino_90 REAL,
+      spy_relative_alpha REAL,
+      cumulative_alpha REAL,
+      max_drawdown_pct REAL,
+      drawdown_duration_days INTEGER,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_alpha_date ON alpha_metrics(date);
+  `);
+
+  // ─── Phase 1: Universe Frozen Snapshots (survivorship bias fix) ─────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS universe_frozen_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      symbol TEXT NOT NULL,
+      frozen_date TEXT NOT NULL,
+      removal_reason TEXT,
+      last_rs_rank INTEGER,
+      last_price REAL,
+      last_scan_data JSON,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_frozen_symbol ON universe_frozen_snapshots(symbol);
+    CREATE INDEX IF NOT EXISTS idx_frozen_date ON universe_frozen_snapshots(frozen_date);
+  `);
+
+  // ─── Phase 2: Conditional Entries (watchlist-to-execution automation) ────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS conditional_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      symbol TEXT NOT NULL,
+      condition_type TEXT NOT NULL DEFAULT 'pullback',
+      trigger_price REAL NOT NULL,
+      entry_price REAL NOT NULL,
+      stop_price REAL NOT NULL,
+      target1_price REAL,
+      target2_price REAL,
+      qty INTEGER NOT NULL,
+      side TEXT DEFAULT 'buy',
+      time_in_force TEXT DEFAULT 'gtc',
+      source TEXT DEFAULT 'manual',
+      conviction_score REAL,
+      expiry_date TEXT,
+      status TEXT DEFAULT 'pending',
+      triggered_at TEXT,
+      staged_order_id INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (staged_order_id) REFERENCES staged_orders(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_conditional_status ON conditional_entries(status);
+    CREATE INDEX IF NOT EXISTS idx_conditional_symbol ON conditional_entries(symbol);
+  `);
+
+  // ─── Phase 2: Scale-In Plans (3-tranche entry workflow) ─────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scale_in_plans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trade_id INTEGER NOT NULL,
+      symbol TEXT NOT NULL,
+      total_shares INTEGER NOT NULL,
+      tranche1_qty INTEGER NOT NULL,
+      tranche1_price REAL,
+      tranche1_filled_at TEXT,
+      tranche2_qty INTEGER NOT NULL,
+      tranche2_trigger TEXT NOT NULL DEFAULT 'confirmation',
+      tranche2_trigger_price REAL,
+      tranche2_filled_at TEXT,
+      tranche3_qty INTEGER NOT NULL,
+      tranche3_trigger TEXT NOT NULL DEFAULT 'breakout',
+      tranche3_trigger_price REAL,
+      tranche3_filled_at TEXT,
+      current_tranche INTEGER DEFAULT 1,
+      stop_price REAL,
+      status TEXT DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (trade_id) REFERENCES trades(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_scale_in_active ON scale_in_plans(status);
+    CREATE INDEX IF NOT EXISTS idx_scale_in_trade ON scale_in_plans(trade_id);
+  `);
+
+  // Phase 2 migration: link trades to scale-in plans
+  safeAddColumn('trades', 'scale_in_plan_id', 'INTEGER');
 }
 
 // One-time migration from legacy JSON files into SQLite

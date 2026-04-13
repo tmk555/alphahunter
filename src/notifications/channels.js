@@ -26,6 +26,12 @@ const CHANNELS = {
     configKeys: ['url'],
     icon: '🔗',
   },
+  pushover: {
+    name: 'Pushover',
+    envKey: 'PUSHOVER_USER_KEY',
+    configKeys: ['user_key', 'app_token'],
+    icon: '📱',
+  },
 };
 
 // ─── Slack Delivery ────────────────────────────────────────────────────────
@@ -85,6 +91,10 @@ function formatTelegramMessage(alert) {
     : alert.type === 'vcp_pivot' ? '🟢'
     : alert.type === 'price_above' ? '📈'
     : alert.type === 'price_below' ? '📉'
+    : alert.type === 'trade_regime_change' ? '🌊'
+    : alert.type === 'trade_conditional_triggered' ? '🎯'
+    : alert.type === 'trade_tranche_filled' ? '📊'
+    : alert.type === 'trade_scale_in' ? '➕'
     : '🔔';
 
   return [
@@ -140,12 +150,112 @@ async function sendWebhook(alert, config) {
   return { delivered: true, channel: 'webhook' };
 }
 
+// ─── Pushover Delivery (Mobile Push Notifications) ────────────────────────
+
+const PUSHOVER_PRIORITY_MAP = {
+  stop_violation: 1,       // high priority — vibrates even on silent
+  force_stop: 1,
+  auto_stop: 1,
+  regime_change: 1,        // regime shifts demand immediate attention
+  trade_regime_change: 1,
+  strategy_exit: 0,        // normal priority
+  vcp_pivot: 0,
+  price_above: 0,
+  price_below: 0,
+  trade_staged: -1,        // low priority — no vibration
+  trade_submitted: -1,
+  pullback_entry: 0,
+  trade_filled: 0,
+  trade_buy: 0,
+  scale_in: 0,
+  conditional_triggered: 0,
+  test: -1,
+};
+
+const PUSHOVER_SOUND_MAP = {
+  stop_violation: 'siren',
+  force_stop: 'siren',
+  auto_stop: 'falling',
+  regime_change: 'cosmic',
+  trade_regime_change: 'cosmic',
+  strategy_exit: 'intermission',
+  vcp_pivot: 'cashregister',
+  pullback_entry: 'pushover',
+  trade_filled: 'cashregister',
+  trade_buy: 'cashregister',
+  scale_in: 'pushover',
+  conditional_triggered: 'magic',
+};
+
+function formatPushoverMessage(alert) {
+  const emoji = alert.type === 'stop_violation' ? '🔴'
+    : alert.type === 'regime_change' || alert.type === 'trade_regime_change' ? '⚠️'
+    : alert.type === 'vcp_pivot' ? '🟢'
+    : alert.type === 'price_above' ? '📈'
+    : alert.type === 'price_below' ? '📉'
+    : alert.type === 'pullback_entry' ? '🎯'
+    : alert.type === 'conditional_triggered' ? '⚡'
+    : alert.type === 'scale_in' ? '➕'
+    : '🔔';
+
+  const title = `${emoji} ${alert.symbol || 'Alpha Hunter'} — ${(alert.type || 'alert').replace(/_/g, ' ').toUpperCase()}`;
+
+  const lines = [];
+  if (alert.message) lines.push(alert.message);
+  if (alert.current_price) lines.push(`Price: $${alert.current_price}`);
+  if (alert.trigger_price) lines.push(`Trigger: $${alert.trigger_price}`);
+
+  return { title, message: lines.join('\n') || 'Alert triggered' };
+}
+
+async function sendPushover(alert, config) {
+  const userKey = config.user_key || process.env.PUSHOVER_USER_KEY;
+  const appToken = config.app_token || process.env.PUSHOVER_APP_TOKEN;
+  if (!userKey || !appToken) throw new Error('Pushover user_key and app_token required');
+
+  const { title, message } = formatPushoverMessage(alert);
+  const priority = PUSHOVER_PRIORITY_MAP[alert.type] ?? 0;
+
+  const body = {
+    token: appToken,
+    user: userKey,
+    title,
+    message,
+    priority,
+    sound: PUSHOVER_SOUND_MAP[alert.type] || 'pushover',
+    url: `http://localhost:${process.env.PORT || 3000}`,
+    url_title: 'Open Alpha Hunter',
+    timestamp: Math.floor(new Date(alert.timestamp || Date.now()).getTime() / 1000),
+  };
+
+  // Priority 1 requires retry/expire params (Pushover requirement)
+  if (priority >= 1) {
+    body.retry = 60;     // retry every 60 seconds
+    body.expire = 600;   // stop retrying after 10 minutes
+  }
+
+  const res = await fetch('https://api.pushover.net/1/messages.json', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Pushover API error (${res.status}): ${text}`);
+  }
+
+  const data = await res.json();
+  return { delivered: true, channel: 'pushover', request: data.request };
+}
+
 // ─── Delivery Router ───────────────────────────────────────────────────────
 
 const senders = {
   slack: sendSlack,
   telegram: sendTelegram,
   webhook: sendWebhook,
+  pushover: sendPushover,
 };
 
 async function deliverAlert(alert, channels) {
@@ -277,6 +387,9 @@ const TRADE_EVENT_EMOJIS = {
   partial_exit: '➖', auto_stop: '🛑', force_stop: '🛑',
   stop_violation: '🛑', strategy_exit: '⚠️', adjustment: '🔧',
   pullback_entry: '🎯',
+  // Phase 2 events
+  regime_change: '🌊', conditional_triggered: '🎯', tranche_filled: '📊',
+  conditional_expired: '⏰', plan_completed: '🏁',
 };
 
 async function notifyTradeEvent({ event, symbol, details = {} }) {
@@ -289,6 +402,13 @@ async function notifyTradeEvent({ event, symbol, details = {} }) {
   if (details.stop) lines.push(`Stop: $${details.stop}`);
   if (details.pnl != null) lines.push(`P&L: ${details.pnl >= 0 ? '+' : ''}$${details.pnl.toFixed(2)}`);
   if (details.pnl_pct != null) lines.push(`Return: ${details.pnl_pct >= 0 ? '+' : ''}${details.pnl_pct.toFixed(1)}%`);
+  // Phase 2 event details
+  if (details.from_regime && details.to_regime) lines.push(`Regime: ${details.from_regime} → ${details.to_regime}`);
+  if (details.vix != null) lines.push(`VIX: ${details.vix}`);
+  if (details.size_multiplier != null) lines.push(`Size multiplier: ${details.size_multiplier}x`);
+  if (details.tranche != null) lines.push(`Tranche: ${details.tranche}/3`);
+  if (details.trigger_type) lines.push(`Trigger: ${details.trigger_type.replace(/_/g, ' ')}`);
+  if (details.entry_type) lines.push(`Entry: ${details.entry_type}`);
   if (details.reason) lines.push(`Reason: ${details.reason}`);
   if (details.message) lines.push(details.message);
 
@@ -322,6 +442,9 @@ async function notifyTradeEvent({ event, symbol, details = {} }) {
     if (process.env.ALERT_WEBHOOK_URL) {
       channels.push({ channel: 'webhook', config: { url: process.env.ALERT_WEBHOOK_URL } });
     }
+    if (process.env.PUSHOVER_USER_KEY && process.env.PUSHOVER_APP_TOKEN) {
+      channels.push({ channel: 'pushover', config: { user_key: process.env.PUSHOVER_USER_KEY, app_token: process.env.PUSHOVER_APP_TOKEN } });
+    }
   }
 
   if (channels.length) {
@@ -353,7 +476,7 @@ module.exports = {
   getDeliveryLog, getDeliveryStats,
   getAvailableChannels,
   // Individual senders for direct use
-  sendSlack, sendTelegram, sendWebhook,
+  sendSlack, sendTelegram, sendWebhook, sendPushover,
   // Trade event notifications
   notifyTradeEvent,
 };

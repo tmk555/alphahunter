@@ -688,5 +688,96 @@ module.exports = function(db) {
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ─── Phase 1: Portfolio Alpha Tracking ──────────────────────────────────────
+
+  router.get('/portfolio/alpha', async (req, res) => {
+    try {
+      const { generateAlphaReport } = require('../risk/alpha-tracker');
+      const windowDays = parseInt(req.query.window) || 30;
+      const report = generateAlphaReport(windowDays);
+      res.json(report);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.get('/portfolio/equity-curve', (req, res) => {
+    try {
+      const { getEquitySnapshots } = require('../risk/alpha-tracker');
+      const { start, end } = req.query;
+      const snapshots = getEquitySnapshots(start, end);
+      res.json({ snapshots, count: snapshots.length });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.post('/portfolio/equity-snapshot', (req, res) => {
+    try {
+      const { recordEquitySnapshot } = require('../risk/alpha-tracker');
+      const { equity, cashFlow = 0, spyClose, openPositions, heatPct } = req.body;
+      if (!equity) return res.status(400).json({ error: 'equity required' });
+      const snapshot = recordEquitySnapshot(equity, cashFlow, spyClose, openPositions, heatPct);
+      res.json(snapshot);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.get('/portfolio/alpha/rolling', (req, res) => {
+    try {
+      const { calculateRollingSharpe, calculateRollingSortino, getEquitySnapshots } = require('../risk/alpha-tracker');
+      const window = parseInt(req.query.window) || 30;
+      const snapshots = getEquitySnapshots();
+      if (!snapshots.length) return res.json({ sharpe: [], sortino: [], window, error: 'No equity snapshots' });
+      const sharpe = calculateRollingSharpe(snapshots, window);
+      const sortino = calculateRollingSortino(snapshots, window);
+      res.json({ sharpe, sortino, window });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Phase 2: Scale-In Routes ───────────────────────────────────────────────
+
+  router.post('/trades/:id/scale-in', (req, res) => {
+    try {
+      const { createScaleInPlan } = require('../risk/scale-in');
+      const trade = db.prepare('SELECT * FROM trades WHERE id = ?').get(+req.params.id);
+      if (!trade) return res.status(404).json({ error: 'Trade not found' });
+      if (trade.exit_date) return res.status(400).json({ error: 'Trade already closed' });
+
+      const plan = createScaleInPlan({
+        tradeId: trade.id,
+        symbol: trade.symbol,
+        totalShares: req.body.totalShares || trade.shares || trade.initial_shares,
+        entryPrice: trade.entry_price,
+        stopPrice: trade.stop_price,
+        target1: trade.target1,
+        target2: trade.target2,
+        ...req.body,
+      });
+
+      // Link trade to plan
+      db.prepare('UPDATE trades SET scale_in_plan_id = ? WHERE id = ?').run(plan.id, trade.id);
+      res.json(plan);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.get('/trades/:id/scale-in', (req, res) => {
+    try {
+      const { getScaleInPlan } = require('../risk/scale-in');
+      const trade = db.prepare('SELECT * FROM trades WHERE id = ?').get(+req.params.id);
+      if (!trade?.scale_in_plan_id) return res.status(404).json({ error: 'No scale-in plan for this trade' });
+      const plan = getScaleInPlan(trade.scale_in_plan_id);
+      res.json(plan);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.post('/trades/:id/scale-in/trigger', (req, res) => {
+    try {
+      const { fillTranche, getScaleInPlan } = require('../risk/scale-in');
+      const trade = db.prepare('SELECT * FROM trades WHERE id = ?').get(+req.params.id);
+      if (!trade?.scale_in_plan_id) return res.status(404).json({ error: 'No scale-in plan for this trade' });
+
+      const plan = getScaleInPlan(trade.scale_in_plan_id);
+      const fillPrice = req.body.fillPrice || trade.entry_price;
+      const result = fillTranche(plan.id, plan.current_tranche, fillPrice);
+      res.json(result);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   return router;
 };

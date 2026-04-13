@@ -192,6 +192,15 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
     scanTxn();
   } catch (_) { /* non-critical */ }
 
+  // Sync universe tracker — captures additions/removals for survivorship-bias-free backtesting
+  try {
+    const { syncUniverse } = require('./signals/universe-tracker');
+    const syncResult = syncUniverse(UNIVERSE, SECTOR_MAP);
+    if (syncResult.added || syncResult.removed) {
+      console.log(`  ✓ Universe sync: +${syncResult.added} / -${syncResult.removed} (total ${syncResult.total})`);
+    }
+  } catch (_) { /* non-critical */ }
+
   console.log(`  ✓ RS scan: ${results.length} stocks, snapshot saved ${today}`);
 
   cacheSet('rs:full', results);

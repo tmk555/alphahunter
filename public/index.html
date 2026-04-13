@@ -572,11 +572,11 @@ function GlobalTradingGuide({ onClose }) {
             <GBlock title="TRADE DISCOVERY (9:15 - 9:30 AM) ~15 minutes" color="var(--green)" border="rgba(0,230,118,0.3)">
               <div style={{display:'grid',gap:8}}>
                 {[
-                  ['Step 6','Scanner tab','Run RS Scanner. Filter by your leading sectors. Sort by RS Accel to find stocks gaining strength fastest. Look for: (1) RS Line New High badge = earliest institutional signal, (2) Triple badge (RS>70 + Accel + Mom>60) = aligned setup, (3) VCP badge = coiling spring ready to break out. Expand any row to see ATR trade levels, CAN SLIM fundamentals (EPS growth, revenue, scores), VCP pivot levels, and recent news headlines.',
+                  ['Step 6','Scanner tab','Run RS Scanner. Filter by your leading sectors. Sort by RS Accel to find stocks gaining strength fastest. Look for: (1) RS Line New High badge = earliest institutional signal, (2) Triple badge (RS>70 + Accel + Mom>60) = aligned setup, (3) VCP badge = coiling spring ready to break out. Expand any interesting row to see ATR levels.',
                    'var(--amber)'],
-                  ['Step 7','Trade Setups tab','Picks are split into two groups: SWING candidates (high momentum >=55, near 52wk high — 2-10 day holds) and POSITION candidates (quality pullbacks to rising 50MA — 3-8 week holds). Review conviction-ranked picks with pre-calculated entry/stop/targets. Check the PULLBACK WATCHLIST section for strong stocks (RS>=70, uptrend) that are 5-20% above 50MA — too extended now but approaching buy zones. Use Momentum Scout ("Scan Expansion List") to discover breakout stocks OUTSIDE your core universe.',
+                  ['Step 7','Trade Setups tab','System auto-generates today\'s conviction-ranked picks with pre-calculated entry, stop (1.5x ATR), and targets (T1=2.5x ATR, T2=4x ATR). Review the top 5-7 picks. Check: SEPA score >= 5/8, Stage 2 uptrend, no earnings within 14 days. The conviction score has already factored in RS, momentum, sector rotation, accumulation, and multi-timeframe alignment.',
                    'var(--amber)'],
-                  ['Step 8','Decision: trade or wait','If regime = BULL and you have heat room (<8%), pick 1-2 highest conviction setups. If regime = NEUTRAL, only take the single best setup at half size. If CAUTION/BEAR, build your watchlist but do NOT enter new longs. Position traders: prioritize pullback candidates near rising 50MA over breakout entries — these have better risk/reward and the system alerts you when they enter the buy zone.',
+                  ['Step 8','Decision: trade or wait','If regime = BULL and you have heat room (<8%), pick 1-2 highest conviction setups. If regime = NEUTRAL, only take the single best setup at half size. If CAUTION/BEAR, build your watchlist but do NOT enter new longs.',
                    'var(--amber)'],
                 ].map(([step,where,desc,col])=>(
                   <div key={step} style={{padding:'6px 10px',background:'var(--bg)',borderRadius:4,borderLeft:`3px solid ${col}`}}>
@@ -596,7 +596,7 @@ function GlobalTradingGuide({ onClose }) {
                 {[
                   ['Step 9','Pipeline tab: STAGE','Click STAGE on your chosen setup. The system automatically: (1) calculates position size using risk formula (regime x beta x ATR volatility adjustments), (2) runs all 6 pre-trade gates (heat, sector, correlation, earnings, regime, position cap), (3) builds a bracket order (limit entry + stop-loss + profit targets). Review the risk_check JSON — every gate shows green/red.',
                    'var(--purple)'],
-                  ['Step 10','Trading tab: SUBMIT','Review final order. One-click sends the full bracket to Alpaca: limit entry + stop-loss OCO + target exits. Stop alerts are auto-created for every submitted trade. All trade events (fills, stops, targets, scaling) fire to your configured notification channels — set up Telegram in Settings > Notifications for real-time phone alerts on every trade lifecycle event: staging, execution, scale-in/out, stop hits, and regime changes.',
+                  ['Step 10','Trading tab: SUBMIT','Review final order. One-click sends the full bracket to Alpaca: limit entry + stop-loss OCO + target exits. The WebSocket monitor takes over from here — it watches every tick and auto-manages your scaling pyramid (sell 1/3 at T1, move stop to breakeven, sell 1/3 at T2, trail final 1/3 with 8%).',
                    'var(--purple)'],
                 ].map(([step,where,desc,col])=>(
                   <div key={step} style={{padding:'6px 10px',background:'var(--bg)',borderRadius:4,borderLeft:`3px solid ${col}`}}>
@@ -967,7 +967,7 @@ function GlobalTradingGuide({ onClose }) {
                   ['Sectors','11 GICS sectors ranked by RS with acceleration delta. Identifies sector rotation — money flowing from one sector to another. Top 2-3 accelerating sectors = where your trades come from.'],
                   ['Industries','Granular industry-level RS within each sector. The #1 industry in the #1 sector produces the best-performing stocks. Sort by RS Accel.'],
                   ['Scanner','Full universe RS scan. Filter by sector, sort by any metric. Shows every signal badge (Triple, RS Line High, VCP, Emerging, Vol Surge). Expand any row for ATR trade levels.'],
-                  ['Trade Setups','Three views: (1) SWING picks — high-momentum stocks near 52wk highs for 2-10 day trades. (2) POSITION picks — quality pullbacks to rising 50MA for 3-8 week holds. (3) PULLBACK WATCHLIST — strong RS>=70 stocks too extended to buy, waiting for 50MA pullback entry zone. Plus Momentum Scout ("Scan Expansion List") to discover breakouts outside your core universe. All conviction-ranked with ATR-based entry/stop/targets and CAN SLIM fundamentals.'],
+                  ['Trade Setups','System-generated daily picks ranked by conviction score with pre-calculated entry/stop/target levels. Includes Top 7 conviction history (365-day backtest). This is your "what to buy today" answer.'],
                 ].map(([k,v])=>(
                   <div key={k} style={{marginBottom:8,fontSize:11}}>
                     <div style={{color:'var(--amber)',fontWeight:700,marginBottom:1}}>{k}</div>
@@ -982,8 +982,8 @@ function GlobalTradingGuide({ onClose }) {
                   ['Hedge','Regime-aware hedge recommendations with instrument suggestions (put spreads, inverse ETFs, VIX calls). Short candidates show Stage 4 breakdowns with weak RS.'],
                   ['Journal','Trade journal with streaks, monthly P&L, day-of-week analysis, exit reason breakdown, RS band performance, and process grading (A-F). Identifies lucky wins vs deserved losses.'],
                   ['Replay','Backtest any strategy against SPY benchmark. Shows alpha, Sharpe, max drawdown, win rate. Uses realistic slippage model. Compare strategies head-to-head.'],
-                  ['Analytics','Five sub-dashboards: (1) Breadth — composite breadth score, early warning system, McClellan oscillator, %Above MA, market health monitoring. (2) Equity Curve — portfolio growth tracking and drawdown visualization over time. (3) Tax Engine — wash sale detection, tax-loss harvesting suggestions, lot-level tracking. (4) Decision Quality — system vs discretionary trade scoring, process trend analysis, outcome alignment. (5) Edge Validation — signal decay analysis, execution cost modeling, return decomposition (alpha vs beta), conviction weight optimizer.'],
-                  ['Settings','Three sections: (1) Broker — Alpaca API keys, paper/live mode toggle. (2) Risk — account size, risk per trade %, max heat, max position, drawdown circuit breaker threshold. (3) Notifications — configure Telegram bot (bot_token + chat_id), Slack webhooks, or custom webhook endpoints for real-time phone alerts. Set per-channel filters and priority, test delivery, view delivery logs and stats. Automation flags: AUTO_STOP_EXECUTE, AUTO_SCALE_EXECUTE.'],
+                  ['Analytics','Edge validation suite: signal decay analysis, composite breadth score, execution cost estimates, return decomposition (alpha vs beta), conviction weight optimizer.'],
+                  ['Settings','Alpaca API keys, account size, risk parameters (risk per trade, max heat, max position), notification webhooks, and automation flags (AUTO_STOP_EXECUTE, AUTO_SCALE_EXECUTE).'],
                 ].map(([k,v])=>(
                   <div key={k} style={{marginBottom:8,fontSize:11}}>
                     <div style={{color:'var(--cyan)',fontWeight:700,marginBottom:1}}>{k}</div>
@@ -995,43 +995,6 @@ function GlobalTradingGuide({ onClose }) {
                 </div>
               </GBlock>
             </div>
-
-            {/* Alerts & Notifications — full trade lifecycle coverage */}
-            <GBlock title="ALERTS & NOTIFICATIONS — real-time phone alerts for every trade event" color="var(--green)" border="rgba(0,230,118,0.25)">
-              <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5,marginBottom:8}}>
-                Configure in <strong>Settings &gt; Notifications</strong> to receive real-time alerts on your phone via Telegram, Slack, or custom webhooks. Every trade lifecycle event is covered — you never miss a stop, target, or pullback entry.
-              </div>
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
-                {[
-                  ['Stop Alerts','Auto-created when you submit a trade. Fires immediately when price hits your stop level. Critical for capital protection.'],
-                  ['Target Alerts','Fires when price reaches T1 or T2 levels. Prompts partial exit or trailing stop activation per the scaling pyramid.'],
-                  ['Pullback Alerts','Monitors your Pullback Watchlist. Fires when a quality stock (RS>=70, uptrending, above 200MA) pulls back to within 5% of its rising 50MA — your position trade entry zone.'],
-                  ['Regime Changes','Fires when market regime shifts (e.g., BULL to CAUTION, FTD confirmed, distribution day count crosses threshold). Adjusts your exposure plan in real time.'],
-                  ['VCP Breakouts','Fires when a stock with a VCP pattern breaks above its pivot level on volume confirmation. Time-sensitive breakout signal.'],
-                  ['Trade Lifecycle','Full coverage: order staged, order submitted, order filled (buy/sell), scale-in, scale-out, auto stop executed, force stop, manual adjustment. Every event sends a notification.'],
-                ].map(([k,v])=>(
-                  <div key={k} style={{background:'var(--bg)',padding:6,borderRadius:3,fontSize:10}}>
-                    <div style={{color:'var(--green)',fontWeight:700,marginBottom:2}}>{k}</div>
-                    <div style={{color:'var(--text3)',lineHeight:1.4}}>{v}</div>
-                  </div>
-                ))}
-              </div>
-              <div style={{marginTop:8,display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
-                {[
-                  ['Telegram (recommended)','Best for phone alerts. Create a bot via @BotFather, get bot_token and chat_id. Rich HTML formatting with trade details, prices, and P&L.'],
-                  ['Slack','Best for desktop monitoring. Add incoming webhook to your workspace. Rich block formatting with actionable trade summaries.'],
-                  ['Custom Webhooks','Universal — send JSON payloads to any endpoint. Use with Pushover, IFTTT, ntfy.sh, or custom services for push notifications on any device.'],
-                ].map(([k,v])=>(
-                  <div key={k} style={{background:'var(--bg)',padding:6,borderRadius:3,fontSize:10}}>
-                    <div style={{color:'var(--amber)',fontWeight:700,fontFamily:'var(--font-mono)',marginBottom:2}}>{k}</div>
-                    <div style={{color:'var(--text3)',lineHeight:1.4}}>{v}</div>
-                  </div>
-                ))}
-              </div>
-              <div style={{marginTop:8,padding:'5px 8px',background:'rgba(0,230,118,0.07)',borderRadius:3,fontSize:10,color:'var(--text3)',lineHeight:1.5}}>
-                <strong>Setup:</strong> Settings &gt; Notifications &gt; Add Channel &gt; select Telegram &gt; paste <code>{`{"bot_token":"YOUR_TOKEN","chat_id":"YOUR_CHAT_ID"}`}</code> &gt; Test Delivery &gt; Enable. You can set per-channel filters (e.g., only critical alerts to phone, all alerts to Slack) and view delivery logs to verify.
-              </div>
-            </GBlock>
           </div>
         )}
 
@@ -1200,10 +1163,6 @@ function GlobalTradingGuide({ onClose }) {
                   ['Weinstein Stages','Stage 1 = base building (accumulation). Stage 2 = uptrend (BUY ZONE). Stage 3 = top/distribution (SELL/avoid). Stage 4 = downtrend (SHORT candidates). Only buy Stage 2. Never buy Stage 3 or 4.'],
                   ['Sector Rotation','Money flows between sectors in cycles. The system ranks sectors by RS and acceleration, applies +15% conviction boost to overweight (leading) sectors and -15% to underweight (lagging) ones. Buying the best stock in the worst sector rarely works.'],
                   ['McClellan Oscillator','EMA(19) minus EMA(39) of daily advance/decline difference. Positive = breadth momentum expanding. Negative = contracting. Extreme readings signal overbought (pullback due) or oversold (bounce due).'],
-                  ['Momentum Scout','Expansion scanner that searches BEYOND your core 540-stock universe to find momentum breakouts you might be missing. Runs on demand from the Trade Setups tab ("Scan Expansion List"). Filters the expansion list using the same RS + momentum criteria as your main scanner. Use when the core universe feels stale or sector rotation is opening new opportunities in names you don\'t track.'],
-                  ['Pullback Watchlist','Stocks that pass quality filters (RS >= 70, above 200MA, uptrending) but are currently 5-20% above their 50MA — too extended for a clean position entry. The system monitors these and alerts you when they pull back to within 5% of their rising 50MA (the ideal position trade buy zone). Check this section daily in Trade Setups for new entries approaching buy zones. This is the primary position trade discovery tool.'],
-                  ['CAN SLIM Score (0-6)','Fundamental overlay from William O\'Neil\'s methodology. Shown when you expand any stock row in the Scanner. C = Current quarterly EPS growth >=25% (checks last 3 quarters individually, highlights acceleration). A = Annual EPS growth >=25% with 3-year trend. S = Supply/demand via volume confirmation. Also shows revenue growth, forward estimates, and earnings dates. Scores 5-6/6 = fundamentally strong. Use alongside RS + SEPA for highest-conviction position trades.'],
-                  ['Notification Channels','Multi-channel alert delivery system configured in Settings > Notifications. Supports Telegram (bot_token + chat_id — recommended for phone), Slack (webhook URL), and custom webhooks (any JSON endpoint). Alerts fire for all trade lifecycle events: staging, fills, stops, targets, scale-in/out, pullback entries, regime changes, VCP breakouts, and earnings warnings. Each channel supports filters (e.g., critical-only to Telegram) and priority levels. Test delivery and view logs to verify setup.'],
                 ].map(([k,v])=>(
                   <div key={k} style={{fontSize:10}}>
                     <div style={{color:'var(--amber)',fontWeight:700,marginBottom:1,fontFamily:'var(--font-mono)',fontSize:10}}>{k}</div>
@@ -4045,6 +4004,379 @@ function SectorIndustryRSTrend({ type, title, api: apiPath }) {
 }
 
 // ─── PORTFOLIO DASHBOARD TAB ───────────────────────────────────────────────
+
+// ─── INTRADAY TIMING SECTION ─────────────────────────────────────────────────
+function IntradayTimingSection() {
+  const [symbol, setSymbol] = useState('');
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function checkTiming() {
+    if (!symbol) return;
+    setLoading(true); setError('');
+    try {
+      const d = await api(`/api/intraday/${symbol.toUpperCase()}/timing`);
+      setData(d);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  const qualityColor = q => {
+    if (!q) return 'var(--text3)';
+    const ql = q.toLowerCase();
+    return ql === 'excellent' ? 'var(--green)' : ql === 'good' ? 'var(--cyan)' : ql === 'wait' ? 'var(--amber)' : 'var(--red)';
+  };
+
+  return (
+    <div style={{marginTop:14}}>
+      <div className="panel">
+        <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>INTRADAY TIMING CHECK</div>
+        <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap',marginBottom:14}}>
+          <div>
+            <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Symbol</label>
+            <input type="text" value={symbol} onChange={e=>setSymbol(e.target.value.toUpperCase())} placeholder="AAPL"
+              onKeyDown={e=>e.key==='Enter'&&checkTiming()}
+              style={{width:120,padding:'6px 8px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
+          </div>
+          <button className="btn btn-primary" onClick={checkTiming} disabled={loading}>
+            {loading ? '...' : 'Check Timing'}
+          </button>
+        </div>
+        {error && <ErrorBox msg={error}/>}
+
+        {data && (
+          <div>
+            {/* Score + Quality Badge */}
+            <div style={{display:'flex',alignItems:'center',gap:16,marginBottom:14}}>
+              <div style={{fontSize:48,fontWeight:800,color:qualityColor(data.quality),fontFamily:'var(--font-mono)'}}>
+                {data.score != null ? data.score : '—'}
+              </div>
+              <div>
+                <span style={{padding:'4px 12px',borderRadius:4,fontSize:12,fontWeight:700,letterSpacing:1,
+                  color:qualityColor(data.quality),
+                  background:qualityColor(data.quality).replace(')', ',0.12)').replace('var(','rgba(').replace('--green','0,230,118').replace('--cyan','0,212,255').replace('--amber','240,165,0').replace('--red','255,61,87')
+                }}>
+                  {(data.quality || 'UNKNOWN').toUpperCase()}
+                </span>
+                <div style={{fontSize:11,color:'var(--text3)',marginTop:6}}>{data.message || 'Timing score 0-100'}</div>
+              </div>
+            </div>
+
+            {/* VWAP + ORB + S/R Grid */}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:12}}>
+              {/* VWAP Data */}
+              {data.vwap && (
+                <div style={{padding:12,background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)'}}>
+                  <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>VWAP</div>
+                  <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.8,fontFamily:'var(--font-mono)'}}>
+                    <div>Price: <span style={{color:'var(--text)',fontWeight:600}}>${fmt(data.vwap.price,2)}</span></div>
+                    <div>VWAP: <span style={{color:'var(--cyan)',fontWeight:600}}>${fmt(data.vwap.vwap,2)}</span></div>
+                    <div>Upper Band: <span style={{color:'var(--text2)'}}>${fmt(data.vwap.upperBand,2)}</span></div>
+                    <div>Lower Band: <span style={{color:'var(--text2)'}}>${fmt(data.vwap.lowerBand,2)}</span></div>
+                    <div>Deviation: <span style={{color:data.vwap.deviation>=0?'var(--green)':'var(--red)',fontWeight:600}}>{fmtP(data.vwap.deviation)}</span></div>
+                  </div>
+                </div>
+              )}
+
+              {/* ORB Status */}
+              {data.orb && (
+                <div style={{padding:12,background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)'}}>
+                  <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>OPENING RANGE BREAKOUT</div>
+                  <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.8,fontFamily:'var(--font-mono)'}}>
+                    <div>Breakout: <span style={{color:data.orb.breakout?'var(--green)':'var(--text3)',fontWeight:700}}>{data.orb.breakout ? 'YES' : 'NO'}</span></div>
+                    <div>Range High: <span style={{color:'var(--text)'}}>${fmt(data.orb.rangeHigh,2)}</span></div>
+                    <div>Range Low: <span style={{color:'var(--text)'}}>${fmt(data.orb.rangeLow,2)}</span></div>
+                    <div>Vol Confirmed: <span style={{color:data.orb.volumeConfirmed?'var(--green)':'var(--text3)',fontWeight:600}}>{data.orb.volumeConfirmed ? 'YES' : 'NO'}</span></div>
+                  </div>
+                </div>
+              )}
+
+              {/* Support / Resistance Levels */}
+              {data.levels && (
+                <div style={{padding:12,background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)'}}>
+                  <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>SUPPORT / RESISTANCE</div>
+                  <div style={{fontSize:11,fontFamily:'var(--font-mono)',lineHeight:1.8}}>
+                    {data.levels.resistance?.length > 0 && (
+                      <div style={{marginBottom:4}}>
+                        <span style={{color:'var(--text3)',fontSize:9}}>RESISTANCE:</span>
+                        {data.levels.resistance.map((l,i) => (
+                          <div key={i} style={{color:'var(--red)'}}>${fmt(l,2)}</div>
+                        ))}
+                      </div>
+                    )}
+                    {data.levels.support?.length > 0 && (
+                      <div>
+                        <span style={{color:'var(--text3)',fontSize:9}}>SUPPORT:</span>
+                        {data.levels.support.map((l,i) => (
+                          <div key={i} style={{color:'var(--green)'}}>${fmt(l,2)}</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── CONDITIONAL ENTRIES SECTION ─────────────────────────────────────────────
+function ConditionalEntriesSection() {
+  const [entries, setEntries] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({symbol:'',entry_type:'pullback',trigger_price:'',shares:'',stop_price:'',target1:'',notes:''});
+
+  async function load() {
+    setLoading(true); setError('');
+    try {
+      const d = await api('/api/staging/conditional?status=active');
+      setEntries(d.entries || d.orders || []);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  useEffect(()=>{ load(); },[]);
+
+  async function createEntry() {
+    if (!form.symbol || !form.trigger_price) return;
+    try {
+      await api('/api/staging/conditional', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({...form, trigger_price:+form.trigger_price, shares:+form.shares||undefined, stop_price:+form.stop_price||undefined, target1:+form.target1||undefined}),
+      });
+      setForm({symbol:'',entry_type:'pullback',trigger_price:'',shares:'',stop_price:'',target1:'',notes:''});
+      setShowForm(false);
+      load();
+    } catch(e) { setError(e.message); }
+  }
+
+  async function cancelEntry(id) {
+    try {
+      await api(`/api/staging/conditional/${id}`, {method:'DELETE'});
+      load();
+    } catch(e) { setError(e.message); }
+  }
+
+  const typeColor = t => t==='breakout'?'var(--green)':t==='pullback'?'var(--cyan)':'var(--amber)';
+
+  return (
+    <div style={{marginTop:14}}>
+      <div className="panel">
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+          <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>CONDITIONAL ENTRIES</div>
+          <div style={{display:'flex',gap:6}}>
+            <button className="btn btn-sm" onClick={()=>setShowForm(!showForm)}>
+              {showForm ? 'Cancel' : '+ Create Conditional'}
+            </button>
+            <button className="btn btn-sm" onClick={load} disabled={loading}>Refresh</button>
+          </div>
+        </div>
+        {error && <ErrorBox msg={error}/>}
+
+        {/* Create Form */}
+        {showForm && (
+          <div style={{padding:12,background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)',marginBottom:14}}>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:10,marginBottom:10}}>
+              <div>
+                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Symbol</label>
+                <input type="text" value={form.symbol} onChange={e=>setForm({...form,symbol:e.target.value.toUpperCase()})} placeholder="AAPL"
+                  style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
+              </div>
+              <div>
+                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Entry Type</label>
+                <select value={form.entry_type} onChange={e=>setForm({...form,entry_type:e.target.value})}
+                  style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13}}>
+                  <option value="pullback">Pullback</option>
+                  <option value="breakout">Breakout</option>
+                  <option value="limit">Limit</option>
+                </select>
+              </div>
+              <div>
+                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Trigger Price</label>
+                <input type="number" value={form.trigger_price} onChange={e=>setForm({...form,trigger_price:e.target.value})} placeholder="0.00"
+                  style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
+              </div>
+              <div>
+                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Shares</label>
+                <input type="number" value={form.shares} onChange={e=>setForm({...form,shares:e.target.value})} placeholder="0"
+                  style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
+              </div>
+              <div>
+                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Stop Price</label>
+                <input type="number" value={form.stop_price} onChange={e=>setForm({...form,stop_price:e.target.value})} placeholder="0.00"
+                  style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
+              </div>
+              <div>
+                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Target 1</label>
+                <input type="number" value={form.target1} onChange={e=>setForm({...form,target1:e.target.value})} placeholder="0.00"
+                  style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
+              </div>
+            </div>
+            <div style={{marginBottom:10}}>
+              <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Notes</label>
+              <input type="text" value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="Optional notes..."
+                style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13}}/>
+            </div>
+            <button className="btn btn-primary" onClick={createEntry}>Create Entry</button>
+          </div>
+        )}
+
+        {/* Entries Table */}
+        {loading && <Loader msg="Loading conditional entries..."/>}
+        {!loading && entries.length > 0 ? (
+          <div style={{overflowX:'auto'}}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Type</th>
+                  <th>Trigger</th>
+                  <th>Shares</th>
+                  <th>Stop</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th>Expires</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {entries.map(e => (
+                  <tr key={e.id}>
+                    <td style={{color:'var(--cyan)',fontWeight:700}}>{e.symbol}</td>
+                    <td><span style={{color:typeColor(e.entry_type),fontWeight:600,fontSize:11,letterSpacing:.5}}>{(e.entry_type||'—').toUpperCase()}</span></td>
+                    <td>${fmt(e.trigger_price,2)}</td>
+                    <td>{e.shares || '—'}</td>
+                    <td style={{color:'var(--red)'}}>{e.stop_price ? '$'+fmt(e.stop_price,2) : '—'}</td>
+                    <td><span style={{padding:'2px 8px',borderRadius:3,fontSize:10,fontWeight:700,
+                      color:e.status==='active'?'var(--green)':e.status==='triggered'?'var(--cyan)':'var(--text3)',
+                      background:e.status==='active'?'rgba(0,230,118,0.1)':'rgba(136,136,187,0.1)'}}>{(e.status||'active').toUpperCase()}</span></td>
+                    <td style={{fontSize:11,color:'var(--text3)'}}>{e.created_at?.split('T')[0] || '—'}</td>
+                    <td style={{fontSize:11,color:'var(--text3)'}}>{e.expires_at?.split('T')[0] || '—'}</td>
+                    <td>
+                      {e.status==='active' && (
+                        <button onClick={()=>cancelEntry(e.id)}
+                          style={{padding:'3px 8px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:10,cursor:'pointer'}}>
+                          Cancel
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : !loading && (
+          <div style={{fontSize:11,color:'var(--text3)',textAlign:'center',padding:20}}>No active conditional entries</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── SCALE-IN PLANS SECTION ──────────────────────────────────────────────────
+function ScaleInPlansSection() {
+  const [plans, setPlans] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function load() {
+    setLoading(true); setError('');
+    try {
+      const d = await api('/api/trades/scaling/pending');
+      setPlans(d.pending || []);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  useEffect(()=>{ load(); },[]);
+
+  async function triggerTranche(tradeId) {
+    try {
+      await api(`/api/trades/${tradeId}/scale`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ currentPrice: null }),
+      });
+      load();
+    } catch(e) { setError(e.message); }
+  }
+
+  const statusColor = s => s==='filled'?'var(--green)':s==='pending'?'var(--amber)':s==='skipped'?'var(--text3)':'var(--text2)';
+
+  return (
+    <div style={{marginTop:14}}>
+      <div className="panel">
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+          <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>SCALE-IN PLANS</div>
+          <button className="btn btn-sm" onClick={load} disabled={loading}>Refresh</button>
+        </div>
+        {error && <ErrorBox msg={error}/>}
+
+        {/* Workflow Explanation */}
+        <div style={{padding:10,background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)',marginBottom:14}}>
+          <div style={{fontSize:10,color:'var(--amber)',letterSpacing:1.5,fontFamily:'var(--font-mono)',fontWeight:700,marginBottom:6}}>SCALE-IN WORKFLOW</div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10,fontSize:11,color:'var(--text2)',lineHeight:1.5}}>
+            <div>
+              <strong style={{color:'var(--cyan)'}}>Tranche 1 (Pilot 1/3):</strong> Initial position. Smallest size, tightest stop. Proves the thesis with real capital.
+            </div>
+            <div>
+              <strong style={{color:'var(--cyan)'}}>Tranche 2 (Confirm 1/3):</strong> Add after confirmation — price holds above entry, volume supports, RS holds. Move stop to breakeven.
+            </div>
+            <div>
+              <strong style={{color:'var(--cyan)'}}>Tranche 3 (Breakout 1/3):</strong> Final add on breakout above resistance. Full position achieved, trail stops up.
+            </div>
+          </div>
+        </div>
+
+        {loading && <Loader msg="Loading scale-in plans..."/>}
+
+        {/* Active Plans */}
+        {!loading && plans.length > 0 ? (
+          <div style={{display:'grid',gap:12}}>
+            {plans.map(p => (
+              <div key={p.tradeId} style={{padding:12,background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                  <div>
+                    <span style={{color:'var(--cyan)',fontWeight:700,fontFamily:'var(--font-mono)',fontSize:14}}>{p.symbol}</span>
+                    <span style={{fontSize:11,color:'var(--text3)',marginLeft:8}}>Entry: ${fmt(p.entry,2)}</span>
+                    {p.currentPrice && <span style={{fontSize:11,color:'var(--text2)',marginLeft:8}}>Now: ${fmt(p.currentPrice,2)}</span>}
+                  </div>
+                  <div style={{fontSize:11,color:'var(--text2)',fontFamily:'var(--font-mono)'}}>
+                    {p.action?.toUpperCase() || 'PENDING'} — {p.reason || ''}
+                  </div>
+                </div>
+
+                {/* Progress Bar */}
+                <div style={{height:4,background:'var(--border)',borderRadius:2,marginBottom:8}}>
+                  <div style={{height:'100%',width:`${Math.min((p.level||0)/3*100,100)}%`,background:'var(--cyan)',borderRadius:2,transition:'width 0.3s'}}/>
+                </div>
+
+                <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                  <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>Level {p.level||0}/3</div>
+                  {p.shares && <div style={{fontSize:10,color:'var(--text2)',fontFamily:'var(--font-mono)'}}>Shares: {p.shares}</div>}
+                  <div style={{flex:1}}/>
+                  <button className="btn btn-sm" onClick={()=>triggerTranche(p.tradeId)} style={{fontSize:10}}>
+                    Trigger Scale
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : !loading && (
+          <div style={{fontSize:11,color:'var(--text3)',textAlign:'center',padding:20}}>
+            No pending scale-in actions — open trades with scaling rules will appear here when price conditions are met.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── EXECUTION TAB — Broker, Staged Orders, Alerts ───────────────────────────
 function ExecutionTab() {
   const [section, setSection] = useState('overview');
@@ -4170,6 +4502,9 @@ function ExecutionTab() {
     {id:'positions', label:`Positions (${positions.length})`},
     {id:'alerts',    label:`Alerts (${subs.length})`},
     {id:'orders',    label:`Broker Orders (${orders.length})`},
+    {id:'intraday',  label:'Intraday'},
+    {id:'conditional', label:'Conditional'},
+    {id:'scalein',   label:'Scale-In'},
   ];
 
   const statusColor = s => s==='filled'?'var(--green)':s==='submitted'?'var(--cyan)':s==='staged'?'var(--amber)':s==='cancelled'||s==='expired'?'var(--text3)':'var(--text)';
@@ -4651,6 +4986,183 @@ function ExecutionTab() {
           )}
         </div>
       )}
+
+      {/* ─── INTRADAY TIMING ──────────────────────── */}
+      {section==='intraday' && <IntradayTimingSection />}
+
+      {/* ─── CONDITIONAL ENTRIES ──────────────────── */}
+      {section==='conditional' && <ConditionalEntriesSection />}
+
+      {/* ─── SCALE-IN PLANS ──────────────────────── */}
+      {section==='scalein' && <ScaleInPlansSection />}
+    </div>
+  );
+}
+
+// ─── ALPHA PERFORMANCE SECTION ────────────────────────────────────────────
+function AlphaPerformanceSection() {
+  const [data, setData] = useState(null);
+  const [curve, setCurve] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [snapping, setSnapping] = useState(false);
+
+  async function load() {
+    setLoading(true); setError('');
+    try {
+      const [d, c] = await Promise.all([
+        api('/api/portfolio/alpha').catch(()=>null),
+        api('/api/portfolio/equity-curve').catch(()=>null),
+      ]);
+      setData(d);
+      setCurve(c);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  async function recordSnapshot() {
+    setSnapping(true);
+    try {
+      await api('/api/portfolio/equity-snapshot', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:'{}',
+      });
+      load();
+    } catch(e) { setError(e.message); }
+    setSnapping(false);
+  }
+
+  useEffect(()=>{ load(); },[]);
+
+  const sharpeColor = v => v > 1 ? 'var(--green)' : v > 0.5 ? 'var(--amber)' : 'var(--red)';
+  const sortinoColor = v => v > 1 ? 'var(--green)' : v > 0.5 ? 'var(--amber)' : 'var(--red)';
+  const alphaColor = v => v > 0 ? 'var(--green)' : 'var(--red)';
+
+  return (
+    <div className="panel" style={{padding:14}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+        <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>ALPHA PERFORMANCE</div>
+        <div style={{display:'flex',gap:6}}>
+          <button className="btn btn-sm" onClick={recordSnapshot} disabled={snapping}>
+            {snapping ? 'Recording...' : 'Record Snapshot'}
+          </button>
+          <button className="btn btn-sm" onClick={load} disabled={loading}>Refresh</button>
+        </div>
+      </div>
+      {error && <ErrorBox msg={error}/>}
+      {loading && !data && <Loader msg="Loading alpha metrics..."/>}
+
+      {data && (
+        <div>
+          {/* Metric Cards */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:8,marginBottom:14}}>
+            {[
+              {label:'TWR',val:fmt(data.twr,2)+'%',color:'var(--cyan)'},
+              {label:'Sharpe (30d)',val:fmt(data.sharpe,2),color:sharpeColor(data.sharpe||0)},
+              {label:'Sortino (30d)',val:fmt(data.sortino,2),color:sortinoColor(data.sortino||0)},
+              {label:'Max Drawdown',val:fmt(data.maxDrawdown,2)+'%',color:'var(--red)'},
+              {label:'DD Duration',val:(data.drawdownDuration||0)+' days',color:'var(--amber)'},
+              {label:'SPY Alpha',val:fmtP(data.spyAlpha),color:alphaColor(data.spyAlpha||0)},
+            ].map(m => (
+              <div key={m.label} style={{padding:8,background:'var(--bg3)',borderRadius:3,textAlign:'center'}}>
+                <div style={{fontSize:9,color:'var(--text3)',marginBottom:3,letterSpacing:1,fontFamily:'var(--font-mono)'}}>{m.label.toUpperCase()}</div>
+                <div style={{fontSize:16,fontWeight:700,color:m.color,fontFamily:'var(--font-mono)'}}>{m.val}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Equity Curve SVG */}
+          {curve?.points?.length > 1 && (() => {
+            const pts = curve.points;
+            const chartW = 800, chartH = 140, padL = 50, padR = 8, padT = 10, padB = 20;
+            const drawW = chartW - padL - padR, drawH = chartH - padT - padB;
+            const stepX = drawW / Math.max(pts.length - 1, 1);
+
+            const eqVals = pts.map(p => p.equity || 0);
+            const spyVals = pts.map(p => p.spy_close || 0);
+            const minEq = Math.min(...eqVals);
+            const maxEq = Math.max(...eqVals);
+            const rangeEq = maxEq - minEq || 1;
+
+            // Normalize SPY to start at same value as equity
+            const spyStart = spyVals[0] || 1;
+            const eqStart = eqVals[0] || 1;
+            const spyNorm = spyVals.map(v => (v / spyStart) * eqStart);
+            const allVals = [...eqVals, ...spyNorm];
+            const minAll = Math.min(...allVals);
+            const maxAll = Math.max(...allVals);
+            const rangeAll = maxAll - minAll || 1;
+
+            const toY = v => padT + drawH - ((v - minAll) / rangeAll * drawH);
+            const eqPts = pts.map((p,i) => `${padL + i*stepX},${toY(eqVals[i])}`).join(' ');
+            const spyPts = pts.map((p,i) => `${padL + i*stepX},${toY(spyNorm[i])}`).join(' ');
+
+            return (
+              <div style={{marginBottom:14}}>
+                <div style={{fontSize:10,color:'var(--text3)',letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:6}}>EQUITY CURVE vs SPY</div>
+                <svg viewBox={`0 0 ${chartW} ${chartH}`} style={{width:'100%',height:chartH}}>
+                  {/* Grid lines */}
+                  {[0.25,0.5,0.75].map(f => {
+                    const v = minAll + f * rangeAll;
+                    const y = toY(v);
+                    return (
+                      <g key={f}>
+                        <line x1={padL} y1={y} x2={padL+drawW} y2={y} stroke="var(--border)" strokeWidth="0.5" strokeDasharray="3,3"/>
+                        <text x={padL-4} y={y+3} fill="var(--text3)" fontSize="8" textAnchor="end" fontFamily="var(--font-mono)">${(v/1000).toFixed(1)}k</text>
+                      </g>
+                    );
+                  })}
+                  <polyline points={spyPts} fill="none" stroke="var(--cyan)" strokeWidth="1.5" strokeDasharray="4,2" opacity="0.5"/>
+                  <polyline points={eqPts} fill="none" stroke="var(--green)" strokeWidth="2.5"/>
+                  {(() => {
+                    const lastX = padL + (pts.length-1)*stepX;
+                    const lastY = toY(eqVals[eqVals.length-1]);
+                    return <circle cx={lastX} cy={lastY} r="3.5" fill="var(--green)" stroke="var(--bg)" strokeWidth="1.5"/>;
+                  })()}
+                  {/* Date labels */}
+                  {pts.filter((_,i) => i===0 || i===pts.length-1 || i===Math.floor(pts.length/2)).map((p,idx) => {
+                    const i = idx===0 ? 0 : idx===1 ? Math.floor(pts.length/2) : pts.length-1;
+                    const d = pts[i]?.date || '';
+                    return <text key={i} x={padL + i*stepX} y={chartH-2} fill="var(--text3)" fontSize="8" textAnchor="middle" fontFamily="var(--font-mono)">{d.slice(5)}</text>;
+                  })}
+                </svg>
+                <div style={{display:'flex',gap:16,justifyContent:'center',marginTop:4}}>
+                  <span style={{fontSize:9,color:'var(--text3)'}}><span style={{display:'inline-block',width:16,height:2,background:'var(--green)',verticalAlign:'middle',marginRight:4,borderRadius:1}}></span>Portfolio Equity</span>
+                  <span style={{fontSize:9,color:'var(--text3)'}}><span style={{display:'inline-block',width:16,height:2,background:'var(--cyan)',verticalAlign:'middle',marginRight:4,borderRadius:1,borderTop:'1px dashed var(--cyan)'}}></span>SPY (normalized)</span>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* SPY Relative Returns Table */}
+          {data.spyRelative?.curve?.length > 0 && (
+            <div>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:6}}>SPY RELATIVE RETURNS</div>
+              <div style={{maxHeight:200,overflowY:'auto'}}>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Portfolio $</th>
+                      <th>SPY Norm</th>
+                      <th>Alpha Spread</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.spyRelative.curve.map(r => (
+                      <tr key={r.date}>
+                        <td style={{fontSize:11,color:'var(--text2)'}}>{r.date}</td>
+                        <td style={{color:'var(--green)'}}>${fmt(r.equity,0)}</td>
+                        <td style={{color:'var(--cyan)'}}>${fmt(r.spyNormalized,0)}</td>
+                        <td style={{color:r.alphaSpread>=0?'var(--green)':'var(--red)',fontWeight:600}}>{fmtP(r.alphaSpread)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -4941,6 +5453,9 @@ function PortfolioTab() {
               </div>
             )}
           </div>
+
+          {/* Alpha Performance */}
+          <AlphaPerformanceSection />
         </div>
       )}
     </div>
@@ -7208,6 +7723,199 @@ function ReplayTab() {
   );
 }
 
+// ─── UNIVERSE TRACKING SECTION ───────────────────────────────────────────────
+function UniverseTrackingSection() {
+  const [sizeData, setSizeData] = useState(null);
+  const [frozen, setFrozen] = useState([]);
+  const [changes, setChanges] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+
+  async function load() {
+    setLoading(true); setError('');
+    try {
+      const [s, f] = await Promise.all([
+        api('/api/edge/universe-size').catch(()=>null),
+        api('/api/edge/universe-frozen?limit=20').catch(()=>null),
+      ]);
+      setSizeData(s);
+      setFrozen(f?.snapshots || f || []);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  useEffect(()=>{ load(); },[]);
+
+  async function syncNow() {
+    setSyncing(true);
+    try {
+      await api('/api/edge/universe-sync', {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      load();
+    } catch(e) { setError(e.message); }
+    setSyncing(false);
+  }
+
+  async function loadChanges() {
+    if (!startDate || !endDate) return;
+    try {
+      const d = await api(`/api/edge/universe-changes?start=${startDate}&end=${endDate}`);
+      setChanges(d);
+    } catch(e) { setError(e.message); }
+  }
+
+  const sizeArr = Array.isArray(sizeData) ? sizeData : sizeData?.history || [];
+
+  return (
+    <div style={{marginTop:14}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+        <div style={{fontSize:12,color:'var(--text2)'}}>Track universe composition changes over time</div>
+        <div style={{display:'flex',gap:6}}>
+          <button className="btn btn-sm" onClick={syncNow} disabled={syncing}>{syncing ? 'Syncing...' : 'Sync Now'}</button>
+          <button className="btn btn-sm" onClick={load} disabled={loading}>Refresh</button>
+        </div>
+      </div>
+      {error && <ErrorBox msg={error}/>}
+      {loading && <div className="panel"><Loader msg="Loading universe data..."/></div>}
+
+      {/* Universe Size Over Time Chart */}
+      {sizeArr.length > 1 && (() => {
+        const chartW = 800, chartH = 120, padL = 40, padR = 8, padT = 6, padB = 18;
+        const drawW = chartW - padL - padR, drawH = chartH - padT - padB;
+        const stepX = drawW / Math.max(sizeArr.length - 1, 1);
+
+        const vals = sizeArr.map(d => d.active_count || d.total_count || 0);
+        const minV = Math.min(...vals) * 0.9;
+        const maxV = Math.max(...vals) * 1.1;
+        const rangeV = maxV - minV || 1;
+
+        const toY = v => padT + drawH - ((v - minV) / rangeV * drawH);
+        const pts = sizeArr.map((d,i) => `${padL + i*stepX},${toY(vals[i])}`).join(' ');
+
+        return (
+          <div className="panel" style={{marginBottom:14}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:2,fontFamily:'var(--font-mono)'}}>UNIVERSE SIZE OVER TIME</div>
+              <div style={{fontSize:13,fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--cyan)'}}>
+                {vals[vals.length-1]} active
+              </div>
+            </div>
+            <svg viewBox={`0 0 ${chartW} ${chartH}`} style={{width:'100%',height:chartH}}>
+              {[0.25,0.5,0.75].map(f => {
+                const v = minV + f * rangeV;
+                const y = toY(v);
+                return (
+                  <g key={f}>
+                    <line x1={padL} y1={y} x2={padL+drawW} y2={y} stroke="var(--border)" strokeWidth="0.5" strokeDasharray="3,3"/>
+                    <text x={padL-4} y={y+3} fill="var(--text3)" fontSize="8" textAnchor="end" fontFamily="var(--font-mono)">{Math.round(v)}</text>
+                  </g>
+                );
+              })}
+              <polyline points={pts} fill="none" stroke="var(--cyan)" strokeWidth="2.5"/>
+              {(() => {
+                const lastX = padL + (sizeArr.length-1)*stepX;
+                const lastY = toY(vals[vals.length-1]);
+                return <circle cx={lastX} cy={lastY} r="3.5" fill="var(--cyan)" stroke="var(--bg)" strokeWidth="1.5"/>;
+              })()}
+              {sizeArr.filter((_,i) => i===0 || i===sizeArr.length-1 || i===Math.floor(sizeArr.length/2)).map((d,idx) => {
+                const i = idx===0 ? 0 : idx===1 ? Math.floor(sizeArr.length/2) : sizeArr.length-1;
+                const dt = sizeArr[i]?.date || '';
+                return <text key={i} x={padL + i*stepX} y={chartH-2} fill="var(--text3)" fontSize="8" textAnchor="middle" fontFamily="var(--font-mono)">{dt.slice(5)}</text>;
+              })}
+            </svg>
+          </div>
+        );
+      })()}
+
+      {/* Frozen Snapshots Table */}
+      {frozen.length > 0 && (
+        <div className="panel" style={{marginBottom:14}}>
+          <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>FROZEN SNAPSHOTS (REMOVED STOCKS)</div>
+          <div style={{maxHeight:240,overflowY:'auto'}}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Removed</th>
+                  <th>Last RS</th>
+                  <th>Sector</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {frozen.map((f,i) => (
+                  <tr key={i}>
+                    <td style={{color:'var(--cyan)',fontWeight:700}}>{f.symbol}</td>
+                    <td style={{fontSize:11,color:'var(--text3)'}}>{f.removed_date || f.date || '—'}</td>
+                    <td style={{color:f.last_rs_rank>=80?'var(--green)':f.last_rs_rank>=50?'var(--amber)':'var(--red)',fontWeight:600}}>{f.last_rs_rank ?? '—'}</td>
+                    <td style={{fontSize:11,color:'var(--text2)'}}>{f.sector || '—'}</td>
+                    <td style={{fontSize:11,color:'var(--text3)'}}>{f.reason || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Universe Changes */}
+      <div className="panel">
+        <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>UNIVERSE CHANGES</div>
+        <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap',marginBottom:12}}>
+          <div>
+            <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Start Date</label>
+            <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)}
+              style={{padding:'6px 8px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:12,fontFamily:'var(--font-mono)'}}/>
+          </div>
+          <div>
+            <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>End Date</label>
+            <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)}
+              style={{padding:'6px 8px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:12,fontFamily:'var(--font-mono)'}}/>
+          </div>
+          <button className="btn btn-sm" onClick={loadChanges}>Load Changes</button>
+        </div>
+
+        {changes && (
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+            {/* Additions */}
+            <div style={{padding:10,background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)'}}>
+              <div style={{fontSize:9,color:'var(--green)',letterSpacing:1.5,fontFamily:'var(--font-mono)',fontWeight:700,marginBottom:6}}>ADDITIONS ({(changes.additions||[]).length})</div>
+              {(changes.additions||[]).length > 0 ? (
+                <div style={{maxHeight:160,overflowY:'auto'}}>
+                  {changes.additions.map((a,i) => (
+                    <div key={i} style={{fontSize:11,fontFamily:'var(--font-mono)',color:'var(--text2)',padding:'2px 0'}}>
+                      <span style={{color:'var(--green)',fontWeight:600}}>{a.symbol || a}</span>
+                      {a.date && <span style={{color:'var(--text3)',marginLeft:6,fontSize:10}}>{a.date}</span>}
+                    </div>
+                  ))}
+                </div>
+              ) : <div style={{fontSize:11,color:'var(--text3)'}}>None</div>}
+            </div>
+
+            {/* Removals */}
+            <div style={{padding:10,background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)'}}>
+              <div style={{fontSize:9,color:'var(--red)',letterSpacing:1.5,fontFamily:'var(--font-mono)',fontWeight:700,marginBottom:6}}>REMOVALS ({(changes.removals||[]).length})</div>
+              {(changes.removals||[]).length > 0 ? (
+                <div style={{maxHeight:160,overflowY:'auto'}}>
+                  {changes.removals.map((r,i) => (
+                    <div key={i} style={{fontSize:11,fontFamily:'var(--font-mono)',color:'var(--text2)',padding:'2px 0'}}>
+                      <span style={{color:'var(--red)',fontWeight:600}}>{r.symbol || r}</span>
+                      {r.date && <span style={{color:'var(--text3)',marginLeft:6,fontSize:10}}>{r.date}</span>}
+                      {r.reason && <span style={{color:'var(--text3)',marginLeft:6,fontSize:10}}>({r.reason})</span>}
+                    </div>
+                  ))}
+                </div>
+              ) : <div style={{fontSize:11,color:'var(--text3)'}}>None</div>}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── EDGE DASHBOARD TAB — Gaps 1/2/3 ────────────────────────────────────────
 // Unified tab for: Breadth, Correlation, Hedging, Execution Quality,
 // Tax Engine, Decision Quality, Edge Validation
@@ -7222,6 +7930,7 @@ function EdgeDashboardTab() {
     { id:'tax',         label:'Tax Engine' },
     { id:'decisions',   label:'Decision Quality' },
     { id:'edge',        label:'Edge Validation' },
+    { id:'universe',    label:'Universe Tracker' },
   ];
   return (
     <div>
@@ -7244,6 +7953,7 @@ function EdgeDashboardTab() {
       {section==='tax'         && <TaxEngineSection />}
       {section==='decisions'   && <DecisionQualitySection />}
       {section==='edge'        && <EdgeValidationSection />}
+      {section==='universe'    && <UniverseTrackingSection />}
     </div>
   );
 }

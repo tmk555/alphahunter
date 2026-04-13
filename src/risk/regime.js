@@ -198,6 +198,49 @@ async function getMarketRegime() {
         breadthOverlay?.divergence && 'BREADTH DIVERGENCE — internals fading',
       ].filter(Boolean),
     };
+
+    // ── Regime Change Detection & Push Notification ─────────────────────────
+    // Compare current regime against last-known regime stored in portfolio_state.
+    // On change, send high-priority push notification (critical for position traders).
+    try {
+      const { getDB } = require('../data/database');
+      const _db = getDB();
+      const prevRow = _db.prepare("SELECT value FROM portfolio_state WHERE key = 'last_regime'").get();
+      const prevRegime = prevRow?.value || '';
+
+      if (prevRegime && prevRegime !== regime) {
+        // Regime changed — send notification
+        const { notifyTradeEvent } = require('../notifications/channels');
+        notifyTradeEvent({
+          event: 'regime_change',
+          symbol: 'SPY',
+          details: {
+            price: spyPrice,
+            message: `REGIME CHANGE: ${prevRegime} → ${regime}\nVIX: ${vixLevel?.toFixed(1)} | Size mult: ${sizeMultiplier}x\n${warning || 'Adjust positions accordingly'}`,
+            from: prevRegime,
+            to: regime,
+            sizeMultiplier,
+            vixLevel,
+          },
+        }).catch(e => console.error('Regime notification error:', e.message));
+
+        // Log regime change to regime_log table
+        const date = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+        _db.prepare(`
+          INSERT OR REPLACE INTO regime_log (date, mode, confidence, spy_price, vix_level, dist_days, breadth_pct, notes)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(date, regime, 80, spyPrice, vixLevel,
+          exposureRamp?.distDays || 0,
+          breadthOverlay?.score || null,
+          `Changed from ${prevRegime} → ${regime}`);
+      }
+
+      // Store current regime
+      _db.prepare("INSERT OR REPLACE INTO portfolio_state (key, value, updated_at) VALUES ('last_regime', ?, datetime('now'))").run(regime);
+    } catch (_) {
+      // Don't fail regime detection on notification/storage errors
+    }
+
     cacheSet('regime', result);
     return result;
   } catch(e) {

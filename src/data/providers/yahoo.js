@@ -249,6 +249,61 @@ async function getYahooFundamentals(symbol) {
   }
 }
 
+// ─── Intraday Bars (VWAP / ORB / S&R) ────────────────────────────────────────
+// Uses same v8 chart endpoint with intraday interval (1m, 5m, 15m, etc.)
+// Yahoo provides up to 60 days of intraday data; last 5 trading days at 1m.
+async function yahooIntradayBars(symbol, timespan = 'minute', multiplier = 5, from, to) {
+  const interval = timespan === 'minute' ? `${multiplier}m`
+    : timespan === 'hour' ? `${multiplier}h`
+    : `${multiplier}m`;
+
+  const cacheKey = `yid:${symbol}:${interval}:${from}`;
+  const cached = cacheGet(cacheKey, 5 * 60 * 1000); // 5 min cache for intraday
+  if (cached) return cached;
+
+  const { crumb, cookie } = await getYahooCrumb();
+
+  // Build period params — Yahoo uses period1/period2 (epoch) or range
+  let rangeParam;
+  if (from) {
+    const p1 = Math.floor(new Date(from + 'T04:00:00-04:00').getTime() / 1000);
+    const p2 = to ? Math.floor(new Date(to + 'T20:00:00-04:00').getTime() / 1000)
+      : Math.floor(Date.now() / 1000);
+    rangeParam = `period1=${p1}&period2=${p2}`;
+  } else {
+    rangeParam = 'range=1d';
+  }
+
+  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${rangeParam}&interval=${interval}&crumb=${encodeURIComponent(crumb)}&includePrePost=false`;
+  const r = await fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 'Cookie': cookie },
+  });
+  if (r.status === 401 || r.status === 403) { resetAuth(); throw new Error(`Yahoo auth expired (${r.status})`); }
+  const data = await r.json();
+  const result = data?.chart?.result?.[0];
+  if (!result?.timestamp?.length) throw new Error(`No intraday data for ${symbol}`);
+
+  const ts    = result.timestamp;
+  const quote = result.indicators?.quote?.[0] || {};
+  const bars = [];
+  for (let i = 0; i < ts.length; i++) {
+    if (quote.close?.[i] == null || quote.high?.[i] == null) continue;
+    bars.push({
+      timestamp: ts[i] * 1000,
+      date: new Date(ts[i] * 1000).toISOString(),
+      open:   quote.open?.[i],
+      high:   quote.high?.[i],
+      low:    quote.low?.[i],
+      close:  quote.close[i],
+      volume: quote.volume?.[i] || 0,
+    });
+  }
+
+  if (!bars.length) throw new Error(`No valid intraday bars for ${symbol}`);
+  cacheSet(cacheKey, bars);
+  return bars;
+}
+
 async function pLimit(tasks, limit = 5) {
   const results = [];
   for (let i = 0; i < tasks.length; i += limit) {
@@ -261,6 +316,7 @@ async function pLimit(tasks, limit = 5) {
 module.exports = {
   getYahooCrumb, resetAuth,
   yahooQuote, yahooHistory, yahooHistoryFull,
+  yahooIntradayBars,
   getYahooFundamentals, raw,
   pLimit,
 };

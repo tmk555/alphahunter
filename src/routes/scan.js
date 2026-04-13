@@ -37,5 +37,49 @@ module.exports = function(UNIVERSE, SECTOR_MAP) {
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ─── Phase 2: Intraday Entry Timing ──────────────────────────────────────────
+
+  router.get('/intraday/:symbol', async (req, res) => {
+    try {
+      const { getIntradayBars } = require('../data/providers/manager');
+      const { getIntradaySignals } = require('../signals/intraday');
+
+      const symbol = req.params.symbol.toUpperCase();
+      const timespan = req.query.timespan || 'minute';
+      const multiplier = parseInt(req.query.multiplier) || 5;
+
+      // Default to today
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      const from = req.query.from || today;
+      const to = req.query.to || today;
+
+      const bars = await getIntradayBars(symbol, timespan, multiplier, from, to);
+      if (!bars?.length) return res.json({ error: 'No intraday data available', symbol });
+
+      const signals = getIntradaySignals(bars);
+      res.json({ symbol, timespan, multiplier, barCount: bars.length, ...signals });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.get('/intraday/:symbol/timing', async (req, res) => {
+    try {
+      const { getIntradayBars } = require('../data/providers/manager');
+      const { getIntradaySignals, evaluateEntryTiming } = require('../signals/intraday');
+
+      const symbol = req.params.symbol.toUpperCase();
+      const entryPrice = parseFloat(req.query.entry) || null;
+      const side = req.query.side || 'buy';
+
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      const bars = await getIntradayBars(symbol, 'minute', 5, today, today);
+      if (!bars?.length) return res.json({ quality: 'unknown', score: 0, reason: 'No intraday data' });
+
+      const signals = getIntradaySignals(bars);
+      const price = entryPrice || bars[bars.length - 1]?.close;
+      const timing = evaluateEntryTiming(signals, price, side);
+      res.json({ symbol, ...timing, signals });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   return router;
 };
