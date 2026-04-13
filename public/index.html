@@ -572,11 +572,11 @@ function GlobalTradingGuide({ onClose }) {
             <GBlock title="TRADE DISCOVERY (9:15 - 9:30 AM) ~15 minutes" color="var(--green)" border="rgba(0,230,118,0.3)">
               <div style={{display:'grid',gap:8}}>
                 {[
-                  ['Step 6','Scanner tab','Run RS Scanner. Filter by your leading sectors. Sort by RS Accel to find stocks gaining strength fastest. Look for: (1) RS Line New High badge = earliest institutional signal, (2) Triple badge (RS>70 + Accel + Mom>60) = aligned setup, (3) VCP badge = coiling spring ready to break out. Expand any interesting row to see ATR levels.',
+                  ['Step 6','Scanner tab','Run RS Scanner. Filter by your leading sectors. Sort by RS Accel to find stocks gaining strength fastest. Look for: (1) RS Line New High badge = earliest institutional signal, (2) Triple badge (RS>70 + Accel + Mom>60) = aligned setup, (3) VCP badge = coiling spring ready to break out. Expand any row to see ATR trade levels, CAN SLIM fundamentals (EPS growth, revenue, scores), VCP pivot levels, and recent news headlines.',
                    'var(--amber)'],
-                  ['Step 7','Trade Setups tab','System auto-generates today\'s conviction-ranked picks with pre-calculated entry, stop (1.5x ATR), and targets (T1=2.5x ATR, T2=4x ATR). Review the top 5-7 picks. Check: SEPA score >= 5/8, Stage 2 uptrend, no earnings within 14 days. The conviction score has already factored in RS, momentum, sector rotation, accumulation, and multi-timeframe alignment.',
+                  ['Step 7','Trade Setups tab','Picks are split into two groups: SWING candidates (high momentum >=55, near 52wk high — 2-10 day holds) and POSITION candidates (quality pullbacks to rising 50MA — 3-8 week holds). Review conviction-ranked picks with pre-calculated entry/stop/targets. Check the PULLBACK WATCHLIST section for strong stocks (RS>=70, uptrend) that are 5-20% above 50MA — too extended now but approaching buy zones. Use Momentum Scout ("Scan Expansion List") to discover breakout stocks OUTSIDE your core universe.',
                    'var(--amber)'],
-                  ['Step 8','Decision: trade or wait','If regime = BULL and you have heat room (<8%), pick 1-2 highest conviction setups. If regime = NEUTRAL, only take the single best setup at half size. If CAUTION/BEAR, build your watchlist but do NOT enter new longs.',
+                  ['Step 8','Decision: trade or wait','If regime = BULL and you have heat room (<8%), pick 1-2 highest conviction setups. If regime = NEUTRAL, only take the single best setup at half size. If CAUTION/BEAR, build your watchlist but do NOT enter new longs. Position traders: prioritize pullback candidates near rising 50MA over breakout entries — these have better risk/reward and the system alerts you when they enter the buy zone.',
                    'var(--amber)'],
                 ].map(([step,where,desc,col])=>(
                   <div key={step} style={{padding:'6px 10px',background:'var(--bg)',borderRadius:4,borderLeft:`3px solid ${col}`}}>
@@ -596,7 +596,7 @@ function GlobalTradingGuide({ onClose }) {
                 {[
                   ['Step 9','Pipeline tab: STAGE','Click STAGE on your chosen setup. The system automatically: (1) calculates position size using risk formula (regime x beta x ATR volatility adjustments), (2) runs all 6 pre-trade gates (heat, sector, correlation, earnings, regime, position cap), (3) builds a bracket order (limit entry + stop-loss + profit targets). Review the risk_check JSON — every gate shows green/red.',
                    'var(--purple)'],
-                  ['Step 10','Trading tab: SUBMIT','Review final order. One-click sends the full bracket to Alpaca: limit entry + stop-loss OCO + target exits. The WebSocket monitor takes over from here — it watches every tick and auto-manages your scaling pyramid (sell 1/3 at T1, move stop to breakeven, sell 1/3 at T2, trail final 1/3 with 8%).',
+                  ['Step 10','Trading tab: SUBMIT','Review final order. One-click sends the full bracket to Alpaca: limit entry + stop-loss OCO + target exits. Stop alerts are auto-created for every submitted trade. All trade events (fills, stops, targets, scaling) fire to your configured notification channels — set up Telegram in Settings > Notifications for real-time phone alerts on every trade lifecycle event: staging, execution, scale-in/out, stop hits, and regime changes.',
                    'var(--purple)'],
                 ].map(([step,where,desc,col])=>(
                   <div key={step} style={{padding:'6px 10px',background:'var(--bg)',borderRadius:4,borderLeft:`3px solid ${col}`}}>
@@ -967,7 +967,7 @@ function GlobalTradingGuide({ onClose }) {
                   ['Sectors','11 GICS sectors ranked by RS with acceleration delta. Identifies sector rotation — money flowing from one sector to another. Top 2-3 accelerating sectors = where your trades come from.'],
                   ['Industries','Granular industry-level RS within each sector. The #1 industry in the #1 sector produces the best-performing stocks. Sort by RS Accel.'],
                   ['Scanner','Full universe RS scan. Filter by sector, sort by any metric. Shows every signal badge (Triple, RS Line High, VCP, Emerging, Vol Surge). Expand any row for ATR trade levels.'],
-                  ['Trade Setups','System-generated daily picks ranked by conviction score with pre-calculated entry/stop/target levels. Includes Top 7 conviction history (365-day backtest). This is your "what to buy today" answer.'],
+                  ['Trade Setups','Three views: (1) SWING picks — high-momentum stocks near 52wk highs for 2-10 day trades. (2) POSITION picks — quality pullbacks to rising 50MA for 3-8 week holds. (3) PULLBACK WATCHLIST — strong RS>=70 stocks too extended to buy, waiting for 50MA pullback entry zone. Plus Momentum Scout ("Scan Expansion List") to discover breakouts outside your core universe. All conviction-ranked with ATR-based entry/stop/targets and CAN SLIM fundamentals.'],
                 ].map(([k,v])=>(
                   <div key={k} style={{marginBottom:8,fontSize:11}}>
                     <div style={{color:'var(--amber)',fontWeight:700,marginBottom:1}}>{k}</div>
@@ -982,8 +982,8 @@ function GlobalTradingGuide({ onClose }) {
                   ['Hedge','Regime-aware hedge recommendations with instrument suggestions (put spreads, inverse ETFs, VIX calls). Short candidates show Stage 4 breakdowns with weak RS.'],
                   ['Journal','Trade journal with streaks, monthly P&L, day-of-week analysis, exit reason breakdown, RS band performance, and process grading (A-F). Identifies lucky wins vs deserved losses.'],
                   ['Replay','Backtest any strategy against SPY benchmark. Shows alpha, Sharpe, max drawdown, win rate. Uses realistic slippage model. Compare strategies head-to-head.'],
-                  ['Analytics','Edge validation suite: signal decay analysis, composite breadth score, execution cost estimates, return decomposition (alpha vs beta), conviction weight optimizer.'],
-                  ['Settings','Alpaca API keys, account size, risk parameters (risk per trade, max heat, max position), notification webhooks, and automation flags (AUTO_STOP_EXECUTE, AUTO_SCALE_EXECUTE).'],
+                  ['Analytics','Five sub-dashboards: (1) Breadth — composite breadth score, early warning system, McClellan oscillator, %Above MA, market health monitoring. (2) Equity Curve — portfolio growth tracking and drawdown visualization over time. (3) Tax Engine — wash sale detection, tax-loss harvesting suggestions, lot-level tracking. (4) Decision Quality — system vs discretionary trade scoring, process trend analysis, outcome alignment. (5) Edge Validation — signal decay analysis, execution cost modeling, return decomposition (alpha vs beta), conviction weight optimizer.'],
+                  ['Settings','Three sections: (1) Broker — Alpaca API keys, paper/live mode toggle. (2) Risk — account size, risk per trade %, max heat, max position, drawdown circuit breaker threshold. (3) Notifications — configure Telegram bot (bot_token + chat_id), Slack webhooks, or custom webhook endpoints for real-time phone alerts. Set per-channel filters and priority, test delivery, view delivery logs and stats. Automation flags: AUTO_STOP_EXECUTE, AUTO_SCALE_EXECUTE.'],
                 ].map(([k,v])=>(
                   <div key={k} style={{marginBottom:8,fontSize:11}}>
                     <div style={{color:'var(--cyan)',fontWeight:700,marginBottom:1}}>{k}</div>
@@ -995,6 +995,43 @@ function GlobalTradingGuide({ onClose }) {
                 </div>
               </GBlock>
             </div>
+
+            {/* Alerts & Notifications — full trade lifecycle coverage */}
+            <GBlock title="ALERTS & NOTIFICATIONS — real-time phone alerts for every trade event" color="var(--green)" border="rgba(0,230,118,0.25)">
+              <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5,marginBottom:8}}>
+                Configure in <strong>Settings &gt; Notifications</strong> to receive real-time alerts on your phone via Telegram, Slack, or custom webhooks. Every trade lifecycle event is covered — you never miss a stop, target, or pullback entry.
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+                {[
+                  ['Stop Alerts','Auto-created when you submit a trade. Fires immediately when price hits your stop level. Critical for capital protection.'],
+                  ['Target Alerts','Fires when price reaches T1 or T2 levels. Prompts partial exit or trailing stop activation per the scaling pyramid.'],
+                  ['Pullback Alerts','Monitors your Pullback Watchlist. Fires when a quality stock (RS>=70, uptrending, above 200MA) pulls back to within 5% of its rising 50MA — your position trade entry zone.'],
+                  ['Regime Changes','Fires when market regime shifts (e.g., BULL to CAUTION, FTD confirmed, distribution day count crosses threshold). Adjusts your exposure plan in real time.'],
+                  ['VCP Breakouts','Fires when a stock with a VCP pattern breaks above its pivot level on volume confirmation. Time-sensitive breakout signal.'],
+                  ['Trade Lifecycle','Full coverage: order staged, order submitted, order filled (buy/sell), scale-in, scale-out, auto stop executed, force stop, manual adjustment. Every event sends a notification.'],
+                ].map(([k,v])=>(
+                  <div key={k} style={{background:'var(--bg)',padding:6,borderRadius:3,fontSize:10}}>
+                    <div style={{color:'var(--green)',fontWeight:700,marginBottom:2}}>{k}</div>
+                    <div style={{color:'var(--text3)',lineHeight:1.4}}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{marginTop:8,display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
+                {[
+                  ['Telegram (recommended)','Best for phone alerts. Create a bot via @BotFather, get bot_token and chat_id. Rich HTML formatting with trade details, prices, and P&L.'],
+                  ['Slack','Best for desktop monitoring. Add incoming webhook to your workspace. Rich block formatting with actionable trade summaries.'],
+                  ['Custom Webhooks','Universal — send JSON payloads to any endpoint. Use with Pushover, IFTTT, ntfy.sh, or custom services for push notifications on any device.'],
+                ].map(([k,v])=>(
+                  <div key={k} style={{background:'var(--bg)',padding:6,borderRadius:3,fontSize:10}}>
+                    <div style={{color:'var(--amber)',fontWeight:700,fontFamily:'var(--font-mono)',marginBottom:2}}>{k}</div>
+                    <div style={{color:'var(--text3)',lineHeight:1.4}}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{marginTop:8,padding:'5px 8px',background:'rgba(0,230,118,0.07)',borderRadius:3,fontSize:10,color:'var(--text3)',lineHeight:1.5}}>
+                <strong>Setup:</strong> Settings &gt; Notifications &gt; Add Channel &gt; select Telegram &gt; paste <code>{`{"bot_token":"YOUR_TOKEN","chat_id":"YOUR_CHAT_ID"}`}</code> &gt; Test Delivery &gt; Enable. You can set per-channel filters (e.g., only critical alerts to phone, all alerts to Slack) and view delivery logs to verify.
+              </div>
+            </GBlock>
           </div>
         )}
 
@@ -1163,6 +1200,10 @@ function GlobalTradingGuide({ onClose }) {
                   ['Weinstein Stages','Stage 1 = base building (accumulation). Stage 2 = uptrend (BUY ZONE). Stage 3 = top/distribution (SELL/avoid). Stage 4 = downtrend (SHORT candidates). Only buy Stage 2. Never buy Stage 3 or 4.'],
                   ['Sector Rotation','Money flows between sectors in cycles. The system ranks sectors by RS and acceleration, applies +15% conviction boost to overweight (leading) sectors and -15% to underweight (lagging) ones. Buying the best stock in the worst sector rarely works.'],
                   ['McClellan Oscillator','EMA(19) minus EMA(39) of daily advance/decline difference. Positive = breadth momentum expanding. Negative = contracting. Extreme readings signal overbought (pullback due) or oversold (bounce due).'],
+                  ['Momentum Scout','Expansion scanner that searches BEYOND your core 540-stock universe to find momentum breakouts you might be missing. Runs on demand from the Trade Setups tab ("Scan Expansion List"). Filters the expansion list using the same RS + momentum criteria as your main scanner. Use when the core universe feels stale or sector rotation is opening new opportunities in names you don\'t track.'],
+                  ['Pullback Watchlist','Stocks that pass quality filters (RS >= 70, above 200MA, uptrending) but are currently 5-20% above their 50MA — too extended for a clean position entry. The system monitors these and alerts you when they pull back to within 5% of their rising 50MA (the ideal position trade buy zone). Check this section daily in Trade Setups for new entries approaching buy zones. This is the primary position trade discovery tool.'],
+                  ['CAN SLIM Score (0-6)','Fundamental overlay from William O\'Neil\'s methodology. Shown when you expand any stock row in the Scanner. C = Current quarterly EPS growth >=25% (checks last 3 quarters individually, highlights acceleration). A = Annual EPS growth >=25% with 3-year trend. S = Supply/demand via volume confirmation. Also shows revenue growth, forward estimates, and earnings dates. Scores 5-6/6 = fundamentally strong. Use alongside RS + SEPA for highest-conviction position trades.'],
+                  ['Notification Channels','Multi-channel alert delivery system configured in Settings > Notifications. Supports Telegram (bot_token + chat_id — recommended for phone), Slack (webhook URL), and custom webhooks (any JSON endpoint). Alerts fire for all trade lifecycle events: staging, fills, stops, targets, scale-in/out, pullback entries, regime changes, VCP breakouts, and earnings warnings. Each channel supports filters (e.g., critical-only to Telegram) and priority levels. Test delivery and view logs to verify setup.'],
                 ].map(([k,v])=>(
                   <div key={k} style={{fontSize:10}}>
                     <div style={{color:'var(--amber)',fontWeight:700,marginBottom:1,fontFamily:'var(--font-mono)',fontSize:10}}>{k}</div>
