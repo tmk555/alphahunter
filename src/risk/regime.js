@@ -329,13 +329,19 @@ async function autoDetectCycleState() {
       }
     }
 
-    // ── FTD confirmation: ≤1 dist day in 5 sessions after FTD ────────────
+    // ── FTD confirmation: ≤1 dist day in sessions after FTD ────────────
+    // O'Neil: watch 3-5 sessions post-FTD for distribution. If market holds
+    // (≤1 dist day), FTD is confirmed. We require minimum 3 sessions of data,
+    // not 5 — waiting for 5 full days to confirm meant FTD stayed "unconfirmed"
+    // for a full week, blocking entries during the most profitable window.
     let ftdConfirmed = false;
     if (ftdFired && ftdDate) {
       const ftdIdx = bars.findIndex(b => b.date === ftdDate);
-      if (ftdIdx >= 0 && ftdIdx + 5 < n) {
+      const sessionsAfterFTD = n - 1 - ftdIdx; // how many bars exist after FTD
+      if (ftdIdx >= 0 && sessionsAfterFTD >= 3) {
+        const lookAhead = Math.min(sessionsAfterFTD, 5); // check up to 5 sessions
         let postFTDDist = 0;
-        for (let i = ftdIdx + 1; i <= Math.min(ftdIdx + 5, n - 1); i++) {
+        for (let i = ftdIdx + 1; i <= ftdIdx + lookAhead; i++) {
           const chg = (bars[i].close - bars[i-1].close) / bars[i-1].close;
           if (chg <= -0.002 && bars[i].volume > vol50Avg) postFTDDist++;
         }
