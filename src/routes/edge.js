@@ -502,6 +502,75 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
     res.json(getExpansionWatchlist());
   });
 
+  // ─── Universe Management (DB-backed, no file editing) ─────────────────────
+
+  // Add stock to universe at runtime + persist to DB
+  router.post('/edge/universe/add', (req, res) => {
+    try {
+      const { symbol, sector } = req.body;
+      if (!symbol || !sector) return res.status(400).json({ error: 'symbol and sector required' });
+      const sym = symbol.toUpperCase().trim();
+      const validSectors = ['Technology','Comm Services','Consumer Disc','Industrials',
+        'Energy','Financials','Healthcare','Materials','Cons Staples','Real Estate','Utilities'];
+      if (!validSectors.includes(sector)) {
+        return res.status(400).json({ error: `Invalid sector. Must be one of: ${validSectors.join(', ')}` });
+      }
+      if (SECTOR_MAP[sym]) {
+        return res.json({ message: `${sym} already in universe (${SECTOR_MAP[sym]})`, existed: true });
+      }
+      // Add to live runtime universe
+      SECTOR_MAP[sym] = sector;
+      UNIVERSE.push(sym);
+      // Persist to DB so it survives restarts
+      db.prepare(`INSERT OR REPLACE INTO universe_mgmt (symbol, sector, status, added_date)
+        VALUES (?, ?, 'active', datetime('now'))`).run(sym, sector);
+      // Sync universe tracker
+      try {
+        const { syncUniverse } = require('../signals/universe-tracker');
+        syncUniverse(UNIVERSE, SECTOR_MAP);
+      } catch(_){}
+      res.json({ added: sym, sector, universeSize: UNIVERSE.length });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Remove stock from universe
+  router.post('/edge/universe/remove', (req, res) => {
+    try {
+      const { symbol } = req.body;
+      if (!symbol) return res.status(400).json({ error: 'symbol required' });
+      const sym = symbol.toUpperCase().trim();
+      if (!SECTOR_MAP[sym]) {
+        return res.status(404).json({ error: `${sym} not in universe` });
+      }
+      const sector = SECTOR_MAP[sym];
+      delete SECTOR_MAP[sym];
+      const idx = UNIVERSE.indexOf(sym);
+      if (idx !== -1) UNIVERSE.splice(idx, 1);
+      // Mark removed in DB
+      db.prepare(`UPDATE universe_mgmt SET status = 'removed', removed_date = datetime('now')
+        WHERE symbol = ? AND status = 'active'`).run(sym);
+      // Freeze snapshot
+      try {
+        const { freezeSnapshot } = require('../signals/universe-tracker');
+        freezeSnapshot(sym, 'manual_removal');
+      } catch(_){}
+      res.json({ removed: sym, sector, universeSize: UNIVERSE.length });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // List current universe (for UI)
+  router.get('/edge/universe', (req, res) => {
+    try {
+      const bySector = {};
+      for (const [sym, sector] of Object.entries(SECTOR_MAP)) {
+        if (sector === 'Hedge') continue;
+        if (!bySector[sector]) bySector[sector] = [];
+        bySector[sector].push(sym);
+      }
+      res.json({ universeSize: UNIVERSE.length, bySector, sectors: Object.keys(bySector).sort() });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // ─── Phase 1: Universe Tracking (Survivorship Bias Fix) ──────────────────
 
   router.post('/edge/universe-sync', (req, res) => {

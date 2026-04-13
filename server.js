@@ -18,7 +18,7 @@ app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ─── Universe ────────────────────────────────────────────────────────────────
+// ─── Universe (file + DB: DB additions survive restarts) ─────────────────────
 const SECTOR_MAP = FULL_UNIVERSE;
 const UNIVERSE   = Object.keys(SECTOR_MAP);
 
@@ -35,6 +35,20 @@ const SECTOR_ETFS = [
 const { getDB, migrateFromJSON } = require('./src/data/database');
 const db = getDB();
 migrateFromJSON();
+
+// Merge DB-managed universe additions (stocks added via UI)
+try {
+  const dbAdded = db.prepare("SELECT symbol, sector FROM universe_mgmt WHERE status = 'active'").all();
+  let dbCount = 0;
+  for (const { symbol, sector } of dbAdded) {
+    if (!SECTOR_MAP[symbol]) {
+      SECTOR_MAP[symbol] = sector;
+      UNIVERSE.push(symbol);
+      dbCount++;
+    }
+  }
+  if (dbCount) console.log(`   Universe: +${dbCount} stocks from DB (total ${UNIVERSE.length})`);
+} catch(_) { /* universe_mgmt table may not exist on first run */ }
 
 // ─── Scanner (needs universe context) ────────────────────────────────────────
 const { runRSScan } = require('./src/scanner');

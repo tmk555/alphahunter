@@ -2502,10 +2502,12 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
               ))}
             </div>
             <div className="btn-group">
-              {[{k:'full_size',l:'Full Size'},{k:'scale_in_out',l:'Scale In/Out'}].map(s => (
+              {[{k:'full_size',l:'Full Size',t:'Enter full position at once, exit all at stop/target'},
+                {k:'scale_in_out',l:'3-Tranche Scale',t:'Pilot 1/3 → Confirm 1/3 → Breakout 1/3. Stops tighten each tranche.'}].map(s => (
                 <button key={s.k} className={`mode-btn ${exitStrategy===s.k?'active':''}`}
                   onClick={() => setExitStrategy(s.k)}
-                  title={s.k==='full_size'?'Enter full position, exit all at stop/target':'Dynamic scale: 1/3 at T1 (stop→BE), 1/3 at T2, trail final 1/3'}>
+                  title={s.t}
+                  style={exitStrategy===s.k && s.k==='scale_in_out'?{borderColor:'var(--cyan)',color:'var(--cyan)'}:{}}>
                   {s.l}
                 </button>
               ))}
@@ -2941,6 +2943,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                   <th title="% below 52-week high">From High</th>
                   <th title="Today's volume vs 3-month average">Vol Ratio</th>
                   <th>Signals</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -2959,12 +2962,26 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                     <td style={{fontSize:10}}>
                       {s.reasons?.map((r,j) => <span key={j} style={{display:'inline-block',marginRight:4,marginBottom:2,padding:'1px 5px',background:'rgba(196,77,255,0.08)',border:'1px solid rgba(196,77,255,0.2)',borderRadius:2,color:'var(--text2)',fontSize:9}}>{r}</span>)}
                     </td>
+                    <td>
+                      <button onClick={async()=>{
+                        const sector = prompt(`Add ${s.ticker} to universe. Enter sector:\nTechnology, Comm Services, Consumer Disc, Industrials, Energy, Financials, Healthcare, Materials, Cons Staples, Real Estate, Utilities`, s.sector||'Technology');
+                        if(!sector) return;
+                        try {
+                          const r = await api('/api/edge/universe/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:s.ticker,sector})});
+                          if(r.existed) alert(`${s.ticker} already in universe (${r.message})`);
+                          else alert(`✓ Added ${s.ticker} to ${sector} — will appear in next scan`);
+                        } catch(e) { alert('Error: '+e.message); }
+                      }}
+                        style={{padding:'3px 8px',background:'rgba(0,230,118,0.1)',border:'1px solid rgba(0,230,118,0.3)',borderRadius:3,color:'var(--green)',fontSize:9,cursor:'pointer',fontWeight:700,fontFamily:'var(--font-mono)',whiteSpace:'nowrap'}}>
+                        + ADD
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
             <div style={{fontSize:10,color:'var(--text3)',marginTop:6,paddingLeft:2}}>
-              These stocks are NOT in your universe. To add one: edit universe.js and add the ticker to the appropriate sector. Or take a discretionary position without adding.
+              These stocks are NOT in your universe. Click <strong style={{color:'var(--green)'}}>+ ADD</strong> to include one — persists to database, no file editing needed.
             </div>
           </div>
         )}
@@ -4063,60 +4080,76 @@ function IntradayTimingSection() {
               </div>
             </div>
 
-            {/* VWAP + ORB + S/R Grid */}
+            {/* VWAP + ORB + S/R Grid — signals nested under data.signals from /timing route */}
+            {(() => { const s = data.signals || data; return (
             <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:12}}>
               {/* VWAP Data */}
-              {data.vwap && (
+              {s.vwap && (
                 <div style={{padding:12,background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)'}}>
                   <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>VWAP</div>
                   <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.8,fontFamily:'var(--font-mono)'}}>
-                    <div>Price: <span style={{color:'var(--text)',fontWeight:600}}>${fmt(data.vwap.price,2)}</span></div>
-                    <div>VWAP: <span style={{color:'var(--cyan)',fontWeight:600}}>${fmt(data.vwap.vwap,2)}</span></div>
-                    <div>Upper Band: <span style={{color:'var(--text2)'}}>${fmt(data.vwap.upperBand,2)}</span></div>
-                    <div>Lower Band: <span style={{color:'var(--text2)'}}>${fmt(data.vwap.lowerBand,2)}</span></div>
-                    <div>Deviation: <span style={{color:data.vwap.deviation>=0?'var(--green)':'var(--red)',fontWeight:600}}>{fmtP(data.vwap.deviation)}</span></div>
+                    <div>Price: <span style={{color:'var(--text)',fontWeight:600}}>${fmt(s.vwap.price||s.vwap.close,2)}</span></div>
+                    <div>VWAP: <span style={{color:'var(--cyan)',fontWeight:600}}>${fmt(s.vwap.vwap,2)}</span></div>
+                    <div>+1σ Band: <span style={{color:'var(--text2)'}}>${fmt(s.vwap.upperBand1||s.vwap.upperBand,2)}</span></div>
+                    <div>-1σ Band: <span style={{color:'var(--text2)'}}>${fmt(s.vwap.lowerBand1||s.vwap.lowerBand,2)}</span></div>
+                    <div>+2σ Band: <span style={{color:'var(--text3)'}}>{s.vwap.upperBand2?'$'+fmt(s.vwap.upperBand2,2):'—'}</span></div>
+                    <div>-2σ Band: <span style={{color:'var(--text3)'}}>{s.vwap.lowerBand2?'$'+fmt(s.vwap.lowerBand2,2):'—'}</span></div>
+                    <div>Position: <span style={{color:s.vwap.aboveVWAP?'var(--green)':'var(--red)',fontWeight:600}}>{s.vwap.aboveVWAP?'ABOVE':'BELOW'} VWAP</span></div>
                   </div>
                 </div>
               )}
 
               {/* ORB Status */}
-              {data.orb && (
+              {s.orb && (
                 <div style={{padding:12,background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)'}}>
                   <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>OPENING RANGE BREAKOUT</div>
                   <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.8,fontFamily:'var(--font-mono)'}}>
-                    <div>Breakout: <span style={{color:data.orb.breakout?'var(--green)':'var(--text3)',fontWeight:700}}>{data.orb.breakout ? 'YES' : 'NO'}</span></div>
-                    <div>Range High: <span style={{color:'var(--text)'}}>${fmt(data.orb.rangeHigh,2)}</span></div>
-                    <div>Range Low: <span style={{color:'var(--text)'}}>${fmt(data.orb.rangeLow,2)}</span></div>
-                    <div>Vol Confirmed: <span style={{color:data.orb.volumeConfirmed?'var(--green)':'var(--text3)',fontWeight:600}}>{data.orb.volumeConfirmed ? 'YES' : 'NO'}</span></div>
+                    <div>Breakout: <span style={{color:s.orb.breakoutDetected?'var(--green)':'var(--text3)',fontWeight:700}}>{s.orb.breakoutDetected ? 'YES ↑'+s.orb.breakoutDirection?.toUpperCase() : 'NO'}</span></div>
+                    <div>Range High: <span style={{color:'var(--text)'}}>${fmt(s.orb.rangeHigh,2)}</span></div>
+                    <div>Range Low: <span style={{color:'var(--text)'}}>${fmt(s.orb.rangeLow,2)}</span></div>
+                    <div>Range Width: <span style={{color:'var(--text2)'}}>{s.orb.rangeWidth?fmt(s.orb.rangeWidth,1)+'%':'—'}</span></div>
+                    <div>Vol Confirmed: <span style={{color:s.orb.volumeConfirmed?'var(--green)':'var(--text3)',fontWeight:600}}>{s.orb.volumeConfirmed ? 'YES' : 'NO'}</span></div>
+                    {s.orb.retestCount>0 && <div>Retests: <span style={{color:'var(--cyan)',fontWeight:600}}>{s.orb.retestCount}</span></div>}
                   </div>
                 </div>
               )}
 
               {/* Support / Resistance Levels */}
-              {data.levels && (
+              {(s.supportResistance || s.levels) && (() => { const sr = s.supportResistance || s.levels; return (
                 <div style={{padding:12,background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)'}}>
                   <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>SUPPORT / RESISTANCE</div>
                   <div style={{fontSize:11,fontFamily:'var(--font-mono)',lineHeight:1.8}}>
-                    {data.levels.resistance?.length > 0 && (
+                    {(sr.resistance?.length > 0) && (
                       <div style={{marginBottom:4}}>
                         <span style={{color:'var(--text3)',fontSize:9}}>RESISTANCE:</span>
-                        {data.levels.resistance.map((l,i) => (
-                          <div key={i} style={{color:'var(--red)'}}>${fmt(l,2)}</div>
+                        {sr.resistance.map((l,i) => (
+                          <div key={i} style={{color:'var(--red)'}}>${fmt(typeof l==='object'?l.price:l,2)}{l.strength?' (str '+l.strength+')':''}</div>
                         ))}
                       </div>
                     )}
-                    {data.levels.support?.length > 0 && (
+                    {(sr.support?.length > 0) && (
                       <div>
                         <span style={{color:'var(--text3)',fontSize:9}}>SUPPORT:</span>
-                        {data.levels.support.map((l,i) => (
-                          <div key={i} style={{color:'var(--green)'}}>${fmt(l,2)}</div>
+                        {sr.support.map((l,i) => (
+                          <div key={i} style={{color:'var(--green)'}}>${fmt(typeof l==='object'?l.price:l,2)}{l.strength?' (str '+l.strength+')':''}</div>
                         ))}
                       </div>
                     )}
                   </div>
                 </div>
+              ); })()}
+
+              {/* Entry Reasons */}
+              {data.reasons?.length > 0 && (
+                <div style={{padding:12,background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)',gridColumn:'1/-1'}}>
+                  <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>TIMING ANALYSIS</div>
+                  {data.reasons.map((r,i)=>(
+                    <div key={i} style={{fontSize:11,color:'var(--text2)',marginBottom:3,fontFamily:'var(--font-mono)'}}>• {r}</div>
+                  ))}
+                </div>
               )}
             </div>
+            ); })()}
           </div>
         )}
       </div>
@@ -4130,7 +4163,7 @@ function ConditionalEntriesSection() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({symbol:'',entry_type:'pullback',trigger_price:'',shares:'',stop_price:'',target1:'',notes:''});
+  const [form, setForm] = useState({symbol:'',conditionType:'pullback',triggerPrice:'',entryPrice:'',qty:'',stopPrice:'',target1Price:'',notes:''});
 
   async function load() {
     setLoading(true); setError('');
@@ -4144,13 +4177,22 @@ function ConditionalEntriesSection() {
   useEffect(()=>{ load(); },[]);
 
   async function createEntry() {
-    if (!form.symbol || !form.trigger_price) return;
+    if (!form.symbol || !form.triggerPrice || !form.qty || !form.stopPrice) return;
     try {
       await api('/api/staging/conditional', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({...form, trigger_price:+form.trigger_price, shares:+form.shares||undefined, stop_price:+form.stop_price||undefined, target1:+form.target1||undefined}),
+        body: JSON.stringify({
+          symbol: form.symbol,
+          conditionType: form.conditionType,
+          triggerPrice: +form.triggerPrice,
+          entryPrice: +form.entryPrice || +form.triggerPrice,
+          stopPrice: +form.stopPrice,
+          qty: +form.qty,
+          target1Price: +form.target1Price || undefined,
+          notes: form.notes || undefined,
+        }),
       });
-      setForm({symbol:'',entry_type:'pullback',trigger_price:'',shares:'',stop_price:'',target1:'',notes:''});
+      setForm({symbol:'',conditionType:'pullback',triggerPrice:'',entryPrice:'',qty:'',stopPrice:'',target1Price:'',notes:''});
       setShowForm(false);
       load();
     } catch(e) { setError(e.message); }
@@ -4163,7 +4205,7 @@ function ConditionalEntriesSection() {
     } catch(e) { setError(e.message); }
   }
 
-  const typeColor = t => t==='breakout'?'var(--green)':t==='pullback'?'var(--cyan)':'var(--amber)';
+  const typeColor = t => {const v=(t||'').toLowerCase(); return v==='breakout'?'var(--green)':v==='pullback'?'var(--cyan)':'var(--amber)';};
 
   return (
     <div style={{marginTop:14}}>
@@ -4189,32 +4231,37 @@ function ConditionalEntriesSection() {
                   style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
               </div>
               <div>
-                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Entry Type</label>
-                <select value={form.entry_type} onChange={e=>setForm({...form,entry_type:e.target.value})}
+                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Condition Type</label>
+                <select value={form.conditionType} onChange={e=>setForm({...form,conditionType:e.target.value})}
                   style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13}}>
-                  <option value="pullback">Pullback</option>
-                  <option value="breakout">Breakout</option>
-                  <option value="limit">Limit</option>
+                  <option value="pullback">Pullback (buy on dip to trigger)</option>
+                  <option value="breakout">Breakout (buy on rise to trigger)</option>
+                  <option value="limit">Limit (simple limit buy)</option>
                 </select>
               </div>
               <div>
                 <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Trigger Price</label>
-                <input type="number" value={form.trigger_price} onChange={e=>setForm({...form,trigger_price:e.target.value})} placeholder="0.00"
+                <input type="number" value={form.triggerPrice} onChange={e=>setForm({...form,triggerPrice:e.target.value})} placeholder="0.00"
                   style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
               </div>
               <div>
-                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Shares</label>
-                <input type="number" value={form.shares} onChange={e=>setForm({...form,shares:e.target.value})} placeholder="0"
+                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Entry Price (or same as trigger)</label>
+                <input type="number" value={form.entryPrice} onChange={e=>setForm({...form,entryPrice:e.target.value})} placeholder="= trigger"
+                  style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
+              </div>
+              <div>
+                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Shares (qty)</label>
+                <input type="number" value={form.qty} onChange={e=>setForm({...form,qty:e.target.value})} placeholder="0"
                   style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
               </div>
               <div>
                 <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Stop Price</label>
-                <input type="number" value={form.stop_price} onChange={e=>setForm({...form,stop_price:e.target.value})} placeholder="0.00"
+                <input type="number" value={form.stopPrice} onChange={e=>setForm({...form,stopPrice:e.target.value})} placeholder="0.00"
                   style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
               </div>
               <div>
                 <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Target 1</label>
-                <input type="number" value={form.target1} onChange={e=>setForm({...form,target1:e.target.value})} placeholder="0.00"
+                <input type="number" value={form.target1Price} onChange={e=>setForm({...form,target1Price:e.target.value})} placeholder="0.00"
                   style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
               </div>
             </div>
@@ -4249,15 +4296,15 @@ function ConditionalEntriesSection() {
                 {entries.map(e => (
                   <tr key={e.id}>
                     <td style={{color:'var(--cyan)',fontWeight:700}}>{e.symbol}</td>
-                    <td><span style={{color:typeColor(e.entry_type),fontWeight:600,fontSize:11,letterSpacing:.5}}>{(e.entry_type||'—').toUpperCase()}</span></td>
+                    <td><span style={{color:typeColor(e.condition_type),fontWeight:600,fontSize:11,letterSpacing:.5}}>{(e.condition_type||'—').toUpperCase()}</span></td>
                     <td>${fmt(e.trigger_price,2)}</td>
-                    <td>{e.shares || '—'}</td>
+                    <td>{e.qty || '—'}</td>
                     <td style={{color:'var(--red)'}}>{e.stop_price ? '$'+fmt(e.stop_price,2) : '—'}</td>
                     <td><span style={{padding:'2px 8px',borderRadius:3,fontSize:10,fontWeight:700,
                       color:e.status==='active'?'var(--green)':e.status==='triggered'?'var(--cyan)':'var(--text3)',
                       background:e.status==='active'?'rgba(0,230,118,0.1)':'rgba(136,136,187,0.1)'}}>{(e.status||'active').toUpperCase()}</span></td>
-                    <td style={{fontSize:11,color:'var(--text3)'}}>{e.created_at?.split('T')[0] || '—'}</td>
-                    <td style={{fontSize:11,color:'var(--text3)'}}>{e.expires_at?.split('T')[0] || '—'}</td>
+                    <td style={{fontSize:11,color:'var(--text3)'}}>{(e.created_at||'').split('T')[0] || '—'}</td>
+                    <td style={{fontSize:11,color:'var(--text3)'}}>{e.expiry_date || '—'}</td>
                     <td>
                       {e.status==='active' && (
                         <button onClick={()=>cancelEntry(e.id)}
