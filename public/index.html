@@ -183,6 +183,11 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .chart-overlay-legend { position:absolute; top:8px; left:10px; z-index:2; display:flex; gap:12px; font-size:10px; font-family:var(--font-mono); }
 .chart-legend-item { display:flex; align-items:center; gap:4px; }
 .chart-legend-dot { width:8px; height:2px; border-radius:1px; }
+.chart-ohlc-label { position:absolute; top:8px; right:12px; z-index:2; display:flex; gap:10px; font-size:10px; font-family:var(--font-mono); background:rgba(11,11,34,0.82); padding:4px 8px; border:1px solid var(--border); border-radius:3px; pointer-events:none; }
+.chart-ohlc-label .ohlc-pair { display:flex; gap:3px; }
+.chart-ohlc-label .ohlc-k { color:var(--text3); letter-spacing:.5px; }
+.chart-ohlc-label .ohlc-v { font-weight:700; }
+.chart-ohlc-label .ohlc-date { color:var(--text3); margin-right:4px; border-right:1px solid var(--border); padding-right:8px; }
 .chart-toolbar { display:flex; gap:4px; padding:6px 10px; background:var(--bg2); border-bottom:1px solid var(--border); align-items:center; }
 .chart-toolbar button { font-size:10px; padding:3px 8px; border-radius:3px; border:1px solid var(--border); background:var(--bg3); color:var(--text3); cursor:pointer; font-family:var(--font-mono); letter-spacing:.5px; transition:all .15s; }
 .chart-toolbar button:hover { border-color:var(--amber); color:var(--amber); }
@@ -407,29 +412,49 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
   const seriesRef = useRef(null);
   const [chartData, setChartData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [timeframe, setTimeframe] = useState('daily'); // 'daily' | '39m'
   const [drawTool, setDrawTool] = useState(null); // null | 'hline' | 'trendline' | 'rect' | 'fib' | 'fibext'
   const [drawings, setDrawings] = useState([]);
+  const [hoverBar, setHoverBar] = useState(null); // OHLC of hovered bar (falls back to last bar)
   const pendingClick = useRef(null); // for 2-click tools: stores first click
   const drawingsRef = useRef([]);   // mirror for cleanup
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    const params = new URLSearchParams({ days: 252 });
+    const params = new URLSearchParams({ days: 252, timeframe });
     if (entry) params.set('entry', entry);
     if (stop) params.set('stop', stop);
     if (target1) params.set('target1', target1);
     if (target2) params.set('target2', target2);
-    api(`/api/chart/${symbol}?${params}`).then(d => {
-      if (!cancelled) { setChartData(d); setLoading(false); }
-    }).catch(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [symbol, entry, stop, target1, target2]);
+    const fetchChart = (showLoader=false) => {
+      if (showLoader) setLoading(true);
+      api(`/api/chart/${symbol}?${params}`).then(d => {
+        if (!cancelled) { setChartData(d); setLoading(false); }
+      }).catch(() => { if (!cancelled) setLoading(false); });
+    };
+    fetchChart(true);
+    // Auto-refresh during US market hours (9:30 AM – 4:00 PM ET, Mon–Fri).
+    // Daily: 60s so the synthesized "today" bar updates.
+    // 39-min: 39s so the current in-progress 39-min bucket updates smoothly.
+    const refreshMs = timeframe === '39m' ? 39_000 : 60_000;
+    const interval = setInterval(() => {
+      const nowET = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+      const [d, t] = nowET.split(', ');
+      const [h, m] = t.split(':').map(Number);
+      const day = new Date(nowET).getDay(); // 0=Sun, 6=Sat
+      const mins = h * 60 + m;
+      const isMarketHours = day >= 1 && day <= 5 && mins >= 9*60+30 && mins <= 16*60+5;
+      if (isMarketHours) fetchChart(false);
+    }, refreshMs);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [symbol, entry, stop, target1, target2, timeframe]);
 
   useEffect(() => {
     if (!chartData || !containerRef.current || !window.LightweightCharts) return;
     if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; }
 
+    const isIntraday = chartData?.timeframe === '39min' || chartData?.meta?.timeframe === '39min';
     const chart = window.LightweightCharts.createChart(containerRef.current, {
       width: containerRef.current.clientWidth,
       height: height,
@@ -437,7 +462,7 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
       grid: { vertLines: { color: '#14142e' }, horzLines: { color: '#14142e' } },
       crosshair: { mode: 0 },
       rightPriceScale: { borderColor: '#14142e' },
-      timeScale: { borderColor: '#14142e', timeVisible: false },
+      timeScale: { borderColor: '#14142e', timeVisible: isIntraday, secondsVisible: false },
     });
     chartRef.current = chart;
 
@@ -460,12 +485,38 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
       }
     }
 
+    // VWAP overlay — dashed pink line. Session VWAP on 39-min (resets daily),
+    // 20-day rolling VWAP on daily charts.
+    if (chartData.overlays?.vwap?.length) {
+      const vwapSeries = chart.addLineSeries({
+        color: '#ff80ab',
+        lineWidth: 2,
+        lineStyle: 2, // Dashed
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      vwapSeries.setData(chartData.overlays.vwap.filter(d => d.value !== null).map(d => ({ time: d.time, value: d.value })));
+    }
+
     if (chartData.markers) {
       for (const m of chartData.markers) {
         const lineColor = m.type === 'entry' ? '#f0a500' : m.type === 'stop' ? '#ff3d57' : '#00e676';
         candleSeries.createPriceLine({ price: m.price, color: lineColor, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: m.label });
       }
     }
+
+    // ── OHLC crosshair: update hoverBar as user moves the mouse over candles ──
+    const volBySec = new Map((chartData.volume || []).map(v => [v.time, v.value || 0]));
+    chart.subscribeCrosshairMove(param => {
+      if (!param || !param.time || !param.seriesData) { setHoverBar(null); return; }
+      const bar = param.seriesData.get(candleSeries);
+      if (bar && typeof bar.close === 'number') {
+        setHoverBar({ time: param.time, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: volBySec.get(param.time) || 0 });
+      } else {
+        setHoverBar(null);
+      }
+    });
 
     chart.timeScale().fitContent();
     const handleResize = () => chart.applyOptions({ width: containerRef.current?.clientWidth || 600 });
@@ -685,9 +736,29 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
   if (!chartData) return <div className="muted" style={{padding:12,fontSize:11}}>No chart data for {symbol}</div>;
 
   const toolActive = drawTool !== null;
+  // OHLC readout: use hovered bar, or fall back to the most recent bar.
+  const lastBar = (chartData.bars || [])[(chartData.bars || []).length - 1];
+  const lastVol = (chartData.volume || [])[(chartData.volume || []).length - 1]?.value || 0;
+  const displayBar = hoverBar || (lastBar && { time: lastBar.time, open: lastBar.open, high: lastBar.high, low: lastBar.low, close: lastBar.close, volume: lastVol });
+  const barColor = displayBar ? (displayBar.close >= displayBar.open ? '#00e676' : '#ff3d57') : '#8888bb';
+  const fmtPrice = (p) => p == null ? '—' : (p >= 1000 ? p.toFixed(0) : p.toFixed(2));
+  const fmtVol = (v) => !v ? '—' : v >= 1e9 ? (v/1e9).toFixed(2)+'B' : v >= 1e6 ? (v/1e6).toFixed(2)+'M' : v >= 1e3 ? (v/1e3).toFixed(1)+'K' : String(v);
+  const fmtBarDate = (t) => {
+    if (t == null) return '';
+    if (typeof t === 'string') return t; // daily 'YYYY-MM-DD'
+    // intraday: seconds since epoch
+    const d = new Date(t * 1000);
+    return d.toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: false });
+  };
+  const change = displayBar ? (displayBar.close - displayBar.open) : 0;
+  const changePct = displayBar && displayBar.open ? (change / displayBar.open * 100) : 0;
   return (
     <div className="chart-container">
       <div className="chart-toolbar">
+        <span className="toolbar-label">TF</span>
+        <button className={timeframe==='daily'?'draw-active':''} onClick={() => setTimeframe('daily')} title="Daily candles — 252-day window with 50/150/200 MAs">Daily</button>
+        <button className={timeframe==='39m'?'draw-active':''} onClick={() => setTimeframe('39m')} title="39-minute candles (IBD intraday) — 10 bars per trading day, anchored to 9:30 AM ET open. ~7 days of history.">39-min</button>
+        <div className="toolbar-sep"/>
         <span className="toolbar-label">DRAW</span>
         <button className={drawTool==='hline'?'draw-active':''} onClick={() => { setDrawTool(drawTool==='hline'?null:'hline'); pendingClick.current=null; }} title="Horizontal Price Line — click chart at any price">― H-Line</button>
         <button className={drawTool==='trendline'?'draw-active':''} onClick={() => { setDrawTool(drawTool==='trendline'?null:'trendline'); pendingClick.current=null; }} title="Trendline — click two points on chart">╱ Trend</button>
@@ -702,10 +773,45 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
       </div>
       <div style={{position:'relative'}}>
         <div className="chart-overlay-legend" style={{top:8,left:10}}>
-          <div className="chart-legend-item"><div className="chart-legend-dot" style={{background:'#f0a500'}}/><span style={{color:'var(--text3)'}}>50MA</span></div>
-          <div className="chart-legend-item"><div className="chart-legend-dot" style={{background:'#c44dff'}}/><span style={{color:'var(--text3)'}}>150MA</span></div>
-          <div className="chart-legend-item"><div className="chart-legend-dot" style={{background:'#00d4ff'}}/><span style={{color:'var(--text3)'}}>200MA</span></div>
+          {(() => {
+            const labels = chartData?.meta?.maLabels || { ma50:'50', ma150:'150', ma200:'200' };
+            const vwapLabel = chartData?.meta?.vwapLabel || 'VWAP';
+            return (<>
+              <div className="chart-legend-item"><div className="chart-legend-dot" style={{background:'#f0a500'}}/><span style={{color:'var(--text3)'}}>{labels.ma50}MA</span></div>
+              <div className="chart-legend-item"><div className="chart-legend-dot" style={{background:'#c44dff'}}/><span style={{color:'var(--text3)'}}>{labels.ma150}MA</span></div>
+              <div className="chart-legend-item"><div className="chart-legend-dot" style={{background:'#00d4ff'}}/><span style={{color:'var(--text3)'}}>{labels.ma200}MA</span></div>
+              {chartData?.overlays?.vwap?.length > 0 && (
+                <div className="chart-legend-item" title={chartData?.meta?.timeframe === '39min' ? 'Session VWAP — resets each trading day at 9:30 ET. Cumulative Σ(TP×V)/Σ(V).' : '20-day rolling VWAP — volume-weighted mean over the last 20 daily bars.'}>
+                  <div className="chart-legend-dot" style={{background:'#ff80ab'}}/>
+                  <span style={{color:'var(--text3)'}}>{vwapLabel}</span>
+                </div>
+              )}
+            </>);
+          })()}
+          {chartData?.meta?.timeframe === '39min' && (
+            <div className="chart-legend-item" title={`${chartData.meta.totalBars} × 39-min bars over ${chartData.meta.tradingDays} trading days. 10 bars per session anchored to 9:30 ET. Auto-refreshes every 39s during market hours.`}>
+              <div className="chart-legend-dot" style={{background:'#c44dff'}}/>
+              <span style={{color:'#c44dff',fontWeight:700,letterSpacing:0.5}}>39-MIN · {chartData.meta.totalBars}B / {chartData.meta.tradingDays}D</span>
+            </div>
+          )}
+          {chartData?.meta?.timeframe !== '39min' && chartData?.meta?.todayLive && (
+            <div className="chart-legend-item" title={`Today's bar synthesized from ${chartData.meta.todayLiveBar?.barCount||0} intraday 5-min bars. Auto-refreshes every 60s during market hours.`}>
+              <div className="chart-legend-dot" style={{background:'#00e676',boxShadow:'0 0 6px #00e676',animation:'pulse 1.5s ease-in-out infinite'}}/>
+              <span style={{color:'#00e676',fontWeight:700,letterSpacing:0.5}}>LIVE ${chartData.meta.todayLiveBar?.close?.toFixed(2)}</span>
+            </div>
+          )}
         </div>
+        {displayBar && (
+          <div className="chart-ohlc-label" title={hoverBar ? 'Hovered bar OHLC' : 'Most recent bar OHLC (hover chart to inspect other bars)'}>
+            <span className="ohlc-date">{fmtBarDate(displayBar.time)}</span>
+            <span className="ohlc-pair"><span className="ohlc-k">O</span><span className="ohlc-v" style={{color:barColor}}>{fmtPrice(displayBar.open)}</span></span>
+            <span className="ohlc-pair"><span className="ohlc-k">H</span><span className="ohlc-v" style={{color:barColor}}>{fmtPrice(displayBar.high)}</span></span>
+            <span className="ohlc-pair"><span className="ohlc-k">L</span><span className="ohlc-v" style={{color:barColor}}>{fmtPrice(displayBar.low)}</span></span>
+            <span className="ohlc-pair"><span className="ohlc-k">C</span><span className="ohlc-v" style={{color:barColor}}>{fmtPrice(displayBar.close)}</span></span>
+            <span className="ohlc-pair" style={{color:barColor}}>{change >= 0 ? '+' : ''}{fmtPrice(change)} ({changePct >= 0 ? '+' : ''}{changePct.toFixed(2)}%)</span>
+            <span className="ohlc-pair"><span className="ohlc-k">V</span><span className="ohlc-v" style={{color:'#8888bb'}}>{fmtVol(displayBar.volume)}</span></span>
+          </div>
+        )}
         <div ref={containerRef} onClick={handleChartClick} style={{cursor: toolActive ? 'crosshair' : 'default'}}/>
       </div>
     </div>
@@ -2683,10 +2789,10 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
     '⭐':   s => s.rsLineNewHigh,
     '↗':   s => s.rsTrend?.vs4w>5 && s.rsRank>=65 && s.rsRank<80,
     'VCP': s => s.vcpForming,
-    'CUP': s => s.patternData?.patterns?.cupHandle,
-    'ASC': s => s.patternData?.patterns?.ascendingBase,
-    'PWR': s => s.patternData?.patterns?.powerPlay,
-    'HTF': s => s.patternData?.patterns?.highTightFlag,
+    'CUP': s => s.patternData?.patterns?.cupHandle?.detected,
+    'ASC': s => s.patternData?.patterns?.ascendingBase?.detected,
+    'PWR': s => s.patternData?.patterns?.powerPlay?.detected,
+    'HTF': s => s.patternData?.patterns?.highTightFlag?.detected,
     'S2':  s => s.stage===2,
     'S4':  s => s.stage===4,
     'ACC': s => s.volumeTrend==='accumulating',

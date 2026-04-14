@@ -1,8 +1,42 @@
 // ─── /api/chart/:symbol — OHLCV + overlay data for TradingView Lightweight Charts
 const express = require('express');
 
-const { getHistoryFull } = require('../data/providers/manager');
+const { getHistoryFull, getIntradayBars } = require('../data/providers/manager');
 const { getDB }          = require('../data/database');
+
+// ─── Check if US equity market is open (or within ~30 min after close) ─────
+// Used to decide whether to refresh today's bar from intraday data.
+function isMarketOpenOrRecent() {
+  const nowET = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+  const dt = new Date(nowET);
+  const day = dt.getDay(); // 0=Sun, 6=Sat
+  if (day === 0 || day === 6) return false;
+  const mins = dt.getHours() * 60 + dt.getMinutes();
+  // Market open 9:30 ET through 16:30 ET (30 min buffer for intraday data settle)
+  return mins >= 9 * 60 + 30 && mins <= 16 * 60 + 30;
+}
+
+// ─── Build today's "in-progress" daily bar from 5-min intraday bars ─────────
+// Returns null if market is closed / no intraday data available.
+async function buildTodayLiveBar(symbol) {
+  try {
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const bars = await getIntradayBars(symbol, 'minute', 5, today, today);
+    if (!bars || bars.length === 0) return null;
+    const open  = bars[0].open;
+    const close = bars[bars.length - 1].close;
+    let high = -Infinity, low = Infinity, volume = 0;
+    for (const b of bars) {
+      if (b.high  > high) high = b.high;
+      if (b.low   < low)  low  = b.low;
+      volume += b.volume || 0;
+    }
+    if (!isFinite(high) || !isFinite(low)) return null;
+    return { date: today, open, high, low, close, volume, _live: true, barCount: bars.length };
+  } catch (_) {
+    return null;
+  }
+}
 
 // ─── Moving average helper ──────────────────────────────────────────────────
 // Returns an array the same length as `values`, with nulls where the window
@@ -24,19 +58,277 @@ function sma(values, period) {
   return result;
 }
 
+// ─── Rolling VWAP over N bars (for daily charts) ───────────────────────────
+// VWAP = Σ(typical_price × volume) / Σ(volume), where typical_price = (H+L+C)/3.
+// Returns one value per bar with nulls until the window fills.
+function rollingVWAP(bars, period = 20) {
+  const n = bars.length;
+  const result = new Array(n).fill(null);
+  if (n < period) return result;
+
+  const pv = bars.map(b => ((b.high + b.low + b.close) / 3) * (b.volume || 0));
+  const v  = bars.map(b => b.volume || 0);
+
+  let pvSum = 0, vSum = 0;
+  for (let i = 0; i < period; i++) { pvSum += pv[i]; vSum += v[i]; }
+  result[period - 1] = vSum > 0 ? pvSum / vSum : null;
+
+  for (let i = period; i < n; i++) {
+    pvSum += pv[i] - pv[i - period];
+    vSum  += v[i]  - v[i - period];
+    result[i] = vSum > 0 ? pvSum / vSum : null;
+  }
+  return result;
+}
+
+// ─── Session VWAP for intraday (resets each trading day) ───────────────────
+// Cumulative Σ(TP×V)/Σ(V) from the first bar of each session. Bars must
+// carry a `.date` field (YYYY-MM-DD in ET) as the session key. This is the
+// standard intraday VWAP traders watch on minute/39-min charts.
+function sessionVWAP(bars) {
+  const result = new Array(bars.length).fill(null);
+  let currentDate = null;
+  let cumPV = 0, cumV = 0;
+
+  for (let i = 0; i < bars.length; i++) {
+    const b = bars[i];
+    if (b.date !== currentDate) {
+      currentDate = b.date;
+      cumPV = 0;
+      cumV = 0;
+    }
+    const tp = (b.high + b.low + b.close) / 3;
+    const vol = b.volume || 0;
+    cumPV += tp * vol;
+    cumV  += vol;
+    result[i] = cumV > 0 ? cumPV / cumV : null;
+  }
+  return result;
+}
+
+// ─── Extract ET date and minute-of-day from a timestamp ────────────────────
+// Uses Intl to avoid DST headaches.  Returns `null` outside cash session.
+const etPartsFmt = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', hour12: false,
+});
+function getETParts(ts) {
+  const parts = etPartsFmt.formatToParts(new Date(ts));
+  const p = {};
+  for (const x of parts) if (x.type !== 'literal') p[x.type] = x.value;
+  // Intl may report hour '24' for midnight; normalize.
+  const hour = parseInt(p.hour, 10) % 24;
+  const minute = parseInt(p.minute, 10);
+  return {
+    date: `${p.year}-${p.month}-${p.day}`,
+    minutes: hour * 60 + minute,
+  };
+}
+
+// ─── Aggregate 1-min bars into 39-min buckets anchored to 9:30 ET ──────────
+// US cash session is exactly 390 minutes (9:30–16:00 ET), so 390 / 39 = 10
+// bars per trading day. The intraday chart uses these 10 buckets for clean
+// alignment to market open — the "39-minute chart" popularized by O'Neil.
+function aggregateTo39Min(oneMinBars) {
+  const MARKET_OPEN_MIN = 9 * 60 + 30;  // 9:30 AM ET
+  const MARKET_CLOSE_MIN = 16 * 60;     // 4:00 PM ET
+  const BUCKET_MIN = 39;
+
+  const buckets = new Map(); // key = `${date}|${bucketIdx}` → bar
+
+  for (const bar of oneMinBars) {
+    const ts = bar.timestamp || new Date(bar.date).getTime();
+    const { date, minutes } = getETParts(ts);
+    if (minutes < MARKET_OPEN_MIN || minutes >= MARKET_CLOSE_MIN) continue;
+
+    const bucketIdx = Math.floor((minutes - MARKET_OPEN_MIN) / BUCKET_MIN);
+    const key = `${date}|${bucketIdx}`;
+
+    if (!buckets.has(key)) {
+      // Compute bucket start time in Unix seconds (ET → UTC)
+      const bucketStartMin = MARKET_OPEN_MIN + bucketIdx * BUCKET_MIN;
+      const h = Math.floor(bucketStartMin / 60);
+      const m = bucketStartMin % 60;
+      // Use the first bar's timestamp as the bucket anchor (avoids timezone math)
+      const bucketTs = Math.floor(ts / 1000);
+      buckets.set(key, {
+        time:   bucketTs,
+        date,
+        bucketIdx,
+        startMinuteET: bucketStartMin,
+        startLabelET: `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`,
+        open:   bar.open,
+        high:   bar.high,
+        low:    bar.low,
+        close:  bar.close,
+        volume: bar.volume || 0,
+        barCount: 1,
+      });
+    } else {
+      const b = buckets.get(key);
+      if (bar.high > b.high) b.high = bar.high;
+      if (bar.low  < b.low)  b.low  = bar.low;
+      b.close = bar.close;
+      b.volume += bar.volume || 0;
+      b.barCount += 1;
+    }
+  }
+
+  // Sort chronologically
+  return Array.from(buckets.values()).sort((a, b) => a.time - b.time);
+}
+
+// ─── Determine calendar-day range for 1-min intraday fetch ────────────────
+// Yahoo's 1-min endpoint is capped at ~7 calendar days from "now". Request
+// exceeding the cap returns an empty result. We go back `calendarDays` days
+// (6 is safe under the cap, yielding 4-5 trading days of 39-min bars = 40-50
+// bars, enough for short-term pattern work).
+function getIntradayDateRange(calendarDays = 6) {
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const start = new Date(todayStr + 'T00:00:00Z');
+  start.setUTCDate(start.getUTCDate() - calendarDays);
+  return {
+    from: start.toISOString().slice(0, 10),
+    to:   todayStr,
+  };
+}
+
 module.exports = function () {
   const router = express.Router();
 
   // GET /api/chart/:symbol?days=252&entry=150&stop=145&target1=160&target2=170
+  //         &timeframe=daily|39m
   router.get('/chart/:symbol', async (req, res) => {
     try {
-      const symbol = req.params.symbol.toUpperCase();
-      const days   = Math.min(parseInt(req.query.days) || 252, 1000);
+      const symbol    = req.params.symbol.toUpperCase();
+      const days      = Math.min(parseInt(req.query.days) || 252, 1000);
+      const timeframe = (req.query.timeframe || 'daily').toLowerCase();
+
+      // ─── 39-MINUTE INTRADAY CHART ────────────────────────────────────
+      // Aggregates 1-minute bars into 39-minute buckets anchored to 9:30 ET.
+      // Yahoo's 1-min endpoint is capped to ~7 calendar days; Polygon paid
+      // tier extends further. MAs are computed on 39-min closes.
+      if (timeframe === '39m' || timeframe === '39min') {
+        const range = getIntradayDateRange(6); // 6 calendar days — safe under Yahoo's 7-day 1m cap
+        let oneMin;
+        try {
+          oneMin = await getIntradayBars(symbol, 'minute', 1, range.from, range.to);
+        } catch (e) {
+          return res.status(502).json({ error: `39-min chart requires 1-min intraday data: ${e.message}` });
+        }
+        if (!oneMin || oneMin.length === 0) {
+          return res.status(404).json({ error: `No intraday data for ${symbol}` });
+        }
+
+        const bars39 = aggregateTo39Min(oneMin);
+        if (bars39.length === 0) {
+          return res.status(404).json({ error: `No cash-session bars for ${symbol}` });
+        }
+
+        // Build OHLCV series — use Unix seconds so Lightweight Charts renders intraday time labels
+        const ohlcv = bars39.map(b => ({
+          time:  b.time,
+          open:  +b.open.toFixed(2),
+          high:  +b.high.toFixed(2),
+          low:   +b.low.toFixed(2),
+          close: +b.close.toFixed(2),
+        }));
+        const volumeSeries = bars39.map(b => ({
+          time:  b.time,
+          value: b.volume,
+          color: b.close >= b.open ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)',
+        }));
+
+        // MAs on 39-min closes — 10/50/200 bars ≈ 1 day / 5 days / 20 days
+        const closes39 = bars39.map(b => b.close);
+        const ma10s    = sma(closes39, 10);
+        const ma50s39  = sma(closes39, 50);
+        const ma200s39 = sma(closes39, 200);
+        // Session VWAP — resets each trading day at 9:30 ET
+        const vwap39   = sessionVWAP(bars39);
+        const maSeries = (arr) => arr
+          .map((v, i) => v != null ? { time: bars39[i].time, value: +v.toFixed(2) } : null)
+          .filter(Boolean);
+
+        // Entry / stop / target markers
+        const markers = [];
+        const entryPrice   = parseFloat(req.query.entry);
+        const stopPrice    = parseFloat(req.query.stop);
+        const target1Price = parseFloat(req.query.target1);
+        const target2Price = parseFloat(req.query.target2);
+        if (!isNaN(entryPrice))   markers.push({ label: 'Entry',    price: entryPrice,   color: '#2196F3' });
+        if (!isNaN(stopPrice))    markers.push({ label: 'Stop',     price: stopPrice,    color: '#f44336' });
+        if (!isNaN(target1Price)) markers.push({ label: 'Target 1', price: target1Price, color: '#4CAF50' });
+        if (!isNaN(target2Price)) markers.push({ label: 'Target 2', price: target2Price, color: '#8BC34A' });
+
+        // Unique trading days covered (for info display)
+        const uniqueDays = new Set(bars39.map(b => b.date)).size;
+
+        return res.json({
+          symbol,
+          timeframe: '39min',
+          bars:    ohlcv,
+          volume:  volumeSeries,
+          overlays: {
+            // Reuse same keys the frontend expects, but these are shorter periods
+            ma50:  maSeries(ma10s),    // fast MA (~1 day)
+            ma150: maSeries(ma50s39),  // mid  MA (~5 days)
+            ma200: maSeries(ma200s39), // slow MA (~20 days)
+            vwap:  maSeries(vwap39),   // session VWAP (resets daily)
+          },
+          markers,
+          meta: {
+            timeframe:   '39min',
+            bucketMinutes: 39,
+            totalBars:   bars39.length,
+            visibleBars: bars39.length,
+            tradingDays: uniqueDays,
+            maLabels:    { ma50: '10', ma150: '50', ma200: '200' },
+            vwapLabel:   'Session VWAP',
+            firstTime:   bars39[0].time,
+            lastTime:    bars39[bars39.length - 1].time,
+            dataRange:   range,
+            todayLive:   isMarketOpenOrRecent(),
+          },
+        });
+      }
 
       // ── Fetch full history so MAs are seeded properly ──────────────────
       const allBars = await getHistoryFull(symbol);
       if (!allBars || allBars.length === 0) {
         return res.status(404).json({ error: `No price data for ${symbol}` });
+      }
+
+      // ── Append/refresh today's live bar from 5-min intraday aggregation ──
+      // Daily providers cache aggressively (23hr TTL) and may not reflect the
+      // latest intraday price action. During market hours we always build the
+      // current day's bar from 5-min intraday data (cached 5min) so the chart
+      // shows live price action. If historical already has today, we replace
+      // that bar with the fresher intraday-built version.
+      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      const lastHistDate = allBars[allBars.length - 1]?.date;
+      let todayLive = false;
+      let todayLiveMeta = null;
+      if (isMarketOpenOrRecent()) {
+        const liveBar = await buildTodayLiveBar(symbol);
+        if (liveBar) {
+          if (lastHistDate === todayStr) {
+            // Replace cached daily bar with fresher intraday-built bar
+            allBars[allBars.length - 1] = liveBar;
+          } else if (lastHistDate && lastHistDate < todayStr) {
+            allBars.push(liveBar);
+          }
+          todayLive = true;
+          todayLiveMeta = {
+            open:  +liveBar.open.toFixed(2),
+            high:  +liveBar.high.toFixed(2),
+            low:   +liveBar.low.toFixed(2),
+            close: +liveBar.close.toFixed(2),
+            volume: liveBar.volume,
+            barCount: liveBar.barCount,
+          };
+        }
       }
 
       // We need at least 200 extra bars before the visible window to seed
@@ -46,6 +338,8 @@ module.exports = function () {
       const ma50s   = sma(closes, 50);
       const ma150s  = sma(closes, 150);
       const ma200s  = sma(closes, 200);
+      // 20-day rolling VWAP — volume-weighted mean-reversion / support level
+      const vwap20s = rollingVWAP(allBars, 20);
 
       // Trim to the requested visible window
       const visibleBars = allBars.slice(-days);
@@ -80,6 +374,7 @@ module.exports = function () {
       const ma50  = maSlice(ma50s);
       const ma150 = maSlice(ma150s);
       const ma200 = maSlice(ma200s);
+      const vwap  = maSlice(vwap20s);
 
       // ── Entry / Stop / Target horizontal markers ──────────────────────
       const markers = [];
@@ -122,11 +417,13 @@ module.exports = function () {
 
       res.json({
         symbol,
+        timeframe: 'daily',
         bars:    ohlcv,
         volume,
-        overlays: { ma50, ma150, ma200 },
+        overlays: { ma50, ma150, ma200, vwap },
         markers,
         meta: {
+          timeframe:  'daily',
           totalBars:  allBars.length,
           visibleBars: visibleBars.length,
           currentMa50,
@@ -135,6 +432,10 @@ module.exports = function () {
           rsRank,
           stage,
           lastDate: visibleBars[visibleBars.length - 1]?.date || null,
+          todayLive,
+          todayLiveBar: todayLiveMeta,
+          maLabels: { ma50: '50', ma150: '150', ma200: '200' },
+          vwapLabel: 'VWAP(20)',
         },
       });
     } catch (e) {
