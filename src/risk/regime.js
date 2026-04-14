@@ -327,8 +327,10 @@ async function autoDetectCycleState() {
     const above200 = spyNow > ma200;
 
     // ── 200MA direction ──────────────────────────────────────────────────
+    // Genuine 200MA from ~4 weeks (20 trading days) ago: average of the 200
+    // bars ending 20 days before today, i.e. closes[n-220..n-20].
     const ma200_4wAgo = closes.length >= 220
-      ? closes.slice(-220, -200).reduce((a,b)=>a+b,0) / 20
+      ? closes.slice(-220, -20).reduce((a,b)=>a+b,0) / 200
       : ma200;
     const ma200Rising = ma200 > ma200_4wAgo * 1.001;
 

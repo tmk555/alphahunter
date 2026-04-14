@@ -4,6 +4,38 @@ const { getDB } = require('../data/database');
 
 function db() { return getDB(); }
 
+// Lazy to avoid a circular import during module init and to keep backtests
+// runnable on DBs that don't have the macro_series table yet.
+function macroFred() { return require('./macro-fred'); }
+
+/**
+ * Point-in-time macro snapshot for a given trading day, via FRED data
+ * imported by scripts/fetch-fred.js. Forward-fills monthly series so a
+ * query in the middle of a month still gets the most recent observation.
+ *
+ * Returns an empty object when the macro_series table has no rows (e.g.
+ * the user hasn't run fetch-fred yet) — callers should treat absent keys
+ * as "unknown" rather than error out.
+ *
+ * Intended consumers: the walk-forward dashboard (Day 5-6) and any
+ * future strategy that conditions on real macro rather than ETF proxies.
+ *
+ * @param {string} date           ISO 'YYYY-MM-DD'
+ * @param {string[]=} seriesIds   Optional allow-list; default = every
+ *                                distinct series_id in the table.
+ * @returns {Object<string, number|null>}
+ */
+function getMacroSnapshotForDate(date, seriesIds = null) {
+  if (!date) throw new Error('getMacroSnapshotForDate: date required');
+  try {
+    return macroFred().getMacroSnapshot(date, seriesIds);
+  } catch (_) {
+    // macro_series table missing, or macro-fred not loadable — backtests
+    // should still run without macro context rather than die here.
+    return {};
+  }
+}
+
 // ─── Strategy Definitions ──────────────────────────────────────────────────
 
 const BUILT_IN_STRATEGIES = {
@@ -337,12 +369,16 @@ function calcSPYBenchmark(startDate, endDate) {
 // Excludes stocks that were removed from the universe before a given date AND
 // stocks that were added AFTER the given date (prevents look-ahead bias).
 // Falls back to basic universe_mgmt check if tracker module unavailable.
+//
+// `indexName` is the external index to resolve against (SP500, RUSSELL1000,
+// NDX, etc.). Passed through to pit-universe; when no PIT data exists for
+// the index, falls through to the legacy universe_mgmt / rs_snapshots paths.
 
-function getActiveUniverse(date) {
+function getActiveUniverse(date, indexName = 'SP500') {
   try {
     // Phase 1: use universe-tracker for comprehensive filtering
     const { getActiveUniverseForDate } = require('./universe-tracker');
-    const activeSymbols = getActiveUniverseForDate(date);
+    const activeSymbols = getActiveUniverseForDate(date, indexName);
     if (activeSymbols && activeSymbols.length > 0) {
       // Return a Set of REMOVED symbols (for backward compat with existing filter)
       // Any symbol NOT in the active universe is effectively "removed"
@@ -385,7 +421,7 @@ const MODE_OVERRIDES = {
   position: { holdDays: 40, stopATR: 2.0, targetATR: 4.0, target1ATR: 2.5, target2ATR: 4.0 },
 };
 
-function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPositions = 10, initialCapital = 100000, execution = {}, persistResult = true }) {
+function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPositions = 10, initialCapital = 100000, execution = {}, persistResult = true, indexName = 'SP500' }) {
   const stratDef = BUILT_IN_STRATEGIES[strategy];
   if (!stratDef) throw new Error(`Unknown strategy: ${strategy}. Available: ${Object.keys(BUILT_IN_STRATEGIES).join(', ')}`);
 
@@ -490,8 +526,9 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       if (isEmerging) s._rs_accel_4w = computeRsAccel4w(s.symbol, date);
     }
 
-    // Survivorship filter: skip stocks not in the universe on this date
-    const universeFilter = getActiveUniverse(date);
+    // Survivorship filter: skip stocks not in the universe on this date.
+    // Resolves against the chosen index (default SP500) via PIT membership.
+    const universeFilter = getActiveUniverse(date, indexName);
 
     // For adaptive strategies, resolve today's sub-strategy + regime context.
     // Non-adaptive strategies see { key: strategy, def: stratDef, regime: null }.
@@ -1489,6 +1526,7 @@ function getWFResult(id) {
 module.exports = {
   BUILT_IN_STRATEGIES,
   getAvailableDateRange,
+  getMacroSnapshotForDate,
   runReplay,
   runWalkForward,
   runMonteCarlo,

@@ -4,8 +4,13 @@ const path = require('path');
 const fs   = require('fs');
 
 const DATA_DIR = path.join(__dirname, '..', '..', 'data');
-const DB_PATH  = path.join(DATA_DIR, 'alphahunter.db');
+// ALPHAHUNTER_DB lets tests and ephemeral runs point at an isolated DB file
+// (or ':memory:') without polluting the canonical alphahunter.db.
+const DB_PATH  = process.env.ALPHAHUNTER_DB || path.join(DATA_DIR, 'alphahunter.db');
 
+if (DB_PATH !== ':memory:' && !fs.existsSync(path.dirname(DB_PATH))) {
+  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+}
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 let db = null;
@@ -326,6 +331,13 @@ function initSchema() {
   // Exit strategy on staged orders (full_size = all-in/all-out, scale_in_out = dynamic partials)
   safeAddColumn('staged_orders', 'exit_strategy', "TEXT DEFAULT 'full_size'");
 
+  // Multi-tranche bracket bookkeeping: JSON array of
+  // [{label, orderId, qty, tp, stopOrderId}] rows, one per tranche.
+  // Set on submission when the exit strategy splits qty across N brackets;
+  // NULL for single-bracket submissions. Monitor and reconciler read this
+  // to find every child stop leg when moving stops to breakeven.
+  safeAddColumn('staged_orders', 'tranches_json', 'JSON');
+
   // Replay strategy tag — links live trades to replay engine strategy for active management
   safeAddColumn('staged_orders', 'strategy', 'TEXT');
   safeAddColumn('trades', 'strategy', 'TEXT');
@@ -355,6 +367,60 @@ function initSchema() {
   // ─── Gap 1: Edge Validation — survivorship-bias-free backtesting ──────────
   // universe_mgmt already exists above; these support execution cost tracking
   // in backtests and signal decay analysis results.
+
+  // ─── Point-in-Time Index Membership ────────────────────────────────────────
+  //
+  // `universe_mgmt` is a single-row-per-symbol admin table — it can't hold
+  // a re-addition (e.g. Netflix dropped from S&P 500 then re-added years
+  // later). This table is the authoritative historical membership record
+  // for external indices (S&P 500, Russell 1000, Nasdaq 100, etc.).
+  //
+  // Schema is sparse ranges: one row per continuous membership stint.
+  // A symbol that was in the index 2010-2015 and re-added 2019 to present
+  // gets two rows. `end_date IS NULL` means "currently a member".
+  //
+  // Primary key is (index_name, symbol, start_date) so multiple stints per
+  // symbol are allowed without clobbering each other.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS universe_membership (
+      index_name  TEXT NOT NULL,    -- 'SP500', 'RUSSELL1000', 'NDX', etc.
+      symbol      TEXT NOT NULL,
+      start_date  TEXT NOT NULL,    -- ISO date 'YYYY-MM-DD', inclusive
+      end_date    TEXT,             -- ISO date, exclusive; NULL if still a member
+      sector      TEXT,             -- Sector as-of start_date (best-effort)
+      source      TEXT,             -- 'wikipedia', 'fja05680', 'manual', etc.
+      PRIMARY KEY (index_name, symbol, start_date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_universe_membership_date
+      ON universe_membership (index_name, start_date, end_date);
+  `);
+
+  // ─── FRED Macro Series (point-in-time historical economic data) ──────────
+  //
+  // Stores observations for FRED series like DGS10 (10yr yield), CPIAUCSL
+  // (CPI), UNRATE (unemployment), BAMLH0A0HYM2 (high-yield spread). The
+  // existing src/signals/macro.js uses ETF PROXIES (TLT/SHY for yield curve,
+  // HYG/LQD for credit spreads) because FRED requires no auth but the
+  // proxies are easier to fetch live; those are fine for real-time regime
+  // detection but useless for backtests — ETFs have their own price action
+  // and pre-2007 coverage is missing. This table holds the real historical
+  // numbers so replay.js and walk-forward can ask "what was the 10Y/2Y
+  // spread on 2018-03-15?" and get a ground-truth answer.
+  //
+  // Schema note: monthly series (UNRATE, CPIAUCSL) only have observations
+  // on specific dates (usually the 1st). The query layer in
+  // src/signals/macro-fred.js does forward-fill so callers can ask for any
+  // trading day and get the most recent observation on-or-before that date.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS macro_series (
+      series_id TEXT NOT NULL,  -- FRED series ID, e.g. 'DGS10', 'CPIAUCSL'
+      date      TEXT NOT NULL,  -- ISO 'YYYY-MM-DD'
+      value     REAL,           -- may be NULL for reported-missing observations
+      PRIMARY KEY (series_id, date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_macro_series_date
+      ON macro_series (series_id, date);
+  `);
 
   // ─── Gap 2a: Market Breadth Internals ─────────────────────────────────────
   db.exec(`

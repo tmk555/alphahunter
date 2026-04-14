@@ -14,8 +14,11 @@ function calcSEPA(price, ma50, ma150, ma200, closes, distFromHigh, rsRank) {
     aboveMA150:      vsMA150 != null && vsMA150 > 0,           // 2. Price > 150MA
     ma150AboveMA200: ma150 && ma200 ? ma150 > ma200 : null,    // 3. 150MA > 200MA
     ma200Rising:     (() => {                                    // 4. 200MA trending up 4+ weeks
-      if (!closes || closes.length < 252) return null;
-      const ma200_4wAgo = closes.slice(-252,-228).reduce((a,b)=>a+b,0)/24;
+      // True 200MA from ~4 weeks (20 trading days) ago: average of the 200
+      // bars ending 20 bars before today, i.e. closes[n-220 .. n-20].
+      // Requires ≥220 bars of history (200 for the MA + 20 for the lag).
+      if (!closes || closes.length < 220) return null;
+      const ma200_4wAgo = closes.slice(-220, -20).reduce((a, b) => a + b, 0) / 200;
       return ma200 > ma200_4wAgo * 1.001;
     })(),
     ma50AboveAll,                                                // 5. 50MA > 150MA AND 200MA

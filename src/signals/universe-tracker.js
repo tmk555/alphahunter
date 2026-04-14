@@ -3,6 +3,7 @@
 // and leave the trading universe. Freezes snapshots on removal so historical
 // data is preserved for accurate replay.
 const { getDB } = require('../data/database');
+const pitUniverse = require('./pit-universe');
 
 function db() { return getDB(); }
 
@@ -128,9 +129,25 @@ function freezeSnapshot(symbol, reason = 'manual') {
 // ─── Get Active Universe for a Date ─────────────────────────────────────────
 // Returns the list of symbols that were in the universe on a given date.
 // This is the key function for survivorship-bias-free backtesting.
+//
+// Resolution order (first non-empty wins):
+//   1. PIT membership (`universe_membership` via pit-universe) — the real
+//      answer sourced from external index reconstitution records. This is
+//      the only layer that handles re-additions and delisted names, so it's
+//      preferred whenever we have data for the requested index.
+//   2. `universe_mgmt` — internal "tracked symbols" table. Good for the
+//      scanner's working universe but biased toward live tickers.
+//   3. `rs_snapshots` — last-resort inference: "if we had a price row on
+//      that day, it was in the universe." Handy before PIT is seeded.
 
-function getActiveUniverseForDate(date) {
-  // Primary: use universe_mgmt with date range filtering
+function getActiveUniverseForDate(date, indexName = 'SP500') {
+  // 1. Preferred: point-in-time membership (survivor-bias-free).
+  try {
+    const pit = pitUniverse.getMembersOn(date, indexName);
+    if (pit && pit.length > 0) return pit;
+  } catch (_) { /* table may not exist yet on older DBs — fall through */ }
+
+  // 2. Fallback: universe_mgmt with date range filtering.
   const mgmtCount = db().prepare('SELECT COUNT(*) as cnt FROM universe_mgmt').get().cnt;
 
   if (mgmtCount > 0) {
@@ -143,7 +160,7 @@ function getActiveUniverseForDate(date) {
     if (active.length > 0) return active;
   }
 
-  // Fallback: use rs_snapshots to infer which symbols existed on that date
+  // 3. Last resort: rs_snapshots to infer which symbols existed on that date.
   const fallback = db().prepare(`
     SELECT DISTINCT symbol FROM rs_snapshots
     WHERE date = ? AND type = 'stock' AND price > 0
