@@ -43,7 +43,7 @@ router.get('/replay/range', (req, res) => {
 // ─── Run replay ───────────────────────────────────────────────────────────
 router.post('/replay/run', (req, res) => {
   try {
-    const { strategy, tradeMode, params, startDate, endDate, maxPositions, initialCapital, execution } = req.body;
+    const { strategy, tradeMode, params, startDate, endDate, maxPositions, initialCapital, execution, indexName } = req.body;
     if (!strategy || !startDate || !endDate) {
       return res.status(400).json({ error: 'strategy, startDate, and endDate required' });
     }
@@ -52,6 +52,7 @@ router.post('/replay/run', (req, res) => {
       maxPositions: maxPositions || 10,
       initialCapital: initialCapital || 100000,
       execution: execution || {},
+      indexName: indexName || 'SP500',
     });
     res.json(result);
   } catch (e) { res.status(400).json({ error: e.message }); }

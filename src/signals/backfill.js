@@ -29,6 +29,7 @@ const { calcSwingMomentum, calcATR, calcVolumeProfile } = require('./momentum');
 const { calcVCP } = require('./vcp');
 const { calcRSLine } = require('./rsline');
 const { calcStage } = require('./stage');
+const { calcSEPA } = require('./sepa');
 
 function db() { return getDB(); }
 
@@ -86,20 +87,10 @@ function computeSnapshotForSymbolAtDate(sym, bars, date, spyClosesUpToDate) {
     return hi > 0 ? +((hi - price) / hi).toFixed(4) : null;
   })();
   const lo52 = Math.min(...closes.slice(-252));
-  const sepa = {
-    aboveMA200:      vsMA200 != null && vsMA200 > 0,
-    aboveMA150:      vsMA150 != null && vsMA150 > 0,
-    ma150AboveMA200: ma150 && ma200 ? ma150 > ma200 : null,
-    ma200Rising:     (() => {
-      if (n < 252) return null;
-      const ma200_4wAgo = closes.slice(-252, -228).reduce((a, b) => a + b, 0) / 24;
-      return ma200 > ma200_4wAgo * 1.001;
-    })(),
-    ma50AboveAll:    ma50 && ma150 && ma200 ? (ma50 > ma150 && ma50 > ma200) : null,
-    aboveMA50:       vsMA50 != null && vsMA50 > 0,
-    low30pctBelow:   lo52 ? (price - lo52) / price >= 0.30 : null,
-    priceNearHigh:   distFromHigh != null && distFromHigh <= 0.25,
-  };
+  const { sepa } = calcSEPA(price, ma50, ma150, ma200, closes, distFromHigh, null);
+  // Rule 7 (within 30% of 52-week low) is caller-patched — historical backfill
+  // derives w52l from the truncated close window rather than a live quote.
+  sepa.low30pctBelow = lo52 ? (price - lo52) / price >= 0.30 : null;
   const sepaScore = Object.values(sepa).filter(v => v === true).length;
 
   // Volume ratio: today vs 50-day avg from the truncated window

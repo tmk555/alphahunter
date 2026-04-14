@@ -1,8 +1,24 @@
 // ─── Stop Monitor — Real-Time Position Monitoring ────────────────────────────
-// Uses WebSocket streaming for millisecond-level stop detection.
+//
+// Role: OBSERVER. The monitor watches prices, fires notifications, and
+// performs broker-side adjustments that the broker itself cannot know
+// about — specifically move-to-breakeven after a tranche fills, and
+// signal-based exits (RS dropped, regime flipped, VCP failed).
+//
+// What the monitor does NOT do anymore (post Day 2-3 refactor):
+//   • Submit market sells on stop-loss price crossings. The broker has a
+//     bracket; the stop leg fires server-side. If the monitor sees a price
+//     cross and the broker hasn't filled, that's a BROKER health issue, not
+//     a monitor fallback.
+//   • Submit market sells on target1/target2 price crossings. Multi-tranche
+//     brackets close each tranche natively on the broker side. The monitor
+//     just keeps local DB state in sync and raises stops to breakeven.
+//
+// Uses WebSocket streaming for millisecond-level detection.
 // Falls back to 5-minute cron for non-streaming scenarios.
 const cron = require('node-cron');
 const alpaca = require('./alpaca');
+const { getBroker } = require('./index');
 const { checkAlerts, getActiveAlerts } = require('./alerts');
 const { expireStaleOrders } = require('./staging');
 const { priceStream } = require('./stream');
@@ -97,9 +113,27 @@ function _watchForNewAlerts() {
   }, 30000); // Check every 30 seconds
 }
 
-// ─── Tier 3: Auto Scaling / Partial Exits ──────────────────────────────────
-// Triggered on every price tick — checks if any open trade has hit a target
-// and applies the partial-exit pyramid (1/3, 1/3, trail final 1/3).
+// ─── Tier 3: Scaling Observer (move stops, don't submit sells) ─────────────
+//
+// Triggered on every price tick. Checks if any open trade's price has
+// crossed a partial-exit level.
+//
+// Day 2-3 change: we no longer submit market sells here — the broker's
+// multi-tranche bracket closes each tranche natively when its TP hits.
+// What the monitor DOES still do:
+//
+//   1. applyScalingAction() — keeps local DB `remaining_shares` and
+//      `partial_exits` fields in step with what the broker just did on its
+//      side. This is best-effort bookkeeping so the UI reflects reality;
+//      a separate reconciler should eventually replace it with pull-based
+//      polling of broker fills.
+//
+//   2. Move-to-breakeven — after target1 hits, the remaining tranches'
+//      stop legs on the broker must be raised. We call
+//      broker.replaceStopsForSymbol() to PATCH every open stop leg for
+//      that symbol to the new breakeven price.
+//
+//   3. Notifications — phone alerts on every partial fill.
 
 async function _checkScalingForSymbol(symbol, price) {
   const trades = db().prepare(
@@ -107,57 +141,83 @@ async function _checkScalingForSymbol(symbol, price) {
   ).all(symbol);
   if (!trades.length) return;
 
-  const { configured } = alpaca.getConfig();
-  const autoExec = process.env.AUTO_SCALE_EXECUTE === 'true' && configured;
+  const broker = getBroker();
 
   for (const t of trades) {
     const action = evaluateScalingAction(t, price);
     if (!action) continue;
 
-    // Persist the action (move stops, record partial fills)
-    const applied = applyScalingAction(t.id, action);
+    // Local DB bookkeeping: record the implied partial exit and raise the
+    // local stop field. The broker has already closed the tranche by now
+    // (its TP fired), so this just keeps our view of the position in sync.
+    applyScalingAction(t.id, action);
     console.log(`  📤 Scaling ${t.symbol}: ${action.reason}`);
-    notifyTradeEvent({ event: action.action === 'full_exit' ? 'auto_stop' : 'scale_out', symbol: t.symbol, details: { shares: action.shares, price, reason: action.reason, level: action.level } }).catch(e => console.error('Notification error:', e.message));
+    notifyTradeEvent({
+      event: action.action === 'full_exit' ? 'auto_stop' : 'scale_out',
+      symbol: t.symbol,
+      details: { shares: action.shares, price, reason: action.reason, level: action.level },
+    }).catch(e => console.error('Notification error:', e.message));
 
-    // Auto-execute partial sell at the broker if enabled
-    if (autoExec && action.action === 'partial_exit' && action.shares > 0) {
+    // Move every open stop leg on the broker to the new stop price. This
+    // is the ONLY broker write the observer issues on scale events — the
+    // partial sell itself is the broker's job, done via the bracket's TP.
+    if (action.moveStopTo != null && broker.isConfigured()) {
       try {
-        await alpaca.submitOrder({
+        const patched = await broker.replaceStopsForSymbol({
           symbol: t.symbol,
-          qty: action.shares,
-          side: t.side === 'short' ? 'buy' : 'sell',
-          type: 'market',
-          time_in_force: 'day',
+          newStopPrice: action.moveStopTo,
         });
-        console.log(`  ✓ Auto partial-sold ${action.shares} ${t.symbol} @ ${action.level}`);
+        console.log(`  ✓ Raised ${patched.length} stop leg(s) on ${t.symbol} to ${action.moveStopTo}`);
       } catch (e) {
-        console.error(`  Auto partial-exit failed for ${t.symbol}: ${e.message}`);
+        console.error(`  Stop-move failed for ${t.symbol}: ${e.message}`);
       }
     }
   }
 }
 
-// ─── Auto-Execute Stops ──────────────────────────────────────────────────────
+// ─── Stop Alert Handler (observer only) ────────────────────────────────────
+//
+// Day 2-3: the monitor does NOT submit market sells on stop alerts. Every
+// open position should already have a broker-side bracket whose stop leg
+// fires automatically when the broker sees the price cross. If we see the
+// cross first, the right response is to notify the user — and optionally,
+// as a LAST-RESORT safety net, call broker.closePosition() for positions
+// that have no bracket (orphans from legacy code paths).
+//
+// AUTO_STOP_EXECUTE=true enables the safety net. It's off by default
+// because a healthy system should never need it: if it fires, something
+// upstream is broken and the user should investigate.
 
 async function _autoExecuteStops(firedAlerts) {
-  const { configured } = alpaca.getConfig();
-  if (process.env.AUTO_STOP_EXECUTE !== 'true' || !configured) return;
+  const broker = getBroker();
+  const safetyNet = process.env.AUTO_STOP_EXECUTE === 'true' && broker.isConfigured();
 
   for (const alert of firedAlerts) {
-    if (alert.type === 'stop_violation') {
-      try {
-        await alpaca.submitOrder({
-          symbol: alert.symbol,
-          qty: 0, // Close entire position
-          side: 'sell',
-          type: 'market',
-          time_in_force: 'day',
-        });
-        console.log(`  Auto-sold ${alert.symbol} on stop violation (price: $${alert.current_price})`);
-        notifyTradeEvent({ event: 'force_stop', symbol: alert.symbol, details: { price: alert.current_price, stop: alert.trigger_price, reason: 'Auto-stop executed at broker' } }).catch(e => console.error('Notification error:', e.message));
-      } catch (e) {
-        console.error(`  Auto-stop failed for ${alert.symbol}: ${e.message}`);
-      }
+    if (alert.type !== 'stop_violation') continue;
+
+    // Always notify — this is the observer's primary job.
+    notifyTradeEvent({
+      event: 'force_stop',
+      symbol: alert.symbol,
+      details: {
+        price: alert.current_price,
+        stop:  alert.trigger_price,
+        reason: 'Stop price crossed (broker bracket should be firing)',
+      },
+    }).catch(e => console.error('Notification error:', e.message));
+
+    if (!safetyNet) continue;
+
+    // Safety net: only closes if there's still an open position, meaning
+    // the broker's bracket somehow missed. closePosition is a no-op for
+    // flat symbols at the broker level (or throws a handleable error).
+    try {
+      const pos = await broker.getPosition(alert.symbol);
+      if (!pos || pos.qty === 0) continue; // broker already flat — good
+      console.warn(`  ⚠ Safety net: ${alert.symbol} still open despite stop cross, closing via broker.closePosition`);
+      await broker.closePosition(alert.symbol);
+    } catch (e) {
+      console.error(`  Safety-net close failed for ${alert.symbol}: ${e.message}`);
     }
   }
 }
@@ -446,8 +506,8 @@ async function checkStrategyExits() {
       console.log(`  Live regime fetch failed, using scan-derived: ${regime}`);
     }
 
-    const { configured } = alpaca.getConfig();
-    const autoExec = process.env.AUTO_STOP_EXECUTE === 'true' && configured;
+    const broker = getBroker();
+    const autoExec = process.env.AUTO_STOP_EXECUTE === 'true' && broker.isConfigured();
     const fired = [];
 
     for (const trade of trades) {
@@ -483,16 +543,13 @@ async function checkStrategyExits() {
         console.log(`  Strategy exit: ${trade.symbol} (${trade.strategy}) — ${exitReason}`);
         fired.push({ symbol: trade.symbol, strategy: trade.strategy, reason: exitReason, tradeId: trade.id });
 
-        // Auto-execute exit if enabled
+        // Signal-based exits route through broker.closePosition — the broker
+        // has no context for "RS dropped" or "regime changed", so we have to
+        // tell it explicitly. This is one of the few places the monitor
+        // writes to the broker as an actor rather than an observer.
         if (autoExec) {
           try {
-            await alpaca.submitOrder({
-              symbol: trade.symbol,
-              qty: trade.remaining_shares || trade.shares,
-              side: trade.side === 'short' ? 'buy' : 'sell',
-              type: 'market',
-              time_in_force: 'day',
-            });
+            await broker.closePosition(trade.symbol);
             console.log(`  ✓ Auto-exited ${trade.symbol}: ${exitReason}`);
           } catch (e) {
             console.error(`  Auto-exit failed for ${trade.symbol}: ${e.message}`);

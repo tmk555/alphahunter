@@ -1,0 +1,37 @@
+{
+  "_comment": "Tiny synthetic index for pit-universe tests. NOT real SP500 data — it's the minimum shape we need to exercise all branches: a continuous stint (AAPL), an expired stint (ENRON), and a re-addition (NFLX, two rows). Keep this file small and deterministic so tests stay fast.",
+  "indexName": "TEST500",
+  "source": "test-fixture",
+  "rows": [
+    {
+      "symbol": "AAPL",
+      "startDate": "2010-01-04",
+      "endDate": null,
+      "sector": "Technology"
+    },
+    {
+      "symbol": "NFLX",
+      "startDate": "2010-12-20",
+      "endDate": "2015-06-30",
+      "sector": "Communication Services"
+    },
+    {
+      "symbol": "NFLX",
+      "startDate": "2019-09-23",
+      "endDate": null,
+      "sector": "Communication Services"
+    },
+    {
+      "symbol": "ENRON",
+      "startDate": "2000-01-03",
+      "endDate": "2001-12-03",
+      "sector": "Energy"
+    },
+    {
+      "symbol": "NVDA",
+      "startDate": "2019-11-20",
+      "endDate": null,
+      "sector": "Technology"
+    }
+  ]
+}

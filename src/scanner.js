@@ -15,6 +15,7 @@ const { calcSwingMomentum, calcPeriodReturns, calcATR, volumeTrend, calcVolumePr
 const { calcVCP }    = require('./signals/vcp');
 const { calcRSLine } = require('./signals/rsline');
 const { calcStage }  = require('./signals/stage');
+const { calcSEPA }   = require('./signals/sepa');
 const { calcEarningsDrift } = require('./signals/earningsDrift');
 const { calcBeta } = require('./risk/position-sizer');
 const { detectPatterns } = require('./signals/patterns');
@@ -80,21 +81,9 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
     const vsMA150   = ma150 ? +((price-ma150)/ma150*100).toFixed(2) : null;
 
     // SEPA Trend Template (Minervini) — all 8 rules
-    const ma50AboveAll = ma50 && ma150 && ma200 ? (ma50 > ma150 && ma50 > ma200) : null;
-    const sepa = {
-      aboveMA200:      vsMA200 != null && vsMA200 > 0,
-      aboveMA150:      vsMA150 != null && vsMA150 > 0,
-      ma150AboveMA200: ma150 && ma200 ? ma150 > ma200 : null,
-      ma200Rising:     (() => {
-        if (closes.length < 252) return null;
-        const ma200_4wAgo = closes.slice(-252,-228).reduce((a,b)=>a+b,0)/24;
-        return ma200 > ma200_4wAgo * 1.001;
-      })(),
-      ma50AboveAll,
-      aboveMA50:       vsMA50 != null && vsMA50 > 0,
-      low30pctBelow:   q.fiftyTwoWeekLow && price ? (price - q.fiftyTwoWeekLow)/price >= 0.30 : null,
-      priceNearHigh:   distFromHigh != null && distFromHigh <= 0.25,
-    };
+    const { sepa, ma50AboveAll } = calcSEPA(price, ma50, ma150, ma200, closes, distFromHigh, null);
+    // Rule 7 (within 30% of 52-week low) is caller-patched — it needs w52l.
+    sepa.low30pctBelow = q.fiftyTwoWeekLow && price ? (price - q.fiftyTwoWeekLow)/price >= 0.30 : null;
     const sepaScore = Object.values(sepa).filter(v => v === true).length;
     const rawRS         = calcRS(closes);
     const rawRSWeekly   = calcRSWeekly(closes);
