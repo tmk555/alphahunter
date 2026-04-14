@@ -180,7 +180,7 @@ async function getMarketRegime() {
     const result = {
       regime, color, swingOk, positionOk, sizeMultiplier, warning, vixLevel,
       spyPrice, spyChg1d, spy50, spy200, above50, above200,
-      cycleOverride, exposureRamp, breadthOverlay,
+      cycleOverride, exposureRamp, breadthOverlay, macroOverlay,
       qqqChg1d: qqq?.regularMarketChangePercent,
       iwmChg1d: iwm?.regularMarketChangePercent,
       tltChg1d: tlt?.regularMarketChangePercent,
@@ -198,6 +198,39 @@ async function getMarketRegime() {
         breadthOverlay?.divergence && 'BREADTH DIVERGENCE — internals fading',
       ].filter(Boolean),
     };
+
+    // ── Macro regime overlay (v8: yield curve, credit spreads, dollar, ISM) ──
+    let macroOverlay = null;
+    try {
+      const { getMacroSignals, computeMacroScore, getMacroRegimeOverlay } = require('../signals/macro');
+      const macroSignals = await getMacroSignals();
+      if (macroSignals) {
+        const macroResult = computeMacroScore(macroSignals);
+        const overlay = getMacroRegimeOverlay(macroResult, { regime, sizeMultiplier });
+        macroOverlay = {
+          score: macroResult.score,
+          regime: macroResult.regime,
+          multiplier: macroResult.macroSizeMultiplier,
+          yieldCurve: macroSignals.yieldCurve,
+          creditSpread: macroSignals.creditSpread,
+          dollar: macroSignals.dollar,
+          commodities: macroSignals.commodities,
+          ismProxy: macroSignals.ismProxy,
+          intermarket: macroSignals.intermarket,
+        };
+        // Macro can only DOWNGRADE (never upgrade)
+        if (overlay.adjusted) {
+          const prevRegime = regime;
+          regime = overlay.to;
+          sizeMultiplier = Math.min(sizeMultiplier, macroResult.macroSizeMultiplier);
+          color = sizeMultiplier <= 0.5 ? '#ff8c00' : sizeMultiplier <= 0.75 ? '#f0a500' : color;
+          warning = (warning ? warning + '. ' : '') + overlay.reason;
+          macroOverlay.override = { applied: true, from: prevRegime, to: regime, reason: overlay.reason };
+        }
+      }
+    } catch (_) {
+      // Macro integration failed — proceed without
+    }
 
     // ── Regime Change Detection & Push Notification ─────────────────────────
     // Compare current regime against last-known regime stored in portfolio_state.

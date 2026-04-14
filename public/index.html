@@ -12,6 +12,7 @@
 <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7.22.5/babel.min.js"></script>
 <script src="https://unpkg.com/recharts@2.1.16/umd/Recharts.js"></script>
+<script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 :root {
   --bg:    #03030b; --bg2: #07071a; --bg3: #0b0b22;
@@ -175,6 +176,49 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .text-cyan  { color:var(--cyan); }
 .anim-in { animation:fadeUp 0.3s ease; }
 @keyframes fadeUp { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+
+/* ── v8: Chart ─────────────────────────────── */
+.chart-container { background:var(--bg3); border:1px solid var(--border); border-radius:5px; overflow:hidden; }
+.chart-overlay-legend { position:absolute; top:8px; left:10px; z-index:2; display:flex; gap:12px; font-size:10px; font-family:var(--font-mono); }
+.chart-legend-item { display:flex; align-items:center; gap:4px; }
+.chart-legend-dot { width:8px; height:2px; border-radius:1px; }
+
+/* ── v8: Pattern badges ────────────────────── */
+.pattern-badge { font-size:9px; padding:2px 6px; border-radius:3px; font-weight:700; letter-spacing:.5px; font-family:var(--font-mono); }
+.badge-cup { background:rgba(0,230,118,0.12); color:#00e676; border:1px solid rgba(0,230,118,0.25); }
+.badge-asc { background:rgba(0,212,255,0.12); color:#00d4ff; border:1px solid rgba(0,212,255,0.25); }
+.badge-pwr { background:rgba(196,77,255,0.12); color:#c44dff; border:1px solid rgba(196,77,255,0.25); }
+.badge-htf { background:rgba(255,215,0,0.15); color:#ffd700; border:1px solid rgba(255,215,0,0.3); }
+
+/* ── v8: Institutional flow ────────────────── */
+.flow-badge { font-size:9px; padding:2px 6px; border-radius:3px; font-weight:700; letter-spacing:.3px; }
+.flow-accum { background:rgba(0,230,118,0.1); color:var(--green); }
+.flow-dist { background:rgba(255,61,87,0.1); color:var(--red); }
+
+/* ── v8: Revision badge ────────────────────── */
+.rev-badge { font-size:9px; padding:2px 6px; border-radius:3px; font-weight:700; }
+.rev-up { background:rgba(0,230,118,0.1); color:var(--green); }
+.rev-down { background:rgba(255,61,87,0.1); color:var(--red); }
+
+/* ── v8: Macro indicators ──────────────────── */
+.macro-indicator-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:10px; }
+.macro-ind-card { background:var(--bg3); border:1px solid var(--border); border-radius:5px; padding:12px; }
+.macro-score-bar { height:4px; border-radius:2px; background:var(--border2); margin-top:6px; overflow:hidden; }
+.macro-score-fill { height:100%; border-radius:2px; transition:width 0.3s; }
+
+/* ── v8: Strategy cards ────────────────────── */
+.strategy-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:12px; }
+.strategy-card { background:var(--bg3); border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+.strategy-header { padding:12px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+.strategy-body { padding:12px; }
+.strategy-stat { display:flex; justify-content:space-between; padding:4px 0; font-size:12px; }
+
+/* ── v8: Options chain ─────────────────────── */
+.options-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+@media (max-width:768px) { .options-grid { grid-template-columns:1fr; } }
+.option-chain-table { width:100%; border-collapse:collapse; font-size:12px; }
+.option-chain-table th { padding:5px 8px; font-size:10px; color:var(--text3); border-bottom:1px solid var(--border); text-align:right; }
+.option-chain-table td { padding:4px 8px; border-bottom:1px solid var(--border); font-family:var(--font-mono); font-size:11px; text-align:right; }
 </style>
 </head>
 <body>
@@ -309,6 +353,126 @@ function AIOutput({ text, loading }) {
   return (
     <div className="ai-output anim-in"
       dangerouslySetInnerHTML={{__html: formatAI(text)}} />
+  );
+}
+
+// ─── v8: TRADINGVIEW LIGHTWEIGHT CHART ───────────────────────────────────────
+function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
+  const containerRef = useRef(null);
+  const chartRef = useRef(null);
+  const [chartData, setChartData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    const params = new URLSearchParams({ days: 252 });
+    if (entry) params.set('entry', entry);
+    if (stop) params.set('stop', stop);
+    if (target1) params.set('target1', target1);
+    if (target2) params.set('target2', target2);
+    api(`/api/chart/${symbol}?${params}`).then(d => {
+      if (!cancelled) { setChartData(d); setLoading(false); }
+    }).catch(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [symbol, entry, stop, target1, target2]);
+
+  useEffect(() => {
+    if (!chartData || !containerRef.current || !window.LightweightCharts) return;
+    // Clean up previous chart
+    if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; }
+
+    const chart = window.LightweightCharts.createChart(containerRef.current, {
+      width: containerRef.current.clientWidth,
+      height: height,
+      layout: { background: { type: 'solid', color: '#0b0b22' }, textColor: '#8888bb', fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" },
+      grid: { vertLines: { color: '#14142e' }, horzLines: { color: '#14142e' } },
+      crosshair: { mode: 0 },
+      rightPriceScale: { borderColor: '#14142e' },
+      timeScale: { borderColor: '#14142e', timeVisible: false },
+    });
+    chartRef.current = chart;
+
+    // Candlestick series
+    const candleSeries = chart.addCandlestickSeries({
+      upColor: '#00e676', downColor: '#ff3d57', borderUpColor: '#00e676', borderDownColor: '#ff3d57',
+      wickUpColor: '#00e676', wickDownColor: '#ff3d57',
+    });
+    candleSeries.setData(chartData.candles.map(c => ({ time: c.date, open: c.open, high: c.high, low: c.low, close: c.close })));
+
+    // Volume
+    const volSeries = chart.addHistogramSeries({
+      priceFormat: { type: 'volume' }, priceScaleId: 'vol',
+    });
+    chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+    volSeries.setData(chartData.candles.map(c => ({
+      time: c.date, value: c.volume, color: c.close >= c.open ? 'rgba(0,230,118,0.2)' : 'rgba(255,61,87,0.2)',
+    })));
+
+    // Moving averages
+    const maColors = { ma50: '#f0a500', ma150: '#c44dff', ma200: '#00d4ff' };
+    for (const [key, color] of Object.entries(maColors)) {
+      if (chartData.overlays && chartData.overlays[key]) {
+        const maSeries = chart.addLineSeries({ color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+        maSeries.setData(chartData.overlays[key].filter(d => d.value !== null).map(d => ({ time: d.date, value: d.value })));
+      }
+    }
+
+    // Entry/Stop/Target lines
+    if (chartData.markers) {
+      for (const m of chartData.markers) {
+        const lineColor = m.type === 'entry' ? '#f0a500' : m.type === 'stop' ? '#ff3d57' : '#00e676';
+        candleSeries.createPriceLine({ price: m.price, color: lineColor, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: m.label });
+      }
+    }
+
+    chart.timeScale().fitContent();
+    const handleResize = () => chart.applyOptions({ width: containerRef.current?.clientWidth || 600 });
+    window.addEventListener('resize', handleResize);
+    return () => { window.removeEventListener('resize', handleResize); if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; } };
+  }, [chartData, height]);
+
+  if (loading) return <Loader msg={`Loading ${symbol} chart...`}/>;
+  if (!chartData) return <div className="muted" style={{padding:12,fontSize:11}}>No chart data for {symbol}</div>;
+  return (
+    <div className="chart-container" style={{position:'relative'}}>
+      <div className="chart-overlay-legend">
+        <div className="chart-legend-item"><div className="chart-legend-dot" style={{background:'#f0a500'}}/><span style={{color:'var(--text3)'}}>50MA</span></div>
+        <div className="chart-legend-item"><div className="chart-legend-dot" style={{background:'#c44dff'}}/><span style={{color:'var(--text3)'}}>150MA</span></div>
+        <div className="chart-legend-item"><div className="chart-legend-dot" style={{background:'#00d4ff'}}/><span style={{color:'var(--text3)'}}>200MA</span></div>
+      </div>
+      <div ref={containerRef}/>
+    </div>
+  );
+}
+
+// ─── v8: PATTERN BADGE ──────────────────────────────────────────────────────
+function PatternBadge({ patternData }) {
+  if (!patternData || !patternData.bestPattern) return null;
+  const labels = { cupHandle: 'CUP', ascendingBase: 'ASC', powerPlay: 'PWR', highTightFlag: 'HTF' };
+  const classes = { cupHandle: 'badge-cup', ascendingBase: 'badge-asc', powerPlay: 'badge-pwr', highTightFlag: 'badge-htf' };
+  const best = patternData.bestPattern;
+  const p = patternData.patterns[best];
+  const tip = best === 'cupHandle' ? `Cup & Handle — depth ${p?.depth?.toFixed(0)}%, pivot $${p?.pivotPrice?.toFixed(2)}` :
+    best === 'ascendingBase' ? `Ascending Base — ${p?.pullbacks} pullbacks, pivot $${p?.pivotPrice?.toFixed(2)}` :
+    best === 'powerPlay' ? `Power Play — ${p?.weeksFlat}w tight, pivot $${p?.pivotPrice?.toFixed(2)}` :
+    `High Tight Flag — ${p?.priorGainPct?.toFixed(0)}% run, ${p?.flagPullbackPct?.toFixed(0)}% flag`;
+  return (
+    <span className={`pattern-badge ${classes[best]}`} title={tip}>
+      {labels[best]}{patternData.patternCount > 1 ? ` +${patternData.patternCount-1}` : ''}
+    </span>
+  );
+}
+
+// ─── v8: INSTITUTIONAL FLOW BADGE ───────────────────────────────────────────
+function InstitutionalBadge({ data }) {
+  if (!data || data.tier === 'neutral') return null;
+  const isAccum = data.tier?.includes('accumulation');
+  return (
+    <span className={`flow-badge ${isAccum ? 'flow-accum' : 'flow-dist'}`}
+      title={`Institutional flow score: ${data.institutionalScore}/100 — ${(data.signals||[]).join(', ')}`}>
+      {isAccum ? '▲' : '▼'}{data.institutionalScore}
+    </span>
   );
 }
 
@@ -477,7 +641,7 @@ function App() {
         {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary} setupSigFilters={setupSigFilters} setSetupSigFilters={setSetupSigFilters} mode={setupMode} setMode={setSetupMode}/>}
         {tab==='watchlist'  && <WatchlistTab rsData={rsData} />}
         {tab==='hedge'      && <HedgeTab />}
-        {tab==='trading'    && <><PortfolioTab /><ExecutionTab /></>}
+        {tab==='trading'    && <><PortfolioTab /><StrategiesSection /><ExecutionTab /></>}
         {tab==='journal'    && <><PerformanceTab /><TradeJournalTab /></>}
         {tab==='replay'     && <ReplayTab />}
         {tab==='edge'       && <EdgeDashboardTab />}
@@ -2264,6 +2428,8 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                         {s.stage===2 && <span title="S2: price above rising 150MA. Required for all long setups." style={{color:'var(--green)',fontWeight:700,marginRight:3}}>S2</span>}
                         {s.stage===4 && <span title="S4: Downtrend. Avoid all longs." style={{color:'var(--red)',fontWeight:700,marginRight:3}}>S4</span>}
                         {s.sepaScore!=null && <span title={s.sepa?Object.entries(s.sepa).map(([k,v])=>`${k}:${v===true?'✓':v===false?'✗':'?'}`).join(' '):'SEPA score'} style={{color:s.sepaScore>=6?'var(--green)':s.sepaScore>=4?'var(--amber)':'var(--text3)',fontWeight:700}}>{s.sepaScore}/8</span>}
+                          <PatternBadge patternData={s.patternData} />
+                          <InstitutionalBadge data={s.institutionalData} />
                       </td>
                       <td style={{whiteSpace:'nowrap'}}>
                         {stratRank && <span style={{fontFamily:'var(--font-mono)',fontSize:9,fontWeight:700,color:isReplayPick?'var(--green)':'var(--text3)',marginRight:3}}>#{stratRank}</span>}
@@ -2330,6 +2496,8 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                               </div>
                             </div>
                             <InlineLevels stock={s}/>
+                            <StockChart symbol={s.ticker} height={300}
+                              entry={s.swingEntry} stop={s.swingStop} target1={s.swingTarget1} target2={s.swingTarget2} />
                           </div>
                         </td>
                       </tr>
@@ -3277,6 +3445,47 @@ function MarketPulseTab() {
           <span style={{fontSize:11,color:'var(--text2)'}}>No deterioration detected — composite {bWarning.currentScore}, breadth stable</span>
         </div>
       )}
+
+        {/* v8: MACRO REGIME MODEL */}
+        {regime?.macroOverlay && (
+          <div className="panel" style={{borderColor: regime.macroOverlay.score < -2 ? 'rgba(255,61,87,0.3)' : regime.macroOverlay.score > 2 ? 'rgba(0,230,118,0.3)' : 'var(--border)'}}>
+            <div className="panel-title"><span>MACRO REGIME</span> — Economic Indicators</div>
+            <div className="panel-sub">Yield curve, credit spreads, dollar, commodities, ISM proxy — macro can only DOWNGRADE the regime</div>
+            <div style={{display:'flex',alignItems:'center',gap:16,marginBottom:14}}>
+              <div style={{fontSize:28,fontWeight:800,fontFamily:'var(--font-mono)',color: regime.macroOverlay.score>2?'var(--green)':regime.macroOverlay.score>0?'var(--amber)':'var(--red)'}}>
+                {regime.macroOverlay.score > 0 ? '+' : ''}{regime.macroOverlay.score?.toFixed(1)}
+              </div>
+              <div>
+                <div style={{fontSize:13,fontWeight:700,color:'var(--text)'}}>{regime.macroOverlay.regime}</div>
+                <div style={{fontSize:11,color:'var(--text3)'}}>Macro size multiplier: {regime.macroOverlay.multiplier}x</div>
+              </div>
+              {regime.macroOverlay.override?.applied && (
+                <div style={{fontSize:11,color:'var(--red)',fontFamily:'var(--font-mono)',background:'rgba(255,61,87,0.08)',padding:'4px 10px',borderRadius:3}}>
+                  DOWNGRADE: {regime.macroOverlay.override.reason}
+                </div>
+              )}
+            </div>
+            <div className="macro-indicator-grid">
+              {[
+                { label: 'YIELD CURVE', data: regime.macroOverlay.yieldCurve, key: 'score' },
+                { label: 'CREDIT SPREADS', data: regime.macroOverlay.creditSpread, key: 'score' },
+                { label: 'DOLLAR', data: regime.macroOverlay.dollar, key: 'score' },
+                { label: 'COMMODITIES', data: regime.macroOverlay.commodities, key: 'score' },
+                { label: 'ISM PROXY', data: regime.macroOverlay.ismProxy, key: 'score' },
+                { label: 'INTERMARKET', data: regime.macroOverlay.intermarket, key: 'score' },
+              ].map(ind => (
+                <div className="macro-ind-card" key={ind.label}>
+                  <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',fontWeight:600}}>{ind.label}</div>
+                  <div style={{fontSize:18,fontWeight:800,fontFamily:'var(--font-mono)',color: (ind.data?.[ind.key]||0)>0?'var(--green)':(ind.data?.[ind.key]||0)<0?'var(--red)':'var(--text2)',marginTop:4}}>
+                    {ind.data?.[ind.key] != null ? ((ind.data[ind.key]>0?'+':'')+ind.data[ind.key].toFixed(1)) : '—'}
+                  </div>
+                  {ind.data?.signal && <div style={{fontSize:10,color:'var(--text2)',marginTop:4}}>{ind.data.signal}</div>}
+                  {ind.data?.detail && <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>{ind.data.detail}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
       {/* Key market levels */}
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:10,marginBottom:18}}>
@@ -5192,6 +5401,114 @@ function AlphaPerformanceSection() {
   );
 }
 
+// ─── v8: MULTI-STRATEGY FRAMEWORK ──────────────────────────────────────────
+function StrategiesSection() {
+  const [strategies, setStrategies] = useState([]);
+  const [allocation, setAllocation] = useState(null);
+  const [perf, setPerf] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [rebalance, setRebalance] = useState(null);
+
+  useEffect(() => {
+    setLoading(true);
+    Promise.all([
+      api('/api/strategies').catch(()=>({strategies:[]})),
+      api('/api/strategies/allocation').catch(()=>null),
+    ]).then(([s, a]) => {
+      setStrategies(s.strategies || []);
+      setAllocation(a);
+      setLoading(false);
+    });
+  }, []);
+
+  async function loadPerf(id) {
+    try {
+      const d = await api(`/api/strategies/${id}/performance`);
+      setPerf(prev => ({...prev, [id]: d}));
+    } catch(_) {}
+  }
+
+  async function checkRebalance() {
+    try { const d = await api('/api/strategies/rebalance'); setRebalance(d); }
+    catch(e) { alert(e.message); }
+  }
+
+  if (loading) return <div className="panel"><Loader msg="Loading strategies..."/></div>;
+  if (!strategies.length) return null;
+
+  const stratColors = { momentum_swing: 'var(--green)', vcp_breakout: 'var(--cyan)', sector_rotation: 'var(--purple)', mean_reversion: 'var(--amber)' };
+
+  return (
+    <div className="panel">
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+        <div>
+          <div className="panel-title"><span>MULTI-STRATEGY ALLOCATION</span></div>
+          <div className="panel-sub">Independent P&L buckets with combined risk management</div>
+        </div>
+        <button className="btn btn-sm" onClick={checkRebalance}>Check Rebalance</button>
+      </div>
+
+      <div className="strategy-grid">
+        {strategies.map(s => {
+          const alloc = allocation?.strategies?.find(a => a.id === s.id);
+          const p = perf[s.id];
+          const color = stratColors[s.id] || 'var(--text2)';
+          const utilPct = alloc ? ((alloc.currentDollars / Math.max(alloc.targetDollars, 1)) * 100) : 0;
+          return (
+            <div className="strategy-card" key={s.id} style={{borderColor: s.enabled ? `${color}33` : 'var(--border)'}}>
+              <div className="strategy-header">
+                <div>
+                  <div style={{fontSize:13,fontWeight:700,color}}>{s.name}</div>
+                  <div style={{fontSize:10,color:'var(--text3)'}}>{s.allocation_pct}% allocation · {s.max_positions} max positions</div>
+                </div>
+                <span style={{fontSize:10,padding:'2px 8px',borderRadius:3,background:s.enabled?'rgba(0,230,118,0.1)':'rgba(255,61,87,0.1)',color:s.enabled?'var(--green)':'var(--red)'}}>
+                  {s.enabled ? 'ACTIVE' : 'PAUSED'}
+                </span>
+              </div>
+              <div className="strategy-body">
+                {alloc && (
+                  <div>
+                    <div className="strategy-stat"><span style={{color:'var(--text3)'}}>Target</span><span style={{fontFamily:'var(--font-mono)',fontWeight:600}}>${fmtK(alloc.targetDollars).replace('$','')}</span></div>
+                    <div className="strategy-stat"><span style={{color:'var(--text3)'}}>Deployed</span><span style={{fontFamily:'var(--font-mono)',fontWeight:600,color:utilPct>100?'var(--red)':'var(--text)'}}>${fmtK(alloc.currentDollars).replace('$','')}</span></div>
+                    <div className="strategy-stat"><span style={{color:'var(--text3)'}}>Heat</span><span style={{fontFamily:'var(--font-mono)',fontWeight:600,color:(alloc.heatUsed||0)>s.max_heat_pct?'var(--red)':'var(--text)'}}>{(alloc.heatUsed||0).toFixed(1)}% / {s.max_heat_pct}%</span></div>
+                    <div className="strategy-stat"><span style={{color:'var(--text3)'}}>Positions</span><span style={{fontFamily:'var(--font-mono)',fontWeight:600}}>{alloc.positionsOpen || 0} / {s.max_positions}</span></div>
+                    <div style={{marginTop:6}}>
+                      <div className="macro-score-bar"><div className="macro-score-fill" style={{width:`${Math.min(utilPct,100)}%`,background:utilPct>100?'var(--red)':color}}/></div>
+                      <div style={{fontSize:9,color:'var(--text3)',marginTop:2,textAlign:'right'}}>{utilPct.toFixed(0)}% utilized</div>
+                    </div>
+                  </div>
+                )}
+                {!p && <button className="btn btn-sm" style={{marginTop:8,width:'100%'}} onClick={()=>loadPerf(s.id)}>Load Performance</button>}
+                {p && (
+                  <div style={{marginTop:8,borderTop:'1px solid var(--border)',paddingTop:8}}>
+                    <div className="strategy-stat"><span style={{color:'var(--text3)'}}>Trades</span><span style={{fontFamily:'var(--font-mono)'}}>{p.trades}</span></div>
+                    <div className="strategy-stat"><span style={{color:'var(--text3)'}}>Win Rate</span><span style={{fontFamily:'var(--font-mono)',color:p.winRate>=50?'var(--green)':'var(--red)'}}>{p.winRate?.toFixed(0)}%</span></div>
+                    <div className="strategy-stat"><span style={{color:'var(--text3)'}}>Profit Factor</span><span style={{fontFamily:'var(--font-mono)',color:p.profitFactor>=1.5?'var(--green)':'var(--text2)'}}>{p.profitFactor?.toFixed(2)}</span></div>
+                    <div className="strategy-stat"><span style={{color:'var(--text3)'}}>Avg R</span><span style={{fontFamily:'var(--font-mono)',color:(p.avgR||0)>0?'var(--green)':'var(--red)'}}>{p.avgR?.toFixed(2)}R</span></div>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {rebalance && (
+        <div style={{marginTop:12,background:rebalance.needsRebalance?'rgba(240,165,0,0.06)':'rgba(0,230,118,0.06)',border:`1px solid ${rebalance.needsRebalance?'rgba(240,165,0,0.25)':'rgba(0,230,118,0.25)'}`,borderRadius:5,padding:12}}>
+          <div style={{fontSize:11,fontWeight:700,color:rebalance.needsRebalance?'var(--amber)':'var(--green)'}}>
+            {rebalance.needsRebalance ? 'REBALANCE RECOMMENDED' : 'ALLOCATION ON TARGET'}
+          </div>
+          {rebalance.actions?.map((a,i) => (
+            <div key={i} style={{fontSize:11,color:'var(--text2)',marginTop:4}}>
+              {a.strategy}: {a.action === 'reduce' ? 'Reduce' : 'Increase'} — currently {a.currentPct?.toFixed(0)}%, target {a.targetPct?.toFixed(0)}%
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── PORTFOLIO TAB ────────────────────────────────────────────────────────
 function PortfolioTab() {
   const [status, setStatus]   = useState(null);
@@ -6779,6 +7096,117 @@ function SettingsTab() {
 }
 
 // ─── REPLAY TAB (Tier 4 — Signal Backtest) ──────────────────────────────────
+
+// ─── v8: OPTIONS HEDGE SECTION ──────────────────────────────────────────────
+function OptionsHedgeSection() {
+  const [symbol, setSymbol] = useState('');
+  const [chain, setChain] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [hedgeType, setHedgeType] = useState('protective-put');
+  const [hedgeResult, setHedgeResult] = useState(null);
+  const [positions, setPositions] = useState([]);
+
+  useEffect(() => { api('/api/options/positions').then(d => setPositions(d.positions || [])).catch(()=>{}); }, []);
+
+  async function loadChain() {
+    if (!symbol) return;
+    setLoading(true);
+    try { const d = await api(`/api/options/chain/${symbol.toUpperCase()}`); setChain(d); }
+    catch(e) { alert(e.message); }
+    setLoading(false);
+  }
+
+  async function buildHedge() {
+    setLoading(true);
+    try {
+      const d = await api(`/api/options/hedge/${hedgeType}`, {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ symbol: symbol.toUpperCase(), shares: 100, hedgeRatio: 0.5 }),
+      });
+      setHedgeResult(d);
+    } catch(e) { alert(e.message); }
+    setLoading(false);
+  }
+
+  return (
+    <div>
+      <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:12,flexWrap:'wrap'}}>
+        <input value={symbol} onChange={e=>setSymbol(e.target.value)} placeholder="Symbol (e.g. AAPL)"
+          style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,padding:'7px 12px',color:'var(--text)',fontSize:12,fontFamily:'var(--font-mono)',width:120}}
+          onKeyDown={e => e.key==='Enter' && loadChain()} />
+        <button className="btn btn-sm btn-primary" onClick={loadChain} disabled={loading||!symbol}>Load Chain</button>
+        <div className="btn-group" style={{marginLeft:8}}>
+          {['protective-put','collar','vix'].map(t => (
+            <button key={t} className={`mode-btn ${hedgeType===t?'active':''}`} style={{padding:'5px 10px',fontSize:10}}
+              onClick={()=>setHedgeType(t)}>
+              {t==='protective-put'?'Put':t==='collar'?'Collar':'VIX'}
+            </button>
+          ))}
+        </div>
+        <button className="btn btn-sm" onClick={buildHedge} disabled={loading||!symbol}>Build Hedge</button>
+      </div>
+
+      {chain && (
+        <div className="options-grid">
+          <div>
+            <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',color:'var(--green)',marginBottom:6}}>CALLS</div>
+            <table className="option-chain-table">
+              <thead><tr><th>Strike</th><th>Bid</th><th>Ask</th><th>IV</th><th>Delta</th><th>Vol</th></tr></thead>
+              <tbody>
+                {(chain.calls||[]).slice(0,10).map((o,i) => (
+                  <tr key={i}><td style={{fontWeight:600}}>${fmt(o.strike)}</td><td>${fmt(o.bid)}</td><td>${fmt(o.ask)}</td>
+                    <td>{o.iv ? (o.iv*100).toFixed(0)+'%' : '—'}</td><td>{o.delta?.toFixed(2)||'—'}</td><td>{o.volume||'—'}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div>
+            <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',color:'var(--red)',marginBottom:6}}>PUTS</div>
+            <table className="option-chain-table">
+              <thead><tr><th>Strike</th><th>Bid</th><th>Ask</th><th>IV</th><th>Delta</th><th>Vol</th></tr></thead>
+              <tbody>
+                {(chain.puts||[]).slice(0,10).map((o,i) => (
+                  <tr key={i}><td style={{fontWeight:600}}>${fmt(o.strike)}</td><td>${fmt(o.bid)}</td><td>${fmt(o.ask)}</td>
+                    <td>{o.iv ? (o.iv*100).toFixed(0)+'%' : '—'}</td><td>{o.delta?.toFixed(2)||'—'}</td><td>{o.volume||'—'}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {hedgeResult && (
+        <div style={{marginTop:12,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:14}}>
+          <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',color:'var(--amber)',marginBottom:8}}>HEDGE RECOMMENDATION</div>
+          <div style={{display:'flex',gap:16,flexWrap:'wrap',fontSize:12}}>
+            {hedgeResult.strategy && <div>Strategy: <strong style={{color:'var(--cyan)'}}>{hedgeResult.strategy}</strong></div>}
+            {hedgeResult.estimatedCost != null && <div>Cost: <strong style={{color:'var(--red)'}}>${fmt(hedgeResult.estimatedCost)}</strong></div>}
+            {hedgeResult.maxProtection != null && <div>Protection: <strong style={{color:'var(--green)'}}>${fmt(hedgeResult.maxProtection)}</strong></div>}
+            {hedgeResult.breakeven != null && <div>Breakeven: <strong>${fmt(hedgeResult.breakeven)}</strong></div>}
+          </div>
+          {hedgeResult.live === false && <div style={{fontSize:10,color:'var(--text3)',marginTop:6}}>Estimated (synthetic) — connect Alpaca for live options data</div>}
+        </div>
+      )}
+
+      {positions.length > 0 && (
+        <div style={{marginTop:12}}>
+          <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',color:'var(--text3)',marginBottom:6}}>OPEN OPTIONS POSITIONS</div>
+          <table className="data-table">
+            <thead><tr><th>Symbol</th><th>Type</th><th>Strike</th><th>Exp</th><th>Qty</th><th>P&L</th></tr></thead>
+            <tbody>
+              {positions.map((p,i) => (
+                <tr key={i}><td className="td-ticker">{p.underlying}</td><td>{p.option_type}</td>
+                  <td>${fmt(p.strike)}</td><td>{p.expiration}</td><td>{p.qty}</td>
+                  <td style={{color:(p.pnl||0)>=0?'var(--green)':'var(--red)'}}>${fmt(p.pnl)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── HEDGE TAB — Short candidates, hedge recommendations, instruments, stream ──
 function HedgeTab() {
   const [shorts, setShorts] = useState(null);
@@ -6971,6 +7399,13 @@ function HedgeTab() {
           )}
         </div>
       )}
+
+        {/* v8: OPTIONS EXECUTION */}
+        <div className="panel">
+          <div className="panel-title"><span>OPTIONS HEDGE EXECUTION</span></div>
+          <div className="panel-sub">Build and execute protective puts, collars, and VIX hedges directly through Alpaca</div>
+          <OptionsHedgeSection />
+        </div>
 
     </div>
   );

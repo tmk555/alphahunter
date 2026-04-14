@@ -33,6 +33,47 @@ function calcConviction(stock, rsTrend, rotationModel) {
   if (vp?.accumulation50 === 'A') score += 3; // exceptional accumulation (≥1.5)
   if (vp?.distributing)     score -= 8;       // under distribution — avoid
 
+  // ─── v8: Enhanced Pattern Recognition bonus ──────────────────────────────
+  // Advanced chart patterns (cup-handle, ascending base, power play, HTF)
+  // are among the most reliable setup signals — they represent completed
+  // accumulation patterns that institutions use to build positions.
+  const pd = stock.patternData;
+  if (pd && pd.patternCount > 0) {
+    const best = pd.bestPattern;
+    if (best === 'highTightFlag')   score += 12;  // rarest, most powerful pattern
+    else if (best === 'cupHandle')  score += 9;   // classic institutional accumulation
+    else if (best === 'ascendingBase') score += 8; // persistent demand
+    else if (best === 'powerPlay')  score += 7;   // tight consolidation = coiled spring
+    if (pd.patternCount >= 2)       score += 3;   // multiple patterns confirming = extra conviction
+  }
+
+  // ─── v8: Institutional Flow Proxy bonus ───────────────────────────────────
+  // Direct measurement of institutional buying pressure via volume analysis.
+  // More reliable than technical patterns alone because it measures actual demand.
+  const inst = stock.institutionalData;
+  if (inst) {
+    if (inst.tier === 'heavy_accumulation')    score += 10;
+    else if (inst.tier === 'moderate_accumulation') score += 5;
+    else if (inst.tier === 'moderate_distribution') score -= 5;
+    else if (inst.tier === 'heavy_distribution')    score -= 10;
+
+    // Power days (3x+ volume on 2%+ gain) are the strongest institutional signal
+    if (inst.unusualVolume?.powerDays >= 2) score += 4;
+  }
+
+  // ─── v8: Earnings Revision bonus ──────────────────────────────────────────
+  // Analyst estimate revisions are the strongest fundamental signal for momentum.
+  // Rising estimates + rising RS = institutional magnet.
+  const rev = stock.revisionData;
+  if (rev && rev.revisionScore != null) {
+    if (rev.tier === 'strong_upgrade' && stock.rsRank >= 80) score += 12;
+    else if (rev.tier === 'strong_upgrade')                   score += 8;
+    else if (rev.tier === 'upgrade' && stock.rsRank >= 70)    score += 6;
+    else if (rev.tier === 'upgrade')                          score += 4;
+    else if (rev.tier === 'downgrade')                        score -= 8;
+    else if (rev.tier === 'strong_downgrade')                 score -= 15;
+  }
+
   // Sector rotation tilt: overweight sectors get a boost, underweight get penalized
   if (rotationModel?.sectors) {
     const sector = stock.sector;
@@ -58,6 +99,15 @@ function calcConviction(stock, rsTrend, rotationModel) {
   else if (tfAlign === 2) reasons.push('RS leader on 2 of 3 timeframes');
   if (vp?.accumulating) reasons.push(`Accumulation grade ${vp.accumulation50} (U/D ${vp.upDownRatio50})`);
   if (vp?.distributing) reasons.push(`⚠ Distribution grade ${vp.accumulation50} (U/D ${vp.upDownRatio50})`);
+  // v8 reasons
+  if (pd?.bestPattern === 'highTightFlag') reasons.push(`High Tight Flag (${pd.patterns.highTightFlag?.confidence}% confidence)`);
+  else if (pd?.bestPattern === 'cupHandle') reasons.push(`Cup & Handle forming (depth ${pd.patterns.cupHandle?.depth?.toFixed(0)}%)`);
+  else if (pd?.bestPattern === 'ascendingBase') reasons.push(`Ascending Base (${pd.patterns.ascendingBase?.pullbacks} pullbacks)`);
+  else if (pd?.bestPattern === 'powerPlay') reasons.push(`Power Play — tight ${pd.patterns.powerPlay?.weeksFlat}w consolidation`);
+  if (inst?.tier === 'heavy_accumulation') reasons.push(`Heavy institutional accumulation (score ${inst.institutionalScore})`);
+  else if (inst?.tier === 'heavy_distribution') reasons.push(`⚠ Heavy institutional distribution`);
+  if (rev?.tier === 'strong_upgrade') reasons.push(`Estimates revised UP (score ${rev.revisionScore})`);
+  else if (rev?.tier === 'downgrade') reasons.push(`⚠ Estimates revised DOWN`);
   if (stock.earningsRisk) reasons.push(`⚠ Earnings in ${stock.daysToEarnings} days`);
 
   return { convictionScore: +score.toFixed(1), reasons };
