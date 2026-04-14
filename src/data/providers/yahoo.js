@@ -112,7 +112,7 @@ function raw(field) {
 async function getYahooFundamentals(symbol) {
   try {
     const { crumb, cookie } = await getYahooCrumb();
-    const modules = 'financialData,defaultKeyStatistics,incomeStatementHistory,incomeStatementHistoryQuarterly,earningsTrend';
+    const modules = 'financialData,defaultKeyStatistics,incomeStatementHistory,incomeStatementHistoryQuarterly,earningsTrend,earningsHistory';
     const url = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=${encodeURIComponent(modules)}&crumb=${encodeURIComponent(crumb)}`;
     const r = await fetch(url, {
       headers: {
@@ -143,6 +143,7 @@ async function getYahooFundamentals(symbol) {
     let revenueQ_0 = null, revenueQ_1 = null, revenueQ_2 = null;
     let epsGrowth_Q0_yoy = null, epsGrowth_Q1_yoy = null, epsGrowth_Q2_yoy = null;
     let revGrowth_Q0_yoy = null, revGrowth_Q1_yoy = null;
+    let epsActualQuarterly = []; // per-share EPS from earningsHistory
 
     if (ishQ.length >= 5) {
       epsQ_0 = raw(ishQ[0]?.netIncome);
@@ -168,6 +169,55 @@ async function getYahooFundamentals(symbol) {
       if (revenueQ_1 != null && revQ_5 != null && revQ_5 > 0)
         revGrowth_Q1_yoy = +((revenueQ_1/revQ_5 - 1)*100).toFixed(1);
     }
+
+    // Fallback: Use earningsHistory for per-share EPS when incomeStatement only has 4 quarters
+    // earningsHistory gives actual reported EPS/share + sequential growth trend
+    const ehist = result.earningsHistory?.history || [];
+    if (ehist.length >= 2 && epsGrowth_Q0_yoy == null) {
+      // earningsHistory is chronological (oldest first), reverse to newest first
+      const sorted = [...ehist].sort((a, b) => {
+        const da = a.quarter?.raw || 0;
+        const db = b.quarter?.raw || 0;
+        return db - da;
+      });
+      epsActualQuarterly = sorted.map(q => ({
+        date: q.quarter?.fmt,
+        actual: raw(q.epsActual),
+        estimate: raw(q.epsEstimate),
+        surprise: raw(q.epsDifference),
+        surprisePct: raw(q.surprisePercent),
+      })).filter(q => q.actual != null);
+
+      // Calculate sequential Q/Q growth (not Y/Y, but still shows acceleration)
+      if (epsActualQuarterly.length >= 2) {
+        const q0 = epsActualQuarterly[0]?.actual;
+        const q1 = epsActualQuarterly[1]?.actual;
+        const q2 = epsActualQuarterly[2]?.actual;
+        if (q0 != null && q1 != null && q1 > 0)
+          epsGrowth_Q0_yoy = +((q0/q1 - 1)*100).toFixed(1);
+        if (q1 != null && q2 != null && q2 > 0)
+          epsGrowth_Q1_yoy = +((q1/q2 - 1)*100).toFixed(1);
+        if (epsActualQuarterly.length >= 4) {
+          const q3 = epsActualQuarterly[3]?.actual;
+          if (q2 != null && q3 != null && q3 > 0)
+            epsGrowth_Q2_yoy = +((q2/q3 - 1)*100).toFixed(1);
+        }
+      }
+    }
+
+    // Revenue Q/Q from incomeStatement (uses available 4 quarters)
+    if (revGrowth_Q0_yoy == null && ishQ.length >= 2) {
+      revenueQ_0 = raw(ishQ[0]?.totalRevenue);
+      revenueQ_1 = raw(ishQ[1]?.totalRevenue);
+      if (revenueQ_0 != null && revenueQ_1 != null && revenueQ_1 > 0)
+        revGrowth_Q0_yoy = +((revenueQ_0/revenueQ_1 - 1)*100).toFixed(1);
+      if (ishQ.length >= 3) {
+        revenueQ_2 = raw(ishQ[2]?.totalRevenue);
+        if (revenueQ_1 != null && revenueQ_2 != null && revenueQ_2 > 0)
+          revGrowth_Q1_yoy = +((revenueQ_1/revenueQ_2 - 1)*100).toFixed(1);
+      }
+    }
+
     epsGrowthQoQ = epsGrowth_Q0_yoy ?? (raw(fd.earningsGrowth) != null ? +(fd.earningsGrowth.raw * 100).toFixed(1) : null);
 
     const c_pass_q0 = epsGrowth_Q0_yoy != null && epsGrowth_Q0_yoy >= 25;
@@ -180,12 +230,28 @@ async function getYahooFundamentals(symbol) {
     // ── A: Annual EPS
     let epsGrowthYoY = null;
     let epsAnnualGrowth = [];
+    let epsTurnaround = false;    // loss → profit transition
+    let epsAnnualValues = [];     // actual annual net income for display
     if (ish.length >= 2) {
       const eps0 = raw(ish[0]?.netIncome);
       const eps1 = raw(ish[1]?.netIncome);
       const eps2 = raw(ish[2]?.netIncome);
-      if (eps0 != null && eps1 != null && eps1 > 0)
+      const rev0 = raw(ish[0]?.totalRevenue);
+
+      // Store actual values for display
+      for (let i = 0; i < Math.min(ish.length, 4); i++) {
+        const ni = raw(ish[i]?.netIncome);
+        if (ni != null) epsAnnualValues.push({ date: ish[i]?.endDate?.fmt, netIncome: ni });
+      }
+
+      if (eps0 != null && eps1 != null && eps1 > 0) {
         epsGrowthYoY = +((eps0/eps1 - 1)*100).toFixed(1);
+      } else if (eps0 != null && eps0 > 0 && eps1 != null && eps1 <= 0) {
+        // Turnaround: loss last year → profit this year
+        epsTurnaround = true;
+        epsGrowthYoY = null; // can't compute meaningful %, but flag it
+      }
+
       if (eps0 != null && eps1 != null && eps1 > 0)
         epsAnnualGrowth.push(+((eps0/eps1 - 1)*100).toFixed(1));
       if (eps1 != null && eps2 != null && eps2 > 0)
@@ -237,11 +303,14 @@ async function getYahooFundamentals(symbol) {
       c_pass_q0, c_pass_q1, c_pass_q2,
       epsAccelerating_qoq,
       epsAnnualGrowth, annualEpsAccelerating,
+      epsTurnaround, epsAnnualValues,
+      epsActualQuarterly,
       revGrowth_Q0_yoy, revGrowth_Q1_yoy,
       sharesFloat, sharesShort, shortPercentFloat, shortRatio,
       institutionPct, insiderPct,
       revenueGrowthYoY, grossMargins, returnOnEquity, debtToEquity, forwardPE,
       canSlimScore,
+      epsDataSource: ishQ.length >= 5 ? 'yoy' : ehist.length >= 2 ? 'sequential' : 'estimate',
     };
   } catch(e) {
     console.warn('Fundamentals error:', e.message);

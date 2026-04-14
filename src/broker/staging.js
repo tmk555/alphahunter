@@ -12,9 +12,10 @@ function db() { return getDB(); }
 
 function stageOrder({ symbol, side = 'buy', order_type = 'limit', qty, entry_price, stop_price,
                       target1_price, target2_price, time_in_force = 'gtc', source, conviction_score, notes,
-                      exit_strategy = 'full_size', strategy: replayStrategy }) {
-  const validExitStrategies = ['full_size', 'scale_in_out'];
-  const exitStrat = validExitStrategies.includes(exit_strategy) ? exit_strategy : 'full_size';
+                      exit_strategy = 'full_in_scale_out', strategy: replayStrategy }) {
+  const validExitStrategies = ['full_in_full_out', 'full_in_scale_out', 'scale_in_scale_out', 'scale_in_full_out',
+    'full_size', 'scale_in_out']; // last two are legacy aliases
+  const exitStrat = validExitStrategies.includes(exit_strategy) ? exit_strategy : 'full_in_scale_out';
   const stmt = db().prepare(`
     INSERT INTO staged_orders (symbol, side, order_type, qty, entry_price, stop_price,
       target1_price, target2_price, time_in_force, source, conviction_score, notes, exit_strategy, strategy)
@@ -31,7 +32,7 @@ function stageOrder({ symbol, side = 'buy', order_type = 'limit', qty, entry_pri
   return order;
 }
 
-function stageFromSetup(stock, setup, sizing, source = 'swinglab', exitStrategy = 'full_size', strategy = null) {
+function stageFromSetup(stock, setup, sizing, source = 'swinglab', exitStrategy = 'full_in_scale_out', strategy = null) {
   // Parse numeric values from setup strings (e.g., "$185.50" → 185.50)
   const parsePrice = (s) => {
     if (typeof s === 'number') return s;

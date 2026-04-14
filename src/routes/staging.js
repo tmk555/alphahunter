@@ -51,7 +51,7 @@ module.exports = function(db, runScan) {
   // ─── Stage from trade setup (auto-calculate everything) ───────────────────
   router.post('/staging/from-setup', async (req, res) => {
     try {
-      const { ticker, mode = 'swing', exitStrategy = 'full_size', strategy } = req.body;
+      const { ticker, mode = 'swing', exitStrategy = 'full_in_scale_out', strategy } = req.body;
       if (!ticker) return res.status(400).json({ error: 'ticker required' });
 
       // Run scanner to get fresh stock data

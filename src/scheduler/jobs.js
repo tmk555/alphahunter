@@ -509,4 +509,59 @@ registerJobType('equity_snapshot', {
   },
 });
 
+// ─── Revision Scan — Daily earnings estimate snapshot ──────────────────────
+// Fetches analyst estimates for the universe stocks and stores snapshots.
+// Revision scores appear once a prior snapshot exists for comparison.
+
+registerJobType('revision_scan', {
+  description: 'Fetch earnings estimate revisions for top stocks and store snapshots for trend tracking',
+  defaultConfig: { topN: 100 },
+  handler: async () => {
+    const { fetchEstimateRevisions, storeRevisions, loadPriorRevisions, scoreRevisions } = require('../signals/earningsRevisions');
+    const { cacheGet } = require('../data/cache');
+
+    // Use latest scan results to get top stocks by RS
+    const cached = cacheGet('rs:full', 60 * 60 * 1000);
+    if (!cached || !cached.length) {
+      return { error: 'No scan results cached. Run rs_scan first.' };
+    }
+
+    const topStocks = cached
+      .sort((a, b) => (b.rsRank || 0) - (a.rsRank || 0))
+      .slice(0, 100)
+      .map(s => s.ticker);
+
+    let fetched = 0, stored = 0, withRevisions = 0, errors = 0;
+
+    for (const symbol of topStocks) {
+      try {
+        const current = await fetchEstimateRevisions(symbol);
+        if (!current) { errors++; continue; }
+        fetched++;
+
+        const prior = loadPriorRevisions(db(), symbol);
+        if (prior) {
+          const score = scoreRevisions(current, prior);
+          if (score) withRevisions++;
+        }
+
+        storeRevisions(db(), symbol, current);
+        stored++;
+
+        // Rate limit: 200ms between Yahoo calls
+        await new Promise(r => setTimeout(r, 200));
+      } catch (_) { errors++; }
+    }
+
+    return {
+      date: marketDate(),
+      attempted: topStocks.length,
+      fetched,
+      stored,
+      withRevisions,
+      errors,
+    };
+  },
+});
+
 module.exports = { setRunScan };

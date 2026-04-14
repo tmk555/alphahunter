@@ -1798,7 +1798,10 @@ function InlineLevels({ stock: s }) {
 
               {/* ── C: Multi-quarter EPS section ─────────────────────── */}
               <div style={{marginBottom:10,padding:'8px 10px',background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)'}}>
-                <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,marginBottom:6,textTransform:'uppercase'}}>C — EPS Growth: Last 3 Quarters vs Same Quarter Prior Year</div>
+                <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,marginBottom:6,textTransform:'uppercase'}}>
+                  C — EPS Growth: {funds.epsDataSource==='yoy'?'Last 3 Quarters vs Same Quarter Prior Year':'Sequential Quarter Growth (Q/Q)'}
+                  {funds.epsDataSource==='sequential' && <span style={{color:'var(--amber)',fontWeight:400}}> · Yahoo provides 4 quarters only</span>}
+                </div>
                 <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
                   {[
                     {label:'Q0 (latest)',  val:funds.epsGrowth_Q0_yoy, pass:funds.c_pass_q0},
@@ -1823,10 +1826,27 @@ function InlineLevels({ stock: s }) {
                     <span style={{fontSize:10,color:'var(--green)',fontWeight:700,background:'rgba(0,230,118,0.12)',padding:'2px 6px',borderRadius:3}}>★ 3-qtr streak ≥25%</span>
                   )}
                 </div>
+                {/* Actual EPS per share from earningsHistory */}
+                {funds.epsActualQuarterly?.length > 0 && (
+                  <div style={{marginTop:6,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+                    <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>ACTUAL EPS/SHARE:</span>
+                    {funds.epsActualQuarterly.map((q,i) => (
+                      <span key={i} style={{fontSize:10,fontFamily:'var(--font-mono)',padding:'1px 6px',borderRadius:3,
+                        background:q.surprisePct>0?'rgba(0,230,118,0.08)':q.surprisePct<0?'rgba(255,61,87,0.08)':'var(--bg)',
+                        border:`1px solid ${q.surprisePct>0?'var(--green)':q.surprisePct<0?'var(--red)':'var(--border)'}`,
+                        color:'var(--text)'}}>
+                        {q.date}: <strong>${q.actual?.toFixed(2)}</strong>
+                        {q.surprisePct!=null && <span style={{color:q.surprisePct>0?'var(--green)':'var(--red)',marginLeft:3,fontSize:9}}>
+                          {q.surprisePct>0?'+':''}{(q.surprisePct*100).toFixed(1)}%
+                        </span>}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {/* Rev per quarter */}
                 {(funds.revGrowth_Q0_yoy != null || funds.revGrowth_Q1_yoy != null) && (
                   <div style={{marginTop:6,fontSize:10,color:'var(--text3)'}}>
-                    Rev YoY: <span style={{color:funds.revGrowth_Q0_yoy>=15?'var(--green)':'var(--amber)',fontWeight:700}}>{funds.revGrowth_Q0_yoy!=null?`Q0 ${funds.revGrowth_Q0_yoy}%`:'—'}</span>
+                    Rev Growth: <span style={{color:funds.revGrowth_Q0_yoy>=15?'var(--green)':'var(--amber)',fontWeight:700}}>{funds.revGrowth_Q0_yoy!=null?`Q0 ${funds.revGrowth_Q0_yoy}%`:'—'}</span>
                     {funds.revGrowth_Q1_yoy != null && <span style={{marginLeft:8}}>Q-1 {funds.revGrowth_Q1_yoy}%</span>}
                   </div>
                 )}
@@ -1838,11 +1858,19 @@ function InlineLevels({ stock: s }) {
                 <div style={{display:'flex',gap:16,flexWrap:'wrap',alignItems:'center'}}>
                   <div>
                     <span style={{fontSize:10,color:'var(--text3)'}}>YoY Growth: </span>
-                    <span style={{fontFamily:'var(--font-mono)',fontSize:13,fontWeight:700,
-                      color:funds.epsGrowthYoY>=25?'var(--green)':funds.epsGrowthYoY>0?'var(--amber)':'var(--red)'}}>
-                      {funds.epsGrowthYoY!=null?`${funds.epsGrowthYoY}%`:'—'}
-                    </span>
-                    {funds.epsGrowthYoY>=25 && <span style={{fontSize:9,color:'var(--green)',marginLeft:3}}>✓</span>}
+                    {funds.epsGrowthYoY != null ? (
+                      <span style={{fontFamily:'var(--font-mono)',fontSize:13,fontWeight:700,
+                        color:funds.epsGrowthYoY>=25?'var(--green)':funds.epsGrowthYoY>0?'var(--amber)':'var(--red)'}}>
+                        {funds.epsGrowthYoY}%
+                        {funds.epsGrowthYoY>=25 && <span style={{fontSize:9,marginLeft:3}}>✓</span>}
+                      </span>
+                    ) : funds.epsTurnaround ? (
+                      <span style={{fontFamily:'var(--font-mono)',fontSize:13,fontWeight:700,color:'var(--green)'}}>
+                        TURNAROUND (loss → profit)
+                      </span>
+                    ) : (
+                      <span style={{fontFamily:'var(--font-mono)',fontSize:13,color:'var(--text3)'}}>—</span>
+                    )}
                   </div>
                   {funds.epsAnnualGrowth?.length>=2 && (
                     <div style={{fontSize:10}}>
@@ -1854,6 +1882,20 @@ function InlineLevels({ stock: s }) {
                     </div>
                   )}
                 </div>
+                {/* Annual net income values */}
+                {funds.epsAnnualValues?.length > 0 && (
+                  <div style={{marginTop:6,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+                    <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>NET INCOME:</span>
+                    {funds.epsAnnualValues.map((v,i) => (
+                      <span key={i} style={{fontSize:10,fontFamily:'var(--font-mono)',padding:'1px 6px',borderRadius:3,
+                        background:v.netIncome>0?'rgba(0,230,118,0.08)':'rgba(255,61,87,0.08)',
+                        border:`1px solid ${v.netIncome>0?'var(--green)':'var(--red)'}`,
+                        color:v.netIncome>0?'var(--green)':'var(--red)'}}>
+                        {v.date?.slice(0,4)}: {v.netIncome>=0?'':''}${(v.netIncome/1e9).toFixed(2)}B
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* ── S I + quality grid ───────────────────────────────── */}
@@ -2542,7 +2584,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
   const [error,   setError]   = useState('');
   const [rsStaging, setRsStaging] = useState(null);
   const [rsStageMode, setRsStageMode] = useState('swing');
-  const [rsExitStrategy, setRsExitStrategy] = useState('full_size');
+  const [rsExitStrategy, setRsExitStrategy] = useState('full_in_scale_out');
   const [strategyFilter, setStrategyFilter] = useState('');
   // minRS/setMinRS now from App props — persists across tab switches
   const [expandedTicker, setExpandedTicker] = useState(null);
@@ -2590,8 +2632,9 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ ticker, mode: mode || rsStageMode, exitStrategy: rsExitStrategy, strategy: strategyFilter || undefined }),
       });
-      const scaleLabel = rsExitStrategy === 'scale_in_out' ? ' (pilot ⅓)' : ' (full size)';
-      alert(`Staged ${r.staged?.symbol} (${mode || rsStageMode}): ${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk${scaleLabel}. Go to Trading tab to submit.`);
+      const scaleLabels = { full_in_scale_out:'Full→Scale', full_in_full_out:'Full→Full', scale_in_scale_out:'Scale→Scale', scale_in_full_out:'Scale→Full' };
+      const scaleLabel = scaleLabels[rsExitStrategy] || rsExitStrategy;
+      alert(`Staged ${r.staged?.symbol} (${mode || rsStageMode}): ${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk [${scaleLabel}]. Go to Trading tab to submit.`);
     } catch(e) { alert(`Stage failed: ${e.message}`); }
     setRsStaging(null);
   }
@@ -2907,18 +2950,23 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                                     </button>
                                   ))}
                                 </div>
-                                <div className="btn-group" title="Full Size = single entry at full position size. 3-Tranche = pilot ⅓ entry, add ⅓ on confirmation, final ⅓ on breakout">
-                                  {[{k:'full_size',label:'Full Size'},{k:'scale_in_out',label:'3-Tranche'}].map(m => (
+                                <div className="btn-group" title="Entry × Exit strategy: Full = single entry at full size. Scale = build/exit in thirds">
+                                  {[
+                                    {k:'full_in_scale_out',label:'Full→Scale',color:'var(--green)'},
+                                    {k:'full_in_full_out',label:'Full→Full',color:'var(--amber)'},
+                                    {k:'scale_in_scale_out',label:'Scale→Scale',color:'var(--cyan)'},
+                                    {k:'scale_in_full_out',label:'Scale→Full',color:'var(--purple,#a78bfa)'}
+                                  ].map(m => (
                                     <button key={m.k} className={`mode-btn ${rsExitStrategy===m.k?'active':''}`}
-                                      style={{padding:'3px 10px',fontSize:10,borderColor: rsExitStrategy==='scale_in_out' && m.k==='scale_in_out' ? 'var(--cyan)' : undefined, color: rsExitStrategy==='scale_in_out' && m.k==='scale_in_out' ? 'var(--cyan)' : undefined}}
+                                      style={{padding:'3px 8px',fontSize:9,borderColor: rsExitStrategy===m.k ? m.color : undefined, color: rsExitStrategy===m.k ? m.color : undefined}}
                                       onClick={() => setRsExitStrategy(m.k)}>
                                       {m.label}
                                     </button>
                                   ))}
                                 </div>
                                 <button disabled={rsStaging===s.ticker} onClick={()=>stageFromRS(s.ticker)}
-                                  style={{padding:'5px 14px',background: rsExitStrategy==='scale_in_out' ? 'var(--cyan)' : 'var(--green)',border: `1px solid ${rsExitStrategy==='scale_in_out' ? 'var(--cyan)' : 'var(--green)'}`,borderRadius:4,color:'#000',fontSize:11,fontWeight:800,cursor:'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
-                                  {rsStaging===s.ticker ? 'STAGING...' : rsExitStrategy==='scale_in_out' ? 'STAGE PILOT ⅓' : 'STAGE FULL'}
+                                  style={{padding:'5px 14px',background: rsExitStrategy==='full_in_scale_out'?'var(--green)':rsExitStrategy==='full_in_full_out'?'var(--amber)':rsExitStrategy==='scale_in_scale_out'?'var(--cyan)':'var(--purple,#a78bfa)',border:'1px solid transparent',borderRadius:4,color:'#000',fontSize:11,fontWeight:800,cursor:'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
+                                  {rsStaging===s.ticker ? 'STAGING...' : rsExitStrategy.startsWith('scale_in') ? 'STAGE PILOT ⅓' : 'STAGE FULL'}
                                 </button>
                               </div>
                             </div>
@@ -2953,7 +3001,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
   const [picks,   setPicks]   = useState(null);
   const [picksLoad, setPicksLoad] = useState(false);
   const [staging, setStaging] = useState(null); // ticker currently staging
-  const [exitStrategy, setExitStrategy] = useState('full_size'); // full_size | scale_in_out
+  const [exitStrategy, setExitStrategy] = useState('full_in_scale_out'); // full_in_scale_out | full_in_full_out | scale_in_scale_out | scale_in_full_out
   const [convictionOverrides, setConvictionOverrides] = useState([]);
   const [scoutData, setScoutData] = useState(null);
   const [scoutLoading, setScoutLoading] = useState(false);
@@ -3097,12 +3145,16 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
               ))}
             </div>
             <div className="btn-group">
-              {[{k:'full_size',l:'Full Size',t:'Enter full position at once, exit all at stop/target'},
-                {k:'scale_in_out',l:'3-Tranche Scale',t:'Pilot 1/3 → Confirm 1/3 → Breakout 1/3. Stops tighten each tranche.'}].map(s => (
+              {[
+                {k:'full_in_scale_out', l:'Full In / Scale Out', t:'Full position at entry. Scale out: sell 1/3 at T1, 1/3 at T2, trail last 1/3. DEFAULT for high conviction.', col:'var(--green)'},
+                {k:'full_in_full_out',   l:'Full In / Full Out',  t:'Full position in and out. Binary outcome — all shares exit at stop or single target.', col:'var(--amber)'},
+                {k:'scale_in_scale_out', l:'Scale In / Scale Out',t:'Pilot 1/3 → add on confirmation. Exit: sell 1/3 at T1, 1/3 at T2, trail rest.', col:'var(--cyan)'},
+                {k:'scale_in_full_out',  l:'Scale In / Full Out', t:'Pilot 1/3 → build position. Full exit if RS<50 or stop hit — no partial profit-taking.', col:'var(--purple)'},
+              ].map(s => (
                 <button key={s.k} className={`mode-btn ${exitStrategy===s.k?'active':''}`}
                   onClick={() => setExitStrategy(s.k)}
                   title={s.t}
-                  style={exitStrategy===s.k && s.k==='scale_in_out'?{borderColor:'var(--cyan)',color:'var(--cyan)'}:{}}>
+                  style={exitStrategy===s.k?{borderColor:s.col,color:s.col}:{}}>
                   {s.l}
                 </button>
               ))}
@@ -3212,7 +3264,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                         <span style={{fontSize:10,color:'var(--text3)',marginLeft:'auto'}}>{s.sector}</span>
                         <button disabled={noLongs||staging===s.ticker} onClick={()=>stageFromSetup(s.ticker,'swing')}
                           style={{padding:'5px 14px',background:noLongs?'var(--bg3)':'var(--cyan)',border:`1px solid ${noLongs?'var(--border)':'var(--cyan)'}`,borderRadius:4,color:noLongs?'var(--text3)':'#000',fontSize:11,fontWeight:800,cursor:noLongs?'not-allowed':'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
-                          {staging===s.ticker?'STAGING...':`STAGE${exitStrategy==='scale_in_out'?' ⅓':''}`}
+                          {staging===s.ticker?'STAGING...':`STAGE${exitStrategy.includes('scale_in')?' ⅓':''}`}
                         </button>
                       </div>
                       <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
@@ -3275,7 +3327,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                         <span style={{fontSize:10,color:'var(--text3)',marginLeft:'auto'}}>{s.sector}</span>
                         <button disabled={noLongs||staging===s.ticker} onClick={()=>stageFromSetup(s.ticker,'position')}
                           style={{padding:'5px 14px',background:noLongs?'var(--bg3)':'var(--green)',border:`1px solid ${noLongs?'var(--border)':'var(--green)'}`,borderRadius:4,color:noLongs?'var(--text3)':'#000',fontSize:11,fontWeight:800,cursor:noLongs?'not-allowed':'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
-                          {staging===s.ticker?'STAGING...':`STAGE${exitStrategy==='scale_in_out'?' ⅓':''}`}
+                          {staging===s.ticker?'STAGING...':`STAGE${exitStrategy.includes('scale_in')?' ⅓':''}`}
                         </button>
                       </div>
                       <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
@@ -3638,8 +3690,11 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                       </div>
                     )}
                     <button disabled={noLongs || staging===s.ticker} onClick={()=>stageFromSetup(s.ticker)}
-                      style={{width:'100%',marginTop:8,padding:'6px 0',background:noLongs?'var(--bg3)':exitStrategy==='scale_in_out'?'var(--cyan)':'var(--green)',border:`1px solid ${noLongs?'var(--border)':exitStrategy==='scale_in_out'?'var(--cyan)':'var(--green)'}`,borderRadius:4,color:noLongs?'var(--text3)':'#000',fontSize:11,fontWeight:800,cursor:noLongs?'not-allowed':'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
-                      {staging===s.ticker ? 'STAGING...' : exitStrategy==='scale_in_out' ? 'STAGE PILOT ⅓' : 'STAGE FULL'}
+                      style={{width:'100%',marginTop:8,padding:'6px 0',
+                        background:noLongs?'var(--bg3)':exitStrategy.includes('scale_in')?'var(--cyan)':'var(--green)',
+                        border:`1px solid ${noLongs?'var(--border)':exitStrategy.includes('scale_in')?'var(--cyan)':'var(--green)'}`,
+                        borderRadius:4,color:noLongs?'var(--text3)':'#000',fontSize:11,fontWeight:800,cursor:noLongs?'not-allowed':'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
+                      {staging===s.ticker ? 'STAGING...' : exitStrategy.includes('scale_in') ? 'STAGE PILOT ⅓' : 'STAGE FULL'}
                     </button>
                   </div>
                 </div>
@@ -5374,8 +5429,15 @@ function ExecutionTab() {
                         ${fmt(riskDollars,0)}
                       </td>
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{o.qty}</td>
-                      <td style={{padding:'8px 6px',fontSize:10,fontWeight:600,color:o.exit_strategy==='scale_in_out'?'var(--cyan)':'var(--text3)'}}>
-                        {o.exit_strategy==='scale_in_out'?'SCALE':'FULL'}
+                      <td style={{padding:'8px 6px',fontSize:10,fontWeight:600,color:
+                        o.exit_strategy==='full_in_scale_out'?'var(--green)':
+                        o.exit_strategy==='scale_in_scale_out'?'var(--cyan)':
+                        o.exit_strategy==='scale_in_full_out'?'var(--purple)':'var(--amber)'}}>
+                        {o.exit_strategy==='full_in_scale_out'?'FULL→SCALE':
+                         o.exit_strategy==='full_in_full_out'?'FULL→FULL':
+                         o.exit_strategy==='scale_in_scale_out'?'SCALE→SCALE':
+                         o.exit_strategy==='scale_in_full_out'?'SCALE→FULL':
+                         o.exit_strategy==='scale_in_out'?'SCALE→SCALE':'FULL→FULL'}
                       </td>
                       <td style={{padding:'8px 6px',fontSize:10,color:'var(--text3)'}}>{o.source}</td>
                       <td style={{padding:'8px 6px'}}>

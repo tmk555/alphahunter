@@ -302,10 +302,10 @@ module.exports = function(db) {
           `[AUTO-SYNCED] Filled at $${(+order.filled_avg_price).toFixed(2)} via ${staged?.source || 'broker'}. Add your trade thesis and setup notes.`,
         );
 
-        // If we have staged order data, update stop/target
+        // If we have staged order data, update stop/target/exit_strategy
         if (staged) {
-          db.prepare('UPDATE trades SET stop_price=?, target1=?, target2=?, strategy=?, was_system_signal=1 WHERE alpaca_order_id=?')
-            .run(staged.stop_price, staged.target1_price, staged.target2_price, staged.strategy || null, order.id);
+          db.prepare('UPDATE trades SET stop_price=?, target1=?, target2=?, strategy=?, exit_strategy=?, was_system_signal=1 WHERE alpaca_order_id=?')
+            .run(staged.stop_price, staged.target1_price, staged.target2_price, staged.strategy || null, staged.exit_strategy || 'full_in_scale_out', order.id);
         }
 
         // Capture RS context at entry from latest snapshot

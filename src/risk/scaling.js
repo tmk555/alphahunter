@@ -17,6 +17,11 @@ function evaluateScalingAction(trade, currentPrice) {
   const shares = trade.remaining_shares ?? trade.shares ?? 0;
   if (shares <= 0) return null;
 
+  // Check exit strategy — skip partial exits for full-out strategies
+  const exitStrat = trade.exit_strategy || 'full_in_scale_out';
+  const isScaleOut = exitStrat === 'full_in_scale_out' || exitStrat === 'scale_in_scale_out'
+    || exitStrat === 'scale_in_out'; // legacy alias
+
   const initial   = trade.initial_shares ?? trade.shares;
   const target1   = trade.target1;
   const target2   = trade.target2;
@@ -38,8 +43,8 @@ function evaluateScalingAction(trade, currentPrice) {
              reason: `Stop ${stopPrice} hit at ${currentPrice}` };
   }
 
-  // Target 1 — sell 1/3, move stop to breakeven
-  if (target1 && !tookT1 && hit(target1)) {
+  // Target 1 — sell 1/3, move stop to breakeven (only for scale-out strategies)
+  if (isScaleOut && target1 && !tookT1 && hit(target1)) {
     const sellQty = Math.max(1, Math.floor(initial / 3));
     const actualQty = Math.min(sellQty, shares);
     return {
@@ -52,8 +57,8 @@ function evaluateScalingAction(trade, currentPrice) {
     };
   }
 
-  // Target 2 — sell another 1/3, move stop up
-  if (target2 && !tookT2 && hit(target2)) {
+  // Target 2 — sell another 1/3, move stop up (only for scale-out strategies)
+  if (isScaleOut && target2 && !tookT2 && hit(target2)) {
     const sellQty = Math.max(1, Math.floor(initial / 3));
     const actualQty = Math.min(sellQty, shares);
     // Move stop to halfway between entry and current price (lock in gains)
@@ -72,7 +77,7 @@ function evaluateScalingAction(trade, currentPrice) {
   }
 
   // Trailing stop maintenance for the final third (after target2)
-  if (tookT2 && trade.trailing_stop_active) {
+  if (isScaleOut && tookT2 && trade.trailing_stop_active) {
     // 8% trailing stop on close
     const trailPct = 0.08;
     const newTrail = isShort
