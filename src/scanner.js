@@ -17,6 +17,8 @@ const { calcRSLine } = require('./signals/rsline');
 const { calcStage }  = require('./signals/stage');
 const { calcEarningsDrift } = require('./signals/earningsDrift');
 const { calcBeta } = require('./risk/position-sizer');
+const { detectPatterns } = require('./signals/patterns');
+const { detectUnusualVolume, detectDarkPoolProxy, computeInstitutionalScore, calcInstitutionalAdjustment } = require('./signals/institutional');
 
 // ─── Core RS scan (shared, cached) ──────────────────────────────────────────
 async function runRSScan(UNIVERSE, SECTOR_MAP) {
@@ -116,6 +118,24 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
     const earningsDrift = calcEarningsDrift(barsMap[sym], daysToEarnings, q);
     const beta = calcBeta(closes, spyCloses, 90);
 
+    // Enhanced pattern detection (v8)
+    let patternData = { patterns: {}, patternCount: 0, bestPattern: null };
+    try {
+      patternData = detectPatterns(barsMap[sym] || [], closes, ma50, ma150, ma200);
+    } catch(_) {}
+
+    // Institutional flow proxy (v8)
+    let institutionalData = null;
+    try {
+      if (barsMap[sym] && barsMap[sym].length >= 50) {
+        const unusualVol = detectUnusualVolume(barsMap[sym], q.averageDailyVolume3Month);
+        const darkPool = detectDarkPoolProxy(barsMap[sym]);
+        institutionalData = computeInstitutionalScore(unusualVol, darkPool, null);
+        institutionalData.unusualVolume = unusualVol;
+        institutionalData.darkPool = darkPool;
+      }
+    } catch(_) {}
+
     const epsTrailing   = q.epsTrailingTwelveMonths || null;
     const epsForward    = q.epsForward || null;
     const epsGrowthEst  = epsTrailing && epsForward && epsTrailing > 0
@@ -154,6 +174,12 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
       volumeProfile,
       earningsDrift,
       beta,
+      patternData,
+      bestPattern: patternData.bestPattern,
+      patternCount: patternData.patternCount,
+      institutionalData,
+      institutionalScore: institutionalData?.institutionalScore || null,
+      institutionalTier: institutionalData?.tier || null,
     });
   }
 

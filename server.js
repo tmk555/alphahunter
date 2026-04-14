@@ -75,6 +75,10 @@ const providerRoutes      = require('./src/routes/providers');
 const replayRoutes        = require('./src/routes/replay');
 const hedgeRoutes         = require('./src/routes/hedge')(runScan);
 const edgeRoutes          = require('./src/routes/edge')(db, runScan, UNIVERSE, SECTOR_MAP);
+const revisionRoutes      = require('./src/routes/revisions')(db, runScan);
+const chartRoutes         = require('./src/routes/chart')();
+const optionsRoutes       = require('./src/routes/options')(db);
+const strategiesRoutes    = require('./src/routes/strategies')(db);
 
 app.use('/api', scanRoutes);
 app.use('/api', sectorRoutes);
@@ -96,6 +100,10 @@ app.use('/api', providerRoutes);
 app.use('/api', replayRoutes);
 app.use('/api', hedgeRoutes);
 app.use('/api', edgeRoutes);
+app.use('/api', revisionRoutes);
+app.use('/api', chartRoutes);
+app.use('/api', optionsRoutes);
+app.use('/api', strategiesRoutes);
 
 // ─── SPA fallback ────────────────────────────────────────────────────────────
 app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
@@ -116,7 +124,7 @@ app.listen(PORT, () => {
   const providerStatus = getProviderHealth();
   const availableProviders = providerStatus.filter(p => p.configured).map(p => p.name);
 
-  console.log(`\n🎯 Alpha Hunter v7  →  http://localhost:${PORT}`);
+  console.log(`\n🎯 Alpha Hunter v8  →  http://localhost:${PORT}`);
   console.log(`   Universe: ${UNIVERSE.length} stocks`);
   console.log(`   RS model: REAL IBD (12-month daily closes)`);
   console.log(`   Database: SQLite (WAL mode)`);
@@ -130,6 +138,13 @@ app.listen(PORT, () => {
   console.log(`   Risk: Correlation matrix + factor decomposition + VaR + hedge framework`);
   console.log(`   Tax: Lot tracking + wash sales + after-tax returns + TLH scanner`);
   console.log(`   Quality: Decision scoring + process trend + system vs discretionary`);
+  console.log(`   Charts: TradingView Lightweight Charts + signal overlays`);
+  console.log(`   Patterns: Cup & Handle + Ascending Base + Power Play + High Tight Flag`);
+  console.log(`   Revisions: Earnings estimate revision tracking + conviction integration`);
+  console.log(`   Options: Alpaca options chain + protective puts + collars + VIX hedges`);
+  console.log(`   Macro: Yield curve + credit spreads + dollar + commodities + ISM proxy`);
+  console.log(`   Institutional: Unusual volume + dark pool proxy + accumulation scoring`);
+  console.log(`   Strategies: Multi-strategy framework (momentum/VCP/rotation/reversion)`);
   console.log(`   Claude: ${anthropic?'✓ sonnet-4-6 / haiku-4-5':'⚠ Set ANTHROPIC_API_KEY'}`);
   console.log(`   Broker: ${alpacaConfig.configured ? '✓ Alpaca' + (alpacaConfig.base.includes('paper') ? ' (paper)' : ' (LIVE)') : '⚠ Set ALPACA_API_KEY'}`);
   console.log(`   Sectors: ${JSON.stringify(counts)}\n`);

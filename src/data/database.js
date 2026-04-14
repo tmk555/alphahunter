@@ -584,6 +584,175 @@ function initSchema() {
 
   // Phase 2 migration: link trades to scale-in plans
   safeAddColumn('trades', 'scale_in_plan_id', 'INTEGER');
+
+  // ─── v8: Earnings Estimate Revisions ──────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS earnings_estimates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      symbol TEXT NOT NULL,
+      quarter TEXT NOT NULL,
+      eps_estimate REAL,
+      eps_actual REAL,
+      rev_estimate REAL,
+      rev_actual REAL,
+      eps_current_year REAL,
+      eps_next_year REAL,
+      rev_current_year REAL,
+      num_analysts INTEGER,
+      fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(symbol, quarter, fetched_at)
+    );
+    CREATE INDEX IF NOT EXISTS idx_earnings_est_symbol ON earnings_estimates(symbol);
+    CREATE INDEX IF NOT EXISTS idx_earnings_est_quarter ON earnings_estimates(quarter);
+
+    CREATE TABLE IF NOT EXISTS revision_scores (
+      symbol TEXT NOT NULL,
+      date TEXT NOT NULL,
+      revision_score REAL,
+      direction TEXT,
+      eps_current_yr_chg REAL,
+      eps_next_yr_chg REAL,
+      rev_chg REAL,
+      acceleration REAL,
+      tier TEXT,
+      PRIMARY KEY (symbol, date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_revision_scores_date ON revision_scores(date);
+  `);
+
+  // Migrations: add columns needed by earningsRevisions engine
+  safeAddColumn('earnings_estimates', 'eps_current_qtr', 'REAL');
+  safeAddColumn('earnings_estimates', 'eps_next_qtr', 'REAL');
+  safeAddColumn('earnings_estimates', 'rev_current_qtr', 'REAL');
+  safeAddColumn('earnings_estimates', 'eps_growth_current_year', 'REAL');
+  safeAddColumn('earnings_estimates', 'eps_growth_next_year', 'REAL');
+  safeAddColumn('earnings_estimates', 'created_at', "TEXT DEFAULT (datetime('now'))");
+
+  // ─── v8: Options Positions & Hedge Log (extended) ─────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS options_positions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      symbol TEXT NOT NULL,
+      underlying TEXT NOT NULL,
+      option_type TEXT NOT NULL CHECK(option_type IN ('call','put')),
+      strike REAL NOT NULL,
+      expiration TEXT NOT NULL,
+      qty INTEGER NOT NULL,
+      side TEXT NOT NULL CHECK(side IN ('long','short')),
+      entry_price REAL,
+      current_price REAL,
+      strategy_type TEXT,
+      linked_trade_id INTEGER,
+      status TEXT DEFAULT 'open',
+      alpaca_order_id TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      closed_at TEXT,
+      pnl REAL,
+      FOREIGN KEY (linked_trade_id) REFERENCES trades(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_options_pos_underlying ON options_positions(underlying);
+    CREATE INDEX IF NOT EXISTS idx_options_pos_status ON options_positions(status);
+  `);
+
+  // ─── v8: Pattern Detection Cache ──────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pattern_detections (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      symbol TEXT NOT NULL,
+      date TEXT NOT NULL,
+      pattern_type TEXT NOT NULL,
+      confidence INTEGER,
+      pivot_price REAL,
+      stop_price REAL,
+      details JSON,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(symbol, date, pattern_type)
+    );
+    CREATE INDEX IF NOT EXISTS idx_pattern_symbol ON pattern_detections(symbol);
+    CREATE INDEX IF NOT EXISTS idx_pattern_date ON pattern_detections(date);
+    CREATE INDEX IF NOT EXISTS idx_pattern_type ON pattern_detections(pattern_type);
+  `);
+
+  // ─── v8: Macro Regime Snapshots ───────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS macro_snapshots (
+      date TEXT PRIMARY KEY,
+      yield_curve_score REAL,
+      credit_spread_score REAL,
+      dollar_score REAL,
+      commodity_score REAL,
+      ism_proxy_score REAL,
+      intermarket_score REAL,
+      composite_score REAL,
+      macro_regime TEXT,
+      macro_size_multiplier REAL,
+      details JSON,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_macro_date ON macro_snapshots(date);
+  `);
+
+  // ─── v8: Institutional Flow Tracking ──────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS institutional_flow (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      symbol TEXT NOT NULL,
+      date TEXT NOT NULL,
+      flow_score INTEGER,
+      net_flow TEXT,
+      accum_days_20 INTEGER,
+      dist_days_20 INTEGER,
+      power_days INTEGER,
+      dark_pool_score INTEGER,
+      details JSON,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(symbol, date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_inst_flow_symbol ON institutional_flow(symbol);
+    CREATE INDEX IF NOT EXISTS idx_inst_flow_date ON institutional_flow(date);
+  `);
+
+  // ─── v8: Multi-Strategy Framework ─────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS strategies (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      allocation_pct REAL NOT NULL DEFAULT 25,
+      max_positions INTEGER DEFAULT 5,
+      max_heat_pct REAL DEFAULT 3,
+      holding_period_min INTEGER DEFAULT 1,
+      holding_period_max INTEGER DEFAULT 60,
+      entry_rules JSON DEFAULT '{}',
+      exit_rules JSON DEFAULT '{}',
+      enabled BOOLEAN DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+
+  // Seed default strategies if empty
+  const stratCount = db.prepare('SELECT COUNT(*) as cnt FROM strategies').get();
+  if (stratCount.cnt === 0) {
+    const seed = db.prepare('INSERT OR IGNORE INTO strategies (id, name, type, allocation_pct, max_positions, max_heat_pct, holding_period_min, holding_period_max) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    seed.run('momentum_swing', 'RS Momentum Swing', 'momentum', 40, 8, 4, 2, 20);
+    seed.run('vcp_breakout', 'VCP / Pattern Breakout', 'breakout', 25, 5, 2.5, 5, 40);
+    seed.run('sector_rotation', 'Sector ETF Rotation', 'rotation', 20, 4, 2, 20, 90);
+    seed.run('mean_reversion', 'Oversold Mean Reversion', 'mean_reversion', 15, 4, 1.5, 1, 10);
+  }
+
+  // v8 migration: add new columns to existing tables
+  safeAddColumn('trades', 'pattern_type', 'TEXT');
+  safeAddColumn('trades', 'revision_score', 'REAL');
+  safeAddColumn('trades', 'institutional_score', 'REAL');
+  safeAddColumn('trades', 'macro_regime_at_entry', 'TEXT');
+  safeAddColumn('rs_snapshots', 'pattern_type', 'TEXT');
+  safeAddColumn('rs_snapshots', 'pattern_confidence', 'INTEGER');
+  safeAddColumn('rs_snapshots', 'revision_score', 'REAL');
+  safeAddColumn('rs_snapshots', 'institutional_score', 'INTEGER');
+  safeAddColumn('scan_results', 'pattern_data', 'JSON');
+  safeAddColumn('scan_results', 'revision_data', 'JSON');
+  safeAddColumn('scan_results', 'institutional_data', 'JSON');
 }
 
 // One-time migration from legacy JSON files into SQLite
