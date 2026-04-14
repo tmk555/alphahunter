@@ -74,7 +74,8 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .data-table td { padding:8px 10px; border-bottom:1px solid var(--border); font-family:var(--font-mono); font-size:14px; white-space:nowrap; }
 .data-table tr:hover td { background:var(--bg3); }
 .td-name { font-family:var(--font-sans) !important; font-size:13px !important; color:var(--text2); max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.td-ticker { color:var(--cyan); font-weight:600; }
+.td-ticker { color:var(--cyan); font-weight:600; cursor:pointer; }
+.td-ticker:hover { text-decoration:underline; opacity:0.85; }
 
 /* ── RS Bar ──────────────────────────────────── */
 .rs-bar { display:flex; align-items:center; gap:6px; min-width:100px; }
@@ -501,6 +502,35 @@ function App() {
   const [setupSigFilters, setSetupSigFilters] = useState(new Set());
   const [setupMode, setSetupMode] = useState('swing');
 
+  // Global ticker click → navigate to Scanner and auto-expand
+  const [scannerTarget, setScannerTarget] = useState(null);
+  const navigateToScanner = useCallback((ticker) => {
+    setScannerTarget(ticker);
+    setTab('rs');
+  }, []);
+  // Expose globally so all tab components can call it without prop drilling
+  useEffect(() => { window.navigateToScanner = navigateToScanner; return () => { delete window.navigateToScanner; }; }, [navigateToScanner]);
+
+  // Delegated click: any .td-ticker span anywhere → navigate to Scanner
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+  useEffect(() => {
+    function handleTickerClick(e) {
+      const el = e.target.closest('.td-ticker');
+      if (!el) return;
+      // Don't navigate if already on Scanner tab (let native row-expand work)
+      if (tabRef.current === 'rs') return;
+      const ticker = (el.textContent || '').trim().toUpperCase();
+      if (ticker && /^[A-Z]{1,6}$/.test(ticker)) {
+        e.preventDefault();
+        e.stopPropagation();
+        navigateToScanner(ticker);
+      }
+    }
+    document.addEventListener('click', handleTickerClick, true);
+    return () => document.removeEventListener('click', handleTickerClick, true);
+  }, [navigateToScanner]);
+
   // Badge counts — fetch periodically for tab indicators
   const [badgeCounts, setBadgeCounts] = useState({staged:0, review:0, positions:0});
   const prevBadges = useRef({staged:0, review:0, positions:0});
@@ -637,7 +667,7 @@ function App() {
         {tab==='pulse'      && <MarketPulseTab />}
         {tab==='sectors'    && <SectorsTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
         {tab==='industries' && <IndustriesTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
-        {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} sigFilters={rsSigFilters} setSigFilters={setRsSigFilters} quickFilter={rsQuickFilter} setQuickFilter={setRsQuickFilter}/>}
+        {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} sigFilters={rsSigFilters} setSigFilters={setRsSigFilters} quickFilter={rsQuickFilter} setQuickFilter={setRsQuickFilter} scannerTarget={scannerTarget} clearScannerTarget={() => setScannerTarget(null)}/>}
         {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary} setupSigFilters={setupSigFilters} setSetupSigFilters={setSetupSigFilters} mode={setupMode} setMode={setSetupMode}/>}
         {tab==='watchlist'  && <WatchlistTab rsData={rsData} />}
         {tab==='hedge'      && <HedgeTab />}
@@ -2143,14 +2173,28 @@ function IndustriesTab({ selectedSectors, setSelectedSectors }) {
 }
 
 // ─── RS SCANNER TAB ───────────────────────────────────────────────────────────
-function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, selectedSectors, setSelectedSectors, sigFilters, setSigFilters }) {
+function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, selectedSectors, setSelectedSectors, sigFilters, setSigFilters, scannerTarget, clearScannerTarget }) {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   const [rsStaging, setRsStaging] = useState(null);
   const [rsStageMode, setRsStageMode] = useState('swing');
+  const [rsExitStrategy, setRsExitStrategy] = useState('full_size');
   const [strategyFilter, setStrategyFilter] = useState('');
   // minRS/setMinRS now from App props — persists across tab switches
   const [expandedTicker, setExpandedTicker] = useState(null);
+
+  // Auto-expand ticker when navigated from another tab
+  useEffect(() => {
+    if (scannerTarget) {
+      setExpandedTicker(scannerTarget);
+      clearScannerTarget();
+      // Scroll to the expanded row after render
+      setTimeout(() => {
+        const el = document.querySelector(`[data-ticker="${scannerTarget}"]`);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 200);
+    }
+  }, [scannerTarget]);
 
   // Strategy entry criteria (matches replay engine evaluateEntry)
   const strategyEntryFilters = {
@@ -2180,9 +2224,10 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
     try {
       const r = await api('/api/staging/from-setup', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ ticker, mode: mode || rsStageMode, strategy: strategyFilter || undefined }),
+        body: JSON.stringify({ ticker, mode: mode || rsStageMode, exitStrategy: rsExitStrategy, strategy: strategyFilter || undefined }),
       });
-      alert(`Staged ${r.staged?.symbol} (${mode || rsStageMode}): ${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk. Go to Trading tab to submit.`);
+      const scaleLabel = rsExitStrategy === 'scale_in_out' ? ' (pilot ⅓)' : ' (full size)';
+      alert(`Staged ${r.staged?.symbol} (${mode || rsStageMode}): ${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk${scaleLabel}. Go to Trading tab to submit.`);
     } catch(e) { alert(`Stage failed: ${e.message}`); }
     setRsStaging(null);
   }
@@ -2390,7 +2435,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                     const isBeyondReplay = stratRank != null && stratRank > 5;
                     return (
                     <React.Fragment key={s.ticker}>
-                    <tr ref={el => rowRefs.current[s.ticker] = el}
+                    <tr ref={el => rowRefs.current[s.ticker] = el} data-ticker={s.ticker}
                       style={{
                         background:expandedTicker===s.ticker?'rgba(240,165,0,0.12)':isReplayPick?'rgba(0,200,150,0.06)':'',
                         borderLeft:expandedTicker===s.ticker?'3px solid var(--amber)':isReplayPick?'3px solid var(--green)':'3px solid transparent',
@@ -2488,9 +2533,18 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                                     </button>
                                   ))}
                                 </div>
+                                <div className="btn-group" title="Full Size = single entry at full position size. 3-Tranche = pilot ⅓ entry, add ⅓ on confirmation, final ⅓ on breakout">
+                                  {[{k:'full_size',label:'Full Size'},{k:'scale_in_out',label:'3-Tranche'}].map(m => (
+                                    <button key={m.k} className={`mode-btn ${rsExitStrategy===m.k?'active':''}`}
+                                      style={{padding:'3px 10px',fontSize:10,borderColor: rsExitStrategy==='scale_in_out' && m.k==='scale_in_out' ? 'var(--cyan)' : undefined, color: rsExitStrategy==='scale_in_out' && m.k==='scale_in_out' ? 'var(--cyan)' : undefined}}
+                                      onClick={() => setRsExitStrategy(m.k)}>
+                                      {m.label}
+                                    </button>
+                                  ))}
+                                </div>
                                 <button disabled={rsStaging===s.ticker} onClick={()=>stageFromRS(s.ticker)}
-                                  style={{padding:'5px 14px',background:'var(--green)',border:'1px solid var(--green)',borderRadius:4,color:'#000',fontSize:11,fontWeight:800,cursor:'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
-                                  {rsStaging===s.ticker ? 'STAGING...' : 'STAGE'}
+                                  style={{padding:'5px 14px',background: rsExitStrategy==='scale_in_out' ? 'var(--cyan)' : 'var(--green)',border: `1px solid ${rsExitStrategy==='scale_in_out' ? 'var(--cyan)' : 'var(--green)'}`,borderRadius:4,color:'#000',fontSize:11,fontWeight:800,cursor:'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
+                                  {rsStaging===s.ticker ? 'STAGING...' : rsExitStrategy==='scale_in_out' ? 'STAGE PILOT ⅓' : 'STAGE FULL'}
                                 </button>
                                 <button onClick={closeLevels} style={{background:'var(--bg3)',border:'1px solid var(--border)',color:'var(--text2)',cursor:'pointer',fontSize:13,padding:'3px 10px',borderRadius:4,fontWeight:700}}>✕ Close</button>
                               </div>
@@ -3172,7 +3226,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                   <div className="sl-card-header">
                     <div className="sl-card-title">
                       <div>
-                        <span className="sl-ticker">{s.ticker}</span>
+                        <span className="sl-ticker td-ticker">{s.ticker}</span>
                         <span style={{fontSize:11,color:'var(--text3)',marginLeft:8}}>${fmt(s.price)}</span>
                       </div>
                     </div>
@@ -4207,7 +4261,7 @@ function SectorIndustryRSTrend({ type, title, api: apiPath }) {
                                                                'Neutral — hold if owned';
                   return (
                     <tr key={t.ticker}>
-                      <td style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--cyan)'}}>{t.ticker}</td>
+                      <td className="td-ticker" style={{fontFamily:'var(--font-mono)',fontSize:12}}>{t.ticker}</td>
                       <td><RSBar rs={t.current}/></td>
                       <td style={{color:dirColor(t.direction),fontFamily:'var(--font-mono)',fontWeight:700}}>
                         {dirIcon(t.direction)} {t.direction}
@@ -4505,7 +4559,7 @@ function ConditionalEntriesSection() {
               <tbody>
                 {entries.map(e => (
                   <tr key={e.id}>
-                    <td style={{color:'var(--cyan)',fontWeight:700}}>{e.symbol}</td>
+                    <td className="td-ticker">{e.symbol}</td>
                     <td><span style={{color:typeColor(e.condition_type),fontWeight:600,fontSize:11,letterSpacing:.5}}>{(e.condition_type||'—').toUpperCase()}</span></td>
                     <td>${fmt(e.trigger_price,2)}</td>
                     <td>{e.qty || '—'}</td>
@@ -4599,7 +4653,7 @@ function ScaleInPlansSection() {
               <div key={p.tradeId} style={{padding:12,background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)'}}>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
                   <div>
-                    <span style={{color:'var(--cyan)',fontWeight:700,fontFamily:'var(--font-mono)',fontSize:14}}>{p.symbol}</span>
+                    <span className="td-ticker" style={{fontFamily:'var(--font-mono)',fontSize:14}}>{p.symbol}</span>
                     <span style={{fontSize:11,color:'var(--text3)',marginLeft:8}}>Entry: ${fmt(p.entry,2)}</span>
                     {p.currentPrice && <span style={{fontSize:11,color:'var(--text2)',marginLeft:8}}>Now: ${fmt(p.currentPrice,2)}</span>}
                   </div>
@@ -4935,7 +4989,7 @@ function ExecutionTab() {
                     return (
                     <tr key={o.id} style={{borderBottom:'1px solid var(--border)'}}>
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--text3)'}}>{o.id}</td>
-                      <td style={{padding:'8px 6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{o.symbol}</td>
+                      <td className="td-ticker" style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{o.symbol}</td>
                       <td style={{padding:'8px 6px',color:o.side==='buy'?'var(--green)':'var(--red)'}}>{o.side.toUpperCase()}</td>
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>${fmt(o.entry_price)}</td>
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--red)'}}>${fmt(o.stop_price)}</td>
@@ -5004,7 +5058,7 @@ function ExecutionTab() {
                 <tbody>
                   {positions.map(p => (
                     <tr key={p.symbol} style={{borderBottom:'1px solid var(--border)'}}>
-                      <td style={{padding:'8px 6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{p.symbol}</td>
+                      <td className="td-ticker" style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{p.symbol}</td>
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{p.qty}</td>
                       <td style={{padding:'8px 6px',color:p.side==='long'?'var(--green)':'var(--red)'}}>{p.side}</td>
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>${fmt(p.avgEntryPrice)}</td>
@@ -5101,7 +5155,7 @@ function ExecutionTab() {
                 <tbody>
                   {subs.map(s => (
                     <tr key={s.id} style={{borderBottom:'1px solid var(--border)'}}>
-                      <td style={{padding:'8px 6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{s.symbol}</td>
+                      <td className="td-ticker" style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{s.symbol}</td>
                       <td style={{padding:'8px 6px'}}>
                         <span style={{padding:'2px 8px',borderRadius:3,fontSize:10,fontWeight:600,
                           color:s.alert_type==='stop_violation'?'var(--red)':s.alert_type==='vcp_pivot'?'var(--purple)':'var(--amber)',
@@ -5151,7 +5205,7 @@ function ExecutionTab() {
                         <span style={{fontSize:14}}>{a.type==='stop_violation'?'🛑':a.type==='price_above'?'📈':'📉'}</span>
                         <span style={{fontSize:10,color:'var(--text3)',marginLeft:6}}>{a.type}</span>
                       </td>
-                      <td style={{padding:'8px 6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{a.symbol}</td>
+                      <td className="td-ticker" style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{a.symbol}</td>
                       <td style={{padding:'8px 6px',color:'var(--text2)',fontSize:11}}>{a.message}</td>
                       <td style={{padding:'8px 6px',color:'var(--text3)',fontSize:10,fontFamily:'var(--font-mono)'}}>{a.created_at}</td>
                       <td style={{padding:'8px 6px'}}>
@@ -5186,7 +5240,7 @@ function ExecutionTab() {
                 <tbody>
                   {orders.map(o => (
                     <tr key={o.id} style={{borderBottom:'1px solid var(--border)'}}>
-                      <td style={{padding:'8px 6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{o.symbol}</td>
+                      <td className="td-ticker" style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{o.symbol}</td>
                       <td style={{padding:'8px 6px',color:o.side==='buy'?'var(--green)':'var(--red)',fontWeight:700}}>{o.side.toUpperCase()}</td>
                       <td style={{padding:'8px 6px',fontSize:11}}>{o.order_type||o.type}</td>
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{o.qty} {o.filled_qty!=='0'&&o.filled_qty?`(${o.filled_qty} filled)`:''}</td>
@@ -5716,7 +5770,7 @@ function PortfolioTab() {
                 <tbody>
                   {status.brokerPositions.map(p => (
                     <tr key={p.symbol} style={{borderBottom:'1px solid var(--border)'}}>
-                      <td style={{padding:'6px 5px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{p.symbol}</td>
+                      <td className="td-ticker" style={{padding:'6px 5px',fontFamily:'var(--font-mono)'}}>{p.symbol}</td>
                       <td style={{padding:'6px 5px',fontFamily:'var(--font-mono)'}}>{p.qty}</td>
                       <td style={{padding:'6px 5px',fontFamily:'var(--font-mono)'}}>${fmt(p.avgEntryPrice)}</td>
                       <td style={{padding:'6px 5px',fontFamily:'var(--font-mono)'}}>${fmt(p.currentPrice)}</td>
@@ -5956,7 +6010,7 @@ function TradeJournalTab() {
             <tbody>
               {trades.map(t => (
                 <tr key={t.id} style={{borderBottom:'1px solid var(--border)',background:t.needs_review?'rgba(240,165,0,0.06)':'transparent'}}>
-                  <td style={{padding:'8px 6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>
+                  <td className="td-ticker" style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>
                     {t.needs_review ? <span title="Needs review" style={{color:'var(--amber)',marginRight:4}}>●</span> : null}
                     {t.symbol}
                   </td>
@@ -6459,7 +6513,7 @@ function PerformanceTab() {
                 <tbody>
                   {pendingScales.map((p,i)=>(
                     <tr key={i} style={{borderBottom:'1px solid var(--border)'}}>
-                      <td style={{padding:'6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{p.symbol}</td>
+                      <td className="td-ticker" style={{padding:'6px',fontFamily:'var(--font-mono)'}}>{p.symbol}</td>
                       <td style={{padding:'6px',color:'var(--amber)',fontFamily:'var(--font-mono)'}}>{p.action}</td>
                       <td style={{padding:'6px',color:'var(--text2)',fontFamily:'var(--font-mono)'}}>{p.level||'—'}</td>
                       <td style={{padding:'6px',fontFamily:'var(--font-mono)'}}>${fmt(p.currentPrice,2)}</td>
@@ -6735,7 +6789,7 @@ function PerformanceTab() {
                 <tbody>
                   {perf.recentTrades.map((t,i) => (
                     <tr key={i} style={{borderBottom:'1px solid var(--border)'}}>
-                      <td style={{padding:'6px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{t.symbol}</td>
+                      <td className="td-ticker" style={{padding:'6px',fontFamily:'var(--font-mono)'}}>{t.symbol}</td>
                       <td style={{padding:'6px',color:'var(--text3)'}}>{t.entry_date}</td>
                       <td style={{padding:'6px',color:'var(--text3)'}}>{t.exit_date}</td>
                       <td style={{padding:'6px',fontWeight:700,color:t.pnl_percent>0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)'}}>
@@ -7379,7 +7433,7 @@ function HedgeTab() {
               {instruments.instruments?.map((inst,i)=>(
                 <div key={i} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:14}}>
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-                    <span style={{fontFamily:'var(--font-mono)',fontWeight:700,fontSize:16,color:'var(--cyan)'}}>{inst.ticker}</span>
+                    <span className="td-ticker" style={{fontFamily:'var(--font-mono)',fontSize:16}}>{inst.ticker}</span>
                     <span style={{fontSize:10,padding:'2px 8px',background:'rgba(255,61,87,0.1)',borderRadius:3,color:'var(--red)',fontFamily:'var(--font-mono)'}}>
                       {inst.meta?.leverage}x
                     </span>
@@ -8307,7 +8361,7 @@ function UniverseTrackingSection() {
               <tbody>
                 {frozen.map((f,i) => (
                   <tr key={i}>
-                    <td style={{color:'var(--cyan)',fontWeight:700}}>{f.symbol}</td>
+                    <td className="td-ticker">{f.symbol}</td>
                     <td style={{fontSize:11,color:'var(--text3)'}}>{f.removed_date || f.date || '—'}</td>
                     <td style={{color:f.last_rs_rank>=80?'var(--green)':f.last_rs_rank>=50?'var(--amber)':'var(--red)',fontWeight:600}}>{f.last_rs_rank ?? '—'}</td>
                     <td style={{fontSize:11,color:'var(--text2)'}}>{f.sector || '—'}</td>
