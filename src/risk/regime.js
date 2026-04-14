@@ -177,28 +177,6 @@ async function getMarketRegime() {
       // Breadth integration failed — proceed with basic + cycle regime
     }
 
-    const result = {
-      regime, color, swingOk, positionOk, sizeMultiplier, warning, vixLevel,
-      spyPrice, spyChg1d, spy50, spy200, above50, above200,
-      cycleOverride, exposureRamp, breadthOverlay, macroOverlay,
-      qqqChg1d: qqq?.regularMarketChangePercent,
-      iwmChg1d: iwm?.regularMarketChangePercent,
-      tltChg1d: tlt?.regularMarketChangePercent,
-      riskOnSignals: [
-        above50    && 'SPY above 50MA',
-        above200   && 'SPY above 200MA',
-        vixLevel < 20 && `VIX calm at ${vixLevel.toFixed(0)}`,
-        breadthOverlay?.score >= 70 && `Breadth healthy (${breadthOverlay.score}/100)`,
-      ].filter(Boolean),
-      riskOffSignals: [
-        !above50   && 'SPY below 50MA',
-        !above200  && 'SPY below 200MA',
-        vixLevel > 25 && `VIX elevated at ${vixLevel.toFixed(0)}`,
-        breadthOverlay?.score < 40 && `Breadth weak (${breadthOverlay.score}/100)`,
-        breadthOverlay?.divergence && 'BREADTH DIVERGENCE — internals fading',
-      ].filter(Boolean),
-    };
-
     // ── Macro regime overlay (v8: yield curve, credit spreads, dollar, ISM) ──
     let macroOverlay = null;
     try {
@@ -228,9 +206,31 @@ async function getMarketRegime() {
           macroOverlay.override = { applied: true, from: prevRegime, to: regime, reason: overlay.reason };
         }
       }
-    } catch (_) {
-      // Macro integration failed — proceed without
+    } catch (macroErr) {
+      console.error('  Macro overlay error:', macroErr.message);
     }
+
+    const result = {
+      regime, color, swingOk, positionOk, sizeMultiplier, warning, vixLevel,
+      spyPrice, spyChg1d, spy50, spy200, above50, above200,
+      cycleOverride, exposureRamp, breadthOverlay, macroOverlay,
+      qqqChg1d: qqq?.regularMarketChangePercent,
+      iwmChg1d: iwm?.regularMarketChangePercent,
+      tltChg1d: tlt?.regularMarketChangePercent,
+      riskOnSignals: [
+        above50    && 'SPY above 50MA',
+        above200   && 'SPY above 200MA',
+        vixLevel < 20 && `VIX calm at ${vixLevel.toFixed(0)}`,
+        breadthOverlay?.score >= 70 && `Breadth healthy (${breadthOverlay.score}/100)`,
+      ].filter(Boolean),
+      riskOffSignals: [
+        !above50   && 'SPY below 50MA',
+        !above200  && 'SPY below 200MA',
+        vixLevel > 25 && `VIX elevated at ${vixLevel.toFixed(0)}`,
+        breadthOverlay?.score < 40 && `Breadth weak (${breadthOverlay.score}/100)`,
+        breadthOverlay?.divergence && 'BREADTH DIVERGENCE — internals fading',
+      ].filter(Boolean),
+    };
 
     // ── Regime Change Detection & Push Notification ─────────────────────────
     // Compare current regime against last-known regime stored in portfolio_state.
@@ -277,7 +277,8 @@ async function getMarketRegime() {
     cacheSet('regime', result);
     return result;
   } catch(e) {
-    return { regime: 'UNKNOWN', color: '#888', swingOk: true, positionOk: true, sizeMultiplier: 0.75, warning: 'Could not fetch regime data' };
+    console.error('  ⚠ Regime detection failed:', e.message);
+    return { regime: 'UNKNOWN', color: '#888', swingOk: true, positionOk: true, sizeMultiplier: 0.75, warning: `Could not fetch regime data: ${e.message}` };
   }
 }
 
