@@ -16,6 +16,7 @@ const { attributePerformance } = require('../signals/attribution');
 const { notifyTradeEvent } = require('../notifications/channels');
 const { createTaxLot, sellTaxLots } = require('../risk/tax-engine');
 const { logExecution } = require('../risk/execution-quality');
+const { assignStrategy } = require('../risk/strategy-manager');
 
 module.exports = function(db) {
   // ─── Portfolio Config ──────────────────────────────────────────────────────
@@ -158,20 +159,35 @@ module.exports = function(db) {
                            entry_rs, entry_sepa, entry_regime, wave, sector, notes, strategy)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
+      // Auto-assign strategy if not provided
+      let assignedStrategy = strategy || null;
+      if (!assignedStrategy) {
+        try {
+          const assigned = assignStrategy({
+            symbol: symbol.toUpperCase(),
+            rsRank: entry_rs || 0,
+            swingMomentum: 0,
+            vcpForming: false,
+          });
+          assignedStrategy = assigned.strategy;
+          console.log(`  Strategy auto-assigned: ${symbol.toUpperCase()} → ${assigned.strategy} (${assigned.confidence}% confidence: ${assigned.reasons.join(', ')})`);
+        } catch (_) {}
+      }
+
       const result = stmt.run(
         symbol.toUpperCase(), side, entry_date || new Date().toISOString().split('T')[0],
         entry_price, stop_price, target1, target2,
         shares, shares, shares,
         entry_rs, entry_sepa, entry_regime, wave, sector, notes,
-        strategy || null,
+        assignedStrategy,
       );
       // Auto-create stop alert if stop_price is set
       if (stop_price) {
         try { createStopAlert(result.lastInsertRowid); } catch (_) {}
       }
 
-      notifyTradeEvent({ event: 'buy', symbol: symbol.toUpperCase(), details: { shares, price: entry_price, stop: stop_price, strategy } }).catch(e => console.error('Notification error:', e.message));
-      res.json({ ok: true, id: result.lastInsertRowid });
+      notifyTradeEvent({ event: 'buy', symbol: symbol.toUpperCase(), details: { shares, price: entry_price, stop: stop_price, strategy: assignedStrategy } }).catch(e => console.error('Notification error:', e.message));
+      res.json({ ok: true, id: result.lastInsertRowid, strategy: assignedStrategy });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -293,12 +309,14 @@ module.exports = function(db) {
         }
 
         // Capture RS context at entry from latest snapshot
+        let snapData = null;
         try {
           const snap = db.prepare(`
             SELECT rs_rank, sepa_score, swing_momentum FROM rs_snapshots
             WHERE symbol = ? AND date <= ? AND type = 'stock' ORDER BY date DESC LIMIT 1
           `).get(order.symbol, fillDate);
           if (snap) {
+            snapData = snap;
             db.prepare('UPDATE trades SET entry_rs=?, entry_sepa=? WHERE alpaca_order_id=? AND entry_rs IS NULL')
               .run(snap.rs_rank, snap.sepa_score, order.id);
           }
@@ -309,6 +327,27 @@ module.exports = function(db) {
               .run(regime.regime, order.id);
           }
         } catch (_) {}
+
+        // Auto-assign strategy if not already set by staged order
+        if (!staged?.strategy) {
+          try {
+            // Look up scan data for richer classification
+            const scanRow = db.prepare(
+              `SELECT data FROM scan_results WHERE symbol = ? ORDER BY date DESC LIMIT 1`
+            ).get(order.symbol);
+            const scanData = scanRow ? JSON.parse(scanRow.data) : {};
+            const assigned = assignStrategy({
+              symbol: order.symbol,
+              rsRank: snapData?.rs_rank || scanData.rsRank || 0,
+              swingMomentum: snapData?.swing_momentum || scanData.swingMomentum || 0,
+              vcpForming: scanData.vcpForming || false,
+              patternDetected: scanData.bestPattern || false,
+            });
+            db.prepare('UPDATE trades SET strategy=? WHERE alpaca_order_id=? AND strategy IS NULL')
+              .run(assigned.strategy, order.id);
+            console.log(`  Strategy auto-assigned: ${order.symbol} → ${assigned.strategy} (${assigned.confidence}%)`);
+          } catch (_) {}
+        }
 
         const lastTradeId = db.prepare('SELECT id FROM trades WHERE alpaca_order_id = ?').get(order.id)?.id;
 
@@ -708,12 +747,23 @@ module.exports = function(db) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  router.post('/portfolio/equity-snapshot', (req, res) => {
+  router.post('/portfolio/equity-snapshot', async (req, res) => {
     try {
       const { recordEquitySnapshot } = require('../risk/alpha-tracker');
       const { equity, cashFlow = 0, spyClose, openPositions, heatPct } = req.body;
       if (!equity) return res.status(400).json({ error: 'equity required' });
-      const snapshot = recordEquitySnapshot(equity, cashFlow, spyClose, openPositions, heatPct);
+
+      // Auto-fetch SPY close if not provided
+      let spyPrice = spyClose;
+      if (!spyPrice) {
+        try {
+          const { getQuotes } = require('../data/providers/manager');
+          const quotes = await getQuotes(['SPY']);
+          spyPrice = quotes?.[0]?.price || null;
+        } catch (_) {}
+      }
+
+      const snapshot = recordEquitySnapshot(equity, cashFlow, spyPrice, openPositions, heatPct);
       res.json(snapshot);
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

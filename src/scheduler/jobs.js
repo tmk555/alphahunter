@@ -448,4 +448,65 @@ registerJobType('scale_in_check', {
   },
 });
 
+// ─── Equity Snapshot — Automated daily portfolio equity recording ──────────
+// Records portfolio equity for alpha tracking (TWR, Sharpe, Sortino, SPY Alpha).
+// Calculates equity from account size + open position P&L, fetches SPY for benchmark.
+
+registerJobType('equity_snapshot', {
+  description: 'Record daily portfolio equity snapshot for alpha performance tracking (TWR, Sharpe, Sortino)',
+  defaultConfig: {},
+  handler: async () => {
+    const { recordEquitySnapshot } = require('../risk/alpha-tracker');
+    const { getConfig, getPortfolioHeat } = require('../risk/portfolio');
+    const { getQuotes } = require('../data/providers/manager');
+
+    const config = getConfig();
+    const accountSize = config.accountSize || 100000;
+
+    // Get open trades and calculate equity
+    const openTrades = db().prepare(
+      'SELECT symbol, side, entry_price, shares, remaining_shares FROM trades WHERE exit_date IS NULL'
+    ).all();
+
+    // Fetch current prices for open positions + SPY
+    const symbols = [...new Set(openTrades.map(t => t.symbol).concat('SPY'))];
+    const quotes = await getQuotes(symbols);
+    const priceMap = {};
+    for (const q of quotes) {
+      priceMap[q.symbol || q.ticker] = q.price || q.regularMarketPrice;
+    }
+
+    // Calculate open P&L
+    let openPnl = 0;
+    for (const t of openTrades) {
+      const currentPrice = priceMap[t.symbol] || t.entry_price;
+      const shares = t.remaining_shares || t.shares || 0;
+      const pnl = (currentPrice - t.entry_price) * shares * (t.side === 'short' ? -1 : 1);
+      openPnl += pnl;
+    }
+
+    const equity = +(accountSize + openPnl).toFixed(2);
+    const spyClose = priceMap['SPY'] || null;
+
+    // Get portfolio heat
+    let heatPct = 0;
+    try {
+      const heat = getPortfolioHeat();
+      heatPct = heat?.heatPct || 0;
+    } catch (_) {}
+
+    const snapshot = recordEquitySnapshot(equity, 0, spyClose, openTrades.length, heatPct);
+
+    return {
+      date: marketDate(),
+      equity,
+      spyClose,
+      openPositions: openTrades.length,
+      openPnl: +openPnl.toFixed(2),
+      heatPct,
+      snapshot,
+    };
+  },
+});
+
 module.exports = { setRunScan };

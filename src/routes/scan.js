@@ -5,6 +5,7 @@ const router  = express.Router();
 const { runRSScan } = require('../scanner');
 const { getRSTrend } = require('../signals/rs');
 const { loadHistory, RS_HISTORY } = require('../data/store');
+const { calcConviction } = require('../signals/conviction');
 
 function loadRSHistory() { return loadHistory(RS_HISTORY); }
 
@@ -14,7 +15,11 @@ module.exports = function(UNIVERSE, SECTOR_MAP) {
     try {
       const stocks  = await runRSScan(UNIVERSE, SECTOR_MAP);
       const history = loadRSHistory();
-      const withTrend = stocks.map(s => ({ ...s, rsTrend: getRSTrend(s.ticker, history) }));
+      const withTrend = stocks.map(s => {
+        const rsTrend = getRSTrend(s.ticker, history);
+        const { convictionScore, reasons: convictionReasons } = calcConviction(s, rsTrend);
+        return { ...s, rsTrend, convictionScore, convictionReasons };
+      });
       const spyStock = withTrend.find(s => s.ticker === 'SPY');
       const spy3m = spyStock?.chg3m ?? null;
       const final = spy3m != null

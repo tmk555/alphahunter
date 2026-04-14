@@ -110,6 +110,50 @@ module.exports = function(db) {
     }
   });
 
+  // ─── POST /api/strategies/backfill — Auto-assign strategy to untagged trades
+  router.post('/strategies/backfill', (req, res) => {
+    try {
+      const untagged = db.prepare(
+        `SELECT t.id, t.symbol, t.entry_rs, t.entry_sepa
+         FROM trades t WHERE t.strategy IS NULL`
+      ).all();
+
+      if (untagged.length === 0) {
+        return res.json({ ok: true, updated: 0, message: 'All trades already have strategies assigned' });
+      }
+
+      let updated = 0;
+      const updateStmt = db.prepare('UPDATE trades SET strategy = ? WHERE id = ?');
+
+      for (const trade of untagged) {
+        // Look up scan data for richer classification
+        let scanData = {};
+        try {
+          const scanRow = db.prepare(
+            `SELECT data FROM scan_results WHERE symbol = ? ORDER BY date DESC LIMIT 1`
+          ).get(trade.symbol);
+          if (scanRow) scanData = JSON.parse(scanRow.data);
+        } catch (_) {}
+
+        const assigned = assignStrategy({
+          symbol: trade.symbol,
+          rsRank: trade.entry_rs || scanData.rsRank || 0,
+          swingMomentum: scanData.swingMomentum || 0,
+          vcpForming: scanData.vcpForming || false,
+          patternDetected: scanData.bestPattern || false,
+        });
+
+        updateStmt.run(assigned.strategy, trade.id);
+        console.log(`  Strategy backfill: ${trade.symbol} → ${assigned.strategy} (${assigned.confidence}%: ${assigned.reasons.join(', ')})`);
+        updated++;
+      }
+
+      res.json({ ok: true, updated, total: untagged.length });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ─── POST /api/strategies/validate — Pre-trade validation ─────────────────
   // NOTE: Must be before POST /strategies/:id to avoid "validate" matching as :id
   router.post('/strategies/validate', (req, res) => {
