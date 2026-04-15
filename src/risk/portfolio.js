@@ -219,7 +219,18 @@ function getDrawdownStatus(currentEquity) {
 }
 
 // ─── Pre-trade Validation ────────────────────────────────────────────────────
-// Checks all rules before allowing a new position
+// Checks all rules before allowing a new position.
+//
+// @param {Object}  candidate         — { symbol, entryPrice, stopPrice, shares,
+//                                        sector?, industry?, daysToEarnings?,
+//                                        closesMap?, allowWashSale? }
+//   `allowWashSale: true` on the candidate is the explicit override for the
+//   wash-sale blocker (phase 2.10). The trader has seen the warning and
+//   decided to take the tax hit anyway — typically because the setup quality
+//   outweighs the lost deduction, or because they plan to harvest later.
+// @param {Array}   openPositions
+// @param {Object}  regime
+// @param {Object}  currentPrices
 function preTradeCheck(candidate, openPositions, regime, currentPrices = {}) {
   _ensureConfig();
   const checks = [];
@@ -303,6 +314,54 @@ function preTradeCheck(candidate, openPositions, regime, currentPrices = {}) {
     approved = false;
   } else {
     checks.push({ rule: 'Position Size', pass: true, detail: `${posPct.toFixed(1)}% of account` });
+  }
+
+  // 7. Wash-sale blocker (Phase 2.10)
+  // Checks tax_lots + trades for a recent loss on this symbol inside the
+  // 30-day IRS §1091 window. Fires a BLOCKING check — approval flips to
+  // false unless the caller passes `allowWashSale: true`, which is the
+  // explicit "I've seen the warning, take the tax hit" override.
+  //
+  // Fail-open on query errors: tax_engine may be unavailable in some test
+  // setups or during a schema migration. A wash-sale check that can't run
+  // should NOT silently block every trade — log the skip and move on.
+  try {
+    const { checkWashSaleOnBuy } = require('./tax-engine');
+    const symbol = candidate.symbol || candidate.ticker;
+    if (symbol) {
+      const wash = checkWashSaleOnBuy(symbol, candidate.entryDate || null);
+      if (wash.isWashSale) {
+        if (candidate.allowWashSale) {
+          checks.push({
+            rule: 'Wash Sale',
+            pass: true,
+            detail: `OVERRIDE: ${wash.message} (allowWashSale=true — trader accepted tax cost)`,
+            washSale: wash,
+          });
+        } else {
+          checks.push({
+            rule: 'Wash Sale',
+            pass: false,
+            detail: wash.message,
+            washSale: wash,
+          });
+          approved = false;
+        }
+      } else {
+        checks.push({
+          rule: 'Wash Sale',
+          pass: true,
+          detail: 'No recent loss sales in 30-day window',
+        });
+      }
+    }
+  } catch (e) {
+    // Don't block trades if the tax engine is wedged — but leave a breadcrumb.
+    checks.push({
+      rule: 'Wash Sale',
+      pass: true,
+      detail: `skipped (tax engine unavailable: ${e.message})`,
+    });
   }
 
   return { approved, checks };
