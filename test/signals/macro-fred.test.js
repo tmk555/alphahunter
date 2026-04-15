@@ -423,3 +423,210 @@ test('getLatest: does NOT apply release-lag (UI/diagnostics use)', () => {
   assert.equal(macro.getLatest('UNRATE').value, 14.8);
   macro.clearSeries('UNRATE');
 });
+
+// ─── classifyRegime ────────────────────────────────────────────────────────
+//
+// Pure function over a dailyStats-shaped object. No DB touch — easy to
+// unit-test directly with synthetic stats.
+
+test('classifyRegime: returns UNKNOWN when VIX/curve/OAS are all missing', () => {
+  assert.equal(macro.classifyRegime({}), 'UNKNOWN');
+  assert.equal(macro.classifyRegime({ DGS10: { mean: 4 } }), 'UNKNOWN');
+});
+
+test('classifyRegime: RISK_OFF when VIX mean ≥ 25', () => {
+  const r = macro.classifyRegime({
+    VIXCLS:       { mean: 28 },
+    T10Y2Y:       { mean: 1.2 },
+    BAMLH0A0HYM2: { mean: 3.5 },
+  });
+  assert.equal(r, 'RISK_OFF');
+});
+
+test('classifyRegime: RISK_OFF when curve is inverted even with quiet VIX/OAS', () => {
+  const r = macro.classifyRegime({
+    VIXCLS:       { mean: 15 },
+    T10Y2Y:       { mean: -0.30 },
+    BAMLH0A0HYM2: { mean: 3.5 },
+  });
+  assert.equal(r, 'RISK_OFF');
+});
+
+test('classifyRegime: RISK_OFF when HY OAS ≥ 6', () => {
+  const r = macro.classifyRegime({
+    VIXCLS:       { mean: 15 },
+    T10Y2Y:       { mean: 1.0 },
+    BAMLH0A0HYM2: { mean: 7.5 },
+  });
+  assert.equal(r, 'RISK_OFF');
+});
+
+test('classifyRegime: RISK_ON requires VIX < 18 AND curve > 0 AND OAS < 4', () => {
+  const r = macro.classifyRegime({
+    VIXCLS:       { mean: 14 },
+    T10Y2Y:       { mean: 0.80 },
+    BAMLH0A0HYM2: { mean: 3.2 },
+  });
+  assert.equal(r, 'RISK_ON');
+});
+
+test('classifyRegime: NEUTRAL for the gap between risk-on and risk-off', () => {
+  const r = macro.classifyRegime({
+    VIXCLS:       { mean: 20 },   // too high for risk_on
+    T10Y2Y:       { mean: 0.50 }, // positive → not risk_off
+    BAMLH0A0HYM2: { mean: 4.5 },  // too high for risk_on
+  });
+  assert.equal(r, 'NEUTRAL');
+});
+
+// ─── getMacroContextForRange ───────────────────────────────────────────────
+//
+// Imports small synthetic windows under real series names so the aggregator
+// exercises the same DAILY_IDS / MONTHLY_IDS constants and regime classifier
+// that production code uses.
+
+function seedContextWindow() {
+  // 5 daily observations each for a tight window — easy to reason about by hand.
+  importAs('DGS10',        [
+    { date: '2020-03-16', value: 0.95 },
+    { date: '2020-03-17', value: 0.80 },
+    { date: '2020-03-18', value: 1.20 },
+    { date: '2020-03-19', value: 1.10 },
+    { date: '2020-03-20', value: 0.94 },
+  ]);
+  importAs('DGS2',         [
+    { date: '2020-03-16', value: 0.45 },
+    { date: '2020-03-17', value: 0.35 },
+    { date: '2020-03-18', value: 0.55 },
+    { date: '2020-03-19', value: 0.40 },
+    { date: '2020-03-20', value: 0.32 },
+  ]);
+  importAs('T10Y2Y',       [
+    { date: '2020-03-16', value:  0.50 },
+    { date: '2020-03-17', value:  0.45 },
+    { date: '2020-03-18', value:  0.65 },
+    { date: '2020-03-19', value: -0.10 },  // one inverted day
+    { date: '2020-03-20', value:  0.62 },
+  ]);
+  importAs('VIXCLS',       [
+    { date: '2020-03-16', value: 82.69 },
+    { date: '2020-03-17', value: 75.91 },
+    { date: '2020-03-18', value: 76.45 },
+    { date: '2020-03-19', value: 72.00 },
+    { date: '2020-03-20', value: 66.04 },
+  ]);
+  importAs('BAMLH0A0HYM2', [
+    { date: '2020-03-16', value: 7.50 },
+    { date: '2020-03-17', value: 8.20 },
+    { date: '2020-03-18', value: 9.10 },
+    { date: '2020-03-19', value: 10.87 },
+    { date: '2020-03-20', value: 10.15 },
+  ]);
+  importAs('UNRATE',       [
+    { date: '2020-02-01', value: 3.5 },
+    { date: '2020-03-01', value: 4.4 },
+  ]);
+  importAs('CPIAUCSL',     [
+    { date: '2020-02-01', value: 259.0 },
+    { date: '2020-03-01', value: 258.1 },
+  ]);
+}
+
+function clearContextWindow() {
+  for (const id of ['DGS10','DGS2','T10Y2Y','VIXCLS','BAMLH0A0HYM2','UNRATE','CPIAUCSL','INDPRO','FEDFUNDS','DFF']) {
+    macro.clearSeries(id);
+  }
+}
+
+test('getMacroContextForRange: returns structured summary for a daily window', () => {
+  seedContextWindow();
+  const ctx = macro.getMacroContextForRange('2020-03-16', '2020-03-20');
+
+  assert.equal(ctx.startDate, '2020-03-16');
+  assert.equal(ctx.endDate,   '2020-03-20');
+  assert.equal(ctx.tradingDays, 5);
+
+  // DGS10 aggregate — 5 points, mean ~1.00 (exact: 4.99/5 = 0.998)
+  assert.equal(ctx.dailyStats.DGS10.count, 5);
+  assert.equal(ctx.dailyStats.DGS10.first, 0.95);
+  assert.equal(ctx.dailyStats.DGS10.last,  0.94);
+  assert.equal(ctx.dailyStats.DGS10.min,   0.80);
+  assert.equal(ctx.dailyStats.DGS10.max,   1.20);
+  assert.ok(Math.abs(ctx.dailyStats.DGS10.mean - 0.998) < 1e-3);
+
+  clearContextWindow();
+});
+
+test('getMacroContextForRange: T10Y2Y stress counter counts inverted days', () => {
+  seedContextWindow();
+  const ctx = macro.getMacroContextForRange('2020-03-16', '2020-03-20');
+  // 1 of 5 days inverted (2020-03-19 with -0.10).
+  assert.equal(ctx.dailyStats.T10Y2Y.daysInverted, 1);
+  clearContextWindow();
+});
+
+test('getMacroContextForRange: VIX counts elevated (≥20) and stressed (≥30) days', () => {
+  seedContextWindow();
+  const ctx = macro.getMacroContextForRange('2020-03-16', '2020-03-20');
+  // All 5 days were 66-82, so every day is both elevated and stressed.
+  assert.equal(ctx.dailyStats.VIXCLS.daysElevated, 5);
+  assert.equal(ctx.dailyStats.VIXCLS.daysStressed, 5);
+  clearContextWindow();
+});
+
+test('getMacroContextForRange: HY OAS counts days ≥ 6 as stressed', () => {
+  seedContextWindow();
+  const ctx = macro.getMacroContextForRange('2020-03-16', '2020-03-20');
+  // All 5 days were 7.5-10.87 → all stressed.
+  assert.equal(ctx.dailyStats.BAMLH0A0HYM2.daysStressed, 5);
+  clearContextWindow();
+});
+
+test('getMacroContextForRange: monthly stats return first/last/change', () => {
+  seedContextWindow();
+  const ctx = macro.getMacroContextForRange('2020-02-01', '2020-04-01');
+  // UNRATE: Feb 3.5 → Mar 4.4 (window ends Apr 1 — CPI entry within)
+  assert.equal(ctx.monthlyStats.UNRATE.first, 3.5);
+  assert.equal(ctx.monthlyStats.UNRATE.last,  4.4);
+  assert.equal(ctx.monthlyStats.UNRATE.change, 0.9);
+  // CPI pctChange — 259.0 → 258.1 ≈ -0.35%
+  assert.ok(ctx.monthlyStats.CPIAUCSL.pctChange < 0);
+  assert.ok(Math.abs(ctx.monthlyStats.CPIAUCSL.pctChange + 0.35) < 0.05);
+  clearContextWindow();
+});
+
+test('getMacroContextForRange: COVID window classified as RISK_OFF', () => {
+  seedContextWindow();
+  const ctx = macro.getMacroContextForRange('2020-03-16', '2020-03-20');
+  // VIX mean ≈ 74.6 (≥25) AND HY OAS mean ≈ 9.16 (≥6) → RISK_OFF
+  assert.equal(ctx.regime, 'RISK_OFF');
+  clearContextWindow();
+});
+
+test('getMacroContextForRange: snapshots present at start/mid/end with same shape', () => {
+  seedContextWindow();
+  const ctx = macro.getMacroContextForRange('2020-03-16', '2020-03-20');
+  assert.equal(ctx.snapshots.start.date, '2020-03-16');
+  assert.equal(ctx.snapshots.end.date,   '2020-03-20');
+  // mid date = 2020-03-18 (exact midpoint)
+  assert.equal(ctx.snapshots.mid.date, '2020-03-18');
+  // start snapshot carries DGS10 value available by that date
+  assert.ok('DGS10' in ctx.snapshots.start.values);
+  clearContextWindow();
+});
+
+test('getMacroContextForRange: missing series return null in stats, no crash', () => {
+  // Fresh, empty window — no data seeded. Range aggregator should produce
+  // a well-formed object with null-valued entries.
+  clearContextWindow();
+  const ctx = macro.getMacroContextForRange('2099-01-01', '2099-06-30');
+  assert.equal(ctx.regime, 'UNKNOWN');
+  assert.equal(ctx.tradingDays, 0);
+  assert.equal(ctx.dailyStats.DGS10, null);
+  assert.equal(ctx.monthlyStats.UNRATE, null);
+});
+
+test('getMacroContextForRange: throws when startDate or endDate missing', () => {
+  assert.throws(() => macro.getMacroContextForRange(null, '2024-01-01'),  /startDate required/);
+  assert.throws(() => macro.getMacroContextForRange('2024-01-01', null),  /endDate required/);
+});

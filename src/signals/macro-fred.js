@@ -268,6 +268,178 @@ function getSeriesRange(seriesId, startDate, endDate) {
   `).all(String(seriesId).toUpperCase(), startDate, endDate);
 }
 
+// ─── Range aggregates (for backtest context) ───────────────────────────────
+//
+// The replay engine wants a compact, human-readable summary of the macro
+// environment during a backtest window. These helpers aggregate daily/
+// monthly FRED series over [startDate, endDate] and classify the period
+// into a coarse regime label. The output feeds the "Macro context during
+// run" card in the ReplayTab.
+//
+// Intentional design notes:
+//   • getSeriesRange() does NOT apply release-lag — it returns the full
+//     historical record. That's the right choice for backtest *context*
+//     (post-hoc storytelling about what actually happened). For backtest
+//     decisions strategy code should still use getValueOn/getMacroSnapshot.
+//   • The regime classifier mirrors the thresholds in the Scanner's
+//     as-of banner so both UIs agree on how a date should be labeled.
+//   • All helpers tolerate missing series — if a series has no rows in
+//     the window, its stats entry is `null` and the regime classifier
+//     ignores it rather than crashing.
+
+/** Mean/min/max/first/last for a numeric array. Null on empty. */
+function _numStats(vals) {
+  if (!vals || vals.length === 0) return null;
+  let sum = 0, min = Infinity, max = -Infinity;
+  for (const v of vals) {
+    if (v < min) min = v;
+    if (v > max) max = v;
+    sum += v;
+  }
+  return {
+    count: vals.length,
+    mean: +(sum / vals.length).toFixed(4),
+    min: +min.toFixed(4),
+    max: +max.toFixed(4),
+    first: +vals[0].toFixed(4),
+    last: +vals[vals.length - 1].toFixed(4),
+  };
+}
+
+/** Count of rows whose value satisfies `predicate`. */
+function _countWhere(rows, predicate) {
+  if (!rows) return 0;
+  let n = 0;
+  for (const r of rows) if (predicate(r.value)) n++;
+  return n;
+}
+
+/**
+ * Coarse regime classifier. Mirrors the thresholds used in the Scanner
+ * tab's as-of banner so the two surfaces agree.
+ *
+ *   RISK_OFF : avg VIX ≥ 25 OR avg T10Y2Y < 0 OR avg HY OAS ≥ 6
+ *   RISK_ON  : avg VIX < 18 AND avg T10Y2Y > 0 AND avg HY OAS < 4
+ *   NEUTRAL  : anything in between
+ *   UNKNOWN  : none of the three signals are available
+ *
+ * `stats` is the dailyStats object from getMacroContextForRange.
+ */
+function classifyRegime(stats) {
+  const vix   = stats?.VIXCLS?.mean;
+  const curve = stats?.T10Y2Y?.mean;
+  const oas   = stats?.BAMLH0A0HYM2?.mean;
+  if (vix == null && curve == null && oas == null) return 'UNKNOWN';
+  const riskOff =
+    (vix   != null && vix   >= 25) ||
+    (curve != null && curve <   0) ||
+    (oas   != null && oas   >=  6);
+  if (riskOff) return 'RISK_OFF';
+  const riskOn =
+    (vix   != null && vix   <  18) &&
+    (curve != null && curve >   0) &&
+    (oas   != null && oas   <   4);
+  if (riskOn) return 'RISK_ON';
+  return 'NEUTRAL';
+}
+
+/**
+ * Aggregate FRED macro data over a date range for backtest context.
+ *
+ * Returns a structured summary with snapshots at start/mid/end (release-lag
+ * aware), per-series daily aggregates (mean/min/max/first/last + stress
+ * counters), monthly first/last/delta, and a coarse regime label.
+ *
+ * Missing series are represented as `null` entries rather than being
+ * omitted — the UI can render "— no data" without re-checking existence.
+ *
+ * @param {string} startDate ISO YYYY-MM-DD
+ * @param {string} endDate   ISO YYYY-MM-DD
+ * @returns {object}
+ */
+function getMacroContextForRange(startDate, endDate) {
+  if (!startDate) throw new Error('getMacroContextForRange: startDate required');
+  if (!endDate)   throw new Error('getMacroContextForRange: endDate required');
+
+  // Daily series that matter for backtest context. Order matters — the UI
+  // iterates in display order.
+  const DAILY_IDS = ['DGS10', 'DGS2', 'T10Y2Y', 'VIXCLS', 'BAMLH0A0HYM2', 'DFF'];
+  // Monthly/lagged macro — we summarize via first/last because the deltas
+  // are what matter to a position trader (UNRATE change, CPI change).
+  const MONTHLY_IDS = ['UNRATE', 'CPIAUCSL', 'INDPRO', 'FEDFUNDS'];
+
+  const dailyStats = {};
+  for (const id of DAILY_IDS) {
+    const rows = getSeriesRange(id, startDate, endDate);
+    const vals = rows.map(r => r.value).filter(v => v != null);
+    const stats = _numStats(vals);
+    if (stats) {
+      // Per-series derived stress counters. Cheap to compute here rather
+      // than forcing the UI to re-scan the raw series.
+      if (id === 'T10Y2Y')       stats.daysInverted = _countWhere(rows, v => v != null && v < 0);
+      if (id === 'VIXCLS') {
+        stats.daysElevated = _countWhere(rows, v => v != null && v >= 20);
+        stats.daysStressed = _countWhere(rows, v => v != null && v >= 30);
+      }
+      if (id === 'BAMLH0A0HYM2') stats.daysStressed = _countWhere(rows, v => v != null && v >= 6);
+    }
+    dailyStats[id] = stats;  // null when no data — UI handles it
+  }
+
+  const monthlyStats = {};
+  for (const id of MONTHLY_IDS) {
+    const rows = getSeriesRange(id, startDate, endDate);
+    if (rows.length === 0) { monthlyStats[id] = null; continue; }
+    const first = rows[0].value;
+    const last  = rows[rows.length - 1].value;
+    const entry = {
+      count: rows.length,
+      first: +first.toFixed(4),
+      last:  +last.toFixed(4),
+      change: +(last - first).toFixed(4),
+    };
+    // CPI/INDPRO are index levels — the trader cares about percent change,
+    // not absolute-level change.
+    if (id === 'CPIAUCSL' || id === 'INDPRO') {
+      entry.pctChange = first > 0 ? +(((last - first) / first) * 100).toFixed(2) : null;
+    }
+    monthlyStats[id] = entry;
+  }
+
+  // Point-in-time snapshots at start / mid / end so the UI can draw
+  // "curve inverted → still inverted → normalized" style narratives.
+  // Lag is applied (default behavior) so these reflect what was actually
+  // public on each date.
+  const midDate = (() => {
+    const s = new Date(`${startDate}T00:00:00Z`).getTime();
+    const e = new Date(`${endDate}T00:00:00Z`).getTime();
+    return new Date((s + e) / 2).toISOString().slice(0, 10);
+  })();
+  const snapshotIds = [...DAILY_IDS, ...MONTHLY_IDS];
+  const snapshots = {
+    start: { date: startDate, values: getMacroSnapshot(startDate, snapshotIds) },
+    mid:   { date: midDate,   values: getMacroSnapshot(midDate,   snapshotIds) },
+    end:   { date: endDate,   values: getMacroSnapshot(endDate,   snapshotIds) },
+  };
+
+  // Approximate trading days = daily series with the most rows (typically
+  // DGS10 or VIXCLS). Good enough for UI display.
+  const tradingDays = Math.max(
+    0,
+    ...DAILY_IDS.map(id => dailyStats[id]?.count || 0)
+  );
+
+  return {
+    startDate,
+    endDate,
+    tradingDays,
+    snapshots,
+    dailyStats,
+    monthlyStats,
+    regime: classifyRegime(dailyStats),
+  };
+}
+
 // ─── Metadata ───────────────────────────────────────────────────────────────
 
 function getAvailableSeries() {
@@ -300,6 +472,11 @@ module.exports = {
   getSeriesRange,
   getAvailableSeries,
   clearSeries,
+  // Range aggregation — used by the replay engine to attach macro context
+  // to backtest results. `classifyRegime` is exposed so the Scanner's
+  // as-of banner and the ReplayTab macro card can agree on labels.
+  getMacroContextForRange,
+  classifyRegime,
   // Release-lag introspection — exposed so dashboards and tests can see
   // and override the per-series shift without reaching into internals.
   getReleaseLag,

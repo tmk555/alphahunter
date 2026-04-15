@@ -6,6 +6,8 @@ const { runRSScan } = require('../scanner');
 const { getRSTrend } = require('../signals/rs');
 const { loadHistory, RS_HISTORY } = require('../data/store');
 const { calcConviction } = require('../signals/conviction');
+const pitUniverse = require('../signals/pit-universe');
+const { getActiveUniverseForDate } = require('../signals/universe-tracker');
 
 function loadRSHistory() { return loadHistory(RS_HISTORY); }
 
@@ -26,6 +28,66 @@ module.exports = function(UNIVERSE, SECTOR_MAP) {
         ? withTrend.map(s => ({ ...s, vsSPY3m: s.chg3m != null ? +(s.chg3m - spy3m).toFixed(2) : null }))
         : withTrend;
       res.json({ stocks: final, universeSize: final.length, spy3m });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // /api/universe/as-of?date=YYYY-MM-DD&index=SP500
+  //
+  // Point-in-time universe membership lookup. Used by the Scanner tab's
+  // "as-of date" picker to filter live scan results down to symbols that
+  // were actually in the index on that date — a lightweight survivorship-
+  // bias control for the live view.
+  //
+  // Resolution order matches universe-tracker.getActiveUniverseForDate:
+  //   1. pit-universe (universe_membership table, index reconstitution)
+  //   2. universe_mgmt (internal add/remove tracking)
+  //   3. rs_snapshots (existence inference from historical price rows)
+  //
+  // When any layer is non-empty we also report `source` so the UI can warn
+  // the user if only the fallback is available (e.g. "using rs_snapshots —
+  // PIT seed not yet imported").
+  router.get('/universe/as-of', (req, res) => {
+    try {
+      const date = req.query.date;
+      if (!date) return res.status(400).json({ error: 'date required (YYYY-MM-DD)' });
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+      }
+      const indexName = String(req.query.index || 'SP500').toUpperCase();
+
+      // Probe each layer independently so we can report which one answered.
+      let source = null;
+      let members = [];
+      try {
+        const pit = pitUniverse.getMembersOn(date, indexName);
+        if (pit && pit.length > 0) { members = pit; source = 'pit_membership'; }
+      } catch (_) { /* table missing on older DBs */ }
+
+      if (!members.length) {
+        // Let the tracker's full fallback chain run and tag the result.
+        const fallback = getActiveUniverseForDate(date, indexName);
+        if (fallback && fallback.length > 0) {
+          members = fallback;
+          // If we got here, PIT was empty/missing; tracker will have hit
+          // universe_mgmt or rs_snapshots — we can't distinguish cleanly,
+          // but "fallback" is accurate enough for a UI warning.
+          source = 'fallback';
+        }
+      }
+
+      // Coverage metadata — helps the UI surface "this index has no data
+      // before 2015" without the user having to guess.
+      let coverage = null;
+      try { coverage = pitUniverse.getCoverage(indexName); } catch (_) {}
+
+      res.json({
+        date,
+        index: indexName,
+        source,
+        count: members.length,
+        members,
+        coverage,
+      });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 

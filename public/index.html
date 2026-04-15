@@ -962,6 +962,7 @@ function App() {
 
   const TABS = [
     { id:'pulse',     label:'⚡ Market Pulse' },
+    { id:'macro',     label:'📉 Macro' },
     { id:'sectors',   label:'🔄 Sectors' },
     { id:'industries',label:'🏭 Industries' },
     { id:'hedge',     label:'🛡 Hedge' },
@@ -1041,6 +1042,7 @@ function App() {
       {/* CONTENT */}
       <div id="main">
         {tab==='pulse'      && <MarketPulseTab />}
+        {tab==='macro'      && <MacroTab />}
         {tab==='sectors'    && <SectorsTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
         {tab==='industries' && <IndustriesTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
         {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} sigFilters={rsSigFilters} setSigFilters={setRsSigFilters} quickFilter={rsQuickFilter} setQuickFilter={setRsQuickFilter} scannerTarget={scannerTarget} clearScannerTarget={() => setScannerTarget(null)}/>}
@@ -2695,6 +2697,78 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
   // minRS/setMinRS now from App props — persists across tab switches
   const [expandedTicker, setExpandedTicker] = useState(null);
 
+  // ── Universe-as-of filter ────────────────────────────────────────────────
+  // A date picker that intersects the live scan with the S&P 500 (or other
+  // index) membership as of that date. Lets us answer "which of today's
+  // scanner rows would've been in the index back in 2018-03-15?" without
+  // having to re-run a historical backtest.
+  //
+  // Alongside the membership lookup we also pull a FRED macro snapshot for
+  // the same date (with release-lag applied) so the banner can show the
+  // regime context — "on 2020-03-16 the curve was inverted, VIX was 82,
+  // HY OAS was 10.9%." That gives the as-of filter a *why* instead of a
+  // dry list of symbols.
+  //
+  // Empty string = no filter (default — show today's universe).
+  // asOfMembers is a Set of uppercase symbols — null while untouched so the
+  // "no filter active" state is distinguishable from "filter returned 0."
+  const [asOfDate,     setAsOfDate]     = useState('');
+  const [asOfMembers,  setAsOfMembers]  = useState(null);
+  const [asOfMeta,     setAsOfMeta]     = useState(null);
+  const [asOfMacro,    setAsOfMacro]    = useState(null);
+  const [asOfLoading,  setAsOfLoading]  = useState(false);
+
+  useEffect(() => {
+    if (!asOfDate) {
+      setAsOfMembers(null); setAsOfMeta(null); setAsOfMacro(null);
+      return;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) return;
+    let cancelled = false;
+    setAsOfLoading(true);
+    (async () => {
+      try {
+        // Fire both lookups in parallel — they're independent and hit the
+        // same local DB, so there's no reason to serialize them.
+        const [uni, macro] = await Promise.all([
+          api(`/api/universe/as-of?date=${asOfDate}`),
+          api(`/api/macro/fred/snapshot?date=${asOfDate}&ids=DGS10,DGS2,T10Y2Y,VIXCLS,BAMLH0A0HYM2,UNRATE`).catch(() => null),
+        ]);
+        if (cancelled) return;
+        setAsOfMembers(new Set((uni.members || []).map(s => s.toUpperCase())));
+        setAsOfMeta({ source: uni.source, count: uni.count, coverage: uni.coverage });
+        setAsOfMacro(macro && macro.values ? macro.values : null);
+      } catch (e) {
+        if (cancelled) return;
+        setAsOfMembers(new Set());  // empty set = "lookup failed" — filter still applies
+        setAsOfMeta({ source: 'error', error: e.message });
+        setAsOfMacro(null);
+      } finally {
+        if (!cancelled) setAsOfLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [asOfDate]);
+
+  // Derive a coarse regime label from the macro snapshot. Mirrors the same
+  // thresholds used downstream in the replay engine so the banner agrees
+  // with what a backtest would say about the same date.
+  //
+  // RISK_OFF  : VIX ≥ 25 OR T10Y2Y < 0 OR HY OAS ≥ 6
+  // RISK_ON   : VIX < 18 AND T10Y2Y > 0 AND HY OAS < 4
+  // NEUTRAL   : anything in between
+  // UNKNOWN   : not enough data
+  function regimeFromMacro(m) {
+    if (!m) return { label: 'UNKNOWN', color: 'var(--text3)' };
+    const vix = m.VIXCLS, curve = m.T10Y2Y, oas = m.BAMLH0A0HYM2;
+    if ([vix, curve, oas].every(v => v == null)) return { label:'UNKNOWN', color:'var(--text3)' };
+    const riskOff = (vix != null && vix >= 25) || (curve != null && curve < 0) || (oas != null && oas >= 6);
+    if (riskOff) return { label:'RISK_OFF', color:'var(--red)' };
+    const riskOn = (vix != null && vix < 18) && (curve != null && curve > 0) && (oas != null && oas < 4);
+    if (riskOn) return { label:'RISK_ON', color:'var(--green)' };
+    return { label:'NEUTRAL', color:'var(--amber)' };
+  }
+
   // Auto-expand ticker when navigated from another tab
   useEffect(() => {
     if (scannerTarget) {
@@ -2805,6 +2879,9 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
     let list = rsData.filter(s => {
       if (!baseFilter(s)) return false;
       if (selectedSectors && selectedSectors.size > 0 && !selectedSectors.has(s.sector)) return false;
+      // Universe-as-of filter — only applied when asOfMembers is a live Set.
+      // We uppercase once above, so compare uppercase here too.
+      if (asOfMembers && !asOfMembers.has((s.ticker || '').toUpperCase())) return false;
       for (const key of sigFilters) {
         if (sigChecks[key] && !sigChecks[key](s)) return false;
       }
@@ -2833,11 +2910,95 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
             <label style={{fontSize:11,color:'var(--text3)'}}>Min RS</label>
             <input type="number" value={minRS} onChange={e=>setMinRS(+e.target.value)} min={1} max={99}
               style={{width:60,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',padding:'5px 8px',fontSize:12,fontFamily:'var(--font-mono)'}}/>
+            {/* Universe-as-of picker — filters the live scan to S&P 500 membership on a historical date. */}
+            <label style={{fontSize:11,color:'var(--text3)',marginLeft:6}} title="Show only stocks that were in the S&P 500 on this date (survivorship-bias lens)">Universe as-of</label>
+            <input type="date" value={asOfDate} onChange={e=>setAsOfDate(e.target.value)}
+              style={{background:'var(--bg3)',border:`1px solid ${asOfDate?'var(--cyan)':'var(--border)'}`,borderRadius:3,color:asOfDate?'var(--cyan)':'var(--text)',padding:'5px 8px',fontSize:11,fontFamily:'var(--font-mono)',colorScheme:'dark'}}/>
+            {asOfDate && (
+              <button onClick={()=>setAsOfDate('')} title="Clear universe-as-of filter"
+                style={{padding:'4px 8px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:10,fontFamily:'var(--font-mono)',cursor:'pointer'}}>✕</button>
+            )}
             <button className="btn btn-primary btn-sm" onClick={load} disabled={loading}>
               {loading ? 'Scanning...' : '⟳ Scan'}
             </button>
           </div>
         </div>
+        {/* Universe-as-of status banner — only visible when filter is engaged. */}
+        {asOfDate && (() => {
+          const regime = regimeFromMacro(asOfMacro);
+          // Helper: render a small macro pill. Null-safe — prints "—" when missing.
+          const macroPill = (label, value, formatter, accent) => (
+            <span key={label} title={`${label}: ${value == null ? 'no data' : formatter(value)}`}
+              style={{
+                padding:'2px 7px',
+                background:'rgba(255,255,255,0.03)',
+                border:'1px solid var(--border)',
+                borderRadius:3,
+                fontFamily:'var(--font-mono)',
+                fontSize:10,
+              }}>
+              <span style={{color:'var(--text3)',marginRight:4}}>{label}</span>
+              <span style={{color: value == null ? 'var(--text3)' : (accent || 'var(--text)'),fontWeight:700}}>
+                {value == null ? '—' : formatter(value)}
+              </span>
+            </span>
+          );
+          return (
+            <div style={{
+              padding:'8px 10px',
+              marginBottom:10,
+              background:'rgba(0,212,255,0.06)',
+              border:'1px solid rgba(0,212,255,0.3)',
+              borderRadius:4,
+              fontSize:11,
+              color:'var(--text2)',
+            }}>
+              {/* Row 1 — membership status */}
+              <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+                <span style={{color:'var(--cyan)',fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:1}}>⎋ AS-OF {asOfDate}</span>
+                {asOfLoading && <span style={{color:'var(--text3)'}}>loading membership + macro…</span>}
+                {asOfMeta && !asOfLoading && (
+                  <>
+                    <span>
+                      {asOfMeta.count != null ? `${asOfMeta.count} symbols in S&P 500` : '—'}
+                      {asOfMeta.source === 'pit_membership' && <span style={{color:'var(--green)',marginLeft:6}}>· point-in-time</span>}
+                      {asOfMeta.source === 'fallback'       && <span style={{color:'var(--amber)',marginLeft:6}} title="PIT seed missing for this date — falling back to internal tracking tables.">· fallback (may be biased)</span>}
+                      {asOfMeta.source === 'error'          && <span style={{color:'var(--red)',marginLeft:6}}>· lookup failed: {asOfMeta.error}</span>}
+                    </span>
+                    <span style={{color:'var(--text3)',fontSize:10}}>
+                      showing {filtered.length} of {rsData.length} scan rows (intersection with historical membership · prices are live)
+                    </span>
+                  </>
+                )}
+              </div>
+              {/* Row 2 — macro regime context (only when we have data). */}
+              {asOfMacro && !asOfLoading && (
+                <div style={{display:'flex',alignItems:'center',gap:6,marginTop:6,flexWrap:'wrap'}}>
+                  <span style={{
+                    padding:'2px 8px',
+                    background: regime.color + '22',
+                    border:`1px solid ${regime.color}`,
+                    borderRadius:3,
+                    color: regime.color,
+                    fontFamily:'var(--font-mono)',
+                    fontWeight:700,
+                    fontSize:10,
+                    letterSpacing:1,
+                  }}>
+                    REGIME · {regime.label}
+                  </span>
+                  {macroPill('10Y',   asOfMacro.DGS10,        v => `${v.toFixed(2)}%`)}
+                  {macroPill('2Y',    asOfMacro.DGS2,         v => `${v.toFixed(2)}%`)}
+                  {macroPill('10Y-2Y',asOfMacro.T10Y2Y,       v => `${v >= 0 ? '+' : ''}${v.toFixed(2)}`, asOfMacro.T10Y2Y < 0 ? 'var(--red)' : 'var(--green)')}
+                  {macroPill('VIX',   asOfMacro.VIXCLS,       v => v.toFixed(1), asOfMacro.VIXCLS >= 30 ? 'var(--red)' : asOfMacro.VIXCLS >= 20 ? 'var(--amber)' : 'var(--green)')}
+                  {macroPill('HY OAS',asOfMacro.BAMLH0A0HYM2, v => `${v.toFixed(2)}%`, asOfMacro.BAMLH0A0HYM2 >= 6 ? 'var(--red)' : asOfMacro.BAMLH0A0HYM2 >= 4 ? 'var(--amber)' : 'var(--green)')}
+                  {macroPill('UNRATE',asOfMacro.UNRATE,       v => `${v.toFixed(1)}%`)}
+                  <span style={{color:'var(--text3)',fontSize:9,fontFamily:'var(--font-mono)'}} title="Release-lag applied per series — monthly data reflects what was publicly available on this date.">(lag applied)</span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
         {/* Signal chip filters */}
         <div style={{display:'flex',gap:5,marginBottom:10,flexWrap:'wrap',alignItems:'center'}}>
           <span style={{fontSize:10,color:'var(--text3)',letterSpacing:1,textTransform:'uppercase',marginRight:2}}>Signals</span>
@@ -4369,6 +4530,295 @@ function PicksHistoryPanel() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── MACRO TAB ────────────────────────────────────────────────────────────────
+// Historical FRED series (DGS10, T10Y2Y, CPI, UNRATE, VIX, HY OAS, …).
+// Distinct from the live ETF-proxy ticker bar — this reads from the
+// macro_series table populated by scripts/fetch-fred.js.
+function MacroTab() {
+  const [available, setAvailable] = useState([]);
+  const [selected,  setSelected]  = useState('DGS10');
+  const [range,     setRange]     = useState('3Y');
+  const [series,    setSeries]    = useState(null);
+  const [snapshot,  setSnapshot]  = useState(null);
+  const [loading,   setLoading]   = useState(false);
+  const [error,     setError]     = useState('');
+
+  // Series presentation metadata. Every series in RELEASE_LAG_DAYS should
+  // appear here so the UI can give it a sensible axis format and label.
+  //   fmt:   how to format a single value for labels / snapshot pills
+  //   yUnit: axis suffix
+  //   group: 'yield' (rates), 'spread' (bps), 'vol' (VIX points), 'pct' (%), 'index' (level)
+  const META = {
+    DGS10:        { label:'10Y Yield',        fmt:v=>`${v.toFixed(2)}%`, yUnit:'%',   group:'yield'  },
+    DGS2:         { label:'2Y Yield',         fmt:v=>`${v.toFixed(2)}%`, yUnit:'%',   group:'yield'  },
+    T10Y2Y:       { label:'10Y-2Y Spread',    fmt:v=>`${v>=0?'+':''}${v.toFixed(2)}`, yUnit:'',     group:'yield'  },
+    FEDFUNDS:     { label:'Fed Funds',        fmt:v=>`${v.toFixed(2)}%`, yUnit:'%',   group:'yield'  },
+    DFF:          { label:'Effective FFR',    fmt:v=>`${v.toFixed(2)}%`, yUnit:'%',   group:'yield'  },
+    VIXCLS:       { label:'VIX',              fmt:v=>`${v.toFixed(1)}`,  yUnit:'',    group:'vol'    },
+    BAMLH0A0HYM2: { label:'HY OAS',           fmt:v=>`${v.toFixed(2)}%`, yUnit:'%',   group:'spread' },
+    CPIAUCSL:     { label:'CPI (index)',      fmt:v=>v.toFixed(1),        yUnit:'',   group:'index'  },
+    UNRATE:       { label:'Unemployment',     fmt:v=>`${v.toFixed(1)}%`, yUnit:'%',   group:'pct'    },
+    INDPRO:       { label:'Industrial Prod',  fmt:v=>v.toFixed(1),        yUnit:'',   group:'index'  },
+  };
+
+  // Series featured in the top snapshot bar. Order matters — left to right
+  // reads like a conventional macro dashboard (rates → curve → vol → credit → prices).
+  const HEADLINE = ['DGS10','DGS2','T10Y2Y','VIXCLS','BAMLH0A0HYM2','CPIAUCSL','UNRATE'];
+
+  const RANGES = [
+    { k:'1Y',  days:365 },
+    { k:'3Y',  days:365*3 },
+    { k:'5Y',  days:365*5 },
+    { k:'10Y', days:365*10 },
+    { k:'MAX', days:null },
+  ];
+
+  // Load available series + snapshot on mount.
+  useEffect(() => {
+    (async () => {
+      setLoading(true); setError('');
+      try {
+        const [av, snap] = await Promise.all([
+          api('/api/macro/fred/available'),
+          api(`/api/macro/fred/snapshot?date=${new Date().toISOString().slice(0,10)}`),
+        ]);
+        setAvailable(av.series || []);
+        setSnapshot(snap || null);
+      } catch(e) { setError(e.message); }
+      setLoading(false);
+    })();
+  }, []);
+
+  // Load time-series whenever the selected series or range changes.
+  useEffect(() => {
+    if (!selected) return;
+    (async () => {
+      setLoading(true); setError('');
+      try {
+        const today = new Date().toISOString().slice(0,10);
+        const r = RANGES.find(x => x.k === range) || RANGES[1];
+        let qs = `?end=${today}`;
+        if (r.days != null) {
+          const start = new Date(); start.setDate(start.getDate() - r.days);
+          qs += `&start=${start.toISOString().slice(0,10)}`;
+        } else {
+          qs += '&start=1900-01-01';
+        }
+        const d = await api(`/api/macro/fred/series/${selected}${qs}`);
+        setSeries(d);
+      } catch(e) { setError(e.message); }
+      setLoading(false);
+    })();
+  }, [selected, range]);
+
+  // ── Chart geometry ──
+  function buildChart(points) {
+    if (!points || points.length < 2) return null;
+    const chartW = 900, chartH = 260, padL = 46, padR = 12, padT = 10, padB = 24;
+    const drawW = chartW - padL - padR, drawH = chartH - padT - padB;
+    const vals = points.map(p => p.value).filter(v => v != null);
+    if (vals.length < 2) return null;
+    const minV = Math.min(...vals);
+    const maxV = Math.max(...vals);
+    const span = (maxV - minV) || 1;
+    // pad the y-axis ~5% each side so the line doesn't kiss the edges
+    const yMin = minV - span * 0.05;
+    const yMax = maxV + span * 0.05;
+    const rangeV = yMax - yMin;
+    const stepX = drawW / Math.max(points.length - 1, 1);
+    const toY = v => padT + drawH - ((v - yMin) / rangeV * drawH);
+    const pts = points.map((p,i) => `${(padL + i*stepX).toFixed(1)},${toY(p.value).toFixed(1)}`).join(' ');
+    const lastV = points[points.length-1]?.value;
+    return { chartW, chartH, padL, padR, padT, padB, drawW, drawH, yMin, yMax, rangeV, stepX, toY, pts, lastV, minV, maxV, points };
+  }
+
+  const chart = buildChart(series?.points);
+  const meta = META[selected] || { label: selected, fmt:v=>String(v), yUnit:'', group:'index' };
+
+  // Dashed zero line is meaningful for spread series (T10Y2Y crossing 0)
+  // — otherwise skip it.
+  const showZeroLine = selected === 'T10Y2Y' && chart && chart.yMin < 0 && chart.yMax > 0;
+
+  // ── Render ──
+  return (
+    <div>
+      {/* Snapshot bar — macro landscape at a glance */}
+      <div className="panel" style={{marginBottom:14}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10,flexWrap:'wrap',gap:8}}>
+          <div>
+            <div className="panel-title">Macro <span>(FRED)</span></div>
+            <div className="panel-sub">Historical economic series with point-in-time release-lag applied. Daily market data (yields, VIX, HY OAS) is same-day; monthly series (CPI, UNRATE, INDPRO) show the last publicly-available reading.</div>
+          </div>
+          <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)',letterSpacing:1}}>
+            AS OF {snapshot?.date || '—'}
+          </div>
+        </div>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+          {HEADLINE.map(id => {
+            const v = snapshot?.values?.[id];
+            const m = META[id] || { label:id, fmt:x=>String(x) };
+            const active = selected === id;
+            // Colour cues: T10Y2Y red when inverted; VIX amber/red at stress levels; else cyan.
+            let accent = 'var(--cyan)';
+            if (id === 'T10Y2Y' && v != null) accent = v < 0 ? 'var(--red)' : 'var(--green)';
+            if (id === 'VIXCLS' && v != null) accent = v >= 30 ? 'var(--red)' : v >= 20 ? 'var(--amber)' : 'var(--green)';
+            return (
+              <button key={id} onClick={() => setSelected(id)}
+                style={{
+                  padding:'8px 12px',
+                  background: active ? 'rgba(0,212,255,0.08)' : 'var(--bg3)',
+                  border:`1px solid ${active ? 'var(--cyan)' : 'var(--border)'}`,
+                  borderRadius:4,
+                  cursor:'pointer',
+                  textAlign:'left',
+                  minWidth:108,
+                }}>
+                <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{m.label}</div>
+                <div style={{fontSize:15,fontWeight:700,fontFamily:'var(--font-mono)',color:accent,marginTop:2}}>
+                  {v == null ? '—' : m.fmt(v)}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Chart panel */}
+      <div className="panel" style={{marginBottom:14}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10,flexWrap:'wrap',gap:8}}>
+          <div>
+            <div style={{fontSize:14,fontWeight:700,color:'var(--text)'}}>
+              {meta.label}
+              <span style={{fontSize:10,color:'var(--text3)',marginLeft:8,fontFamily:'var(--font-mono)',letterSpacing:1}}>{selected}</span>
+            </div>
+            <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>
+              {chart
+                ? `${chart.points.length} observations · min ${meta.fmt(chart.minV)} · max ${meta.fmt(chart.maxV)} · latest ${chart.lastV != null ? meta.fmt(chart.lastV) : '—'}`
+                : loading ? 'Loading…' : 'No data in range'}
+              {series?.releaseLagDays > 0 && (
+                <span style={{marginLeft:8,color:'var(--amber)'}}>
+                  release-lag: {series.releaseLagDays}d
+                </span>
+              )}
+            </div>
+          </div>
+          <div style={{display:'flex',gap:4}}>
+            {RANGES.map(r => (
+              <button key={r.k} onClick={() => setRange(r.k)}
+                style={{
+                  padding:'5px 10px',
+                  background: range===r.k ? 'var(--cyan)' : 'var(--bg3)',
+                  border:'1px solid var(--border)',
+                  borderRadius:3,
+                  color: range===r.k ? '#000' : 'var(--text2)',
+                  fontSize:11, fontFamily:'var(--font-mono)', fontWeight:700, letterSpacing:1, cursor:'pointer',
+                }}>{r.k}</button>
+            ))}
+          </div>
+        </div>
+
+        {error && <ErrorBox msg={error}/>}
+
+        {chart && (() => {
+          const { chartW, chartH, padL, padR, padT, padB, drawW, drawH, yMin, yMax, rangeV, stepX, toY, pts, lastV, points } = chart;
+          // 4 horizontal gridlines (quartiles of the padded range)
+          const gridFractions = [0, 0.25, 0.5, 0.75, 1];
+          // Pick evenly-spaced x-axis tick dates (6 labels)
+          const tickIdx = [];
+          const tickCount = 6;
+          for (let i = 0; i < tickCount; i++) {
+            tickIdx.push(Math.floor(i * (points.length - 1) / (tickCount - 1)));
+          }
+          return (
+            <svg viewBox={`0 0 ${chartW} ${chartH}`} style={{width:'100%',height:chartH}}>
+              {/* Gridlines + y-axis labels */}
+              {gridFractions.map(f => {
+                const v = yMin + (1 - f) * rangeV;
+                const y = padT + f * drawH;
+                return (
+                  <g key={f}>
+                    <line x1={padL} y1={y} x2={padL+drawW} y2={y} stroke="var(--border)" strokeWidth="0.5" strokeDasharray="3,3"/>
+                    <text x={padL-4} y={y+3} fill="var(--text3)" fontSize="9" textAnchor="end" fontFamily="var(--font-mono)">
+                      {meta.fmt(v)}
+                    </text>
+                  </g>
+                );
+              })}
+              {/* Zero line for spread series (only when range straddles 0) */}
+              {showZeroLine && (() => {
+                const y0 = toY(0);
+                return <line x1={padL} y1={y0} x2={padL+drawW} y2={y0} stroke="var(--red)" strokeWidth="1" strokeDasharray="4,3" opacity="0.6"/>;
+              })()}
+              {/* Series line */}
+              <polyline points={pts} fill="none" stroke="var(--cyan)" strokeWidth="1.8"/>
+              {/* Last-value marker */}
+              {(() => {
+                const lastX = padL + (points.length-1)*stepX;
+                const lastY = toY(lastV);
+                return <circle cx={lastX} cy={lastY} r="3" fill="var(--cyan)" stroke="var(--bg)" strokeWidth="1.5"/>;
+              })()}
+              {/* X-axis date labels */}
+              {tickIdx.map((i,k) => {
+                const x = padL + i*stepX;
+                const date = points[i]?.date || '';
+                return (
+                  <text key={k} x={x} y={chartH-6} fill="var(--text3)" fontSize="9" textAnchor="middle" fontFamily="var(--font-mono)">
+                    {date.slice(0,7)}
+                  </text>
+                );
+              })}
+            </svg>
+          );
+        })()}
+      </div>
+
+      {/* Coverage / series catalogue */}
+      <div className="panel">
+        <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>
+          AVAILABLE SERIES ({available.length})
+        </div>
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Series</th>
+              <th>Label</th>
+              <th style={{textAlign:'right'}}>Obs</th>
+              <th>Earliest</th>
+              <th>Latest</th>
+              <th style={{textAlign:'right'}}>Release-lag</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {available.map(s => {
+              const m = META[s.series_id] || { label: s.series_id };
+              const isSel = selected === s.series_id;
+              return (
+                <tr key={s.series_id} style={isSel?{background:'rgba(0,212,255,0.05)'}:undefined}>
+                  <td className="td-ticker">{s.series_id}</td>
+                  <td style={{fontSize:11,color:'var(--text2)'}}>{m.label}</td>
+                  <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:11}}>{s.observations?.toLocaleString() || '—'}</td>
+                  <td style={{fontSize:11,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{s.earliest || '—'}</td>
+                  <td style={{fontSize:11,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{s.latest || '—'}</td>
+                  <td style={{textAlign:'right',fontSize:11,fontFamily:'var(--font-mono)',color:s.releaseLagDays>0?'var(--amber)':'var(--text3)'}}>
+                    {s.releaseLagDays > 0 ? `${s.releaseLagDays}d` : '—'}
+                  </td>
+                  <td style={{textAlign:'right'}}>
+                    <button onClick={() => setSelected(s.series_id)}
+                      style={{padding:'3px 10px',background: isSel?'var(--cyan)':'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color: isSel?'#000':'var(--text2)',fontSize:10,fontFamily:'var(--font-mono)',cursor:'pointer',fontWeight:700,letterSpacing:1}}>
+                      {isSel?'SHOWN':'CHART'}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -8065,6 +8515,145 @@ function HedgeTab() {
 }
 
 // ─── REPLAY TAB ─────────────────────────────────────────────────────────────
+//
+// MacroContextCard renders the FRED regime-tagged summary that runReplay /
+// runWalkForward / runMonteCarlo now attach as `.macroContext`. The helper
+// lives alongside ReplayTab because that's the only consumer today, but it's
+// a pure function of one object and can move to a shared components section
+// later if another tab needs it.
+//
+// Fails soft in three ways:
+//   1. ctx is null/undefined         → renders nothing (DB without macro_series)
+//   2. ctx has no regime or stats    → renders the header with "no data"
+//   3. individual series are missing → row just doesn't appear
+function MacroContextCard({ ctx, title = 'MACRO CONTEXT (FRED)' }) {
+  if (!ctx) return null;
+  const regimeColors = {
+    RISK_ON:  'var(--green)',
+    NEUTRAL:  'var(--amber)',
+    RISK_OFF: 'var(--red)',
+    UNKNOWN:  'var(--text3)',
+  };
+  const regimeLabels = {
+    RISK_ON:  'RISK-ON',
+    NEUTRAL:  'NEUTRAL',
+    RISK_OFF: 'RISK-OFF',
+    UNKNOWN:  'UNKNOWN',
+  };
+  const regime = ctx.regime || 'UNKNOWN';
+  const regimeColor = regimeColors[regime] || 'var(--text3)';
+  const daily   = ctx.dailyStats   || {};
+  const monthly = ctx.monthlyStats || {};
+  const tdays = ctx.tradingDays || 0;
+  const fmt = (v, d = 2) => (v == null || !Number.isFinite(v) ? '—' : (+v).toFixed(d));
+  const pct = (v, d = 2) => (v == null || !Number.isFinite(v) ? '—' : (v > 0 ? '+' : '') + (+v).toFixed(d) + '%');
+  // Rows are: [label, tooltip, value-node]
+  const rows = [];
+  if (daily.T10Y2Y) {
+    const inv = daily.T10Y2Y.daysInverted;
+    rows.push([
+      '10Y–2Y spread',
+      'Treasury yield curve — inversion historically precedes recessions',
+      <span>
+        <strong style={{color: daily.T10Y2Y.mean < 0 ? 'var(--red)' : 'var(--text)'}}>{fmt(daily.T10Y2Y.mean)}</strong>
+        {inv != null && tdays > 0 && (
+          <span style={{color:'var(--text3)',fontSize:10}}> · inverted {inv}/{tdays}d</span>
+        )}
+      </span>
+    ]);
+  }
+  if (daily.VIXCLS) {
+    const el = daily.VIXCLS.daysElevated, st = daily.VIXCLS.daysStressed;
+    const vixMean = daily.VIXCLS.mean;
+    const vixColor = vixMean >= 25 ? 'var(--red)' : vixMean >= 20 ? 'var(--amber)' : 'var(--green)';
+    rows.push([
+      'VIX (mean)',
+      'Days with VIX ≥ 20 (elevated) and ≥ 30 (stressed)',
+      <span>
+        <strong style={{color: vixColor}}>{fmt(vixMean)}</strong>
+        {(el != null || st != null) && tdays > 0 && (
+          <span style={{color:'var(--text3)',fontSize:10}}> · ≥20: {el}d · ≥30: {st}d</span>
+        )}
+      </span>
+    ]);
+  }
+  if (daily.BAMLH0A0HYM2) {
+    const mean = daily.BAMLH0A0HYM2.mean;
+    const st = daily.BAMLH0A0HYM2.daysStressed;
+    const oasColor = mean >= 6 ? 'var(--red)' : mean >= 4 ? 'var(--amber)' : 'var(--green)';
+    rows.push([
+      'HY OAS (mean)',
+      'Bank of America US High Yield Option-Adjusted Spread — credit stress proxy',
+      <span>
+        <strong style={{color: oasColor}}>{fmt(mean)}</strong>
+        {st != null && tdays > 0 && (
+          <span style={{color:'var(--text3)',fontSize:10}}> · stressed {st}/{tdays}d</span>
+        )}
+      </span>
+    ]);
+  }
+  if (daily.DGS10) {
+    rows.push([
+      '10Y Treasury',
+      '10-year constant-maturity yield (first → last of window)',
+      <span style={{fontFamily:'var(--font-mono)'}}>
+        {fmt(daily.DGS10.first)} → <strong>{fmt(daily.DGS10.last)}</strong>
+      </span>
+    ]);
+  }
+  if (monthly.UNRATE) {
+    rows.push([
+      'Unemployment',
+      'U3 headline unemployment rate, release-lag applied',
+      <span style={{fontFamily:'var(--font-mono)'}}>
+        {fmt(monthly.UNRATE.first, 1)} → <strong>{fmt(monthly.UNRATE.last, 1)}</strong>%
+      </span>
+    ]);
+  }
+  if (monthly.CPIAUCSL) {
+    const chg = monthly.CPIAUCSL.pctChange;
+    rows.push([
+      'CPI',
+      'Headline CPI level change over the window (not YoY)',
+      <span style={{fontFamily:'var(--font-mono)'}}>
+        {fmt(monthly.CPIAUCSL.first, 1)} → <strong>{fmt(monthly.CPIAUCSL.last, 1)}</strong>
+        <span style={{color:chg>0?'var(--amber)':'var(--text3)',fontSize:10}}> ({pct(chg)})</span>
+      </span>
+    ]);
+  }
+  return (
+    <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:16}}>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:rows.length?10:0,flexWrap:'wrap'}}>
+        <span style={{fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1,color:'var(--cyan)'}}>{title}</span>
+        <span style={{
+          fontSize:10,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:1,
+          padding:'2px 8px',borderRadius:3,
+          background:regimeColor,color:'var(--bg)',
+        }}>{regimeLabels[regime] || regime}</span>
+        {ctx.startDate && ctx.endDate && (
+          <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>
+            {ctx.startDate} → {ctx.endDate}{tdays ? ` · ${tdays}d` : ''}
+          </span>
+        )}
+      </div>
+      {rows.length === 0 ? (
+        <div style={{fontSize:11,color:'var(--text3)'}}>
+          No FRED data in this window. Run <code>scripts/fetch-fred.js</code> to populate the macro_series table.
+        </div>
+      ) : (
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(220px, 1fr))',gap:'6px 16px',fontSize:11}}>
+          {rows.map(([label, tip, val], i) => (
+            <div key={i} style={{display:'flex',justifyContent:'space-between',gap:8}} title={tip}>
+              <span style={{color:'var(--text3)'}}>{label}:</span>
+              <span style={{fontFamily:'var(--font-mono)'}}>{val}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ReplayTab() {
   const [strategies, setStrategies] = useState([]);
   const [dateRange, setDateRange]   = useState(null);
@@ -8178,6 +8767,7 @@ function ReplayTab() {
         },
         tradeLog: trades,
         equityCurve: stored.equityCurve || [],
+        macroContext: stored.macroContext || null,
       });
     } catch(e) { setError(e.message); }
   }
@@ -8428,6 +9018,9 @@ function ReplayTab() {
             </div>
           )}
 
+          {/* Macro Context (FRED) — true macro backdrop of the replay window */}
+          <MacroContextCard ctx={result.macroContext} />
+
           {/* Trade summary */}
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
             <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
@@ -8572,6 +9165,9 @@ function ReplayTab() {
             ))}
           </div>
 
+          {/* Macro Context (FRED) — tagged to the OOS span, not train+test */}
+          <MacroContextCard ctx={wfResult.macroContext} title="MACRO CONTEXT — OOS WINDOW" />
+
           {/* Parameter stability */}
           {wfResult.parameterStability && wfResult.parameterStability.length > 0 && (
             <div style={{marginBottom:12}}>
@@ -8699,6 +9295,9 @@ function ReplayTab() {
           <div style={{fontSize:11,color:'var(--text3)',marginBottom:12,fontFamily:'var(--font-mono)'}}>
             {mcResult.iterations} iterations · {mcResult.method} · {mcResult.tradeCount} trades · {(mcResult.positionFraction*100).toFixed(0)}% per-trade sizing
           </div>
+
+          {/* Macro Context (FRED) — inherited from the source replay window */}
+          <MacroContextCard ctx={mcResult.macroContext} title="MACRO CONTEXT — SOURCE REPLAY" />
 
           {/* Baseline vs distribution */}
           <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:12}}>

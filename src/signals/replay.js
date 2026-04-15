@@ -931,6 +931,17 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     ? +(totalReturn - spyBenchmark.totalReturn).toFixed(2)
     : null;
 
+  // ─── Macro context (FRED) ───────────────────────────────────────────────
+  // Attach a regime-tagged summary of the macro environment that actually
+  // prevailed over the replay window. Pure diagnostic — it does NOT feed into
+  // trade selection (the replay already happened), but it lets the UI surface
+  // "you optimized against a 2020 crash, not a 2023 bull run" before the user
+  // acts on these numbers. Fails soft on DBs without the macro_series table.
+  let macroContext = null;
+  try {
+    macroContext = macroFred().getMacroContextForRange(startDate, endDate);
+  } catch (_) { /* no macro table or out-of-coverage window — UI hides the card */ }
+
   // ─── Persist replay result ───────────────────────────────────────────────
 
   let replayId = null;
@@ -943,7 +954,7 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       strategy, JSON.stringify(mergedParams), startDate, endDate, initialCapital,
       finalEquity, +totalReturn.toFixed(2), trades.length, +winRate.toFixed(1),
       profitFactor, +maxDD.toFixed(2), sharpe,
-      JSON.stringify({ trades, equityCurve, exitReasons, spyBenchmark })
+      JSON.stringify({ trades, equityCurve, exitReasons, spyBenchmark, macroContext })
     ).lastInsertRowid;
   }
 
@@ -993,6 +1004,7 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     tradeLog: trades,
     equityCurve: equityCurve.filter((_, i) => i % Math.max(1, Math.floor(equityCurve.length / 100)) === 0 || i === equityCurve.length - 1),
     regimeBreakdown: regimeStats,
+    macroContext,
   };
 }
 
@@ -1181,6 +1193,14 @@ function runWalkForward({
   const spy = calcSPYBenchmark(oosStart, oosEnd);
   const alpha = spy ? +(finalReturn - spy.totalReturn).toFixed(2) : null;
 
+  // Macro context across the OOS span (NOT the full train+test range — the
+  // OOS equity curve is what the user evaluates, and that's the window that
+  // should be tagged with the prevailing regime).
+  let macroContext = null;
+  try {
+    macroContext = macroFred().getMacroContextForRange(oosStart, oosEnd);
+  } catch (_) { /* no macro table — UI hides the card */ }
+
   return {
     strategy,
     strategyName: stratDef.name,
@@ -1211,6 +1231,7 @@ function runWalkForward({
     parameterStability: stabilityList,
     oosEquityCurve,
     oosTrades: allTestTrades,
+    macroContext,
   };
 }
 
@@ -1254,15 +1275,30 @@ function runMonteCarlo({
     throw new Error('positionFraction must be in (0, 1]');
   }
 
-  // Resolve trade list
+  // Resolve trade list (and the date range that produced it, so we can tag
+  // the MC result with the same macro context the original replay was run
+  // under).
   let tradeList = trades;
+  let mcStartDate = null;
+  let mcEndDate = null;
   if (replayId != null) {
     const saved = getReplayResult(replayId);
     if (!saved) throw new Error(`Replay ${replayId} not found`);
     tradeList = saved.result?.trades || [];
+    mcStartDate = saved.start_date || null;
+    mcEndDate   = saved.end_date   || null;
   }
   if (!Array.isArray(tradeList) || tradeList.length === 0) {
     throw new Error('No trades available to simulate');
+  }
+  // If caller passed `trades` directly (no replayId), infer the window from
+  // the trade log itself — min entry → max exit. Lets `trades: […]` callers
+  // get a macro card without having to also pass dates.
+  if (!mcStartDate || !mcEndDate) {
+    const entries = tradeList.map(t => t.entryDate).filter(Boolean).sort();
+    const exits   = tradeList.map(t => t.exitDate).filter(Boolean).sort();
+    if (entries.length) mcStartDate = mcStartDate || entries[0];
+    if (exits.length)   mcEndDate   = mcEndDate   || exits[exits.length - 1];
   }
 
   const pnlPcts = tradeList
@@ -1366,6 +1402,15 @@ function runMonteCarlo({
   // UI can hide the degenerate distribution rather than mislead.
   const finalReturnIsDeterministic = method === 'permutation';
 
+  // Macro context for the MC source window (whichever we were able to
+  // resolve above). Same fail-soft contract as runReplay/runWalkForward.
+  let macroContext = null;
+  if (mcStartDate && mcEndDate) {
+    try {
+      macroContext = macroFred().getMacroContextForRange(mcStartDate, mcEndDate);
+    } catch (_) { /* UI hides the card */ }
+  }
+
   return {
     method,
     iterations,
@@ -1389,6 +1434,7 @@ function runMonteCarlo({
     sharpe:        summarize(sharpes, 3),
     losingStreak:  summarize(streaks, 0),
     profitableScenariosPct: +(finals.filter(v => v > 0).length / finals.length * 100).toFixed(1),
+    macroContext,
     // Sub-sampled equity curves for plotting (5 representative paths)
     samplePaths: (() => {
       const paths = [];
