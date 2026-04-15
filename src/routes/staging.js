@@ -87,6 +87,9 @@ module.exports = function(db, runScan) {
         maxPositionPct: config.maxPositionPct,
         beta: stock.beta,
         atrPct: stock.atrPct,
+        candidateSymbol: stock.ticker,
+        side: 'buy',
+        orderType: 'limit',
       });
 
       // Stage the bracket order
@@ -108,6 +111,10 @@ module.exports = function(db, runScan) {
           totalMultiplier: sizing.totalMultiplier,
           beta: sizing.beta,
           atrPct: sizing.atrPct,
+          // Phase 2.9 — slippage prediction surfaced for the UI
+          slippagePrediction: sizing.slippagePrediction || null,
+          intendedEntry: sizing.intendedEntry || entryPrice,
+          effectiveEntry: sizing.effectiveEntry || entryPrice,
         },
         exitStrategy,
         stock: {
@@ -122,11 +129,21 @@ module.exports = function(db, runScan) {
   });
 
   // ─── Submit staged order (one-click) ───────────────────────────────────────
+  // Body may include { allowWashSale: true } to override the wash-sale blocker.
   router.post('/staging/:id/submit', async (req, res) => {
     try {
-      const result = await submitStagedOrder(+req.params.id);
+      const overrides = {};
+      if (req.body?.allowWashSale) overrides.allowWashSale = true;
+      const result = await submitStagedOrder(+req.params.id, overrides);
       res.json(result);
-    } catch (e) { res.status(400).json({ error: e.message }); }
+    } catch (e) {
+      // Forward the structured riskCheck so the frontend can render per-gate details
+      // instead of a flat "Pre-trade check failed: Rule1, Rule2" string.
+      res.status(400).json({
+        error: e.message,
+        riskCheck: e.riskCheck || null,
+      });
+    }
   });
 
   // ─── Cancel staged order ──────────────────────────────────────────────────

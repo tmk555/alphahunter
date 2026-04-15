@@ -144,12 +144,12 @@ function getStagedOrders({ status, symbol } = {}) {
 
 // ─── Submit through broker adapter ──────────────────────────────────────────
 
-async function submitStagedOrder(stagedId) {
+async function submitStagedOrder(stagedId, overrides = {}) {
   const staged = getStagedOrder(stagedId);
   if (!staged) throw new Error(`Staged order #${stagedId} not found`);
   if (staged.status !== 'staged') throw new Error(`Order #${stagedId} is ${staged.status}, not staged`);
 
-  // Run pre-trade check as final gate — unchanged from previous behavior.
+  // Run pre-trade check as final gate.
   const openPositions = db().prepare('SELECT * FROM trades WHERE exit_date IS NULL').all();
   const regime = await getMarketRegime();
   const candidate = {
@@ -158,13 +158,19 @@ async function submitStagedOrder(stagedId) {
     entryPrice: staged.entry_price,
     stopPrice: staged.stop_price,
     shares: staged.qty,
+    // Phase 2.10: pass through overrides (e.g. allowWashSale: true)
+    ...overrides,
   };
   const riskCheck = preTradeCheck(candidate, openPositions, regime);
   db().prepare('UPDATE staged_orders SET risk_check = ? WHERE id = ?')
     .run(JSON.stringify(riskCheck), stagedId);
   if (!riskCheck.approved) {
     const failedRules = riskCheck.checks.filter(c => !c.pass).map(c => c.rule).join(', ');
-    throw new Error(`Pre-trade check failed: ${failedRules}`);
+    // Throw a structured error: the route handler catches e.message, but we
+    // also attach the full riskCheck so the route can forward it to the UI.
+    const err = new Error(`Pre-trade check failed: ${failedRules}`);
+    err.riskCheck = riskCheck;
+    throw err;
   }
 
   const broker = getBroker();

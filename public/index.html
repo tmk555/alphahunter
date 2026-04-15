@@ -2812,9 +2812,11 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ ticker, mode: mode || rsStageMode, exitStrategy: rsExitStrategy, strategy: strategyFilter || undefined }),
       });
-      const scaleLabels = { full_in_scale_out:'Full→Scale', full_in_full_out:'Full→Full', scale_in_scale_out:'Scale→Scale', scale_in_full_out:'Scale→Full' };
+      const scaleLabels = { full_in_scale_out:'Full\u2192Scale', full_in_full_out:'Full\u2192Full', scale_in_scale_out:'Scale\u2192Scale', scale_in_full_out:'Scale\u2192Full' };
       const scaleLabel = scaleLabels[rsExitStrategy] || rsExitStrategy;
-      alert(`Staged ${r.staged?.symbol} (${mode || rsStageMode}): ${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk [${scaleLabel}]. Go to Trading tab to submit.`);
+      const slip = r.sizing?.slippagePrediction;
+      const slipNote = slip ? `\nSlippage: ${slip.predictedSlippageBps}bps (tier ${slip.tier}) \u2192 effective entry $${r.sizing.effectiveEntry?.toFixed(2)}` : '';
+      alert(`Staged ${r.staged?.symbol} (${mode || rsStageMode}): ${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk [${scaleLabel}].${slipNote}\nGo to Trading tab to submit.`);
     } catch(e) { alert(`Stage failed: ${e.message}`); }
     setRsStaging(null);
   }
@@ -5690,6 +5692,8 @@ function ExecutionTab() {
   const [stageForm, setStageForm] = useState({symbol:'',entry_price:'',stop_price:'',target1_price:'',qty:'',notes:''});
   const [showStageForm, setShowStageForm] = useState(false);
   const [showAlertForm, setShowAlertForm] = useState(false);
+  // Pre-trade check modal state (Phase 2.10 UI)
+  const [riskCheckModal, setRiskCheckModal] = useState(null); // { orderId, checks, error }
 
   // Refs to track previous values — prevents re-render when data hasn't changed
   const prevData = useRef({broker:null,positions:[],orders:[],staged:[],subs:[],fired:[],stream:null});
@@ -5724,9 +5728,25 @@ function ExecutionTab() {
     return () => clearInterval(interval);
   }, []);
 
-  async function submitStaged(id) {
+  async function submitStaged(id, overrides = {}) {
     try {
-      await api(`/api/staging/${id}/submit`, {method:'POST'});
+      const r = await fetch(`/api/staging/${id}/submit`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(overrides),
+      });
+      const body = await r.json().catch(()=>({}));
+      if (!r.ok) {
+        // If the server returned a structured riskCheck, show the detailed modal
+        // instead of a flat error string.
+        if (body.riskCheck) {
+          setRiskCheckModal({ orderId: id, checks: body.riskCheck.checks || [], error: body.error });
+        } else {
+          setError(body.error || `HTTP ${r.status}`);
+        }
+        return;
+      }
+      setRiskCheckModal(null);
       loadAll();
     } catch(e) { setError(e.message); }
   }
@@ -5951,6 +5971,38 @@ function ExecutionTab() {
               </div>
             )}
           </div>
+
+          {/* Pre-Trade Check Modal (Phase 2.10) */}
+          {riskCheckModal && (
+            <div className="panel" style={{background:'rgba(255,61,87,0.05)',border:'1px solid rgba(255,61,87,0.3)',borderRadius:6,padding:16,marginBottom:12}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+                <span style={{fontSize:12,fontWeight:700,color:'var(--red)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>PRE-TRADE CHECK FAILED</span>
+                <button onClick={()=>setRiskCheckModal(null)} style={{background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:10,padding:'3px 10px',cursor:'pointer'}}>DISMISS</button>
+              </div>
+              <div style={{display:'grid',gap:6,marginBottom:12}}>
+                {riskCheckModal.checks.map((c,i)=>(
+                  <div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'6px 10px',background:'var(--bg3)',borderRadius:4,border:`1px solid ${c.pass?'rgba(0,230,118,0.2)':'rgba(255,61,87,0.3)'}`}}>
+                    <span style={{fontSize:14,width:20,textAlign:'center'}}>{c.pass?'\u2705':'\u274C'}</span>
+                    <span style={{fontSize:11,fontWeight:700,color:c.pass?'var(--green)':'var(--red)',minWidth:120,fontFamily:'var(--font-mono)'}}>{c.rule}</span>
+                    <span style={{fontSize:11,color:'var(--text2)',flex:1}}>{c.detail}</span>
+                    {c.rule==='Wash Sale' && !c.pass && c.washSale && (
+                      <span style={{fontSize:10,color:'var(--amber)',fontFamily:'var(--font-mono)'}}>Re-entry OK after {c.washSale.earliestAllowedReentry}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {/* Override buttons for specific blockers */}
+              {riskCheckModal.checks.some(c=>c.rule==='Wash Sale'&&!c.pass) && (
+                <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                  <button onClick={()=>{setRiskCheckModal(null);submitStaged(riskCheckModal.orderId,{allowWashSale:true});}}
+                    style={{padding:'6px 14px',background:'var(--amber)',border:'none',borderRadius:4,color:'#000',fontSize:11,cursor:'pointer',fontWeight:700}}>
+                    OVERRIDE WASH SALE (accept tax cost)
+                  </button>
+                  <span style={{fontSize:10,color:'var(--text3)'}}>The loss will be added to the new lot's basis instead of deductible this year</span>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Staged Orders Table */}
           {staged.length > 0 ? (
@@ -6881,20 +6933,32 @@ function PortfolioTab() {
               <button className="btn btn-primary" onClick={calcSize}>Calculate</button>
             </div>
             {sizing && (
-              <div style={{marginTop:12,display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:8}}>
-                {[
-                  {label:'Shares',val:sizing.shares,color:'var(--cyan)'},
-                  {label:'Position $',val:'$'+Number(sizing.positionValue||0).toLocaleString(),color:'var(--text)'},
-                  {label:'Risk $',val:'$'+fmt(sizing.dollarRisk,0),color:'var(--red)'},
-                  {label:'Portfolio %',val:fmt(sizing.portfolioPct,1)+'%',color:'var(--amber)'},
-                  {label:'Risk/Trade %',val:fmt(sizing.riskPct,2)+'%',color:'var(--amber)'},
-                  {label:'Regime',val:sizing.regime||'—',color:'var(--green)'},
-                ].map(m => (
-                  <div key={m.label} style={{padding:'8px',background:'var(--bg3)',borderRadius:3,textAlign:'center'}}>
-                    <div style={{fontSize:10,color:'var(--text3)',marginBottom:3}}>{m.label}</div>
-                    <div style={{fontSize:16,fontWeight:700,color:m.color,fontFamily:'var(--font-mono)'}}>{m.val}</div>
+              <div>
+                <div style={{marginTop:12,display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:8}}>
+                  {[
+                    {label:'Shares',val:sizing.shares,color:'var(--cyan)'},
+                    {label:'Position $',val:'$'+Number(sizing.positionValue||0).toLocaleString(),color:'var(--text)'},
+                    {label:'Risk $',val:'$'+fmt(sizing.dollarRisk,0),color:'var(--red)'},
+                    {label:'Portfolio %',val:fmt(sizing.portfolioPct,1)+'%',color:'var(--amber)'},
+                    {label:'Risk/Trade %',val:fmt(sizing.riskPct,2)+'%',color:'var(--amber)'},
+                    {label:'Regime',val:sizing.regime||'—',color:'var(--green)'},
+                  ].map(m => (
+                    <div key={m.label} style={{padding:'8px',background:'var(--bg3)',borderRadius:3,textAlign:'center'}}>
+                      <div style={{fontSize:10,color:'var(--text3)',marginBottom:3}}>{m.label}</div>
+                      <div style={{fontSize:16,fontWeight:700,color:m.color,fontFamily:'var(--font-mono)'}}>{m.val}</div>
+                    </div>
+                  ))}
+                </div>
+                {/* Slippage prediction — shows when sizer returns it (from staging or when symbol context is available) */}
+                {sizing.slippagePrediction && (
+                  <div style={{marginTop:8,padding:'8px 12px',background:'rgba(240,165,0,0.06)',border:'1px solid rgba(240,165,0,0.2)',borderRadius:4,display:'flex',gap:16,alignItems:'center',flexWrap:'wrap'}}>
+                    <span style={{fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1,color:'var(--amber)'}}>SLIPPAGE</span>
+                    <span style={{fontSize:11,color:'var(--text2)'}}>Predicted: <strong style={{color:'var(--amber)'}}>{sizing.slippagePrediction.predictedSlippageBps}bps</strong></span>
+                    <span style={{fontSize:11,color:'var(--text2)'}}>Stress: <strong>{sizing.slippagePrediction.stressSlippageBps}bps</strong></span>
+                    <span style={{fontSize:11,color:'var(--text2)'}}>Effective entry: <strong style={{color:'var(--red)'}}>${sizing.effectiveEntry?.toFixed(2)}</strong></span>
+                    <span style={{fontSize:10,color:'var(--text3)'}}>Tier {sizing.slippagePrediction.tier} ({sizing.slippagePrediction.sampleSize} fills)</span>
                   </div>
-                ))}
+                )}
               </div>
             )}
           </div>
@@ -8756,7 +8820,9 @@ function ReplayTab() {
           initialCapital: r.initial_capital, finalEquity: r.final_equity,
           totalReturn: r.total_return, maxDrawdown: r.max_drawdown,
           sharpeRatio: r.sharpe_ratio, profitFactor: r.profit_factor, alpha,
+          calmarRatio: stored.performance?.calmarRatio ?? null,
         },
+        significance: stored.significance || null,
         benchmark: spyBm ? {
           spyReturn: spyBm.totalReturn, spyMaxDrawdown: spyBm.maxDrawdown,
           spySharpe: spyBm.sharpeRatio, outperformed: r.total_return > spyBm.totalReturn,
@@ -8942,7 +9008,7 @@ function ReplayTab() {
           </div>
 
           {/* KPI cards */}
-          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:10}}>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:10,marginBottom:10}}>
             {[
               ['Total Return', (result.performance.totalReturn>0?'+':'')+result.performance.totalReturn+'%', pctColor(result.performance.totalReturn)],
               ['Final Equity', '$'+result.performance.finalEquity.toLocaleString(), 'var(--text)'],
@@ -8950,7 +9016,11 @@ function ReplayTab() {
               ['Profit Factor', result.performance.profitFactor, result.performance.profitFactor>=1.5?'var(--green)':'var(--text)'],
               ['Max Drawdown', result.performance.maxDrawdown+'%', 'var(--red)'],
               ['Sharpe Ratio', result.performance.sharpeRatio, result.performance.sharpeRatio>=1?'var(--green)':'var(--text3)'],
+              ['Calmar Ratio', result.performance.calmarRatio!=null?(result.performance.calmarRatio===Infinity?'\u221E':result.performance.calmarRatio):'N/A',
+                result.performance.calmarRatio>1?'var(--green)':result.performance.calmarRatio>0?'var(--text)':'var(--red)'],
               ['Alpha vs SPY', result.performance.alpha!=null?(result.performance.alpha>0?'+':'')+result.performance.alpha+'%':'N/A', result.performance.alpha>0?'var(--green)':result.performance.alpha<0?'var(--red)':'var(--text3)'],
+              ['Significance', result.significance?result.significance.verdict.replace(/_/g,' ').toUpperCase():'N/A',
+                result.significance?.verdict==='highly_significant'?'var(--green)':result.significance?.verdict==='significant'?'var(--cyan)':result.significance?.verdict==='not_significant'?'var(--red)':'var(--amber)'],
               ['Side', result.side||'long', result.side==='short'?'var(--red)':'var(--cyan)'],
             ].map(([label,val,color])=>(
               <div key={label} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:'10px 12px',textAlign:'center'}}>
@@ -8959,6 +9029,30 @@ function ReplayTab() {
               </div>
             ))}
           </div>
+
+          {/* Statistical Significance Detail Bar */}
+          {result.significance && result.significance.verdict !== 'insufficient_sample' && (
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:10}}>
+              <div style={{display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
+                <span style={{fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1,color:result.significance.isSignificant?'var(--green)':'var(--red)'}}>STATISTICAL SIGNIFICANCE</span>
+                <span style={{fontSize:11,color:'var(--text2)'}}>p-value: <strong style={{color:result.significance.pValue<0.05?'var(--green)':'var(--red)'}}>{result.significance.pValue<0.001?'<0.001':result.significance.pValue?.toFixed(3)}</strong></span>
+                <span style={{fontSize:11,color:'var(--text2)'}}>t-stat: <strong>{result.significance.tStat?.toFixed(2)}</strong></span>
+                <span style={{fontSize:11,color:'var(--text2)'}}>n={result.significance.sampleSize}</span>
+                {result.significance.bootstrapMeanReturn && (
+                  <span style={{fontSize:11,color:'var(--text2)'}}>Mean CI: [{result.significance.bootstrapMeanReturn.lower?.toFixed(2)}%, {result.significance.bootstrapMeanReturn.upper?.toFixed(2)}%]</span>
+                )}
+                {result.significance.bootstrapWinRate && (
+                  <span style={{fontSize:11,color:'var(--text2)'}}>WR CI: [{result.significance.bootstrapWinRate.lower?.toFixed(1)}%, {result.significance.bootstrapWinRate.upper?.toFixed(1)}%]</span>
+                )}
+                <span style={{fontSize:10,color:'var(--text3)'}}>{result.significance.reason}</span>
+              </div>
+            </div>
+          )}
+          {result.significance && result.significance.verdict === 'insufficient_sample' && (
+            <div style={{background:'rgba(255,171,0,0.05)',border:'1px solid rgba(255,171,0,0.2)',borderRadius:6,padding:12,marginBottom:10}}>
+              <span style={{fontSize:11,color:'var(--amber)'}}>{result.significance.reason} (n={result.significance.sampleSize}, need {result.significance.minSampleForSignificance})</span>
+            </div>
+          )}
 
           {/* SPY Benchmark Comparison */}
           {result.benchmark && (

@@ -368,11 +368,17 @@ module.exports = function(db) {
         if (lastTradeId) {
           try {
             const signalDate = staged?.created_at?.split('T')[0] || fillDate;
+            // Use the order's limit price as the intended price (what the
+            // trader asked for). Fall back to the staged entry_price, then
+            // to the fill itself (0 slippage when we truly don't know).
+            const buyIntended = order.limit_price != null ? +order.limit_price
+              : staged?.entry_price ? +staged.entry_price
+              : +order.filled_avg_price;
             logExecution({
               tradeId: lastTradeId,
               symbol: order.symbol,
               side: 'buy',
-              intendedPrice: staged?.stop_price ? +order.filled_avg_price : +order.filled_avg_price,
+              intendedPrice: buyIntended,
               fillPrice: +order.filled_avg_price,
               shares: +order.filled_qty,
               orderType: order.type || 'market',

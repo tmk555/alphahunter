@@ -1064,7 +1064,7 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       strategy, JSON.stringify(mergedParams), startDate, endDate, initialCapital,
       finalEquity, +totalReturn.toFixed(2), trades.length, +winRate.toFixed(1),
       profitFactor, +maxDD.toFixed(2), sharpe,
-      JSON.stringify({ trades, equityCurve, exitReasons, spyBenchmark, macroContext })
+      JSON.stringify({ trades, equityCurve, exitReasons, spyBenchmark, macroContext, significance, performance: { calmarRatio: Number.isFinite(calmar) ? +calmar.toFixed(3) : calmar } })
     ).lastInsertRowid;
   }
 
