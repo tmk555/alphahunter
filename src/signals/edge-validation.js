@@ -3,6 +3,7 @@
 // execution cost modeling, signal decay analysis, and conviction weight calibration.
 
 const { getDB } = require('../data/database');
+const { assessSignificance } = require('./statistics');
 
 function db() { return getDB(); }
 
@@ -255,6 +256,19 @@ function analyzeSignalDecay(signalName, params = {}) {
     const p75 = sorted[Math.floor(sorted.length * 0.75)];
     const p90 = sorted[Math.floor(sorted.length * 0.90)];
 
+    // Phase 2.7: Significance for THIS horizon. We treat each firing as a
+    // "trade" (a look-forward observation) and ask whether the mean forward
+    // return at this horizon is statistically distinguishable from zero.
+    // Skip the bootstrap on huge samples (> 2000 firings) to keep decay
+    // reports fast — at that size the normal t-stat is already decisive.
+    const iters = rets.length >= 30 && rets.length < 2000 ? 500 : 0;
+    const periodsPerYear = 252 / horizon; // forward-return period length
+    const sig = assessSignificance(rets, {
+      tradesPerYear: periodsPerYear,
+      bootstrapIters: iters,
+      confidence: 0.95,
+    });
+
     decay[key] = {
       count: rets.length,
       avgReturn: +avg.toFixed(2),
@@ -267,6 +281,17 @@ function analyzeSignalDecay(signalName, params = {}) {
       },
       maxGain: +Math.max(...rets).toFixed(2),
       maxLoss: +Math.min(...rets).toFixed(2),
+      // Phase 2.7: significance block (t-stat, p-value, verdict, CIs).
+      // Consumers can gate on `significance.isSignificant` to hide
+      // noise-flavoured horizons from the decay chart.
+      significance: {
+        verdict: sig.verdict,
+        isSignificant: sig.isSignificant,
+        tStat: sig.tStat,
+        pValue: sig.pValue,
+        confidenceInterval: sig.bootstrapMeanReturn,  // null when iters=0
+        reason: sig.reason,
+      },
     };
   }
 
