@@ -20,7 +20,7 @@ const cron = require('node-cron');
 const alpaca = require('./alpaca');
 const { getBroker } = require('./index');
 const { checkAlerts, getActiveAlerts } = require('./alerts');
-const { expireStaleOrders } = require('./staging');
+const { expireStaleOrders, syncOrderStatus } = require('./staging');
 const { priceStream } = require('./stream');
 const { getDB } = require('../data/database');
 const { yahooQuote } = require('../data/providers/yahoo');
@@ -356,7 +356,43 @@ async function startStopMonitor() {
       expireStaleOrders();
     }, { scheduled: true });
 
+    // ─── Order Status Poller (Option A) ─────────────────────────────────
+    // Walks every staged row in 'submitted' state once per minute during
+    // market hours and calls syncOrderStatus() to pick up broker-side
+    // transitions (fill / cancel / reject / expire). The sync function
+    // fires notifyTradeEvent on each terminal transition, so this cron is
+    // the source of real-time phone alerts for broker fills — without
+    // requiring a subscription to Alpaca's trade_updates WebSocket.
+    //
+    // Idempotency: once a row leaves 'submitted' it's no longer selected,
+    // so each transition produces exactly one notification.
+    //
+    // Rate budget: typical open-order count is <5, Alpaca's rate limit is
+    // 200 requests/min — 5 poll calls/min is a rounding error.
+    cron.schedule('* * * * 1-5', async () => {
+      const { configured } = alpaca.getConfig();
+      if (!configured) return;
+      try {
+        const { open } = await alpaca.isMarketOpen();
+        if (!open) return;
+      } catch (_) { return; }
+
+      const rows = db().prepare(
+        "SELECT id FROM staged_orders WHERE status = 'submitted'"
+      ).all();
+      if (!rows.length) return;
+
+      for (const row of rows) {
+        try {
+          await syncOrderStatus(row.id);
+        } catch (e) {
+          console.error(`  Status poll failed for staged #${row.id}: ${e.message}`);
+        }
+      }
+    }, { scheduled: true });
+
     console.log('   Cron Backup: ✓ Running (every 5 min, market hours)');
+    console.log('   Order Status Poll: ✓ Running (every 60s, market hours)');
   }
 }
 

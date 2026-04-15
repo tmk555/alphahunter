@@ -158,12 +158,15 @@ const PUSHOVER_PRIORITY_MAP = {
   auto_stop: 1,
   regime_change: 1,        // regime shifts demand immediate attention
   trade_regime_change: 1,
+  trade_rejected: 1,       // broker rejected the order — needs investigation
   strategy_exit: 0,        // normal priority
   vcp_pivot: 0,
   price_above: 0,
   price_below: 0,
   trade_staged: -1,        // low priority — no vibration
   trade_submitted: -1,
+  trade_cancelled: -1,     // informational — either user-initiated or broker
+  trade_expired: -1,       // informational — stale 24h cleanup or GTC expiry
   pullback_entry: 0,
   trade_filled: 0,
   trade_buy: 0,
@@ -390,6 +393,9 @@ const TRADE_EVENT_EMOJIS = {
   // Phase 2 events
   regime_change: '🌊', conditional_triggered: '🎯', tranche_filled: '📊',
   conditional_expired: '⏰', plan_completed: '🏁',
+  // Broker lifecycle terminal transitions — fired by the order-status
+  // poller in broker/monitor.js + direct hooks in broker/staging.js.
+  cancelled: '🚫', expired: '⏰', rejected: '⛔',
 };
 
 async function notifyTradeEvent({ event, symbol, details = {} }) {
