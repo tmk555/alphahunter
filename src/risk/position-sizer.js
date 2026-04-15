@@ -128,9 +128,37 @@ function calculatePositionSize(params) {
     benchmarkCloses,     // optional — SPY closes for factor analysis
     candidateSymbol,     // optional — symbol being sized
     candidateSector,     // optional — sector of candidate
+    // Phase 2.9: Slippage-aware sizing. Side/orderType let us look up the
+    // trader's historical fill quality for THIS symbol/side/order-type
+    // combination and size against the realistic (post-slippage) entry
+    // price. Without this, the fixed-fractional calc assumes we paid
+    // exactly `entryPrice`, which is optimistic on breakout entries.
+    side = 'buy',
+    orderType = 'limit',
+    // Injection seams for tests — let callers stub out the DB-backed
+    // slippage lookup without monkey-patching require.cache.
+    slippagePrediction, // optional — if supplied, skip the lookup and use this
+    skipSlippageAdjustment = false,
   } = params;
 
-  const base = fixedFractional(accountSize, riskPerTrade, entryPrice, stopPrice);
+  // Phase 2.9: Compute the expected fill price = intended × (1 + slippage).
+  // We use this as the SIZING price (so riskPerTrade is honest) but still
+  // report the intended price alongside so the dashboard can show the
+  // decomposition.
+  let slippage = slippagePrediction || null;
+  if (!slippage && !skipSlippageAdjustment && entryPrice && candidateSymbol) {
+    try {
+      const { predictSlippage } = require('./execution-quality');
+      slippage = predictSlippage({ symbol: candidateSymbol, side, orderType });
+    } catch (_) {
+      slippage = null;
+    }
+  }
+  const effectiveEntry = slippage && entryPrice
+    ? entryPrice * (1 + (side === 'buy' ? (slippage.predictedSlippageBps || 0) / 10000 : -(slippage.predictedSlippageBps || 0) / 10000))
+    : entryPrice;
+
+  const base = fixedFractional(accountSize, riskPerTrade, effectiveEntry, stopPrice);
 
   // Use conviction-adjusted multiplier if stock qualifies for override
   const effectiveRegimeMult = convictionOverride?.override
@@ -208,6 +236,13 @@ function calculatePositionSize(params) {
   adjusted.totalMultiplier    = +totalMult.toFixed(2);
   adjusted.beta               = beta || null;
   adjusted.atrPct             = atrPct || null;
+  // Phase 2.9: Expose the slippage prediction + the intended/effective
+  // entry decomposition so the UI can show "paying $100.12 instead of
+  // $100.00 → that's 12 bps of learned slippage based on your last 7
+  // buys". Also so tests can assert we actually used it.
+  adjusted.slippagePrediction = slippage || null;
+  adjusted.intendedEntry      = entryPrice;
+  adjusted.effectiveEntry     = +((effectiveEntry || entryPrice) || 0).toFixed(4);
   return adjusted;
 }
 
