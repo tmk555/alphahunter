@@ -252,72 +252,29 @@ registerJobType('universe_reconstitute', {
   },
 });
 
-// ─── 9. Pullback Watch — Auto-create alerts for pending pullback stocks ────
-// After each RS scan, identifies stocks with strong RS + structure that are
-// 5-20% above their 50MA.  Creates a price_below alert at the 5% threshold
-// so the trader gets notified when the stock pulls back into the entry zone.
+// ─── 9. Pullback Watch — 3-state 50 SMA pullback detector ──────────────────
+// Delegates to src/signals/pullback-monitor.js — the real detector that:
+//   • Recomputes 50 SMA from OHLCV closes (NOT Yahoo's EOD fiftyDayAverage)
+//   • Uses three bands: approaching (≤1.08×MA50), in_zone (≤1.03×MA50),
+//     kissing (≤MA50+0.3×ATR) — each fires a distinct notification
+//   • Stores last-fired state per symbol → only state transitions fire alerts
+//   • Gates on real leadership: RS≥70, above 200MA, stage 2 OR VCP OR SEPA≥4
+//
+// Can be scheduled two ways:
+//   1. Post-scan daily (e.g. 16:30 ET) — uses latest rs_snapshots, paints the
+//      initial pullback state for every leader.
+//   2. Intraday 1-minute loop during RTH — catches live state transitions.
+//
+// Both modes use the same handler; the scanner internally fetches live quotes
+// via the cascading provider manager when called without currentPrices.
 
 registerJobType('pullback_watch', {
-  description: 'Create pullback entry alerts for stocks approaching 50MA support',
-  defaultConfig: {},
+  description: '3-state 50 SMA pullback detector — approaching/in_zone/kissing with live prices',
+  defaultConfig: { marketHoursOnly: false },
   handler: async () => {
-    const { createAlert, getActiveAlerts, deactivateAlert } = require('../broker/alerts');
-
-    // Get latest RS snapshot data
-    const latestDate = db().prepare(
-      "SELECT MAX(date) as date FROM rs_snapshots WHERE type = 'stock'"
-    ).get()?.date;
-    if (!latestDate) return { message: 'No snapshot data', created: 0 };
-
-    const snapshots = db().prepare(`
-      SELECT symbol, price, rs_rank, swing_momentum, sepa_score, stage,
-             vs_ma50, vs_ma200, volume_ratio, vcp_forming
-      FROM rs_snapshots
-      WHERE date = ? AND type = 'stock' AND price > 0
-    `).all(latestDate);
-
-    // Apply the same pending-pullback filter as the UI
-    const candidates = snapshots.filter(s =>
-      s.rs_rank >= 70 &&
-      s.vs_ma200 > 0 &&
-      s.vs_ma50 > 5 && s.vs_ma50 <= 20 &&
-      (s.sepa_score >= 4 || s.vcp_forming || s.stage === 2)
-    );
-
-    // Get existing pullback alerts to avoid duplicates
-    const existing = getActiveAlerts().filter(a => a.alert_type === 'pullback_entry');
-    const existingSymbols = new Set(existing.map(a => a.symbol));
-
-    // Deactivate alerts for stocks no longer qualifying
-    const candidateSymbols = new Set(candidates.map(c => c.symbol));
-    let deactivated = 0;
-    for (const alert of existing) {
-      if (!candidateSymbols.has(alert.symbol)) {
-        deactivateAlert(alert.id);
-        deactivated++;
-      }
-    }
-
-    // Create alerts for new candidates
-    let created = 0;
-    for (const s of candidates) {
-      if (existingSymbols.has(s.symbol)) continue;
-
-      // Trigger price = 5% above 50MA (the entry zone threshold)
-      const ma50 = s.price / (1 + s.vs_ma50 / 100);
-      const triggerPrice = +(ma50 * 1.05).toFixed(2);
-
-      createAlert({
-        symbol: s.symbol,
-        alert_type: 'pullback_entry',
-        trigger_price: triggerPrice,
-        direction: 'below',
-        message: `PULLBACK ENTRY: ${s.symbol} near 50MA zone ($${ma50.toFixed(2)}) — RS ${s.rs_rank}, SEPA ${s.sepa_score}/8`,
-      });
-      created++;
-    }
-
-    return { date: latestDate, candidates: candidates.length, created, deactivated, existing: existingSymbols.size };
+    const { runPullbackScan } = require('../signals/pullback-monitor');
+    const result = await runPullbackScan();
+    return result;
   },
 });
 
@@ -406,7 +363,74 @@ registerJobType('conditional_entry_check', {
   },
 });
 
-// ─── 12. Scale-In Check — Monitor active scale-in plans ────────────────────
+// ─── 12a. Gap Guard — Pre-open overnight-gap reprice/cancel ────────────────
+// Runs before market open (~9:20 ET on the seeded cron). Walks every
+// staged/submitted order and cancels anything where the overnight gap has
+// broken the setup thesis — e.g. the stock gapped up past our pullback
+// entry zone, or gapped down through our stop before the order fills.
+// Each cancel fires a 'gap_cancel' trade event so the user gets an alert
+// with the specific reason, not a generic "cancelled" ping.
+
+registerJobType('gap_guard', {
+  description: 'Pre-open gap guard — cancel staged/submitted orders where overnight gap broke the setup thesis',
+  defaultConfig: { gapUpLimitPct: 0.02 },
+  handler: async (config) => {
+    const { checkPreOpenGaps } = require('../broker/staging');
+    return await checkPreOpenGaps({ gapUpLimitPct: config.gapUpLimitPct });
+  },
+});
+
+// ─── Correlation Drift Watcher (Phase 2.8) ─────────────────────────────────
+// Hourly pair-correlation sweep across open positions. Fires a
+// `correlation_drift` event when a pair has drifted from its entry baseline
+// into lockstep territory (≥ 0.80 current, ≥ 0.20 drift from baseline,
+// both legs > 3% of book). See src/risk/correlation-drift.js for the full
+// gating logic and why the three-gate design avoids false positives on
+// pairs that were always correlated.
+
+registerJobType('correlation_drift', {
+  description: 'Watch open positions for pair correlations that have drifted into lockstep since entry',
+  defaultConfig: {
+    corrThreshold: 0.80,
+    driftThreshold: 0.20,
+    minWeightPct: 3.0,
+    cooldownHours: 24,
+    bars: 60,
+  },
+  handler: async (config) => {
+    const { runCorrelationDriftCheck } = require('../risk/correlation-drift');
+    // Use the cascading provider manager for live marks — falls back to
+    // Yahoo/FMP/AV if Polygon is rate-limited, matches the rest of the app.
+    const { getQuotes } = require('../data/providers/manager');
+    const { getDB } = require('../data/database');
+
+    // Pull the open-position symbols for a weight calculation. Without live
+    // marks the watcher falls back to entry_price which is good enough for
+    // the weight gate but slightly stale.
+    const syms = getDB().prepare(
+      'SELECT DISTINCT symbol FROM trades WHERE exit_date IS NULL'
+    ).all().map(r => r.symbol);
+
+    const quotes = {};
+    if (syms.length > 0) {
+      try {
+        const data = await getQuotes(syms);
+        for (const q of data) {
+          const price = q.regularMarketPrice ?? q.price;
+          if (price != null) quotes[q.symbol] = price;
+        }
+      } catch (e) {
+        // Don't let quote fetch failure block the drift sweep — we can
+        // still run with entry-price weights.
+        console.error(`correlation_drift: quote fetch failed: ${e.message}`);
+      }
+    }
+
+    return await runCorrelationDriftCheck({ ...config, quotes });
+  },
+});
+
+// ─── 13. Scale-In Check — Monitor active scale-in plans ────────────────────
 
 registerJobType('scale_in_check', {
   description: 'Check active scale-in plans and trigger next tranche when conditions are met',
@@ -564,4 +588,169 @@ registerJobType('revision_scan', {
   },
 });
 
-module.exports = { setRunScan };
+// ─── Default Job Seeding ────────────────────────────────────────────────────
+//
+// Registers a baseline set of scheduled jobs on first startup (idempotent:
+// jobs are identified by `name` and skipped if already present).
+//
+// Why this exists: before this seed, a fresh install had all job TYPES
+// registered but ZERO rows in `scheduled_jobs`, so `startScheduler()` iterated
+// an empty set and nothing actually ran. The trader had to manually POST to
+// /api/scheduler/jobs for every job they wanted, or the pullback monitor and
+// daily scans would never fire. That silent broken state is the reason the
+// user's phone never buzzed on the 5% pullback entries they cared about.
+//
+// The seed writes directly via `db().prepare(...).run(...)` instead of
+// `createJob(...)` because createJob immediately calls `scheduleJob()` — we
+// want startScheduler to handle scheduling in one pass after the seed
+// completes, so cron state is consistent across restarts.
+//
+// Cron timing note: node-cron uses server local time by default. The default
+// crons below target common hours (market close ≈16:00 ET) assuming the
+// server is in Eastern time. Users in other timezones can edit the cron_expr
+// via /api/scheduler/jobs/:id or override per-job via env var.
+
+const DEFAULT_JOBS = [
+  // Daily RS + SEPA scan after market close — feeds the pullback monitor's
+  // leadership filter. Without this, pullback_watch has no snapshot data.
+  {
+    name: 'rs_scan_daily',
+    description: 'Daily RS/SEPA/VCP scan across universe (post-close)',
+    job_type: 'rs_scan',
+    cron_expression: '30 16 * * 1-5',  // 4:30 PM server local, weekdays
+    config: { persist: true },
+  },
+
+  // Intraday 3-state 50 SMA pullback monitor. Runs every 2 minutes on
+  // weekdays — the new pullback-monitor.js only fires on state transitions,
+  // so most runs are no-ops and extremely cheap.
+  {
+    name: 'pullback_watch_intraday',
+    description: 'Fire 50 SMA pullback alerts (approaching/in_zone/kissing) for leaders',
+    job_type: 'pullback_watch',
+    cron_expression: '*/2 * * * 1-5',  // every 2 min, weekdays
+    config: {},
+  },
+
+  // End-of-day equity snapshot for alpha tracking (TWR, Sharpe, SPY-relative).
+  {
+    name: 'equity_snapshot_eod',
+    description: 'Record daily portfolio equity snapshot for alpha tracking',
+    job_type: 'equity_snapshot',
+    cron_expression: '45 16 * * 1-5',  // 4:45 PM server local, weekdays
+    config: {},
+  },
+
+  // Daily portfolio reconcile with broker — catches any drift between local
+  // trades table and Alpaca positions.
+  {
+    name: 'portfolio_reconcile_daily',
+    description: 'Reconcile local trade journal with broker positions',
+    job_type: 'portfolio_reconcile',
+    cron_expression: '0 17 * * 1-5',  // 5:00 PM server local, weekdays
+    config: {},
+  },
+
+  // Stale order cleanup — expire staged orders older than 24h hourly.
+  {
+    name: 'expire_stale_orders_hourly',
+    description: 'Expire staged orders older than 24 hours',
+    job_type: 'expire_stale_orders',
+    cron_expression: '0 * * * *',  // top of every hour
+    config: { maxAgeHours: 24 },
+  },
+
+  // Pre-open gap guard — cancel any staged/submitted order where the
+  // overnight gap already invalidated the setup. Runs twice: once during
+  // pre-market so we catch the gap before the opening tick can fill a
+  // 'submitted' GTC bracket, and once 5 minutes after the open in case
+  // pre-market quotes weren't available (Yahoo free tier can be spotty
+  // pre-open, so the post-open sweep is the safety net).
+  {
+    name: 'gap_guard_preopen',
+    description: 'Cancel staged/submitted orders where overnight gap broke the setup thesis (pre-open)',
+    job_type: 'gap_guard',
+    cron_expression: '20 9 * * 1-5',  // 9:20 AM server local, weekdays
+    config: { gapUpLimitPct: 0.02 },
+  },
+  {
+    name: 'gap_guard_postopen',
+    description: 'Gap guard safety sweep 5 min after the open (catches pre-market quote gaps)',
+    job_type: 'gap_guard',
+    cron_expression: '35 9 * * 1-5',  // 9:35 AM server local, weekdays
+    config: { gapUpLimitPct: 0.02 },
+  },
+
+  // Weekly job history cleanup — keep the DB lean.
+  {
+    name: 'job_history_cleanup_weekly',
+    description: 'Prune job execution history older than 30 days',
+    job_type: 'job_history_cleanup',
+    cron_expression: '0 3 * * 0',  // 3:00 AM Sunday
+    config: { keepDays: 30 },
+  },
+
+  // Correlation drift watcher — hourly during market hours. Looks at every
+  // pair of open positions, computes current vs baseline correlation, and
+  // fires a `correlation_drift` phone alert when lockstep is hit. Off-hours
+  // cron (every hour 10-16) because intraday drift is what bites a day
+  // trader, but we also want the 4pm sweep to catch close-of-day flips.
+  {
+    name: 'correlation_drift_hourly',
+    description: 'Watch for pair correlations that have drifted into lockstep since entry (intraday)',
+    job_type: 'correlation_drift',
+    cron_expression: '5 10-16 * * 1-5',  // 5 past the hour, 10am-4pm weekdays
+    config: {
+      corrThreshold: 0.80,
+      driftThreshold: 0.20,
+      minWeightPct: 3.0,
+      cooldownHours: 24,
+      bars: 60,
+    },
+  },
+];
+
+function seedDefaultJobs() {
+  const existing = new Set(
+    db().prepare('SELECT name FROM scheduled_jobs').all().map(r => r.name)
+  );
+
+  const insertStmt = db().prepare(`
+    INSERT INTO scheduled_jobs (name, description, job_type, cron_expression, config, enabled)
+    VALUES (?, ?, ?, ?, ?, 1)
+  `);
+
+  const seeded = [];
+  const skipped = [];
+  for (const j of DEFAULT_JOBS) {
+    if (existing.has(j.name)) {
+      skipped.push(j.name);
+      continue;
+    }
+    try {
+      insertStmt.run(
+        j.name,
+        j.description,
+        j.job_type,
+        j.cron_expression,
+        JSON.stringify(j.config || {})
+      );
+      seeded.push(j.name);
+    } catch (e) {
+      // If the insert fails (unique constraint race, etc.), log and continue
+      // — one bad row should not block the rest from being seeded.
+      console.error(`  Scheduler seed: failed to insert ${j.name}: ${e.message}`);
+    }
+  }
+
+  if (seeded.length) {
+    console.log(`   Scheduler seed: +${seeded.length} default job(s) [${seeded.join(', ')}]`);
+  }
+  if (skipped.length && !seeded.length) {
+    // Only log "already present" in the case where nothing new was added —
+    // avoids noise on every restart after the first boot.
+  }
+  return { seeded, skipped };
+}
+
+module.exports = { setRunScan, seedDefaultJobs, DEFAULT_JOBS };
