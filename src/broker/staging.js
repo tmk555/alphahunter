@@ -305,7 +305,7 @@ async function syncOrderStatus(stagedId) {
 // cancelling just the primary would leave the sibling brackets running.
 // The broker adapter's cancelOrder propagates to child legs automatically.
 
-async function cancelStagedOrder(stagedId) {
+async function cancelStagedOrder(stagedId, { suppressNotify = false } = {}) {
   const staged = getStagedOrder(stagedId);
   if (!staged) throw new Error(`Staged order #${stagedId} not found`);
   // Capture pre-cancel state so we can decide whether to notify and what to say.
@@ -331,8 +331,10 @@ async function cancelStagedOrder(stagedId) {
 
   // Only fire a notification on meaningful transitions. A cancel on an
   // already-terminal row (filled/expired/cancelled) is a no-op we don't
-  // want to spam the user about.
-  if (wasStatus === 'staged' || wasStatus === 'submitted') {
+  // want to spam the user about. Callers that fire their own event (e.g.
+  // the gap guard's 'gap_cancel' alert) pass suppressNotify:true to avoid
+  // a double-ping on the user's phone.
+  if (!suppressNotify && (wasStatus === 'staged' || wasStatus === 'submitted')) {
     notifyTradeEvent({
       event:  'cancelled',
       symbol: staged.symbol,
@@ -387,11 +389,124 @@ function expireStaleOrders() {
   return stale.length;
 }
 
+// ─── Gap Guard: Pre-Open Reprice / Cancel ───────────────────────────────────
+//
+// Runs on the pre-market cron (`gap_guard` job, ~9:20 ET). Scans every
+// staged/submitted order and checks whether the overnight gap has broken
+// the original thesis:
+//
+//   • BUY and price > entry_price × (1 + gapUpLimitPct) → CHASE. Cancel.
+//     The staged entry is a pullback/limit that assumed mean-reversion — a
+//     gap up past our band means we'd be buying the spike, which is the
+//     exact opposite of the setup.
+//   • BUY and price ≤ stop_price → THESIS BROKEN. Cancel. The stock already
+//     violated the stop before we even entered, so filling the buy would
+//     instantly be underwater and auto-stop would fire on the next tick.
+//   • SELL/SHORT mirror: gap down past entry band, or gap up through stop.
+//
+// Cancellation fires a dedicated 'gap_cancel' trade event (higher urgency
+// than plain 'cancelled') so the user gets a phone ping with the reason.
+// We use `suppressNotify:true` on cancelStagedOrder to avoid double-ping.
+//
+// gapUpLimitPct defaults to 2% — pullback entries have ~1-2% entry-zone
+// width, so >2% above our entry is almost certainly a chase. Override via
+// job config if you want tighter/looser behavior.
+//
+// Returns { checked, cancelled: [{id, symbol, reason, price, entry, stop}] }.
+
+async function checkPreOpenGaps({ gapUpLimitPct = 0.02 } = {}) {
+  const { getQuotes } = require('../data/providers/manager');
+
+  const rows = db().prepare(
+    "SELECT * FROM staged_orders WHERE status IN ('staged', 'submitted')"
+  ).all();
+  if (!rows.length) return { checked: 0, cancelled: [] };
+
+  const symbols = [...new Set(rows.map(r => r.symbol))];
+  let quotes = [];
+  try {
+    quotes = await getQuotes(symbols);
+  } catch (e) {
+    // Provider fallback exhausted — don't cancel anything on stale data,
+    // just log and bail. The next cron tick will retry.
+    console.error(`  checkPreOpenGaps: quote fetch failed: ${e.message}`);
+    return { checked: 0, cancelled: [], error: e.message };
+  }
+
+  const priceMap = {};
+  for (const q of quotes) {
+    const p = q?.regularMarketPrice ?? q?.price;
+    if (p != null) priceMap[q.symbol] = p;
+  }
+
+  const cancelled = [];
+  for (const row of rows) {
+    const price = priceMap[row.symbol];
+    if (price == null) continue;  // no quote → leave order alone, retry next tick
+
+    const entry = row.entry_price;
+    const stop  = row.stop_price;
+    const isBuy = (row.side || 'buy').toLowerCase() === 'buy';
+
+    let reason = null;
+    if (isBuy) {
+      const upperBand = entry * (1 + gapUpLimitPct);
+      if (price > upperBand) {
+        const gapPct = ((price / entry - 1) * 100).toFixed(1);
+        reason = `Gap up +${gapPct}% (price $${price.toFixed(2)} > limit $${upperBand.toFixed(2)}) — chasing pullback thesis`;
+      } else if (stop != null && price <= stop) {
+        reason = `Price $${price.toFixed(2)} ≤ stop $${Number(stop).toFixed(2)} — thesis broken before fill`;
+      }
+    } else {
+      // Short/sell: mirrored logic.
+      const lowerBand = entry * (1 - gapUpLimitPct);
+      if (price < lowerBand) {
+        const gapPct = ((1 - price / entry) * 100).toFixed(1);
+        reason = `Gap down -${gapPct}% (price $${price.toFixed(2)} < limit $${lowerBand.toFixed(2)}) — chasing short thesis`;
+      } else if (stop != null && price >= stop) {
+        reason = `Price $${price.toFixed(2)} ≥ stop $${Number(stop).toFixed(2)} — thesis broken before fill`;
+      }
+    }
+
+    if (!reason) continue;
+
+    try {
+      // Suppress the generic 'cancelled' notification — we fire our own
+      // higher-priority 'gap_cancel' event below so the user sees the
+      // actual reason (not just "user action").
+      await cancelStagedOrder(row.id, { suppressNotify: true });
+    } catch (e) {
+      console.error(`  checkPreOpenGaps: cancel ${row.symbol} #${row.id} failed: ${e.message}`);
+      continue;
+    }
+
+    notifyTradeEvent({
+      event:  'gap_cancel',
+      symbol: row.symbol,
+      details: {
+        shares: row.qty,
+        price,
+        entry,
+        stop,
+        message: `GAP GUARD: ${reason}`,
+      },
+    }).catch(e => console.error(`Notification error (gap_cancel ${row.symbol}):`, e.message));
+
+    cancelled.push({ id: row.id, symbol: row.symbol, reason, price, entry, stop });
+  }
+
+  if (cancelled.length) {
+    console.log(`  Gap guard: cancelled ${cancelled.length} staged order(s) [${cancelled.map(c => c.symbol).join(', ')}]`);
+  }
+
+  return { checked: rows.length, cancelled };
+}
+
 module.exports = {
   stageOrder, stageFromSetup,
   getStagedOrder, getStagedOrders,
   submitStagedOrder, syncOrderStatus, cancelStagedOrder,
-  expireStaleOrders,
+  expireStaleOrders, checkPreOpenGaps,
   // Exposed for unit tests — the tranche split logic is pure and worth
   // pinning independently of the DB/broker roundtrip.
   splitTranchesForScaleOut, isScaleOutStrategy,

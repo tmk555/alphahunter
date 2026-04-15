@@ -218,6 +218,125 @@ function checkWashSale(symbol, saleDate, isLoss) {
   };
 }
 
+// ─── Wash-Sale Blocker on Buy Side (Phase 2.10) ─────────────────────────────
+//
+// Mirror problem: the buyer is about to open a position in a symbol they
+// already closed at a loss within the last 30 days. IRS §1091 says that
+// loss is disallowed — it gets added to the new lot's cost basis and you
+// carry the tax impact forward instead of deducting it this year.
+//
+// Silent-bug scenario the audit flagged: a momentum trader stops out of AAPL
+// for a -$1,200 loss on day 5, sees the setup re-form on day 18, and re-enters.
+// Their broker statement shows "realized loss $1,200" — but for TAX purposes,
+// that $1,200 is gone until they finally sell the new lot. If they meant to
+// bank the loss to offset other gains, they just silently lost that shelter.
+//
+// The existing `checkWashSale` is designed for the SALE side (have I bought
+// back before selling). We need the BUY side: before I place this new long
+// order, is there a recent loss on this symbol that this buy would poison?
+//
+// Inputs:
+//   symbol       — ticker we're about to buy
+//   purchaseDate — YYYY-MM-DD (defaults to today)
+//
+// Returns:
+//   { isWashSale, recentLoss, windowStart, message }
+//     isWashSale: boolean — true if a qualifying loss sale exists in window
+//     recentLoss: { date, amount, source } — details of the blocking loss
+//     message:    human-readable explanation for the UI/notification
+//
+// Data sources checked:
+//   1. tax_lots table: disposed lots with realized_gain < 0
+//   2. trades table:   closed trades with pnl_dollars < 0
+//   Either source triggers the blocker — the tax lot route is authoritative
+//   for users who actually track lots, the trades-table fallback catches
+//   installations that only populate the simple trades log.
+
+function checkWashSaleOnBuy(symbol, purchaseDate = null) {
+  if (!symbol) return { isWashSale: false };
+
+  const nowIso = purchaseDate || new Date().toISOString().split('T')[0];
+  const purchaseMs = new Date(nowIso).getTime();
+  // 30-day backward window. We don't need the forward window here — if we
+  // sell at a loss in the NEXT 30 days that triggers `checkWashSale` at
+  // sale time, which is a separate concern.
+  const windowStart = new Date(purchaseMs - 30 * 24 * 60 * 60 * 1000)
+    .toISOString().split('T')[0];
+
+  // 1) Disposed tax lots at a loss.
+  const lossLots = db().prepare(`
+    SELECT symbol, disposed_date, realized_gain, shares
+    FROM tax_lots
+    WHERE symbol = ?
+      AND disposed_date IS NOT NULL
+      AND disposed_date >= ?
+      AND disposed_date < ?
+      AND realized_gain < 0
+    ORDER BY disposed_date DESC
+  `).all(symbol, windowStart, nowIso);
+
+  // 2) Closed trades at a loss (fallback for users who don't maintain lots).
+  // We only care about closed trades whose exit is inside the window.
+  const lossTrades = db().prepare(`
+    SELECT symbol, exit_date, pnl_dollars, shares
+    FROM trades
+    WHERE symbol = ?
+      AND exit_date IS NOT NULL
+      AND exit_date >= ?
+      AND exit_date < ?
+      AND pnl_dollars < 0
+    ORDER BY exit_date DESC
+  `).all(symbol, windowStart, nowIso);
+
+  if (lossLots.length === 0 && lossTrades.length === 0) {
+    return {
+      isWashSale: false,
+      windowStart,
+      purchaseDate: nowIso,
+      recentLoss: null,
+      message: null,
+    };
+  }
+
+  // Pick the most recent loss across both sources as the "blocker of record"
+  // for the UI. Multiple losses would still all get flagged in the `all`
+  // field below — the message just surfaces the most recent one.
+  const all = [
+    ...lossLots.map(l => ({
+      date: l.disposed_date,
+      amount: l.realized_gain,
+      shares: l.shares,
+      source: 'tax_lot',
+    })),
+    ...lossTrades.map(t => ({
+      date: t.exit_date,
+      amount: t.pnl_dollars,
+      shares: t.shares,
+      source: 'trade',
+    })),
+  ].sort((a, b) => (a.date < b.date ? 1 : -1));
+
+  const latest = all[0];
+  const earliestAllowed = new Date(
+    new Date(latest.date).getTime() + 31 * 24 * 60 * 60 * 1000
+  ).toISOString().split('T')[0];
+
+  return {
+    isWashSale: true,
+    windowStart,
+    purchaseDate: nowIso,
+    recentLoss: latest,
+    allRecentLosses: all,
+    earliestAllowedReentry: earliestAllowed,
+    message:
+      `WASH SALE BLOCKER: ${symbol} closed at a $${Math.abs(latest.amount).toFixed(0)} ` +
+      `loss on ${latest.date} (${all.length} recent loss${all.length > 1 ? 'es' : ''} ` +
+      `in window). Buying today would disallow that loss under IRS §1091 — ` +
+      `the loss would be added to the new lot's basis instead of deductible ` +
+      `this tax year. Earliest clean re-entry: ${earliestAllowed}.`,
+  };
+}
+
 // ─── Tax-Loss Harvesting Scanner ────────────────────────────────────────────
 // Finds positions with unrealized losses that could be harvested to offset gains.
 
@@ -447,6 +566,7 @@ module.exports = {
   createTaxLot,
   sellTaxLots,
   checkWashSale,
+  checkWashSaleOnBuy,
   scanTaxLossHarvesting,
   getYTDTaxSummary,
   afterTaxPerformance,

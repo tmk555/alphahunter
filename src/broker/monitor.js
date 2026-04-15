@@ -135,6 +135,26 @@ function _watchForNewAlerts() {
 //
 //   3. Notifications — phone alerts on every partial fill.
 
+// Cooldown cache for auto_stop notifications. applyScalingAction does NOT
+// write exit_date for full_exit, so without this cache every re-check (once
+// per stream tick OR once per cron cycle) would re-fire the same auto_stop
+// notification until the broker actually closes the position. 10 minutes is
+// long enough for the bracket's stop leg to fill even under wide slippage.
+const _autoStopNotifyCooldown = new Map();  // trade_id -> ts
+const _AUTO_STOP_COOLDOWN_MS = 10 * 60 * 1000;
+
+function _shouldFireAutoStop(tradeId) {
+  const last = _autoStopNotifyCooldown.get(tradeId);
+  if (last && Date.now() - last < _AUTO_STOP_COOLDOWN_MS) return false;
+  _autoStopNotifyCooldown.set(tradeId, Date.now());
+  // Garbage-collect stale entries so the map doesn't grow unbounded over
+  // a long-running process. Fine to walk the map here since it's tiny.
+  for (const [id, ts] of _autoStopNotifyCooldown) {
+    if (Date.now() - ts > _AUTO_STOP_COOLDOWN_MS * 2) _autoStopNotifyCooldown.delete(id);
+  }
+  return true;
+}
+
 async function _checkScalingForSymbol(symbol, price) {
   const trades = db().prepare(
     'SELECT * FROM trades WHERE exit_date IS NULL AND symbol = ?'
@@ -147,13 +167,21 @@ async function _checkScalingForSymbol(symbol, price) {
     const action = evaluateScalingAction(t, price);
     if (!action) continue;
 
+    // Full-exit notifications are rate-limited — see cooldown note above.
+    // Partial exits (scale_out) have inherent idempotency via the
+    // partial_exits JSON column in the trades table, so no extra guard.
+    const isFullExit = action.action === 'full_exit';
+    if (isFullExit && !_shouldFireAutoStop(t.id)) {
+      continue;
+    }
+
     // Local DB bookkeeping: record the implied partial exit and raise the
     // local stop field. The broker has already closed the tranche by now
     // (its TP fired), so this just keeps our view of the position in sync.
     applyScalingAction(t.id, action);
     console.log(`  📤 Scaling ${t.symbol}: ${action.reason}`);
     notifyTradeEvent({
-      event: action.action === 'full_exit' ? 'auto_stop' : 'scale_out',
+      event: isFullExit ? 'auto_stop' : 'scale_out',
       symbol: t.symbol,
       details: { shares: action.shares, price, reason: action.reason, level: action.level },
     }).catch(e => console.error('Notification error:', e.message));
@@ -168,10 +196,96 @@ async function _checkScalingForSymbol(symbol, price) {
           newStopPrice: action.moveStopTo,
         });
         console.log(`  ✓ Raised ${patched.length} stop leg(s) on ${t.symbol} to ${action.moveStopTo}`);
+
+        // Phase 1.3: fire an `adjustment` notification so the user knows
+        // their trailing stop moved. Previously this was silent — the only
+        // signal was reading the log or inspecting the DB.
+        notifyTradeEvent({
+          event: 'adjustment',
+          symbol: t.symbol,
+          details: {
+            price,
+            stop: action.moveStopTo,
+            shares: patched.length,   // repurposed: # of stop legs patched
+            reason: `Stop moved to ${action.moveStopTo} (${action.reason})`,
+            level: action.level,
+          },
+        }).catch(e => console.error('Adjustment notify error:', e.message));
       } catch (e) {
         console.error(`  Stop-move failed for ${t.symbol}: ${e.message}`);
       }
     }
+  }
+}
+
+// ─── Cron-path scaling fallback ────────────────────────────────────────────
+//
+// When the WebSocket stream is down (or the user runs with streamingActive
+// off), `_checkScalingForSymbol` never fires because it's only hooked to
+// `priceStream.on('price', ...)`. This function walks every open trade and
+// runs the same scaling evaluator against a freshly-fetched quote. It's
+// called from the 5-minute cron cycle so scaling/stop lifecycle events are
+// guaranteed to fire even without streaming.
+//
+// Idempotency: `evaluateScalingAction` is already idempotent against
+// already-recorded partial exits (it re-reads the trade row and skips levels
+// whose records exist in `partial_exits`), so running this in addition to
+// the stream path produces no duplicate notifications for a given level.
+
+async function checkOpenTradeScaling() {
+  try {
+    const openTrades = db().prepare(
+      "SELECT DISTINCT symbol FROM trades WHERE exit_date IS NULL"
+    ).all();
+    if (!openTrades.length) return;
+
+    const symbols = openTrades.map(r => r.symbol);
+    const currentPrices = {};
+
+    // Try streaming cache first (if streamingActive, prices are already warm)
+    if (streamingActive) {
+      for (const s of symbols) {
+        const streamPrice = priceStream.getPrice(s);
+        if (streamPrice) currentPrices[s] = streamPrice.price;
+      }
+    }
+
+    // Fill from broker positions (pos.current_price is the most reliable
+    // real-time source when Alpaca is configured).
+    const missing = symbols.filter(s => !currentPrices[s]);
+    const { configured } = alpaca.getConfig();
+    if (configured && missing.length) {
+      try {
+        const positions = await alpaca.getPositions();
+        for (const pos of positions) {
+          if (missing.includes(pos.symbol) && pos.current_price != null) {
+            currentPrices[pos.symbol] = +pos.current_price;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // Final fallback: Yahoo quote
+    const stillMissing = symbols.filter(s => !currentPrices[s]);
+    if (stillMissing.length) {
+      try {
+        const quotes = await yahooQuote(stillMissing);
+        for (const q of quotes) {
+          if (q.regularMarketPrice) currentPrices[q.symbol] = q.regularMarketPrice;
+        }
+      } catch (_) {}
+    }
+
+    // Run scaling check for every symbol that has a price
+    for (const symbol of Object.keys(currentPrices)) {
+      try {
+        await _checkScalingForSymbol(symbol, currentPrices[symbol]);
+      } catch (e) {
+        console.error(`  Scaling check failed for ${symbol}: ${e.message}`);
+      }
+    }
+  } catch (e) {
+    console.error(`  checkOpenTradeScaling error: ${e.message}`);
   }
 }
 
@@ -349,6 +463,10 @@ async function startStopMonitor() {
       await checkStrategyExits();
       await checkBreadthEarlyWarning();
       await checkConditionalAndScaleIn();
+      // Phase 1.3: cron-path scaling fallback. Guarantees scale_out /
+      // auto_stop / adjustment notifications fire even when the WebSocket
+      // stream is dead (or was never started because no alerts were active).
+      await checkOpenTradeScaling();
     }, { scheduled: true });
 
     // Expire stale staged orders every hour
@@ -708,6 +826,7 @@ module.exports = {
   startStopMonitor, stopMonitor, getMonitorStatus,
   checkPositionsAgainstStops, checkStrategyExits, checkBreadthEarlyWarning,
   checkConditionalAndScaleIn,
+  checkOpenTradeScaling,
   reconcilePositions,
   priceStream, // Export for routes to expose status
 };

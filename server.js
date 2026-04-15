@@ -120,8 +120,8 @@ const { startStopMonitor } = require('./src/broker/monitor');
 const alpacaConfig = require('./src/broker/alpaca').getConfig();
 
 // ─── Job Scheduler (Tier 5) ─────────────────────────────────────────────────
-const { startScheduler } = require('./src/scheduler/engine');
-const { setRunScan }     = require('./src/scheduler/jobs');
+const { startScheduler }                = require('./src/scheduler/engine');
+const { setRunScan, seedDefaultJobs }   = require('./src/scheduler/jobs');
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
@@ -161,5 +161,13 @@ app.listen(PORT, () => {
 
   // Start job scheduler (Tier 5)
   setRunScan(runScan);
+  // Seed default cron jobs on first boot — idempotent, skips anything
+  // already present in scheduled_jobs. Must run BEFORE startScheduler so
+  // the newly-inserted rows get picked up and scheduled in one pass.
+  try {
+    seedDefaultJobs();
+  } catch (e) {
+    console.error(`   Scheduler seed failed: ${e.message}`);
+  }
   startScheduler();
 });

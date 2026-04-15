@@ -291,8 +291,247 @@ function analyzeLiquidity(params) {
   };
 }
 
+// ─── Slippage Prediction (Phase 2.9) ───────────────────────────────────────
+//
+// Learn trailing per-symbol slippage from the `execution_log` table and
+// expose a `predictSlippage()` that other modules (position-sizer,
+// edge-validator, risk preview) can call to get an honest "what will I
+// actually pay" estimate BEFORE placing the order.
+//
+// The problem this fixes:
+//   Every other sizing heuristic in this app assumes a theoretical fill at
+//   the intended price. The audit called out that real fills consistently
+//   lag that number — especially on breakout entries where the whole
+//   market is chasing the same pivot. Without feeding realized slippage
+//   back into the sizer, the user is compounding an optimism bias every
+//   time they compute a "planned R multiple".
+//
+// Algorithm (intentionally boring):
+//   1. Pull all execution_log rows for (symbol, side, order_type).
+//      Fall back in tiers:
+//         tier A: exact match   (≥ 5 rows)
+//         tier B: same symbol, any order_type (≥ 5 rows)
+//         tier C: same side, any symbol (the user's GLOBAL trailing bias)
+//         tier D: hard-coded default based on orderType
+//      Each tier reports its own confidence label so the caller can gate
+//      how much to trust the number.
+//   2. Aggregate: median slippage_pct is our point estimate (robust to
+//      earnings-day outliers). p90 is the "stress bps" used for the
+//      conservative position-sizing path.
+//   3. Clamp: never return an "improvement" (positive slippage in the
+//      buyer-paid-less direction) — if your last 5 fills were all above
+//      intended, that's either lucky or a bad sign; the predictor should
+//      assume zero benefit, not negative cost.
+//   4. Apply a decay: older fills get less weight than recent ones. We
+//      use a simple half-life of 30 days — matches the cadence most
+//      swing traders see in their own behaviour drift.
+//
+// Design notes:
+// - Signs are in our standard "buyer paid MORE = negative" convention:
+//     buy at 100.05 on intended 100.00 → slippage = -0.05 (bad)
+//   So the function returns a NON-POSITIVE number (or 0) in decimal form.
+//   Callers typically invert the sign and convert to bps.
+// - Returns a shape the sizer can log directly. The "bps" form is the
+//   UI-friendly number, the "decimal" form is math-friendly.
+
+const HALF_LIFE_DAYS = 30;                 // exponential decay half-life
+const MIN_SAMPLE_TIER_A = 5;               // same-symbol + same-order-type
+const MIN_SAMPLE_TIER_B = 5;               // same-symbol any-order-type
+const MIN_SAMPLE_TIER_C = 10;              // same-side global
+
+// Default slippage-in-bps by order type, applied when we have NO data at
+// all (tier D). Calibrated from audit-era Alpaca fill logs on ~100 trades.
+const DEFAULT_SLIPPAGE_BPS = {
+  market:      25,
+  stop:        30,
+  stop_limit:  20,
+  limit:       10,
+  default:     15,
+};
+
+/**
+ * Predict slippage for an order before it's placed.
+ *
+ * @param {Object} params
+ * @param {string} params.symbol      Ticker to predict for.
+ * @param {string} params.side        'buy' | 'sell'
+ * @param {string} [params.orderType] 'market' | 'limit' | 'stop' | 'stop_limit'
+ * @param {number} [params.now]       Unix ms epoch (test seam). Default now().
+ * @param {number} [params.lookbackDays=365] Max age of fills to consider.
+ * @returns {{
+ *   predictedSlippageBps: number,   // Rounded up to 1 bps — UI-ready.
+ *   predictedSlippagePct: number,   // Same number as %, signed (≤ 0).
+ *   stressSlippageBps: number,      // p90 — worst-case expectation.
+ *   sampleSize: number,             // How many historical fills were used.
+ *   tier: 'A'|'B'|'C'|'D',          // Confidence tier (A = best).
+ *   tierLabel: string,              // Human-readable tier description.
+ *   basedOn: string                 // "symbol+orderType" | "symbol" | "side" | "default"
+ * }}
+ */
+function predictSlippage({ symbol, side, orderType = 'limit', now, lookbackDays = 365 } = {}) {
+  if (!symbol || !side) {
+    return {
+      predictedSlippageBps: DEFAULT_SLIPPAGE_BPS[orderType] || DEFAULT_SLIPPAGE_BPS.default,
+      predictedSlippagePct: -(DEFAULT_SLIPPAGE_BPS[orderType] || DEFAULT_SLIPPAGE_BPS.default) / 100,
+      stressSlippageBps: (DEFAULT_SLIPPAGE_BPS[orderType] || DEFAULT_SLIPPAGE_BPS.default) * 2,
+      sampleSize: 0,
+      tier: 'D',
+      tierLabel: 'default — no symbol/side provided',
+      basedOn: 'default',
+    };
+  }
+
+  const nowMs = now != null ? now : Date.now();
+  const cutoffIso = new Date(nowMs - lookbackDays * 86400000).toISOString().slice(0, 10);
+
+  // Walk the fallback tiers. The CRITICAL invariant: only advance to the
+  // next tier if the CURRENT tier didn't hit its own minimum. We cannot
+  // reuse a single threshold check across tiers — tier C's min (10) is
+  // higher than tier A's (5), and a 6-row tier-A match would otherwise
+  // be wrongly demoted to tier D.
+  let rows, tier, basedOn, label;
+
+  // Tier A: same symbol, same side, same order type.
+  const rowsA = db().prepare(`
+    SELECT slippage_pct, fill_date FROM execution_log
+    WHERE symbol = ? AND side = ? AND order_type = ?
+      AND slippage_pct IS NOT NULL
+      AND (fill_date IS NULL OR fill_date >= ?)
+  `).all(symbol, side, orderType, cutoffIso);
+
+  if (rowsA.length >= MIN_SAMPLE_TIER_A) {
+    rows = rowsA;
+    tier = 'A';
+    basedOn = 'symbol+orderType';
+  } else {
+    // Tier B: same symbol, same side, any order type.
+    const rowsB = db().prepare(`
+      SELECT slippage_pct, fill_date FROM execution_log
+      WHERE symbol = ? AND side = ?
+        AND slippage_pct IS NOT NULL
+        AND (fill_date IS NULL OR fill_date >= ?)
+    `).all(symbol, side, cutoffIso);
+
+    if (rowsB.length >= MIN_SAMPLE_TIER_B) {
+      rows = rowsB;
+      tier = 'B';
+      basedOn = 'symbol';
+    } else {
+      // Tier C: same side, any symbol — the trader's global slippage bias.
+      const rowsC = db().prepare(`
+        SELECT slippage_pct, fill_date FROM execution_log
+        WHERE side = ?
+          AND slippage_pct IS NOT NULL
+          AND (fill_date IS NULL OR fill_date >= ?)
+      `).all(side, cutoffIso);
+
+      if (rowsC.length >= MIN_SAMPLE_TIER_C) {
+        rows = rowsC;
+        tier = 'C';
+        basedOn = 'side';
+      } else {
+        // Tier D: no data — fall back to the hard-coded default table.
+        // Report the SIZE of the tier we most recently failed so callers
+        // can distinguish "zero data" from "not quite enough".
+        const defaultBps = DEFAULT_SLIPPAGE_BPS[orderType] || DEFAULT_SLIPPAGE_BPS.default;
+        return {
+          predictedSlippageBps: defaultBps,
+          predictedSlippagePct: -defaultBps / 100,
+          stressSlippageBps: defaultBps * 2,
+          sampleSize: rowsC.length,
+          tier: 'D',
+          tierLabel: `default — only ${rowsC.length} historical fills (need ≥ ${MIN_SAMPLE_TIER_C})`,
+          basedOn: 'default',
+        };
+      }
+    }
+  }
+
+  // Weight by recency using an exponential half-life of HALF_LIFE_DAYS.
+  // Fills missing a fill_date get weight 1.0 so synthetic fixtures don't
+  // silently decay to zero in tests.
+  const weighted = rows.map(r => {
+    if (!r.fill_date) return { slip: r.slippage_pct, w: 1.0 };
+    const ageDays = (nowMs - new Date(r.fill_date).getTime()) / 86400000;
+    const w = Math.pow(0.5, Math.max(0, ageDays) / HALF_LIFE_DAYS);
+    return { slip: r.slippage_pct, w };
+  });
+
+  // Weighted median (robust to outliers) computed by sorting + picking
+  // the 50th weight-percentile point.
+  weighted.sort((a, b) => a.slip - b.slip);
+  let totalW = 0;
+  for (const x of weighted) totalW += x.w;
+  let cum = 0;
+  let median = weighted[weighted.length - 1].slip;
+  for (const x of weighted) {
+    cum += x.w;
+    if (cum >= totalW / 2) { median = x.slip; break; }
+  }
+
+  // p90 stress — 90th weight-percentile slippage (most negative tail).
+  // We re-sort ascending by slippage and walk the weights again from the
+  // left until 10% of total weight remains above → that's the p90-worst.
+  let p90 = weighted[0].slip;  // default to most negative if we fall through
+  cum = 0;
+  for (const x of weighted) {
+    cum += x.w;
+    if (cum >= totalW * 0.10) { p90 = x.slip; break; }
+  }
+
+  // Enforce "no improvement allowed" clamp. median > 0 means recent fills
+  // were better than intended — which is either luck or a bug in the
+  // logging pipeline. In either case, the sizer should plan for 0, not
+  // a free lunch.
+  if (median > 0) median = 0;
+  if (p90 > 0) p90 = 0;
+
+  // Convert to basis points (bps = % × 100). Sign: slippage_pct is already
+  // signed with "paid more" = negative, so |slippage_pct| × 100 = bps cost.
+  const bps = Math.ceil(Math.abs(median) * 100);
+  const stressBps = Math.ceil(Math.abs(p90) * 100);
+
+  if (tier === 'A') label = `symbol+orderType match (${rows.length} fills, recency-weighted)`;
+  else if (tier === 'B') label = `symbol match across order types (${rows.length} fills)`;
+  else label = `global ${side}-side slippage (${rows.length} fills — no symbol-specific data)`;
+
+  return {
+    predictedSlippageBps: bps,
+    predictedSlippagePct: +median.toFixed(4),
+    stressSlippageBps: stressBps,
+    sampleSize: rows.length,
+    tier,
+    tierLabel: label,
+    basedOn,
+  };
+}
+
+/**
+ * Convenience: apply a predicted slippage to an intended price and return
+ * the expected fill. Used by position-sizer to adjust the effective entry
+ * before computing shares-at-risk.
+ *
+ * @param {number} intendedPrice
+ * @param {string} side
+ * @param {Object} prediction — return value of predictSlippage()
+ * @returns {number} The expected fill price (buy → higher, sell → lower).
+ */
+function applyPredictedSlippage(intendedPrice, side, prediction) {
+  if (!intendedPrice || !prediction) return intendedPrice;
+  const bps = prediction.predictedSlippageBps || 0;
+  const factor = bps / 10000;
+  return side === 'buy'
+    ? intendedPrice * (1 + factor)   // buyer pays MORE
+    : intendedPrice * (1 - factor);  // seller gets LESS
+}
+
 module.exports = {
   logExecution,
   getExecutionReport,
   analyzeLiquidity,
+  // Phase 2.9 — slippage prediction from historical fills
+  predictSlippage,
+  applyPredictedSlippage,
+  DEFAULT_SLIPPAGE_BPS,
+  HALF_LIFE_DAYS,
 };

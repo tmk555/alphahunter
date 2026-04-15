@@ -1,6 +1,9 @@
 // ─── Signal Replay / Backtest Engine (Tier 4) ───────────────────────────────
 // Replays stored scan_results and rs_snapshots to evaluate strategy performance
 const { getDB } = require('../data/database');
+const {
+  assessSignificance, calmarRatio: calmarFn,
+} = require('./statistics');
 
 function db() { return getDB(); }
 
@@ -293,15 +296,52 @@ function evaluateExit(stock, entryStock, strategy, params, holdingDays, position
 }
 
 // ─── Execution Model ──────────────────────────────────────────────────────
-// Realistic slippage and cost simulation
+// Realistic slippage and cost simulation.
+//
+// Phase 2.6 additions (realistic fills — closes the backtest/live gap):
+//
+//   • cashDragAnnualBps        Risk-free yield earned on idle cash. Without
+//                              this, a backtest that spends 30% of its time
+//                              in cash during CAUTION regimes looks worse
+//                              vs live (where SHY yields ~4.5%) by the full
+//                              yield × cash-fraction × years. Compounded,
+//                              a 5-year backtest with 25% average cash is
+//                              off by ~5.6% absolute return.
+//
+//   • dividendYieldAnnualBps   Dividends pulled during hold periods. The
+//                              rs_snapshots table stores PRICE only, not
+//                              total return — so every ex-div day looks
+//                              like a loss. Adding the S&P average div
+//                              yield back as a daily accrual on long
+//                              positions corrects for this. Shorts pay
+//                              the dividend instead of receiving it.
+//
+//   • nextDayOpenGapBps        Extra slippage on next-day entry fills to
+//                              model the gap between prior-close (signal
+//                              data) and next-open (actual fill). Free
+//                              data only gives us closes, so we can't
+//                              literally mark to next-day open — this BP
+//                              penalty captures the average directional
+//                              gap on momentum entries (~0.15% based on
+//                              recent RS-70+ cohort studies).
+//
+// All three default to non-zero so backtests are realistic by default.
+// Callers can zero them out for controlled comparisons with older results.
 
 const DEFAULT_EXECUTION = {
-  entrySlippageBps: 10,    // 10 basis points slippage on entries (buying into strength)
-  exitSlippageBps: 5,      // 5 bps on exits (more orderly)
-  commissionPerShare: 0,   // Most brokers are $0 commission now; set >0 if needed
-  maxGapPct: 3.0,          // Skip entries where price gaps up >3% from prior close
-  nextDayEntry: true,      // Signal on day D → fill at day D+1's price (realistic for manual traders)
+  entrySlippageBps: 10,       // 10 basis points slippage on entries (buying into strength)
+  exitSlippageBps: 5,         // 5 bps on exits (more orderly)
+  commissionPerShare: 0,      // Most brokers are $0 commission now; set >0 if needed
+  maxGapPct: 3.0,             // Skip entries where price gaps up >3% from prior close
+  nextDayEntry: true,         // Signal on day D → fill at day D+1's price (realistic for manual traders)
+  nextDayOpenGapBps: 15,      // Extra slippage when nextDayEntry fills — models open-vs-prior-close gap
+  cashDragAnnualBps: 450,     // ~4.5% SHY-equivalent risk-free yield on idle cash
+  dividendYieldAnnualBps: 150, // ~1.5% S&P 500 average dividend yield on long positions
 };
+
+// Trading days per year — used to convert annual rates into daily accrual.
+// 252 is the standard US-equity count (≈365 - weekends - holidays).
+const TRADING_DAYS_PER_YEAR = 252;
 
 function applySlippage(price, bps, side) {
   // Slippage always works against you:
@@ -516,6 +556,13 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
   let pendingEntries = [];  // [{ symbol, signalStock, subStrategy, isShort }]
   let skippedNextDay = 0;   // Count of pending entries that couldn't fill (symbol missing next day)
 
+  // Pre-compute per-day accrual multipliers (Phase 2.6) — cheaper than
+  // recomputing every iteration and makes the daily loop readable.
+  const cashDragDaily   = (exec.cashDragAnnualBps     || 0) / 10000 / TRADING_DAYS_PER_YEAR;
+  const divAccrualDaily = (exec.dividendYieldAnnualBps || 0) / 10000 / TRADING_DAYS_PER_YEAR;
+  let totalCashInterest = 0;   // Reporting only
+  let totalDividends    = 0;   // Reporting only
+
   for (let i = 0; i < dates.length; i++) {
     const date = dates[i];
     const dayStocks = byDate[date];
@@ -524,6 +571,33 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       stockMap[s.symbol] = s;
       // Attach 4-week RS acceleration for emerging_leader strategy
       if (isEmerging) s._rs_accel_4w = computeRsAccel4w(s.symbol, date);
+    }
+
+    // ─── Daily accruals (Phase 2.6) ─────────────────────────────────────
+    // Skip day 0 so we don't double-count the initial capital before it's
+    // had time to earn anything. Subsequent days accrue on yesterday's
+    // closing capital + position state.
+    if (i > 0 && cashDragDaily > 0) {
+      const interest = capital * cashDragDaily;
+      capital += interest;
+      totalCashInterest += interest;
+    }
+    if (i > 0 && divAccrualDaily > 0) {
+      // Dividends flow as cash to the account (modeled). Longs receive,
+      // shorts pay — matching the real brokerage mechanic where the short
+      // seller owes the dividend on ex-div day.
+      for (const [sym, pos] of positions) {
+        const mark = stockMap[sym]?.price || pos.entryPrice;
+        const positionNotional = mark * pos.shares;
+        const div = positionNotional * divAccrualDaily;
+        if (pos.isShort) {
+          capital -= div;
+          totalDividends -= div;
+        } else {
+          capital += div;
+          totalDividends += div;
+        }
+      }
     }
 
     // Survivorship filter: skip stocks not in the universe on this date.
@@ -659,10 +733,15 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
         const fillRegime = detectRegimeForDate(spyByDate, date);
         if (!pe.isShort && (fillRegime === 'CAUTION' || fillRegime === 'CORRECTION')) continue;
 
+        // Phase 2.6: pile `nextDayOpenGapBps` on top of regular slippage so
+        // the fill price models the prior-close→next-open gap. Free snapshot
+        // data only has closes, so we can't literally mark to the next-day
+        // open — this bp penalty is the best-effort proxy.
+        const totalEntryBps = exec.entrySlippageBps + (exec.nextDayOpenGapBps || 0);
         const rawEntryPrice = stock.price;
         const entryPrice = pe.isShort
-          ? applySlippage(rawEntryPrice, exec.entrySlippageBps, 'sell')
-          : applySlippage(rawEntryPrice, exec.entrySlippageBps, 'buy');
+          ? applySlippage(rawEntryPrice, totalEntryBps, 'sell')
+          : applySlippage(rawEntryPrice, totalEntryBps, 'buy');
         const posSize = Math.max(0, capital) / Math.max(1, maxPositions - positions.size);
         const shares = Math.floor(posSize / entryPrice);
         if (shares <= 0 || posSize < 100) continue;
@@ -919,6 +998,37 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     : 0;
   const sharpe = stdDailyReturn > 0 ? +((avgDailyReturn / stdDailyReturn) * Math.sqrt(252)).toFixed(2) : 0;
 
+  // ─── Phase 2.7: Statistical significance + Calmar ────────────────────────
+  // Assess whether this backtest's edge is real or a lucky streak. The
+  // replay engine has always reported Sharpe/winRate/avgReturn as point
+  // estimates — but without a t-stat or confidence interval, a user
+  // cannot tell a 20-trade streak from a 200-trade track record. The
+  // `significance` block below gives the dashboard everything it needs to
+  // stamp the result "significant" / "insufficient sample" / "not sig".
+  //
+  // Annualization convention: pass `tradesPerYear` as (trades / span),
+  // NOT 252 — the input to assessSignificance is per-trade returns, not
+  // daily returns. For swing setups with ~1 month hold this lands around
+  // 50–100 trades/year, matching typical swing-momentum cadence.
+  const spanDays = dates.length;
+  const spanYears = Math.max(0.01, spanDays / 252);
+  const tradesPerYear = trades.length > 0 ? trades.length / spanYears : 50;
+  const perTradePctReturns = trades.map(t => t.pnlPct || 0);
+  const significance = assessSignificance(perTradePctReturns, {
+    tradesPerYear,
+    totalReturnPct: totalReturn,
+    maxDrawdownPct: maxDD,
+    days: spanDays,
+    bootstrapIters: perTradePctReturns.length >= 10 ? 1000 : 0,
+    confidence: 0.95,
+  });
+
+  // Standalone Calmar ratio on the full backtest — even when there aren't
+  // enough trades for t-stat significance, Calmar is still a meaningful
+  // ratio because it's computed from the equity curve (which always has
+  // enough points). Dashboards show it next to Sharpe as a sanity check.
+  const calmar = calmarFn(totalReturn, maxDD, spanDays);
+
   // Exit reason breakdown
   const exitReasons = {};
   for (const t of trades) {
@@ -970,9 +1080,16 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       totalReturn: +totalReturn.toFixed(2),
       maxDrawdown: +maxDD.toFixed(2),
       sharpeRatio: sharpe,
+      // Phase 2.7: Calmar as a Sharpe-free pain-adjusted return ratio.
+      // Infinity on zero-drawdown winners — dashboards render as "∞".
+      calmarRatio: Number.isFinite(calmar) ? +calmar.toFixed(3) : calmar,
       profitFactor,
       alpha,
     },
+    // Phase 2.7: full significance report — t-stat, p-value, bootstrap CIs,
+    // verdict flag. The UI gates the "significant" badge on
+    // `significance.isSignificant` and shows `significance.reason` on hover.
+    significance,
     benchmark: spyBenchmark ? {
       spyReturn: spyBenchmark.totalReturn,
       spyMaxDrawdown: spyBenchmark.maxDrawdown,
@@ -990,6 +1107,17 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       exitSlippageBps: exec.exitSlippageBps,
       maxGapPct: exec.maxGapPct,
       nextDayEntry: exec.nextDayEntry,
+      // Phase 2.6 reporting — each of these is a dollar delta that
+      // the backtest engine applied to capital during the simulation.
+      // Positive = tailwind (cash interest, long dividends received),
+      // negative = headwind (short dividends paid).
+      nextDayOpenGapBps: exec.nextDayOpenGapBps,
+      cashDragAnnualBps: exec.cashDragAnnualBps,
+      dividendYieldAnnualBps: exec.dividendYieldAnnualBps,
+      totalCashInterest: +totalCashInterest.toFixed(2),
+      totalDividends: +totalDividends.toFixed(2),
+      cashInterestAsReturnBoost: +(totalCashInterest / initialCapital * 100).toFixed(3),
+      dividendsAsReturnBoost: +(totalDividends / initialCapital * 100).toFixed(3),
     },
     trades: {
       total: trades.length,
