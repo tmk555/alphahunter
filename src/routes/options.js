@@ -62,12 +62,19 @@ module.exports = function(db) {
       // Calculate portfolio value from positions or use provided shares
       const portfolioValue = await getPortfolioValue(db, symbol, shares, stockPrice);
 
+      // Phase 3.14: Pass live IV from chain to get real pricing (not fabricated)
+      const atm = chain.calls?.find(c => Math.abs(c.strike - stockPrice) < stockPrice * 0.03);
+      const liveIV = chain.live && atm?.iv > 0 ? atm.iv : null;
+
       const plan = options.buildProtectivePut(
-        symbol, stockPrice, portfolioValue, hedgeRatio || 0.10
+        symbol, stockPrice, portfolioValue, hedgeRatio || 0.10, liveIV
       );
 
-      // Optionally execute the trade
+      // Optionally execute the trade — only if we have real pricing
       if (execute) {
+        if (!plan.order) {
+          return res.status(400).json({ plan, executed: false, error: 'Cannot execute without live options data — no real pricing available' });
+        }
         try {
           const order = await options.submitOptionsOrder(plan.order);
           return res.json({ plan, executed: true, order, live: true });
@@ -103,9 +110,16 @@ module.exports = function(db) {
         });
       }
 
-      const plan = options.buildCollar(symbol, stockPrice, actualShares);
+      // Phase 3.14: Pass live IV
+      const collarAtm = chain.calls?.find(c => Math.abs(c.strike - stockPrice) < stockPrice * 0.03);
+      const collarIV = chain.live && collarAtm?.iv > 0 ? collarAtm.iv : null;
+
+      const plan = options.buildCollar(symbol, stockPrice, actualShares, collarIV);
 
       if (execute) {
+        if (!plan.put?.order || !plan.call?.order) {
+          return res.status(400).json({ plan, executed: false, error: 'Cannot execute without live options data — no real pricing available' });
+        }
         const results = { put: null, call: null, errors: [] };
         try {
           results.put = await options.submitOptionsOrder(plan.put.order);

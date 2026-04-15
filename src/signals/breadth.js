@@ -1,16 +1,20 @@
 // ─── Market Breadth Internals Engine ─────────────────────────────────────────
-// Professional-grade breadth indicators that LEAD price by days/weeks.
-// Replaces the basic "SPY vs 200MA + VIX" regime with a composite model
-// using the same signals institutional desks monitor.
+// Breadth indicators that LEAD price by days/weeks.
+// Computed from the scanned stock universe (~100-200 stocks).
+//
+// Phase 3.13: Advance/Decline now uses REAL daily price changes
+// (close > prior close = advancing) instead of swing_momentum proxies.
+// McClellan oscillator = EMA(19) - EMA(39) of the daily A/D difference,
+// matching the real McClellan methodology (just on our universe, not NYSE).
 //
 // Indicators:
 //   1. % of universe above 50MA / 200MA (participation breadth)
 //   2. New 52-week highs vs lows (momentum breadth)
-//   3. Advance/Decline ratio (market-wide momentum)
+//   3. Advance/Decline — REAL daily price change (close vs prior close)
 //   4. Up volume / down volume ratio (money flow)
 //   5. VIX term structure (contango = calm, backwardation = stress)
 //   6. Credit spread proxy via TLT/HYG ratio (risk appetite)
-//   7. McClellan-style oscillator (breadth momentum)
+//   7. McClellan oscillator — EMA(19) - EMA(39) of daily A/D net
 
 const { getDB } = require('../data/database');
 const { cacheGet, cacheSet } = require('../data/cache');
@@ -48,10 +52,43 @@ function computeBreadthFromSnapshots(date) {
   const hlDiff = newHighs - newLows;
   const hlRatio = newLows > 0 ? +(newHighs / newLows).toFixed(2) : (newHighs > 0 ? 99 : 1);
 
-  // 3. Advance/Decline proxy (stocks with positive momentum vs negative)
-  const advancing = snapshots.filter(s => s.swing_momentum >= 55).length;
-  const declining = snapshots.filter(s => s.swing_momentum <= 45).length;
-  const neutral = total - advancing - declining;
+  // 3. Advance/Decline — REAL daily price change (Phase 3.13)
+  //    Advancing = close > prior snapshot close. Declining = close < prior close.
+  //    This replaces the swing_momentum proxy which was a fabricated signal.
+  //    Falls back to swing_momentum only when prior snapshot is unavailable.
+  const priorDate = db().prepare(
+    `SELECT MAX(date) as date FROM rs_snapshots WHERE date < ? AND type = 'stock'`
+  ).get(date)?.date;
+
+  let advancing, declining, neutral;
+  if (priorDate) {
+    // Build price map for prior date
+    const priorPrices = {};
+    const priorRows = db().prepare(
+      `SELECT symbol, price FROM rs_snapshots WHERE date = ? AND type = 'stock' AND price > 0`
+    ).all(priorDate);
+    for (const r of priorRows) priorPrices[r.symbol] = r.price;
+
+    advancing = 0; declining = 0; neutral = 0;
+    for (const s of snapshots) {
+      const prior = priorPrices[s.symbol];
+      if (prior && prior > 0) {
+        if (s.price > prior) advancing++;
+        else if (s.price < prior) declining++;
+        else neutral++;
+      } else {
+        // No prior price — classify by swing_momentum as last resort
+        if (s.swing_momentum >= 55) advancing++;
+        else if (s.swing_momentum <= 45) declining++;
+        else neutral++;
+      }
+    }
+  } else {
+    // No prior date available — fall back to swing_momentum (first scan date only)
+    advancing = snapshots.filter(s => s.swing_momentum >= 55).length;
+    declining = snapshots.filter(s => s.swing_momentum <= 45).length;
+    neutral = total - advancing - declining;
+  }
   const adRatio = declining > 0 ? +(advancing / declining).toFixed(2) : (advancing > 0 ? 99 : 1);
 
   // 4. Volume thrust proxy (% of stocks with above-average volume in uptrend)
@@ -96,9 +133,13 @@ function computeBreadthFromSnapshots(date) {
   };
 }
 
-// ─── McClellan-style Breadth Oscillator ─────────────────────────────────────
-// EMA(19) - EMA(39) of the advance/decline ratio, normalized.
-// Positive = breadth expanding, Negative = breadth contracting.
+// ─── McClellan Breadth Oscillator ───────────────────────────────────────────
+// Real McClellan methodology: EMA(19) - EMA(39) of daily (advancing - declining).
+// Phase 3.13: A/D now uses actual price changes (close > prior close), not
+// swing_momentum proxies. Computed over the scanned universe (~100-200 stocks),
+// not the full NYSE (~3000). The math is correct McClellan; the universe is
+// narrower than institutional-grade but representative of the liquid names
+// this system actually trades.
 
 function computeMcClellanOscillator(days = 60) {
   const dates = db().prepare(`
@@ -487,12 +528,14 @@ function saveBreadthSnapshot(date, data) {
   db().prepare(`
     INSERT OR REPLACE INTO breadth_snapshots
     (date, pct_above_50ma, pct_above_200ma, new_highs, new_lows, ad_ratio,
-     vol_thrust_pct, stage2_pct, stage4_pct, composite_score, regime)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     vol_thrust_pct, stage2_pct, stage4_pct, composite_score, regime,
+     mcclellan_osc, summation_index)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     date, data.pctAbove50MA, data.pctAbove200MA, data.newHighs, data.newLows,
     data.adRatio, data.volThrustPct, data.stage2Pct, data.stage4Pct,
-    data.compositeScore || null, data.regime || null
+    data.compositeScore || null, data.regime || null,
+    data.mcclellanOsc || null, data.summationIndex || null
   );
 }
 
@@ -552,9 +595,15 @@ async function getFullBreadthDashboard(quotes) {
   // Divergence detection
   const divergence = detectBreadthDivergence(60);
 
-  // Save snapshot
+  // Save snapshot (including McClellan data when available)
   if (breadth) {
-    saveBreadthSnapshot(latestDate, { ...breadth, compositeScore: composite.score, regime: composite.regime });
+    saveBreadthSnapshot(latestDate, {
+      ...breadth,
+      compositeScore: composite.score,
+      regime: composite.regime,
+      mcclellanOsc: mcclellan?.current || null,
+      summationIndex: mcclellan?.summationIndex || null,
+    });
   }
 
   const dashboard = {

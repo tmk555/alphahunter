@@ -93,10 +93,14 @@ async function getMarketRegime() {
       if (cycle && cycle.ftd?.fired) {
         const rallyDay = cycle.rallyAttempt?.day || 0;
         const ftdConfirmed = cycle.ftd?.confirmed;
+        const ftdFailed = cycle.ftd?.failed;
         const distDays = cycle.distributionDays?.count || 0;
         // O'Neil ramp: pilot → half → three-quarter → full
         let maxHeatPct, exposureLevel;
-        if (!ftdConfirmed || rallyDay <= 3) {
+        if (ftdFailed) {
+          // FTD fired but failed confirmation — back to minimal exposure
+          maxHeatPct = 2; exposureLevel = 'PILOT';
+        } else if (!ftdConfirmed || rallyDay <= 3) {
           maxHeatPct = 2; exposureLevel = 'PILOT';          // 25% of normal 8% heat
         } else if (rallyDay <= 7 && distDays <= 1) {
           maxHeatPct = 4; exposureLevel = 'HALF';           // 50% of normal heat
@@ -257,14 +261,18 @@ async function getMarketRegime() {
           },
         }).catch(e => console.error('Regime notification error:', e.message));
 
-        // Log regime change to regime_log table
+        // Log regime change to regime_log table (Phase 3.12: persist ftd_date + rally_day)
         const date = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+        let cycleData = null;
+        try { cycleData = await autoDetectCycleState(); } catch (_) {}
         _db.prepare(`
-          INSERT OR REPLACE INTO regime_log (date, mode, confidence, spy_price, vix_level, dist_days, breadth_pct, notes)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT OR REPLACE INTO regime_log (date, mode, confidence, spy_price, vix_level, dist_days, breadth_pct, ftd_date, rally_day, notes)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(date, regime, 80, spyPrice, vixLevel,
-          exposureRamp?.distDays || 0,
+          cycleData?.distributionDays?.count || exposureRamp?.distDays || 0,
           breadthOverlay?.score || null,
+          cycleData?.ftd?.date || null,
+          cycleData?.rallyAttempt?.day || null,
           `Changed from ${prevRegime} → ${regime}`);
       }
 
@@ -283,67 +291,168 @@ async function getMarketRegime() {
 }
 
 // ─── Enhanced O'Neil Market Cycle Detection ──────────────────────────────────
-// Distribution days, FTD, rally attempts — the full system
+// Dual-index distribution days, FTD, rally attempts — the full system.
+//
+// Phase 3.11: Real O'Neil distribution days on BOTH SPY (S&P 500) and QQQ
+//   (Nasdaq 100). O'Neil watched both indices — a distribution day on EITHER
+//   counts. 5+ in 25 sessions = "under distribution" → CORRECTION.
+//
+// Phase 3.12: Real follow-through day (FTD) on EITHER index.
+//   Classic O'Neil: day 4-7 of rally, ≥1.5% gain on volume > prior session.
+//   FTD on either SPY or QQQ qualifies. Tracks FTD failures (fired but
+//   confirmation failed due to subsequent distribution).
+
+// ── Distribution day detection for a single index ─────────────────────────
+// Returns { all: [{date, chg, vol, index}...], active: [date...], count }
+function _countDistributionDays(bars, indexLabel) {
+  if (!bars || bars.length < 50) return { all: [], active: [], count: 0 };
+
+  const vol50Avg = bars.slice(-50).reduce((s, b) => s + b.volume, 0) / 50;
+
+  // All distribution days in last 50 sessions (for display)
+  const recent50 = bars.slice(-50);
+  const all = [];
+  for (let i = 1; i < recent50.length; i++) {
+    const chg = (recent50[i].close - recent50[i - 1].close) / recent50[i - 1].close;
+    if (chg <= -0.002 && recent50[i].volume > vol50Avg) {
+      all.push({ date: recent50[i].date, chg: +(chg * 100).toFixed(2), vol: recent50[i].volume, index: indexLabel });
+    }
+  }
+
+  // Active distribution days: only last 25 sessions (O'Neil: they expire after 25 trading days)
+  const recent25 = bars.slice(-25);
+  const active = [];
+  for (let i = 1; i < recent25.length; i++) {
+    const chg = (recent25[i].close - recent25[i - 1].close) / recent25[i - 1].close;
+    if (chg <= -0.002 && recent25[i].volume > vol50Avg) {
+      active.push(recent25[i].date);
+    }
+  }
+
+  return { all, active, count: active.length, vol50Avg };
+}
+
+// ── FTD detection for a single index ──────────────────────────────────────
+// Classic O'Neil: day 4-7 after swing low, ≥1.5% gain on volume > prior day.
+// Returns { fired, date, index }
+const FTD_GAIN_THRESHOLD = 0.015; // 1.5% — O'Neil's canonical threshold
+
+function _detectFTD(bars, indexLabel) {
+  if (!bars || bars.length < 20) return { fired: false, date: null, index: indexLabel };
+
+  const last20 = bars.slice(-20);
+  let swingLowIdx = 0;
+  for (let i = 1; i < last20.length; i++) {
+    if (last20[i].close < last20[swingLowIdx].close) swingLowIdx = i;
+  }
+  const swingLowDate = last20[swingLowIdx].date;
+  const rallyDay = last20.length - 1 - swingLowIdx;
+
+  let fired = false, ftdDate = null;
+  if (rallyDay >= 4) {
+    for (let i = swingLowIdx + 4; i < Math.min(swingLowIdx + 8, last20.length); i++) {
+      const dayChg = (last20[i].close - last20[i - 1].close) / last20[i - 1].close;
+      if (dayChg >= FTD_GAIN_THRESHOLD && last20[i].volume > last20[i - 1].volume) {
+        fired = true;
+        ftdDate = last20[i].date;
+        break;
+      }
+    }
+  }
+
+  return { fired, date: ftdDate, index: indexLabel, swingLowDate, rallyDay };
+}
+
+// ── FTD confirmation check ────────────────────────────────────────────────
+// Post-FTD: watch 3-5 sessions. If ≤1 distribution day occurs, confirmed.
+// If 2+ distribution days → FTD failed (tracked for history).
+function _confirmFTD(bars, ftdDate, vol50Avg) {
+  if (!ftdDate || !bars?.length) return { confirmed: false, failed: false, postFTDDistDays: 0 };
+
+  const n = bars.length;
+  const ftdIdx = bars.findIndex(b => b.date === ftdDate);
+  if (ftdIdx < 0) return { confirmed: false, failed: false, postFTDDistDays: 0 };
+
+  const sessionsAfterFTD = n - 1 - ftdIdx;
+  if (sessionsAfterFTD < 3) return { confirmed: false, failed: false, postFTDDistDays: 0, pending: true };
+
+  const lookAhead = Math.min(sessionsAfterFTD, 5);
+  let postFTDDist = 0;
+  for (let i = ftdIdx + 1; i <= ftdIdx + lookAhead; i++) {
+    const chg = (bars[i].close - bars[i - 1].close) / bars[i - 1].close;
+    if (chg <= -0.002 && bars[i].volume > vol50Avg) postFTDDist++;
+  }
+
+  const confirmed = postFTDDist <= 1;
+  const failed = !confirmed && sessionsAfterFTD >= 5; // definitively failed after 5 sessions
+
+  return { confirmed, failed, postFTDDistDays: postFTDDist, sessionsChecked: lookAhead };
+}
+
 async function autoDetectCycleState() {
   const cached = cacheGet('cycle:auto', TTL_QUOTE);
   if (cached) return cached;
 
   try {
-    const bars = await yahooHistoryFull('SPY');
-    if (!bars || bars.length < 50) return null;
+    // ── Fetch BOTH indices in parallel (Phase 3.11) ─────────────────────
+    const [spyBars, qqqBars, vixBars] = await Promise.all([
+      yahooHistoryFull('SPY'),
+      yahooHistoryFull('QQQ'),
+      yahooHistoryFull('^VIX'),
+    ]);
 
-    const vixBars = await yahooHistoryFull('^VIX');
+    if (!spyBars || spyBars.length < 50) return null;
     const vixLevel = vixBars?.length ? vixBars[vixBars.length - 1].close : 20;
 
-    const n = bars.length;
-    const recent = bars.slice(-50); // last 50 sessions
+    // ── Distribution days: BOTH indices (union of dates) ────────────────
+    // O'Neil counted distribution on both S&P 500 and Nasdaq. A dist day
+    // on EITHER index counts toward the 5-in-25 threshold.
+    const spyDist = _countDistributionDays(spyBars, 'SPY');
+    const qqqDist = qqqBars?.length >= 50 ? _countDistributionDays(qqqBars, 'QQQ') : { all: [], active: [], count: 0 };
 
-    // ── Distribution days: close ≥ -0.2% on volume > 50-day avg ─────────
-    const vol50Avg = bars.slice(-50).reduce((s, b) => s + b.volume, 0) / 50;
-    const distDays = [];
-    for (let i = 1; i < recent.length; i++) {
-      const chg = (recent[i].close - recent[i-1].close) / recent[i-1].close;
-      if (chg <= -0.002 && recent[i].volume > vol50Avg) {
-        distDays.push({ date: recent[i].date, chg: +(chg * 100).toFixed(2), vol: recent[i].volume });
-      }
-    }
-    // Only count distribution days within last 25 sessions (O'Neil rule: they expire after 25 days)
-    const recent25 = bars.slice(-25);
-    const distDays25 = [];
-    for (let i = 1; i < recent25.length; i++) {
-      const chg = (recent25[i].close - recent25[i-1].close) / recent25[i-1].close;
-      if (chg <= -0.002 && recent25[i].volume > vol50Avg) {
-        distDays25.push(recent25[i].date);
-      }
-    }
-    const distCount = distDays25.length;
+    // Merge active dist days by date (union — same date on both = 1 count)
+    const activeDateSet = new Set([...spyDist.active, ...qqqDist.active]);
+    const distCount = activeDateSet.size;
+    const distDays25 = [...activeDateSet].sort();
+    const distDaysAll = [...spyDist.all, ...qqqDist.all].sort((a, b) => a.date.localeCompare(b.date));
 
     // ── SPY position vs MAs ──────────────────────────────────────────────
-    const spyNow  = bars[n-1].close;
-    const closes  = bars.map(b => b.close);
-    const ma50  = closes.slice(-50).reduce((a,b)=>a+b,0) / Math.min(50, closes.length);
-    const ma200 = closes.length >= 200 ? closes.slice(-200).reduce((a,b)=>a+b,0) / 200 : ma50;
+    const n = spyBars.length;
+    const spyNow  = spyBars[n - 1].close;
+    const closes  = spyBars.map(b => b.close);
+    const ma50  = closes.slice(-50).reduce((a, b) => a + b, 0) / Math.min(50, closes.length);
+    const ma200 = closes.length >= 200 ? closes.slice(-200).reduce((a, b) => a + b, 0) / 200 : ma50;
     const above50  = spyNow > ma50;
     const above200 = spyNow > ma200;
 
     // ── 200MA direction ──────────────────────────────────────────────────
-    // Genuine 200MA from ~4 weeks (20 trading days) ago: average of the 200
-    // bars ending 20 days before today, i.e. closes[n-220..n-20].
     const ma200_4wAgo = closes.length >= 220
-      ? closes.slice(-220, -20).reduce((a,b)=>a+b,0) / 200
+      ? closes.slice(-220, -20).reduce((a, b) => a + b, 0) / 200
       : ma200;
     const ma200Rising = ma200 > ma200_4wAgo * 1.001;
 
+    // ── QQQ MAs (for display) ────────────────────────────────────────────
+    let qqqAbove50 = null, qqqAbove200 = null, qqqPrice = null;
+    if (qqqBars?.length >= 50) {
+      const qn = qqqBars.length;
+      qqqPrice = qqqBars[qn - 1].close;
+      const qCloses = qqqBars.map(b => b.close);
+      const qMa50 = qCloses.slice(-50).reduce((a, b) => a + b, 0) / 50;
+      const qMa200 = qCloses.length >= 200 ? qCloses.slice(-200).reduce((a, b) => a + b, 0) / 200 : qMa50;
+      qqqAbove50 = qqqPrice > qMa50;
+      qqqAbove200 = qqqPrice > qMa200;
+    }
+
     // ── Breadth proxy: up days in last 25 ────────────────────────────────
+    const recent25 = spyBars.slice(-25);
     let upDays = 0;
     for (let i = 1; i < recent25.length; i++) {
-      if (recent25[i].close > recent25[i-1].close) upDays++;
+      if (recent25[i].close > recent25[i - 1].close) upDays++;
     }
     const breadthPct = +(upDays / Math.max(recent25.length - 1, 1) * 100).toFixed(0);
 
-    // ── Rally attempt detection ──────────────────────────────────────────
-    // Find most recent swing low (lowest close in last 20 sessions)
-    const last20 = bars.slice(-20);
+    // ── Rally attempt detection (from SPY swing low) ─────────────────────
+    const last20 = spyBars.slice(-20);
     let swingLowIdx = 0;
     for (let i = 1; i < last20.length; i++) {
       if (last20[i].close < last20[swingLowIdx].close) swingLowIdx = i;
@@ -352,37 +461,33 @@ async function autoDetectCycleState() {
     const daysSinceLow = last20.length - 1 - swingLowIdx;
     const rallyDay = daysSinceLow;
 
-    // ── FTD detection: days 4-7 of rally, ≥1.25% gain on vol > prior day ─
-    let ftdFired = false, ftdDate = null;
-    if (rallyDay >= 4) {
-      for (let i = swingLowIdx + 4; i < Math.min(swingLowIdx + 8, last20.length); i++) {
-        const dayChg = (last20[i].close - last20[i-1].close) / last20[i-1].close;
-        if (dayChg >= 0.0125 && last20[i].volume > last20[i-1].volume) {
-          ftdFired = true;
-          ftdDate = last20[i].date;
-          break;
-        }
-      }
+    // ── FTD detection: EITHER index qualifies (Phase 3.12) ──────────────
+    // O'Neil: an FTD on either the S&P 500 or the Nasdaq counts as a
+    // green light. We check both and take the earliest one.
+    const spyFTD = _detectFTD(spyBars, 'SPY');
+    const qqqFTD = qqqBars?.length >= 20 ? _detectFTD(qqqBars, 'QQQ') : { fired: false };
+
+    let ftdFired = spyFTD.fired || qqqFTD.fired;
+    let ftdDate = null, ftdIndex = null;
+    if (spyFTD.fired && qqqFTD.fired) {
+      // Both fired — take the earlier date (stronger signal)
+      ftdDate = spyFTD.date <= qqqFTD.date ? spyFTD.date : qqqFTD.date;
+      ftdIndex = spyFTD.date <= qqqFTD.date ? 'SPY' : 'QQQ';
+    } else if (spyFTD.fired) {
+      ftdDate = spyFTD.date; ftdIndex = 'SPY';
+    } else if (qqqFTD.fired) {
+      ftdDate = qqqFTD.date; ftdIndex = 'QQQ';
     }
 
-    // ── FTD confirmation: ≤1 dist day in sessions after FTD ────────────
-    // O'Neil: watch 3-5 sessions post-FTD for distribution. If market holds
-    // (≤1 dist day), FTD is confirmed. We require minimum 3 sessions of data,
-    // not 5 — waiting for 5 full days to confirm meant FTD stayed "unconfirmed"
-    // for a full week, blocking entries during the most profitable window.
-    let ftdConfirmed = false;
+    // ── FTD confirmation with failure tracking ───────────────────────────
+    let ftdConfirmed = false, ftdFailed = false, ftdConfirmDetail = null;
     if (ftdFired && ftdDate) {
-      const ftdIdx = bars.findIndex(b => b.date === ftdDate);
-      const sessionsAfterFTD = n - 1 - ftdIdx; // how many bars exist after FTD
-      if (ftdIdx >= 0 && sessionsAfterFTD >= 3) {
-        const lookAhead = Math.min(sessionsAfterFTD, 5); // check up to 5 sessions
-        let postFTDDist = 0;
-        for (let i = ftdIdx + 1; i <= ftdIdx + lookAhead; i++) {
-          const chg = (bars[i].close - bars[i-1].close) / bars[i-1].close;
-          if (chg <= -0.002 && bars[i].volume > vol50Avg) postFTDDist++;
-        }
-        ftdConfirmed = postFTDDist <= 1;
-      }
+      const confirmedOn = ftdIndex === 'SPY' ? spyBars : qqqBars;
+      const vol50 = ftdIndex === 'SPY' ? spyDist.vol50Avg : (qqqDist.vol50Avg || spyDist.vol50Avg);
+      const detail = _confirmFTD(confirmedOn, ftdDate, vol50);
+      ftdConfirmed = detail.confirmed;
+      ftdFailed = detail.failed;
+      ftdConfirmDetail = detail;
     }
 
     // ── Determine mode ───────────────────────────────────────────────────
@@ -390,12 +495,18 @@ async function autoDetectCycleState() {
 
     if (vixLevel > 35 || (spyNow < ma200 && (spyNow - ma200) / ma200 < -0.15)) {
       mode = 'BEAR'; confidence = 95; action = 'CASH';
+    } else if (!above50 && distCount >= 5) {
+      // O'Neil's threshold: 5+ distribution days in 25 sessions = definitive correction
+      mode = 'CORRECTION'; confidence = 95; action = 'CASH';
     } else if (!above50 && distCount >= 4) {
-      mode = 'CORRECTION'; confidence = 90; action = 'CASH';  // 4+ dist days = high confidence
+      mode = 'CORRECTION'; confidence = 90; action = 'CASH';
     } else if (!above50 && distCount >= 3) {
-      mode = 'CORRECTION'; confidence = 85; action = 'CASH';  // 3 dist days = moderate confidence
+      mode = 'CORRECTION'; confidence = 85; action = 'CASH';
     } else if (ftdConfirmed && above50) {
       mode = 'FTD_CONFIRMED'; confidence = 75; action = 'FULL_DEPLOY';
+    } else if (ftdFired && ftdFailed) {
+      // FTD fired but distribution followed — not safe to deploy
+      mode = 'FTD_FAILED'; confidence = 65; action = 'WATCH_ONLY';
     } else if (ftdFired && !ftdConfirmed) {
       mode = 'FTD_FIRED'; confidence = 60; action = 'WATCH_ONLY';
     } else if (rallyDay >= 1 && rallyDay <= 7 && !above50) {
@@ -411,28 +522,55 @@ async function autoDetectCycleState() {
     const signals = [];
     if (above50) signals.push('SPY > 50MA');
     if (above200) signals.push('SPY > 200MA');
+    if (qqqAbove50) signals.push('QQQ > 50MA');
+    if (qqqAbove200) signals.push('QQQ > 200MA');
     if (ma200Rising) signals.push('200MA rising');
-    if (distCount >= 4) signals.push(`${distCount} distribution days (25-session window)`);
-    if (ftdFired) signals.push(`FTD fired on ${ftdDate}`);
+    if (distCount >= 4) signals.push(`${distCount} distribution days across SPY+QQQ (25-session window)`);
+    else if (distCount >= 2) signals.push(`${distCount} distribution days (25-session window)`);
+    if (ftdFired) signals.push(`FTD fired on ${ftdIndex} ${ftdDate}`);
     if (ftdConfirmed) signals.push('FTD confirmed');
+    if (ftdFailed) signals.push(`FTD failed — distribution followed on ${ftdDate}`);
     if (vixLevel > 25) signals.push(`VIX elevated at ${vixLevel.toFixed(1)}`);
 
     const result = {
       mode, confidence, action, signals,
-      distributionDays: { count: distCount, dates: distDays25, all: distDays },
-      ftd: { fired: ftdFired, date: ftdDate, confirmed: ftdConfirmed },
+      distributionDays: {
+        count: distCount,
+        dates: distDays25,
+        all: distDaysAll,
+        spy: { count: spyDist.count, dates: spyDist.active },
+        qqq: { count: qqqDist.count, dates: qqqDist.active },
+      },
+      ftd: {
+        fired: ftdFired,
+        date: ftdDate,
+        index: ftdIndex,
+        confirmed: ftdConfirmed,
+        failed: ftdFailed,
+        confirmDetail: ftdConfirmDetail,
+        // Both indices' raw FTD results for transparency
+        spyFTD: { fired: spyFTD.fired, date: spyFTD.date },
+        qqqFTD: { fired: qqqFTD.fired, date: qqqFTD.date },
+      },
       rallyAttempt: { day: rallyDay, startDate: swingLowDate },
       breadth: { upDaysPct: breadthPct },
       spy: { price: spyNow, ma50, ma200, above50, above200, ma200Rising },
+      qqq: { price: qqqPrice, above50: qqqAbove50, above200: qqqAbove200 },
       vixLevel,
     };
 
     cacheSet('cycle:auto', result);
     return result;
-  } catch(e) {
+  } catch (e) {
     console.warn('Cycle detection error:', e.message);
     return null;
   }
 }
+
+// Expose helpers for testing
+autoDetectCycleState._countDistributionDays = _countDistributionDays;
+autoDetectCycleState._detectFTD = _detectFTD;
+autoDetectCycleState._confirmFTD = _confirmFTD;
+autoDetectCycleState.FTD_GAIN_THRESHOLD = FTD_GAIN_THRESHOLD;
 
 module.exports = { getMarketRegime, autoDetectCycleState };

@@ -16,7 +16,7 @@ const DEFAULT_STRATEGIES = [
       rs_min: 70,
       swing_momentum_min: 55,
       stage: [2],
-      regime_allowed: ['CONFIRMED_UPTREND', 'UPTREND_PRESSURE'],
+      regime_allowed: ['FTD_CONFIRMED', 'UPTREND_PRESSURE'],
     }),
     exit_rules: JSON.stringify({
       trail_atr_mult: 2.5,
@@ -59,7 +59,7 @@ const DEFAULT_STRATEGIES = [
     entry_rules: JSON.stringify({
       sector_rs_rank_top: 3,
       monthly_rebalance: true,
-      regime_allowed: ['CONFIRMED_UPTREND', 'UPTREND_PRESSURE', 'RALLY_ATTEMPT'],
+      regime_allowed: ['FTD_CONFIRMED', 'UPTREND_PRESSURE', 'RALLY_ATTEMPT'],
     }),
     exit_rules: JSON.stringify({
       sector_rs_exit_rank: 8,

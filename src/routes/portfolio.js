@@ -708,7 +708,7 @@ module.exports = function(db) {
       const winRate = wins.length / closed.length;
       const avgWinPct = wins.length ? wins.reduce((s, t) => s + t.pnl_percent, 0) / wins.length : 0;
       const avgLossPct = losses.length ? losses.reduce((s, t) => s + t.pnl_percent, 0) / losses.length : 0;
-      const kellyPct = kellyOptimal(winRate, avgWinPct, avgLossPct);
+      const kellyPct = kellyOptimal(winRate, avgWinPct, avgLossPct, closed.length);
 
       res.json({
         totalTrades: closed.length,

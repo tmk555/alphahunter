@@ -1709,8 +1709,8 @@ function GlobalTradingGuide({ onClose }) {
               </div>
               <div style={{display:'grid',gap:6}}>
                 {[
-                  ['Distribution Day','A day where the index closes down >=0.2% on volume higher than the 50-day average. This means institutions are selling. Tracked over a rolling 25-session window (they expire). 3 distribution days = caution. 4-5 = correction likely. 6+ = bear territory.'],
-                  ['Follow-Through Day (FTD)','After a correction, a rally attempt starts from the swing low. On days 4-7 of that rally, if the index gains >=1.25% on volume higher than the prior day, that is an FTD. It signals the correction may be ending. ~75% of bull markets start with an FTD, but not all FTDs lead to new bull markets.'],
+                  ['Distribution Day','A day where SPY or QQQ closes down >=0.2% on volume higher than its 50-day average. Counted on BOTH indices (union of dates). Tracked over a rolling 25-session window (they expire). 3 = caution. 4 = elevated. 5+ = under distribution (correction likely).'],
+                  ['Follow-Through Day (FTD)','After a correction, a rally attempt starts from the swing low. On days 4-7 of that rally, if SPY or QQQ gains >=1.5% on volume higher than the prior day, that is an FTD. Checked on BOTH indices (either qualifies). ~75% of bull markets start with an FTD, but not all FTDs lead to new bull markets. FTD must be confirmed (<=1 dist day in next 3-5 sessions) or it is marked FAILED.'],
                   ['FTD Confirmation','After an FTD fires, the system watches the next 5 sessions. If <=1 distribution day occurs, the FTD is "confirmed" — green light to begin deploying capital. If 2+ distribution days follow, the FTD failed.'],
                   ['Rally Attempt','Counts days since the swing low (lowest close in last 20 sessions). Days 1-3 = too early. Days 4-7 = FTD window (watch closely). Day 8+ = past FTD window without confirmation = still uncertain.'],
                   ['Exposure Ramp','After an FTD confirms, you don\'t go from 0 to 100. O\'Neil method: start with PILOT (2% heat, 1 small position), graduate to HALF (4%), THREE_QUARTER (6%), then FULL (8%) as the rally proves itself over days/weeks without new distribution.'],
@@ -1727,14 +1727,14 @@ function GlobalTradingGuide({ onClose }) {
             <GBlock title="OTHER KEY TERMS" color="var(--text2)" border="var(--border)">
               <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
                 {[
-                  ['Kelly Optimal %','The mathematically optimal % of account to risk per trade, based on your win rate and avg win/loss ratio. Formula: kelly = winRate - (1-winRate) / (avgWin/avgLoss). System uses Half-Kelly (50% of full) for safety. Needs 20+ trades to be meaningful; shows 0% with insufficient data.'],
+                  ['Kelly Optimal %','The mathematically optimal % of account to risk per trade, based on your win rate and avg win/loss ratio. Formula: kelly = winRate - (1-winRate) / (avgWin/avgLoss). System uses Quarter-Kelly (25% of full) with a 3% ceiling for safety. Display only — not used in position sizing. Requires 30+ closed trades; shows 0% with insufficient data.'],
                   ['Exit Reason: auto_sync','Trade was closed automatically when the broker sync detected a filled sell order in Alpaca. P&L and R-multiple are auto-calculated. The trade is flagged "needs_review" so you can set the real exit reason (target_hit, stopped_out, manual, etc.).'],
                   ['R-Multiple','Return expressed as multiples of initial risk. If you risked $100 (entry - stop) and made $250, that\'s a 2.5R trade. Normalizes returns across different position sizes. Goal: average R-multiple > 1.5R.'],
                   ['Portfolio Heat','Sum of dollar risk across all open positions as % of account. Dollar risk per position = shares x (entry_price - stop_price). Max heat = 8% at full deployment. Exposure ramp may cap it lower (2-6%) in early cycle stages.'],
                   ['Outcome Alignment','Compares process quality (grade) with outcome (profit/loss). Deserved Win = good process + profit. Lucky Win = bad process + profit (be concerned). Unlucky Loss = good process + loss (don\'t change anything). Deserved Loss = bad process + loss (fix your process).'],
                   ['Weinstein Stages','Stage 1 = base building (accumulation). Stage 2 = uptrend (BUY ZONE). Stage 3 = top/distribution (SELL/avoid). Stage 4 = downtrend (SHORT candidates). Only buy Stage 2. Never buy Stage 3 or 4.'],
                   ['Sector Rotation','Money flows between sectors in cycles. The system ranks sectors by RS and acceleration, applies +15% conviction boost to overweight (leading) sectors and -15% to underweight (lagging) ones. Buying the best stock in the worst sector rarely works.'],
-                  ['McClellan Oscillator','EMA(19) minus EMA(39) of daily advance/decline difference. Positive = breadth momentum expanding. Negative = contracting. Extreme readings signal overbought (pullback due) or oversold (bounce due).'],
+                  ['McClellan Oscillator','EMA(19) minus EMA(39) of daily advance/decline net (advancing - declining stocks). Uses real daily price changes (close vs prior close) across the scanned universe. Positive = breadth expanding. Negative = contracting. Based on your ~100-200 stock universe, not full NYSE.'],
                 ].map(([k,v])=>(
                   <div key={k} style={{fontSize:10}}>
                     <div style={{color:'var(--amber)',fontWeight:700,marginBottom:1,fontFamily:'var(--font-mono)',fontSize:10}}>{k}</div>
@@ -4025,7 +4025,7 @@ function MarketPulseTab() {
 
   const modeColor = m => ({
     UPTREND:'#00e676', UPTREND_PRESSURE:'#f0a500', FTD_CONFIRMED:'#69f0ae', FTD_FIRED:'#f0a500',
-    RALLY_ATTEMPT:'#80d8ff', CORRECTION:'#ff8c00', BEAR:'#ff3d57', CHOPPY:'#888',
+    FTD_FAILED:'#ff3d57', RALLY_ATTEMPT:'#80d8ff', CORRECTION:'#ff8c00', BEAR:'#ff3d57', CHOPPY:'#888',
   }[m] || '#888');
 
   const actionLabel = a => ({
@@ -4322,28 +4322,35 @@ function MarketPulseTab() {
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:10}}>
             <div style={{background:'var(--bg)',borderRadius:4,padding:12,textAlign:'center',border:'1px solid var(--border)'}}>
               <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:4}}>DISTRIBUTION DAYS (25-SESSION)</div>
-              <div style={{fontSize:28,fontWeight:800,color:cycle.distributionDays?.count>=4?'var(--red)':cycle.distributionDays?.count>=3?'var(--amber)':'var(--green)',fontFamily:'var(--font-mono)'}}>{cycle.distributionDays?.count ?? '—'}</div>
+              <div style={{fontSize:28,fontWeight:800,color:cycle.distributionDays?.count>=5?'var(--red)':cycle.distributionDays?.count>=4?'var(--red)':cycle.distributionDays?.count>=3?'var(--amber)':'var(--green)',fontFamily:'var(--font-mono)'}}>{cycle.distributionDays?.count ?? '—'}</div>
               <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>
-                {cycle.distributionDays?.count>=5 ? 'DANGER — correction likely' :
+                {cycle.distributionDays?.count>=5 ? 'DANGER — under distribution' :
                  cycle.distributionDays?.count>=4 ? 'Elevated — tighten stops' :
                  cycle.distributionDays?.count>=3 ? 'Watch closely' : 'Healthy market'}
               </div>
+              {(cycle.distributionDays?.spy || cycle.distributionDays?.qqq) && (
+                <div style={{display:'flex',justifyContent:'center',gap:12,marginTop:6,fontSize:10,color:'var(--text3)'}}>
+                  <span>SPY: {cycle.distributionDays.spy?.count ?? 0}</span>
+                  <span>QQQ: {cycle.distributionDays.qqq?.count ?? 0}</span>
+                </div>
+              )}
               {cycle.distributionDays?.dates?.length > 0 && (
                 <div style={{marginTop:6,fontSize:9,color:'var(--text3)',textAlign:'left'}}>
                   {cycle.distributionDays.dates.slice(-5).map((d,i) => (
-                    <div key={i} style={{padding:'1px 0'}}>{typeof d === 'object' ? `${d.date} ${d.chg}%` : d}</div>
+                    <div key={i} style={{padding:'1px 0'}}>{typeof d === 'object' ? `${d.date} ${d.chg}% (${d.index})` : d}</div>
                   ))}
                 </div>
               )}
             </div>
             <div style={{background:'var(--bg)',borderRadius:4,padding:12,textAlign:'center',border:'1px solid var(--border)'}}>
               <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:4}}>FOLLOW-THROUGH DAY</div>
-              <div style={{fontSize:16,fontWeight:800,color:cycle.ftd?.confirmed?'var(--green)':cycle.ftd?.fired?'var(--amber)':'var(--text3)',fontFamily:'var(--font-mono)'}}>
-                {cycle.ftd?.confirmed ? 'CONFIRMED' : cycle.ftd?.fired ? 'FIRED (unconfirmed)' : 'NOT DETECTED'}
+              <div style={{fontSize:16,fontWeight:800,color:cycle.ftd?.confirmed?'var(--green)':cycle.ftd?.failed?'var(--red)':cycle.ftd?.fired?'var(--amber)':'var(--text3)',fontFamily:'var(--font-mono)'}}>
+                {cycle.ftd?.confirmed ? 'CONFIRMED' : cycle.ftd?.failed ? 'FAILED' : cycle.ftd?.fired ? 'FIRED (pending)' : 'NOT DETECTED'}
               </div>
-              {cycle.ftd?.date && <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>Date: {cycle.ftd.date}</div>}
+              {cycle.ftd?.date && <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>{cycle.ftd.index || ''} {cycle.ftd.date}</div>}
+              {cycle.ftd?.failed && <div style={{fontSize:9,color:'var(--red)',marginTop:2}}>Distribution followed FTD — not confirmed</div>}
               <div style={{fontSize:9,color:'var(--text3)',marginTop:4}}>
-                FTD = 1.25%+ gain on higher vol, days 4-7 of rally
+                FTD = 1.5%+ gain on higher vol, days 4-7 of rally
               </div>
             </div>
             <div style={{background:'var(--bg)',borderRadius:4,padding:12,textAlign:'center',border:'1px solid var(--border)'}}>
@@ -7600,7 +7607,7 @@ function PerformanceTab() {
               {label:'Total P&L',val:'$'+Number(perf.totalPnl).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0}),color:perf.totalPnl>=0?'var(--green)':'var(--red)',sub:`${perf.totalTrades} closed trades`},
               {label:'Avg Win',val:`+${fmt(perf.avgWinPct,1)}%`,color:'var(--green)',sub:'per winning trade'},
               {label:'Avg Loss',val:`${fmt(perf.avgLossPct,1)}%`,color:'var(--red)',sub:'per losing trade'},
-              {label:'Kelly Optimal',val:`${fmt(perf.kellyOptimalPct,1)}%`,color:'var(--cyan)',sub:'optimal risk per trade'},
+              {label:'Kelly Optimal',val:perf.kellyOptimalPct===0&&perf.totalTrades<30?'—':`${fmt(perf.kellyOptimalPct,1)}%`,color:perf.kellyOptimalPct===0&&perf.totalTrades<30?'var(--text3)':'var(--cyan)',sub:perf.kellyOptimalPct===0&&perf.totalTrades<30?`needs 30+ trades (${perf.totalTrades})`:'quarter-Kelly (display only)'},
               {label:'Gross Wins',val:'$'+Number(perf.grossWins).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0}),color:'var(--green)',sub:'total winning $'},
             ].map(m => (
               <div key={m.label} className="panel" style={{padding:14,textAlign:'center'}}>
@@ -8313,10 +8320,19 @@ function OptionsHedgeSection() {
         <button className="btn btn-sm" onClick={buildHedge} disabled={loading||!symbol}>Build Hedge</button>
       </div>
 
-      {chain && (
+      {chain && chain.noData && (
+        <div style={{background:'var(--bg3)',border:'1px solid var(--amber)',borderRadius:5,padding:16,textAlign:'center',marginBottom:12}}>
+          <div style={{fontSize:13,color:'var(--amber)',fontWeight:600,marginBottom:6}}>No Live Options Data</div>
+          <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5}}>{chain.note}</div>
+          {chain.reason && <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>{chain.reason}</div>}
+          {chain.stockPrice && <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>Stock price: ${fmt(chain.stockPrice)}</div>}
+        </div>
+      )}
+
+      {chain && !chain.noData && (
         <div className="options-grid">
           <div>
-            <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',color:'var(--green)',marginBottom:6}}>CALLS</div>
+            <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',color:'var(--green)',marginBottom:6}}>CALLS {chain.live && <span style={{fontSize:8,color:'var(--green)'}}>(LIVE)</span>}</div>
             <table className="option-chain-table">
               <thead><tr><th>Strike</th><th>Bid</th><th>Ask</th><th>IV</th><th>Delta</th><th>Vol</th></tr></thead>
               <tbody>
@@ -8328,7 +8344,7 @@ function OptionsHedgeSection() {
             </table>
           </div>
           <div>
-            <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',color:'var(--red)',marginBottom:6}}>PUTS</div>
+            <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',color:'var(--red)',marginBottom:6}}>PUTS {chain.live && <span style={{fontSize:8,color:'var(--green)'}}>(LIVE)</span>}</div>
             <table className="option-chain-table">
               <thead><tr><th>Strike</th><th>Bid</th><th>Ask</th><th>IV</th><th>Delta</th><th>Vol</th></tr></thead>
               <tbody>
@@ -8348,10 +8364,16 @@ function OptionsHedgeSection() {
           <div style={{display:'flex',gap:16,flexWrap:'wrap',fontSize:12}}>
             {hedgeResult.strategy && <div>Strategy: <strong style={{color:'var(--cyan)'}}>{hedgeResult.strategy}</strong></div>}
             {hedgeResult.estimatedCost != null && <div>Cost: <strong style={{color:'var(--red)'}}>${fmt(hedgeResult.estimatedCost)}</strong></div>}
+            {hedgeResult.estimatedCost == null && hedgeResult.costRange && (
+              <div>Cost range: <strong style={{color:'var(--amber)'}}>${fmt(hedgeResult.costRange.low)} — ${fmt(hedgeResult.costRange.high)}</strong>
+                <span style={{fontSize:9,color:'var(--text3)',marginLeft:4}}>{hedgeResult.costRange.note}</span>
+              </div>
+            )}
             {hedgeResult.maxProtection != null && <div>Protection: <strong style={{color:'var(--green)'}}>${fmt(hedgeResult.maxProtection)}</strong></div>}
             {hedgeResult.breakeven != null && <div>Breakeven: <strong>${fmt(hedgeResult.breakeven)}</strong></div>}
           </div>
-          {hedgeResult.live === false && <div style={{fontSize:10,color:'var(--text3)',marginTop:6}}>Estimated (synthetic) — connect Alpaca for live options data</div>}
+          {hedgeResult.liveIV === false && <div style={{fontSize:10,color:'var(--amber)',marginTop:6}}>No live IV — cost range shown. Enable Alpaca options for exact pricing + order execution.</div>}
+          {hedgeResult.liveIV === true && <div style={{fontSize:10,color:'var(--green)',marginTop:6}}>Pricing from live market IV</div>}
         </div>
       )}
 
@@ -10270,7 +10292,7 @@ function BreadthSection() {
           {/* McClellan Oscillator */}
           {data.mcclellan && (
             <div className="panel">
-              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>MCCLELLAN OSCILLATOR</div>
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>MCCLELLAN OSCILLATOR <span style={{fontSize:8,opacity:0.6}}>(UNIVERSE BREADTH)</span></div>
               <div style={{display:'flex',gap:20,alignItems:'center',flexWrap:'wrap'}}>
                 <div>
                   <span style={{fontSize:28,fontWeight:700,color:data.mcclellan.current>0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)'}}>{data.mcclellan.current}</span>

@@ -1,7 +1,11 @@
 // ─── Alpaca Options Trading Module ──────────────────────────────────────────
 // Options chain data, order execution, and hedging strategy builders.
-// Falls back to Black-Scholes synthetic data when Alpaca options aren't
-// available, so the UI always works for planning.
+//
+// Phase 3.14: Synthetic (BSM) data is NO LONGER returned as real-looking
+// options chains. When live Alpaca options data is unavailable, the API
+// returns { live: false, noData: true } with a clear message — not fake
+// prices that could mislead trading decisions. Strategy builders return
+// estimated cost ranges (not executable limit prices) when IV is unknown.
 
 const fetch = require('node-fetch');
 const { cacheGet, cacheSet } = require('../data/cache');
@@ -352,30 +356,27 @@ async function getOptionsChain(symbol, expirationDate) {
     }
   }
 
-  // Fallback: generate synthetic chain from stock price
+  // Phase 3.14: No synthetic fallback. Fake IV (hardcoded 0.30) produces
+  // fake prices that are worse than no data — they look real but are fiction.
+  // Return a clear "no data" response instead.
   let stockPrice = null;
   if (configured) {
-    stockPrice = await getStockPrice(symbol);
+    try { stockPrice = await getStockPrice(symbol); } catch (_) {}
   }
 
-  // If we still don't have a price, use a sensible default
-  if (!stockPrice) {
-    const defaults = { SPY: 540, QQQ: 465, AAPL: 190, MSFT: 425, GOOGL: 170,
-                       AMZN: 195, NVDA: 880, META: 500, TSLA: 250, VIX: 18 };
-    stockPrice = defaults[symbol.toUpperCase()] || 100;
-  }
-
-  const { calls, puts } = generateSyntheticChain(symbol, stockPrice, expirationDate);
   const result = {
-    calls, puts, expirations,
+    calls: [], puts: [], expirations,
     live: false,
-    estimated: true,
+    noData: true,
     stockPrice,
     expiration: expirationDate,
-    note: 'Estimated via Black-Scholes. Connect Alpaca with options access for live data.',
+    note: 'Live options data unavailable. Enable Alpaca options trading or upgrade your plan for real-time options chains.',
+    reason: configured
+      ? 'Alpaca options API returned no data for this symbol/expiration.'
+      : 'Alpaca API keys not configured.',
   };
 
-  cacheSet(cacheKey, result);
+  // Don't cache "no data" — retry on next request
   return result;
 }
 
@@ -447,33 +448,46 @@ async function submitOptionsOrder(order) {
 // ─── Strategy Builders ─────────────────────────────────────────────────────
 // These build executable hedge plans with concrete option symbols and sizing.
 
-function buildProtectivePut(stockSymbol, stockPrice, portfolioValue, hedgeRatio = 0.10) {
+function buildProtectivePut(stockSymbol, stockPrice, portfolioValue, hedgeRatio = 0.10, liveIV = null) {
   // Strike selection: 5-10% OTM for cost efficiency
-  // Closer OTM = more protection but more expensive
-  const otmPct = hedgeRatio > 0.15 ? 0.05 : 0.08; // tighter strike when hedging more
-  const strike = Math.round(stockPrice * (1 - otmPct) * 2) / 2; // round to nearest 0.50
+  const otmPct = hedgeRatio > 0.15 ? 0.05 : 0.08;
+  const strike = Math.round(stockPrice * (1 - otmPct) * 2) / 2;
 
   // Expiration: 30-60 DTE for time value balance
   const dte = hedgeRatio > 0.15 ? 45 : 30;
   const expDate = new Date();
   expDate.setDate(expDate.getDate() + dte);
-  // Snap to nearest Friday
   const daysToFriday = (5 - expDate.getDay() + 7) % 7;
   expDate.setDate(expDate.getDate() + daysToFriday);
   const expiration = expDate.toISOString().slice(0, 10);
 
-  // Quantity: based on portfolio exposure, 1 put per 100 shares equivalent
+  // Quantity: 1 put per 100 shares equivalent
   const exposureToHedge = portfolioValue * hedgeRatio;
   const sharesEquivalent = Math.round(exposureToHedge / stockPrice);
   const qty = Math.max(1, Math.round(sharesEquivalent / 100));
 
-  // Estimate cost using Black-Scholes
-  const T = dte / 365;
-  const iv = 0.30; // conservative IV estimate
-  const premium = blackScholes(stockPrice, strike, T, 0.05, iv, 'put');
-  const estimatedCost = qty * premium * 100;
-
   const optionSymbol = buildOCCSymbol(stockSymbol, expiration, 'put', strike);
+  const T = dte / 365;
+
+  // Phase 3.14: Only compute pricing with real IV or explicit override.
+  // Without real IV, return structure + cost RANGE (not executable prices).
+  const hasRealIV = liveIV != null && liveIV > 0;
+  const iv = hasRealIV ? liveIV : null;
+
+  let estimatedCost = null, premium = null, breakeven = null, order = null;
+  if (iv) {
+    premium = blackScholes(stockPrice, strike, T, 0.05, iv, 'put');
+    estimatedCost = +(qty * premium * 100).toFixed(2);
+    breakeven = +(strike - premium).toFixed(2);
+    order = {
+      symbol: optionSymbol, qty, side: 'buy', type: 'limit',
+      timeInForce: 'day', limitPrice: +Math.ceil(premium * 100) / 100,
+    };
+  }
+
+  // Rough cost range estimate (IV typically 15-50% for large caps)
+  const lowPremium = blackScholes(stockPrice, strike, T, 0.05, 0.15, 'put');
+  const highPremium = blackScholes(stockPrice, strike, T, 0.05, 0.50, 'put');
 
   return {
     optionSymbol,
@@ -483,35 +497,30 @@ function buildProtectivePut(stockSymbol, stockPrice, portfolioValue, hedgeRatio 
     expiration,
     dte,
     qty,
-    estimatedCost:  +estimatedCost.toFixed(2),
-    costPct:        +((estimatedCost / portfolioValue) * 100).toFixed(3),
-    maxProtection:  +(qty * strike * 100).toFixed(2),
-    breakeven:      +(strike - premium).toFixed(2),
-    protectionStart: `${(otmPct * 100).toFixed(0)}% below current price ($${strike})`,
-    order: {
-      symbol:    optionSymbol,
-      qty,
-      side:      'buy',
-      type:      'limit',
-      timeInForce: 'day',
-      limitPrice: +Math.ceil(premium * 100) / 100, // round up to nearest cent
+    estimatedCost,
+    costRange: {
+      low: +(qty * lowPremium * 100).toFixed(2),
+      high: +(qty * highPremium * 100).toFixed(2),
+      note: hasRealIV ? `Based on IV ${(iv * 100).toFixed(0)}%` : 'Range estimate — get live quote for exact pricing',
     },
+    costPct: estimatedCost ? +((estimatedCost / portfolioValue) * 100).toFixed(3) : null,
+    maxProtection: +(qty * strike * 100).toFixed(2),
+    breakeven,
+    protectionStart: `${(otmPct * 100).toFixed(0)}% below current price ($${strike})`,
+    order,
+    liveIV: hasRealIV,
   };
 }
 
-function buildCollar(stockSymbol, stockPrice, shares) {
+function buildCollar(stockSymbol, stockPrice, shares, liveIV = null) {
   if (!shares || shares < 100) {
     return { error: 'Collar requires at least 100 shares (1 contract equivalent)' };
   }
 
   const contracts = Math.floor(shares / 100);
-
-  // Put: 5-8% below current price (protection floor)
   const putStrike = Math.round(stockPrice * 0.93 * 2) / 2;
-  // Call: 8-12% above current price (upside cap to fund the put)
   const callStrike = Math.round(stockPrice * 1.10 * 2) / 2;
 
-  // Same expiration for both legs, ~45 DTE
   const dte = 45;
   const expDate = new Date();
   expDate.setDate(expDate.getDate() + dte);
@@ -520,125 +529,131 @@ function buildCollar(stockSymbol, stockPrice, shares) {
   const expiration = expDate.toISOString().slice(0, 10);
 
   const T = dte / 365;
-  const iv = 0.30;
-
-  const putPremium  = blackScholes(stockPrice, putStrike, T, 0.05, iv, 'put');
-  const callPremium = blackScholes(stockPrice, callStrike, T, 0.05, iv, 'call');
-  const netCost = (putPremium - callPremium) * contracts * 100;
+  const hasRealIV = liveIV != null && liveIV > 0;
+  const iv = hasRealIV ? liveIV : null;
 
   const putSymbol  = buildOCCSymbol(stockSymbol, expiration, 'put',  putStrike);
   const callSymbol = buildOCCSymbol(stockSymbol, expiration, 'call', callStrike);
 
+  // Phase 3.14: only produce executable orders with real IV
+  let putPremium = null, callPremium = null, netCost = null;
+  let putOrder = null, callOrder = null;
+  if (iv) {
+    putPremium  = +blackScholes(stockPrice, putStrike, T, 0.05, iv, 'put').toFixed(2);
+    callPremium = +blackScholes(stockPrice, callStrike, T, 0.05, iv, 'call').toFixed(2);
+    netCost = +((putPremium - callPremium) * contracts * 100).toFixed(2);
+    putOrder = { symbol: putSymbol, qty: contracts, side: 'buy', type: 'limit',
+                 timeInForce: 'day', limitPrice: +Math.ceil(putPremium * 100) / 100 };
+    callOrder = { symbol: callSymbol, qty: contracts, side: 'sell', type: 'limit',
+                  timeInForce: 'day', limitPrice: +Math.floor(callPremium * 100) / 100 };
+  }
+
+  // Cost range for planning
+  const lowPutPrem  = blackScholes(stockPrice, putStrike, T, 0.05, 0.15, 'put');
+  const highPutPrem = blackScholes(stockPrice, putStrike, T, 0.05, 0.50, 'put');
+  const lowCallPrem  = blackScholes(stockPrice, callStrike, T, 0.05, 0.15, 'call');
+  const highCallPrem = blackScholes(stockPrice, callStrike, T, 0.05, 0.50, 'call');
+
   return {
     put: {
-      symbol:    putSymbol,
-      type:      'put',
-      strike:    putStrike,
-      expiration,
-      qty:       contracts,
-      premium:   +putPremium.toFixed(2),
-      side:      'buy',
-      order: { symbol: putSymbol, qty: contracts, side: 'buy', type: 'limit',
-               timeInForce: 'day', limitPrice: +Math.ceil(putPremium * 100) / 100 },
+      symbol: putSymbol, type: 'put', strike: putStrike, expiration,
+      qty: contracts, premium: putPremium, side: 'buy', order: putOrder,
     },
     call: {
-      symbol:    callSymbol,
-      type:      'call',
-      strike:    callStrike,
-      expiration,
-      qty:       contracts,
-      premium:   +callPremium.toFixed(2),
-      side:      'sell',
-      order: { symbol: callSymbol, qty: contracts, side: 'sell', type: 'limit',
-               timeInForce: 'day', limitPrice: +Math.floor(callPremium * 100) / 100 },
+      symbol: callSymbol, type: 'call', strike: callStrike, expiration,
+      qty: contracts, premium: callPremium, side: 'sell', order: callOrder,
     },
-    netCost:  +netCost.toFixed(2),
-    netCostPct: +((netCost / (stockPrice * shares)) * 100).toFixed(3),
-    maxLoss:  +((stockPrice - putStrike) * shares + Math.max(0, netCost)).toFixed(2),
-    maxGain:  +((callStrike - stockPrice) * shares - Math.max(0, netCost)).toFixed(2),
-    breakeven: netCost > 0
-      ? +(stockPrice + netCost / shares).toFixed(2)
-      : +(stockPrice - Math.abs(netCost) / shares).toFixed(2),
-    shares,
-    contracts,
-    dte,
-    summary: netCost <= 0
-      ? `Zero-cost collar: floor at $${putStrike}, cap at $${callStrike}`
-      : `Collar costs $${netCost.toFixed(2)}: floor at $${putStrike}, cap at $${callStrike}`,
+    netCost,
+    netCostRange: {
+      low: +((lowPutPrem - highCallPrem) * contracts * 100).toFixed(2),
+      high: +((highPutPrem - lowCallPrem) * contracts * 100).toFixed(2),
+      note: hasRealIV ? `Based on IV ${(iv * 100).toFixed(0)}%` : 'Range estimate — get live quotes',
+    },
+    netCostPct: netCost != null ? +((netCost / (stockPrice * shares)) * 100).toFixed(3) : null,
+    maxLoss: netCost != null ? +((stockPrice - putStrike) * shares + Math.max(0, netCost)).toFixed(2) : null,
+    maxGain: netCost != null ? +((callStrike - stockPrice) * shares - Math.max(0, netCost)).toFixed(2) : null,
+    shares, contracts, dte,
+    liveIV: hasRealIV,
+    summary: `Collar: floor at $${putStrike}, cap at $${callStrike}` +
+      (netCost != null ? (netCost <= 0 ? ' (zero-cost)' : ` ($${netCost})`) : ' (get live quote for pricing)'),
   };
 }
 
-function buildVIXHedge(vixLevel, portfolioValue, hedgeRatio = 0.003) {
+function buildVIXHedge(vixLevel, portfolioValue, hedgeRatio = 0.003, liveIV = null) {
   if (!vixLevel || vixLevel <= 0) vixLevel = 18;
 
   const budget = portfolioValue * hedgeRatio;
 
-  // Long call: VIX + 5 (start profiting on a spike)
   const longStrike  = Math.round(vixLevel + 5);
-  // Short call: VIX + 15 (cap the payout to reduce cost)
   const shortStrike = Math.round(vixLevel + 15);
 
-  // VIX options use ~30 DTE
   const dte = 30;
   const expDate = new Date();
   expDate.setDate(expDate.getDate() + dte);
-  // VIX options expire on Wednesdays
   const daysToWed = (3 - expDate.getDay() + 7) % 7;
   expDate.setDate(expDate.getDate() + daysToWed);
   const expiration = expDate.toISOString().slice(0, 10);
 
   const T = dte / 365;
-  // VIX IV is typically high
-  const vixIV = 0.80;
-
-  const longPremium  = blackScholes(vixLevel, longStrike, T, 0.05, vixIV, 'call');
-  const shortPremium = blackScholes(vixLevel, shortStrike, T, 0.05, vixIV, 'call');
-  const spreadCost   = Math.max(0.10, longPremium - shortPremium);
-
-  const contracts = Math.max(1, Math.floor(budget / (spreadCost * 100)));
-  const totalCost = contracts * spreadCost * 100;
-  const maxPayoff = contracts * (shortStrike - longStrike) * 100;
+  const hasRealIV = liveIV != null && liveIV > 0;
+  const iv = hasRealIV ? liveIV : null;
 
   const longSymbol  = buildOCCSymbol('VIX', expiration, 'call', longStrike);
   const shortSymbol = buildOCCSymbol('VIX', expiration, 'call', shortStrike);
 
+  // Phase 3.14: only generate executable orders with real IV
+  let longPremium = null, shortPremium = null, spreadCost = null;
+  let contracts = null, totalCost = null, maxPayoff = null;
+  let longOrder = null, shortOrder = null;
+
+  if (iv) {
+    longPremium  = +blackScholes(vixLevel, longStrike, T, 0.05, iv, 'call').toFixed(2);
+    shortPremium = +blackScholes(vixLevel, shortStrike, T, 0.05, iv, 'call').toFixed(2);
+    spreadCost = Math.max(0.10, longPremium - shortPremium);
+    contracts = Math.max(1, Math.floor(budget / (spreadCost * 100)));
+    totalCost = +(contracts * spreadCost * 100).toFixed(2);
+    maxPayoff = +(contracts * (shortStrike - longStrike) * 100).toFixed(2);
+    longOrder = { symbol: longSymbol, qty: contracts, side: 'buy', type: 'limit',
+                  timeInForce: 'day', limitPrice: +Math.ceil(longPremium * 100) / 100 };
+    shortOrder = { symbol: shortSymbol, qty: contracts, side: 'sell', type: 'limit',
+                   timeInForce: 'day', limitPrice: +Math.floor(shortPremium * 100) / 100 };
+  } else {
+    // Budget-based rough contract estimate (VIX IV typically 60-120%)
+    const estLongLow  = blackScholes(vixLevel, longStrike, T, 0.05, 0.60, 'call');
+    const estShortLow = blackScholes(vixLevel, shortStrike, T, 0.05, 0.60, 'call');
+    const estSpread = Math.max(0.10, estLongLow - estShortLow);
+    contracts = Math.max(1, Math.floor(budget / (estSpread * 100)));
+  }
+
   const recommendation = vixLevel < 15
-    ? 'VIX is very low - options are cheap, good time to buy tail protection'
+    ? 'VIX is very low — options are cheap, good time to buy tail protection'
     : vixLevel < 20
-      ? 'VIX is moderate - reasonable cost for insurance'
+      ? 'VIX is moderate — reasonable cost for insurance'
       : vixLevel < 30
-        ? 'VIX is elevated - hedges are pricier but may be needed'
-        : 'VIX is very high - consider reducing position size instead of buying expensive hedges';
+        ? 'VIX is elevated — hedges are pricier but may be needed'
+        : 'VIX is very high — consider reducing position size instead of buying expensive hedges';
 
   return {
     longCall: {
-      symbol:    longSymbol,
-      strike:    longStrike,
-      premium:   +longPremium.toFixed(2),
-      side:      'buy',
-      qty:       contracts,
-      order: { symbol: longSymbol, qty: contracts, side: 'buy', type: 'limit',
-               timeInForce: 'day', limitPrice: +Math.ceil(longPremium * 100) / 100 },
+      symbol: longSymbol, strike: longStrike, premium: longPremium,
+      side: 'buy', qty: contracts, order: longOrder,
     },
     shortCall: {
-      symbol:    shortSymbol,
-      strike:    shortStrike,
-      premium:   +shortPremium.toFixed(2),
-      side:      'sell',
-      qty:       contracts,
-      order: { symbol: shortSymbol, qty: contracts, side: 'sell', type: 'limit',
-               timeInForce: 'day', limitPrice: +Math.floor(shortPremium * 100) / 100 },
+      symbol: shortSymbol, strike: shortStrike, premium: shortPremium,
+      side: 'sell', qty: contracts, order: shortOrder,
     },
-    maxCost:     +totalCost.toFixed(2),
-    costPct:     +((totalCost / portfolioValue) * 100).toFixed(3),
-    maxPayoff:   +maxPayoff.toFixed(2),
-    payoffRatio: +(maxPayoff / totalCost).toFixed(1),
+    maxCost: totalCost,
+    costPct: totalCost ? +((totalCost / portfolioValue) * 100).toFixed(3) : null,
+    maxPayoff,
+    payoffRatio: totalCost && maxPayoff ? +(maxPayoff / totalCost).toFixed(1) : null,
     contracts,
     dte,
     expiration,
     vixLevel,
+    liveIV: hasRealIV,
     recommendation,
-    description: `Buy VIX ${longStrike}/${shortStrike} call spread for crash insurance`,
+    description: `Buy VIX ${longStrike}/${shortStrike} call spread for crash insurance` +
+      (hasRealIV ? '' : ' (get live VIX options quote for exact pricing)'),
   };
 }
 

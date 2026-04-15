@@ -1,5 +1,9 @@
 // ─── Position Sizing Engine ──────────────────────────────────────────────────
-// Fixed-fractional, Kelly, regime-adjusted, beta-adjusted position sizing
+// Fixed-fractional, regime-adjusted, beta-adjusted, volatility-adjusted,
+// correlation-aware, slippage-aware position sizing.
+//
+// Kelly criterion is computed as a DISPLAY-ONLY metric (not used in sizing).
+// See kellyOptimal() — informational for the performance dashboard.
 
 // Beta adjustment: high-beta stocks contribute more risk per dollar than the
 // account model assumes (which is calibrated to SPY=1.0). Scale inversely so
@@ -51,14 +55,24 @@ function fixedFractional(accountSize, riskPct, entryPrice, stopPrice) {
   };
 }
 
-// Kelly Criterion: optimal bet size based on historical win rate
-function kellyOptimal(winRate, avgWinPct, avgLossPct) {
+// Kelly Criterion: INFORMATIONAL ONLY — not used in calculatePositionSize().
+// Displayed on the performance dashboard to show what optimal sizing would
+// look like given the trader's historical win rate and payoff ratio.
+//
+// Phase 3.15: Uses quarter-Kelly (0.25x) with a 3% hard ceiling and a
+// 30-trade minimum guard. Quarter-Kelly is the industry standard for
+// practitioners (full Kelly is theoretical, half is aggressive, quarter
+// is conservative enough for real accounts).
+function kellyOptimal(winRate, avgWinPct, avgLossPct, tradeCount) {
   if (!winRate || !avgWinPct || !avgLossPct || avgLossPct === 0) return 0;
+  // Guard: need sufficient sample for meaningful Kelly estimate
+  if (tradeCount != null && tradeCount < 30) return 0;
   const W = winRate;
   const R = avgWinPct / Math.abs(avgLossPct); // win/loss ratio
   const kelly = W - ((1 - W) / R);
-  // Use half-Kelly for safety (full Kelly is too aggressive)
-  return Math.max(0, +(kelly * 0.5 * 100).toFixed(1));
+  // Quarter-Kelly with 3% hard ceiling (never risk more than 3% per trade)
+  const quarterKelly = kelly * 0.25 * 100;
+  return Math.max(0, +Math.min(quarterKelly, 3.0).toFixed(1));
 }
 
 // Regime-adjusted sizing
