@@ -86,7 +86,7 @@ async function sendSlack(alert, config) {
 
 // ─── Telegram Delivery ─────────────────────────────────────────────────────
 
-function formatTelegramMessage(alert) {
+function formatTelegramMessage(alert, { priority = 0 } = {}) {
   const emoji = alert.type === 'stop_violation' ? '🔴'
     : alert.type === 'vcp_pivot' ? '🟢'
     : alert.type === 'price_above' ? '📈'
@@ -97,8 +97,17 @@ function formatTelegramMessage(alert) {
     : alert.type === 'trade_scale_in' ? '➕'
     : '🔔';
 
+  // Urgent alerts (priority ≥ 1 — stops, regime changes, rejections) get a
+  // banner line at the top so the user sees at a glance that this one
+  // bypasses normal chatter. Telegram itself doesn't have priority lanes
+  // like Pushover does — the audible/silent split is controlled via the
+  // `disable_notification` flag on the send call, handled in sendTelegram.
+  const header = priority >= 1
+    ? `🚨 <b>URGENT — ${alert.symbol} Alert</b> 🚨`
+    : `${emoji} <b>${alert.symbol} Alert</b>`;
+
   return [
-    `${emoji} <b>${alert.symbol} Alert</b>`,
+    header,
     ``,
     `<b>Type:</b> ${alert.type.replace(/_/g, ' ')}`,
     `<b>Price:</b> $${alert.current_price}`,
@@ -114,21 +123,33 @@ async function sendTelegram(alert, config) {
   const chatId = config.chat_id || process.env.TELEGRAM_CHAT_ID;
   if (!botToken || !chatId) throw new Error('Telegram bot_token and chat_id required');
 
+  // Mirror Pushover priority into Telegram behavior:
+  //   priority ≥ 1 → urgent banner + audible (bypasses muted chat preview)
+  //   priority  0 → normal audible notification (default)
+  //   priority ≤ -1 → `disable_notification: true` (silent — no sound/vibrate)
+  // Lookup via NOTIFICATION_PRIORITY_MAP so a single map drives both channels,
+  // and strips the `trade_` prefix so notifyTradeEvent('auto_stop') still
+  // resolves to the `auto_stop: 1` entry. (Previously this was a silent bug:
+  // every lifecycle event dropped to priority 0 because the map had
+  // `auto_stop` but the code looked up `trade_auto_stop`.)
+  const priority = lookupPriority(alert.type);
+
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       chat_id: Number(chatId) || chatId,
-      text: formatTelegramMessage(alert),
+      text: formatTelegramMessage(alert, { priority }),
       parse_mode: 'HTML',
       disable_web_page_preview: true,
+      disable_notification: priority <= -1,
     }),
   });
 
   const data = await res.json();
   if (!data.ok) throw new Error(`Telegram API error: ${data.description}`);
-  return { delivered: true, channel: 'telegram', message_id: data.result?.message_id };
+  return { delivered: true, channel: 'telegram', message_id: data.result?.message_id, priority };
 }
 
 // ─── Webhook Delivery ──────────────────────────────────────────────────────
@@ -150,45 +171,115 @@ async function sendWebhook(alert, config) {
   return { delivered: true, channel: 'webhook' };
 }
 
+// ─── Unified Priority Map (shared by Pushover + Telegram) ──────────────────
+//
+// Single source of truth for alert urgency. Each channel interprets it
+// differently:
+//
+//   • Pushover  →  priority = N                     (API accepts -2..2)
+//                   priority ≥ 1 adds retry/expire    (emergency-level alert)
+//   • Telegram  →  priority ≤ -1 sets disable_notification: true (silent)
+//                   priority ≥  1 adds an "URGENT" banner to the message body
+//
+// The map contains BOTH the direct alert types (stop_violation, vcp_pivot)
+// AND the shorter lifecycle event names (auto_stop, filled, staged). The
+// `lookupPriority` helper below strips the `trade_` prefix so
+// notifyTradeEvent('auto_stop')'s final type 'trade_auto_stop' still
+// resolves to `auto_stop: 1`. This replaces a latent bug where every
+// lifecycle event silently fell through to priority 0.
+//
+// gap_cancel is treated as priority-1: the staged order just died because
+// the overnight gap broke the setup thesis, and the user needs to know
+// immediately so they can decide whether to re-enter at a new level.
+
+const NOTIFICATION_PRIORITY_MAP = {
+  // Direct alerts (deliverAlert callers)
+  stop_violation:      1,
+  regime_change:       1,
+  vcp_pivot:           0,
+  price_above:         0,
+  price_below:         0,
+  strategy_exit:       0,
+  test:               -1,
+
+  // Lifecycle event short names (notifyTradeEvent + trade_ prefix stripping)
+  auto_stop:           1,
+  force_stop:          1,
+  stop_hit:            1,
+  gap_cancel:          1,   // pre-open gap guard killed the staged order
+  correlation_drift:   1,   // Phase 2.8 — pair drifted into lockstep, trim one
+  rejected:            1,   // broker rejected — needs investigation
+  trade_rejected:      1,   // legacy verbose form
+  pullback_entry:      0,
+  filled:              0,
+  buy:                 0,
+  sell:                0,
+  exit:                0,
+  scale_in:            0,
+  scale_out:           0,
+  partial_exit:        0,
+  adjustment:          0,
+  conditional_triggered: 0,
+  tranche_filled:      0,
+  plan_completed:      0,
+  conditional_expired: 0,
+  staged:             -1,
+  submitted:          -1,
+  cancelled:          -1,
+  expired:            -1,
+};
+
+// Backwards-compat alias — external callers (routes, older tests) may import
+// PUSHOVER_PRIORITY_MAP by name. Point it at the unified map so nothing
+// diverges.
+const PUSHOVER_PRIORITY_MAP = NOTIFICATION_PRIORITY_MAP;
+
+// Resolve the priority for any alert type, supporting both direct alerts
+// ('auto_stop') and trade-prefixed forms ('trade_auto_stop'). Falls through
+// to 0 (default/normal) on unknown types.
+function lookupPriority(type, fallback = 0) {
+  if (type == null) return fallback;
+  if (NOTIFICATION_PRIORITY_MAP[type] != null) return NOTIFICATION_PRIORITY_MAP[type];
+  if (type.startsWith('trade_')) {
+    const stripped = type.slice(6);
+    if (NOTIFICATION_PRIORITY_MAP[stripped] != null) return NOTIFICATION_PRIORITY_MAP[stripped];
+  }
+  return fallback;
+}
+
 // ─── Pushover Delivery (Mobile Push Notifications) ────────────────────────
 
-const PUSHOVER_PRIORITY_MAP = {
-  stop_violation: 1,       // high priority — vibrates even on silent
-  force_stop: 1,
-  auto_stop: 1,
-  regime_change: 1,        // regime shifts demand immediate attention
-  trade_regime_change: 1,
-  trade_rejected: 1,       // broker rejected the order — needs investigation
-  strategy_exit: 0,        // normal priority
-  vcp_pivot: 0,
-  price_above: 0,
-  price_below: 0,
-  trade_staged: -1,        // low priority — no vibration
-  trade_submitted: -1,
-  trade_cancelled: -1,     // informational — either user-initiated or broker
-  trade_expired: -1,       // informational — stale 24h cleanup or GTC expiry
-  pullback_entry: 0,
-  trade_filled: 0,
-  trade_buy: 0,
-  scale_in: 0,
-  conditional_triggered: 0,
-  test: -1,
-};
-
 const PUSHOVER_SOUND_MAP = {
-  stop_violation: 'siren',
-  force_stop: 'siren',
-  auto_stop: 'falling',
-  regime_change: 'cosmic',
-  trade_regime_change: 'cosmic',
-  strategy_exit: 'intermission',
-  vcp_pivot: 'cashregister',
-  pullback_entry: 'pushover',
-  trade_filled: 'cashregister',
-  trade_buy: 'cashregister',
-  scale_in: 'pushover',
+  // Direct alerts
+  stop_violation:      'siren',
+  regime_change:       'cosmic',
+  strategy_exit:       'intermission',
+  vcp_pivot:           'cashregister',
+
+  // Lifecycle short names — resolved via lookupSound which strips trade_
+  // prefix, same approach as lookupPriority.
+  force_stop:          'siren',
+  auto_stop:           'falling',
+  gap_cancel:          'falling',
+  correlation_drift:   'intermission',  // Phase 2.8 — not urgent enough for siren
+  rejected:            'falling',
+  pullback_entry:      'pushover',
+  filled:              'cashregister',
+  buy:                 'cashregister',
+  scale_in:            'pushover',
+  scale_out:           'pushover',
   conditional_triggered: 'magic',
 };
+
+function lookupSound(type, fallback = 'pushover') {
+  if (type == null) return fallback;
+  if (PUSHOVER_SOUND_MAP[type]) return PUSHOVER_SOUND_MAP[type];
+  if (type.startsWith('trade_')) {
+    const stripped = type.slice(6);
+    if (PUSHOVER_SOUND_MAP[stripped]) return PUSHOVER_SOUND_MAP[stripped];
+  }
+  return fallback;
+}
 
 function formatPushoverMessage(alert) {
   const emoji = alert.type === 'stop_violation' ? '🔴'
@@ -217,7 +308,11 @@ async function sendPushover(alert, config) {
   if (!userKey || !appToken) throw new Error('Pushover user_key and app_token required');
 
   const { title, message } = formatPushoverMessage(alert);
-  const priority = PUSHOVER_PRIORITY_MAP[alert.type] ?? 0;
+  // Use the shared lookup helper so trade_ prefixed alert types (from
+  // notifyTradeEvent) resolve to their short-name entries like
+  // auto_stop: 1, stop_hit: 1, etc. Previously this was a silent fall-
+  // through to priority 0 for every trade lifecycle event.
+  const priority = lookupPriority(alert.type);
 
   const body = {
     token: appToken,
@@ -225,7 +320,7 @@ async function sendPushover(alert, config) {
     title,
     message,
     priority,
-    sound: PUSHOVER_SOUND_MAP[alert.type] || 'pushover',
+    sound: lookupSound(alert.type),
     url: `http://localhost:${process.env.PORT || 3000}`,
     url_title: 'Open Alpha Hunter',
     timestamp: Math.floor(new Date(alert.timestamp || Date.now()).getTime() / 1000),
@@ -393,6 +488,7 @@ const TRADE_EVENT_EMOJIS = {
   // Phase 2 events
   regime_change: '🌊', conditional_triggered: '🎯', tranche_filled: '📊',
   conditional_expired: '⏰', plan_completed: '🏁',
+  correlation_drift: '🔗',  // Phase 2.8 — pair of positions drifted into lockstep
   // Broker lifecycle terminal transitions — fired by the order-status
   // poller in broker/monitor.js + direct hooks in broker/staging.js.
   cancelled: '🚫', expired: '⏰', rejected: '⛔',
@@ -483,6 +579,10 @@ module.exports = {
   getAvailableChannels,
   // Individual senders for direct use
   sendSlack, sendTelegram, sendWebhook, sendPushover,
+  // Priority resolution — exported for unit tests and any caller that
+  // wants to inspect the urgency of an alert without actually sending it.
+  NOTIFICATION_PRIORITY_MAP, PUSHOVER_PRIORITY_MAP,
+  lookupPriority, lookupSound,
   // Trade event notifications
   notifyTradeEvent,
 };
