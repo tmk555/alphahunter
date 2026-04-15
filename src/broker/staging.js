@@ -94,7 +94,7 @@ function stageOrder({ symbol, side = 'buy', order_type = 'limit', qty, entry_pri
   return order;
 }
 
-function stageFromSetup(stock, setup, sizing, source = 'swinglab', exitStrategy = 'full_in_scale_out', strategy = null) {
+function stageFromSetup(stock, setup, sizing, source = 'swing', exitStrategy = 'full_in_scale_out', strategy = null) {
   // Parse numeric values from setup strings (e.g., "$185.50" → 185.50)
   const parsePrice = (s) => {
     if (typeof s === 'number') return s;

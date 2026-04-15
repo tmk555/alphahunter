@@ -1,4 +1,4 @@
-// ─── /api/swing-lab/*, /api/trade-setup routes ──────────────────────────────
+// ─── /api/trade-setups/* routes ──────────────────────────────
 const express = require('express');
 const router  = express.Router();
 
@@ -95,8 +95,8 @@ Return JSON array:
     }));
   }
 
-  // POST /api/swing-lab/scan
-  router.post('/swing-lab/scan', async (req, res) => {
+  // POST /api/trade-setups/scan
+  router.post('/trade-setups/scan', async (req, res) => {
     const { stocks = [], mode = 'swing' } = req.body;
     if (!stocks.length) return res.status(400).json({ error: 'No stocks provided' });
 
@@ -140,8 +140,8 @@ Return JSON array:
     res.json({ results, regime, hasAI: !!anthropic, scannedCount: candidates.length, totalInput: stocks.length });
   });
 
-  // POST /api/swing-lab/brief
-  router.post('/swing-lab/brief', async (req, res) => {
+  // POST /api/trade-setups/brief
+  router.post('/trade-setups/brief', async (req, res) => {
     if (!anthropic) return res.status(400).json({ error: 'ANTHROPIC_API_KEY not set' });
     const { stock, mode='swing' } = req.body;
     if (!stock?.ticker) return res.status(400).json({ error: 'stock.ticker required' });
