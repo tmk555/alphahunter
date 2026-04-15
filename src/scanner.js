@@ -105,7 +105,7 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
     }
 
     const earningsDrift = calcEarningsDrift(barsMap[sym], daysToEarnings, q);
-    const beta = calcBeta(closes, spyCloses, 90);
+    const beta = calcBeta(closes, spyCloses, 252);
 
     // Enhanced pattern detection (v8)
     let patternData = { patterns: {}, patternCount: 0, bestPattern: null };

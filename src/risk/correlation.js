@@ -175,7 +175,7 @@ function analyzeFactorExposure(positions, closesMap, benchmarkCloses) {
 
     // Beta exposure
     const beta = closesMap[pos.symbol] && benchmarkCloses
-      ? calcBeta(closesMap[pos.symbol], benchmarkCloses, 90) || 1.0
+      ? calcBeta(closesMap[pos.symbol], benchmarkCloses, 252) || 1.0
       : pos.beta || 1.0;
 
     // Momentum proxy (from RS rank if available)

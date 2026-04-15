@@ -15,13 +15,19 @@ function betaAdjustment(beta) {
 
 // Volatility (ATR%) adjustment: chops position size when realized volatility
 // is elevated. ATR% is the more honest measure of intraday risk than beta.
-//   atr% 2  → ~1.0x   (typical large cap)
-//   atr% 4  → ~0.5x
-//   atr% 6+ → 0.33x
+//   atr% 2   → ~1.00x  (typical large cap)
+//   atr% 4   → ~0.62x
+//   atr% 5+  → 0.50x   (floor)
+//
+// Floor raised from 0.33 → 0.50 after observing the WDC cascade: 6%+ ATR is
+// normal for semis/biotech/high-growth names and should not, on its own,
+// trigger a 3× size cut. That floor stacked multiplicatively with the
+// betaMult floor (0.40) and regimeMult (0.75) to produce effective 10×
+// shrinkage on a single name — way below the intended risk-budget exposure.
 function volatilityAdjustment(atrPct) {
   if (!atrPct || atrPct <= 0) return 1.0;
   if (atrPct <= 2) return 1.0;
-  return Math.max(0.33, 2 / atrPct);
+  return Math.max(0.50, 2.5 / atrPct);
 }
 
 // Fixed fractional: risk X% of account per trade
@@ -86,7 +92,7 @@ function factorConcentrationPenalty(candidateSector, existingPositions, closesMa
   if (closesMap && benchmarkCloses && existingPositions.length >= 2) {
     let totalBeta = 0, betaCount = 0;
     for (const pos of existingPositions) {
-      const beta = closesMap[pos.symbol] ? calcBeta(closesMap[pos.symbol], benchmarkCloses, 90) : null;
+      const beta = closesMap[pos.symbol] ? calcBeta(closesMap[pos.symbol], benchmarkCloses, 252) : null;
       if (beta != null) { totalBeta += beta; betaCount++; }
     }
     if (betaCount > 0) {
@@ -161,8 +167,18 @@ function calculatePositionSize(params) {
     }
   }
 
-  // Combined risk multiplier: regime × beta × vol × correlation × factor (capped at 1.5x ceiling)
-  const totalMult = Math.min(1.5, effectiveRegimeMult * betaMult * volMult * correlationMult * factorMult);
+  // Combined risk multiplier: regime × beta × vol × correlation × factor.
+  // Bounded on BOTH ends:
+  //   - ceiling 1.5×  — prevents low-beta/low-vol names being over-sized
+  //   - floor   0.40× — prevents cascading conservative multipliers from
+  //                     compounding a single name into statistical-noise
+  //                     territory (the WDC cascade shrunk a $1,000 budget
+  //                     to ~$100 effective by stacking 0.75 × 0.40 × 0.33).
+  // The floor means: a name is never sized below 40% of its fixed-fractional
+  // base. If risk-aversion warrants a deeper cut than that, the correct
+  // response is to skip the trade, not to ride in with a token position.
+  const rawMult   = effectiveRegimeMult * betaMult * volMult * correlationMult * factorMult;
+  const totalMult = Math.max(0.40, Math.min(1.5, rawMult));
 
   const adjusted = {
     ...base,
@@ -196,9 +212,24 @@ function calculatePositionSize(params) {
 }
 
 // ─── Beta calculation from price history ────────────────────────────────────
-// Computes 90-day rolling beta of stock vs benchmark (typically SPY).
+// Computes Blume-adjusted 252-day beta of stock vs benchmark (typically SPY).
 // Uses daily log returns for stability.
-function calcBeta(stockCloses, benchCloses, periods = 90) {
+//
+// Why 252-day + Blume: unadjusted 90-day OLS is very sensitive to single-day
+// outliers (earnings gaps, macro prints) and in practice runs 30-60% hotter
+// than every major brokerage beta display. The WDC case exposed this — our
+// 90-day raw OLS was 3.17 while TOS/Yahoo/Bloomberg all showed ~1.8. The
+// difference is entirely methodology:
+//   1. 252-day window dilutes recent single-day shocks.
+//   2. Blume adjustment: beta = 0.67 × raw + 0.33 × 1.0
+//      This shrinks the raw estimate toward the market mean, correcting for
+//      the empirical mean-reversion of betas over time. It's the standard
+//      adjustment Bloomberg/Yahoo/TOS publish as "beta" by default.
+// Our betaMult floor is 0.40 (→ raw beta >2.5 gets clamped); the raw 90-day
+// calc was pushing WDC-like high-vol names past that floor routinely, which
+// in combination with volMult produced cascade compounding. Blume + 252
+// keeps the adjusted beta in the un-floored range for most real names.
+function calcBeta(stockCloses, benchCloses, periods = 252) {
   if (!stockCloses || !benchCloses) return null;
   const n = Math.min(stockCloses.length, benchCloses.length);
   if (n < periods + 1) return null;
@@ -224,7 +255,9 @@ function calcBeta(stockCloses, benchCloses, periods = 90) {
     varB += (benchRets[i] - meanB) ** 2;
   }
   if (varB === 0) return null;
-  return +(cov / varB).toFixed(2);
+  const rawBeta = cov / varB;
+  // Blume adjustment — matches brokerage convention
+  return +(0.67 * rawBeta + 0.33).toFixed(2);
 }
 
 // ─── Correlation matrix for open positions ──────────────────────────────────
