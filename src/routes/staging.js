@@ -90,7 +90,7 @@ module.exports = function(db, runScan) {
       });
 
       // Stage the bracket order
-      const staged = stageFromSetup(stock, setup, sizing, mode === 'swing' ? 'swinglab' : 'position', exitStrategy, strategy);
+      const staged = stageFromSetup(stock, setup, sizing, mode === 'swing' ? 'swing' : 'position', exitStrategy, strategy);
 
       res.json({
         staged,

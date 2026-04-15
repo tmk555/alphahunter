@@ -1,7 +1,7 @@
 {
   "name": "alpha-hunter",
   "version": "6.0.0",
-  "description": "AI-powered trading intelligence — sectors, RS, swing lab, macro",
+  "description": "AI-powered trading intelligence — sectors, RS, trade setups, macro",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

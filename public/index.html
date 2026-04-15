@@ -95,7 +95,7 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .sc-stat-val { font-family:var(--font-mono); font-size:11px; font-weight:600; }
 .sc-rs { display:flex; align-items:center; justify-content:space-between; margin-top:8px; }
 
-/* ── Swing Lab Cards ─────────────────────────── */
+/* ── Trade Setup Cards ─────────────────────────── */
 .sl-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:14px; }
 .sl-card { background:var(--bg3); border:1px solid var(--border); border-radius:6px; overflow:hidden; }
 .sl-card-header { padding:12px 14px 10px; border-bottom:1px solid var(--border); }
@@ -303,7 +303,7 @@ function RSTrendBadge({ trend, rs }) {
   );
 }
 
-// Market regime banner — shown at top of Swing Lab
+// Market regime banner — shown at top of Trade Setups
 function RegimeBanner({ regime }) {
   if (!regime) return null;
   const bg  = regime.swingOk === false ? 'rgba(255,61,87,0.1)' : regime.regime === 'BULL / RISK ON' ? 'rgba(0,230,118,0.08)' : 'rgba(240,165,0,0.08)';
@@ -1011,7 +1011,7 @@ function App() {
             </div>
           </div>
           <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)',marginTop:2,letterSpacing:2}}>
-            IBD-STANDARD RS · SWING LAB · SECTOR ROTATION · MACRO
+            IBD-STANDARD RS · TRADE SETUPS · SECTOR ROTATION · MACRO
           </div>
         </div>
         <div className="header-actions">
@@ -3366,7 +3366,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
     }
     setLoading(true); setError(''); setResults([]);
     try {
-      const d = await api('/api/swing-lab/scan', {
+      const d = await api('/api/trade-setups/scan', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ stocks: rsData, mode }),
       });
@@ -3906,7 +3906,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
         )}
       </div>
 
-      {/* Detailed swing lab results (when scan is run) */}
+      {/* Detailed trade setup results (when scan is run) */}
       {results.length > 0 && (
         <div>
           <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>🔬 DEEP SCAN — AI ENRICHED SETUPS ({scanned} candidates · stricter filters: RS≥70, within 7% of high, volume surge)</div>
