@@ -37,6 +37,17 @@ const CHANNELS = {
 // ─── Slack Delivery ────────────────────────────────────────────────────────
 
 function formatSlackPayload(alert) {
+  // Briefs/digests — use pre-formatted plain text as a single block
+  if (alert.type === 'morning_brief' || alert.type === 'weekly_digest') {
+    const title = alert.type === 'morning_brief' ? '☀️ Morning Brief' : '📊 Weekly Digest';
+    return {
+      blocks: [
+        { type: 'header', text: { type: 'plain_text', text: title, emoji: true } },
+        { type: 'section', text: { type: 'mrkdwn', text: alert.message } },
+      ],
+    };
+  }
+
   const emoji = alert.type === 'stop_violation' ? '🔴'
     : alert.type === 'vcp_pivot' ? '🟢'
     : alert.type === 'price_above' ? '📈'
@@ -122,6 +133,27 @@ async function sendTelegram(alert, config) {
   const botToken = config.bot_token || process.env.TELEGRAM_BOT_TOKEN;
   const chatId = config.chat_id || process.env.TELEGRAM_CHAT_ID;
   if (!botToken || !chatId) throw new Error('Telegram bot_token and chat_id required');
+
+  // Briefs/digests supply their own pre-formatted HTML — use it directly
+  // instead of running through formatTelegramMessage which expects a
+  // standard alert shape (symbol, trigger_price, etc.)
+  if (alert.html_message) {
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: Number(chatId) || chatId,
+        text: alert.html_message,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+        disable_notification: false,
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(`Telegram API error: ${data.description}`);
+    return { delivered: true, channel: 'telegram', message_id: data.result?.message_id, priority: 0 };
+  }
 
   // Mirror Pushover priority into Telegram behavior:
   //   priority ≥ 1 → urgent banner + audible (bypasses muted chat preview)
@@ -227,6 +259,10 @@ const NOTIFICATION_PRIORITY_MAP = {
   submitted:          -1,
   cancelled:          -1,
   expired:            -1,
+
+  // Scheduled digests — normal priority (should ping but not urgent)
+  morning_brief:       0,
+  weekly_digest:       0,
 };
 
 // Backwards-compat alias — external callers (routes, older tests) may import
@@ -269,6 +305,8 @@ const PUSHOVER_SOUND_MAP = {
   scale_in:            'pushover',
   scale_out:           'pushover',
   conditional_triggered: 'magic',
+  morning_brief:       'pushover',     // gentle default — informational
+  weekly_digest:       'pushover',     // gentle default — informational
 };
 
 function lookupSound(type, fallback = 'pushover') {
@@ -282,6 +320,14 @@ function lookupSound(type, fallback = 'pushover') {
 }
 
 function formatPushoverMessage(alert) {
+  // Briefs/digests supply their own pre-formatted text — use custom titles
+  if (alert.type === 'morning_brief') {
+    return { title: '☀️ Alpha Hunter — Morning Brief', message: alert.message || 'Morning brief' };
+  }
+  if (alert.type === 'weekly_digest') {
+    return { title: '📊 Alpha Hunter — Weekly Digest', message: alert.message || 'Weekly digest' };
+  }
+
   const emoji = alert.type === 'stop_violation' ? '🔴'
     : alert.type === 'regime_change' || alert.type === 'trade_regime_change' ? '⚠️'
     : alert.type === 'vcp_pivot' ? '🟢'

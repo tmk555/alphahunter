@@ -588,6 +588,104 @@ registerJobType('revision_scan', {
   },
 });
 
+// ─── 14. Morning Brief — Pre-market push notification ─────────────────────
+// Assembles regime status, distribution days, FTD, open positions with P&L,
+// staged orders, and top scan picks into a single push to Telegram/Pushover.
+// Cron: 8:45 AM ET weekdays — gives the trader a concise snapshot before
+// the opening bell without having to open the app.
+
+registerJobType('morning_brief', {
+  description: 'Pre-market morning brief — regime, positions, staged orders, top picks pushed to phone',
+  defaultConfig: {},
+  handler: async () => {
+    const { assembleMorningBrief } = require('../notifications/briefs');
+    const { deliverAlert, getEnabledChannels } = require('../notifications/channels');
+
+    const brief = await assembleMorningBrief();
+
+    // Build an alert payload compatible with the delivery system
+    const alert = {
+      type: 'morning_brief',
+      symbol: 'PORTFOLIO',
+      message: brief.text,
+      html_message: brief.html,
+      current_price: 0,
+      trigger_price: 0,
+      timestamp: new Date().toISOString(),
+    };
+
+    // Deliver to all enabled channels (DB-configured or env fallback)
+    let channels = getEnabledChannels('morning_brief');
+    if (!channels.length) channels = _envFallbackChannels();
+
+    const results = channels.length ? await deliverAlert(alert, channels) : [];
+
+    return {
+      delivered: results.filter(r => r.delivered).length,
+      failed: results.filter(r => !r.delivered).length,
+      channels: results.map(r => r.channel),
+      summary: brief.data,
+    };
+  },
+});
+
+// ─── 15. Weekly Digest — Sunday evening performance summary ──────────────
+// Assembles week P&L, trades taken, win rate, regime changes, and top RS
+// movers into a comprehensive push. Grounds the weekend review without
+// requiring the trader to open the app.
+// Cron: 6:00 PM ET Sunday
+
+registerJobType('weekly_digest', {
+  description: 'Sunday weekly digest — week P&L, trades, win rate, regime changes, RS movers',
+  defaultConfig: {},
+  handler: async () => {
+    const { assembleWeeklyDigest } = require('../notifications/briefs');
+    const { deliverAlert, getEnabledChannels } = require('../notifications/channels');
+
+    const digest = await assembleWeeklyDigest();
+
+    const alert = {
+      type: 'weekly_digest',
+      symbol: 'PORTFOLIO',
+      message: digest.text,
+      html_message: digest.html,
+      current_price: 0,
+      trigger_price: 0,
+      timestamp: new Date().toISOString(),
+    };
+
+    let channels = getEnabledChannels('weekly_digest');
+    if (!channels.length) channels = _envFallbackChannels();
+
+    const results = channels.length ? await deliverAlert(alert, channels) : [];
+
+    return {
+      delivered: results.filter(r => r.delivered).length,
+      failed: results.filter(r => !r.delivered).length,
+      channels: results.map(r => r.channel),
+      summary: digest.data,
+    };
+  },
+});
+
+// Shared helper — builds channel list from env vars when no DB channels exist
+function _envFallbackChannels() {
+  const channels = [];
+  if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+    channels.push({ channel: 'telegram', config: { bot_token: process.env.TELEGRAM_BOT_TOKEN, chat_id: process.env.TELEGRAM_CHAT_ID } });
+  }
+  if (process.env.PUSHOVER_USER_KEY && process.env.PUSHOVER_APP_TOKEN) {
+    channels.push({ channel: 'pushover', config: { user_key: process.env.PUSHOVER_USER_KEY, app_token: process.env.PUSHOVER_APP_TOKEN } });
+  }
+  if (process.env.SLACK_WEBHOOK_URL) {
+    channels.push({ channel: 'slack', config: { webhook_url: process.env.SLACK_WEBHOOK_URL } });
+  }
+  if (process.env.ALERT_WEBHOOK_URL) {
+    channels.push({ channel: 'webhook', config: { url: process.env.ALERT_WEBHOOK_URL } });
+  }
+  return channels;
+}
+
 // ─── Default Job Seeding ────────────────────────────────────────────────────
 //
 // Registers a baseline set of scheduled jobs on first startup (idempotent:
@@ -707,6 +805,29 @@ const DEFAULT_JOBS = [
       cooldownHours: 24,
       bars: 60,
     },
+  },
+
+  // ─── Morning Brief — pre-market push notification ──────────────────────
+  // Regime + dist days + FTD + open positions + staged orders + top picks.
+  // Fires at 8:45 AM ET so the trader sees it while drinking coffee, 15
+  // minutes before the opening bell.
+  {
+    name: 'morning_brief_daily',
+    description: 'Pre-market morning brief — regime, positions, staged orders, top picks',
+    job_type: 'morning_brief',
+    cron_expression: '45 8 * * 1-5',  // 8:45 AM server local, weekdays
+    config: {},
+  },
+
+  // ─── Weekly Digest — Sunday evening performance summary ────────────────
+  // Week P&L, trades, win rate, regime changes, RS movers. Grounds the
+  // weekend review without requiring the trader to open the app.
+  {
+    name: 'weekly_digest_sunday',
+    description: 'Sunday weekly digest — week P&L, trades, regime changes, RS movers',
+    job_type: 'weekly_digest',
+    cron_expression: '0 18 * * 0',  // 6:00 PM server local, Sunday
+    config: {},
   },
 ];
 
