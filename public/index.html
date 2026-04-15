@@ -9146,6 +9146,72 @@ function ReplayTab() {
             {wfResult.config.combos} param combos × {wfResult.config.windowsTested} windows · train {wfResult.config.trainDays}d / test {wfResult.config.testDays}d · optimize {wfResult.config.optimizeMetric}
           </div>
 
+          {/* ─── Scorecard verdict chips ───────────────────────────────
+              Quick visual summary of whether this walk-forward result
+              looks like a real edge or a fitting artifact. Computed
+              client-side from parameterStability, OOS alpha, and the
+              distribution of per-window macro regimes. */}
+          {(() => {
+            const alpha = wfResult.outOfSample.alpha;
+            const topShare = wfResult.parameterStability?.[0]?.share ?? null;
+            const regimes = (wfResult.windows || []).map(w => w.regime).filter(Boolean);
+            const regimeSet = new Set(regimes);
+
+            // Verdict priority:
+            //   UNKNOWN  – missing alpha or no windows
+            //   OVERFIT  – alpha <= 0, or winning params churn (< 30% top share)
+            //   REGIME   – every window fell inside one regime — can't judge generality
+            //   STABLE   – positive alpha, >= 30% param concentration, >= 2 regimes
+            //   NEUTRAL  – positive alpha but thin coverage (fallback)
+            let verdict, verdictColor, verdictNote;
+            if (alpha == null || regimes.length === 0) {
+              verdict = 'UNKNOWN';
+              verdictColor = 'var(--text3)';
+              verdictNote = 'Not enough data to classify — run with more windows or populate macro_series.';
+            } else if (alpha <= 0 || (topShare != null && topShare < 30)) {
+              verdict = 'OVERFIT RISK';
+              verdictColor = 'var(--red)';
+              verdictNote = alpha <= 0
+                ? 'Negative or zero alpha vs SPY on held-out data.'
+                : 'Winning parameters change almost every window (< 30% concentration).';
+            } else if (regimeSet.size === 1 && regimes.length >= 3) {
+              verdict = 'REGIME-DEPENDENT';
+              verdictColor = 'var(--amber)';
+              verdictNote = `All ${regimes.length} test windows fell in ${[...regimeSet][0].replace('_','-')}. Re-test across regimes before trusting this.`;
+            } else if (regimeSet.size >= 2 && topShare != null && topShare >= 30) {
+              verdict = 'STABLE EDGE';
+              verdictColor = 'var(--green)';
+              verdictNote = `+${alpha}% alpha with ${topShare}% param stability across ${regimeSet.size} regimes.`;
+            } else {
+              verdict = 'NEUTRAL';
+              verdictColor = 'var(--amber)';
+              verdictNote = 'Positive alpha but thin regime or parameter coverage — treat as inconclusive.';
+            }
+
+            const chips = [
+              ['VERDICT', verdict, verdictColor],
+              ['ALPHA', alpha != null ? (alpha > 0 ? '+' : '') + alpha + '%' : 'N/A',
+                        alpha > 0 ? 'var(--green)' : alpha < 0 ? 'var(--red)' : 'var(--text3)'],
+              ['PARAM STABILITY', topShare != null ? topShare + '%' : '—',
+                                  topShare >= 50 ? 'var(--green)' : topShare >= 30 ? 'var(--amber)' : 'var(--red)'],
+              ['REGIMES COVERED', regimeSet.size ? [...regimeSet].map(r => r.replace('_','-')).join(' · ') : '—',
+                                  regimeSet.size >= 2 ? 'var(--green)' : regimeSet.size === 1 ? 'var(--amber)' : 'var(--text3)'],
+            ];
+            return (
+              <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'stretch',marginBottom:12}}>
+                {chips.map(([label,val,color],i)=>(
+                  <div key={i} style={{flex:'1 1 160px',background:'var(--bg3)',border:'1px solid var(--border)',borderLeft:`3px solid ${color}`,borderRadius:4,padding:'8px 10px'}}>
+                    <div style={{fontSize:8,color:'var(--text3)',textTransform:'uppercase',letterSpacing:1,marginBottom:3}}>{label}</div>
+                    <div style={{fontSize:12,fontWeight:700,color,fontFamily:'var(--font-mono)'}}>{val}</div>
+                  </div>
+                ))}
+                <div style={{flex:'2 1 260px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:'8px 10px',display:'flex',alignItems:'center'}}>
+                  <span style={{fontSize:11,color:'var(--text2)',fontStyle:'italic'}}>{verdictNote}</span>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* OOS KPIs */}
           <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:12}}>
             {[
@@ -9164,6 +9230,103 @@ function ReplayTab() {
               </div>
             ))}
           </div>
+
+          {/* ─── OOS equity curve chart ────────────────────────────────
+              Strategy equity curve vs SPY benchmark over the OOS span.
+              Strategy points are sparse (one per window boundary) but
+              rendered as a piecewise-linear line so the x-axis aligns
+              calendar-wise with SPY's daily curve. */}
+          {wfResult.oosEquityCurve && wfResult.oosEquityCurve.length >= 2 && (() => {
+            const strat = wfResult.oosEquityCurve;
+            const spy   = wfResult.outOfSample.spyEquityCurve || [];
+            const chartW = 760, chartH = 220;
+            const padL = 56, padR = 18, padT = 14, padB = 26;
+            const drawW = chartW - padL - padR;
+            const drawH = chartH - padT - padB;
+
+            const allVals = [...strat.map(p => p.equity), ...spy.map(p => p.equity)];
+            const minV = Math.min(...allVals) * 0.98;
+            const maxV = Math.max(...allVals) * 1.02;
+            const rangeV = maxV - minV || 1;
+
+            // Date → x via calendar time so sparse strategy points land on
+            // the same x-axis as the dense SPY daily series.
+            const t0 = Date.parse(strat[0].date);
+            const t1 = Date.parse(strat[strat.length - 1].date);
+            const rangeT = (t1 - t0) || 1;
+            const toX = d => padL + ((Date.parse(d) - t0) / rangeT) * drawW;
+            const toY = v => padT + drawH - ((v - minV) / rangeV) * drawH;
+
+            const stratPts = strat.map(p => `${toX(p.date).toFixed(1)},${toY(p.equity).toFixed(1)}`).join(' ');
+            const spyPts   = spy.map(p => `${toX(p.date).toFixed(1)},${toY(p.equity).toFixed(1)}`).join(' ');
+
+            const lastStrat = strat[strat.length - 1];
+            const lastSpy   = spy[spy.length - 1];
+            const baseCap   = strat[0].equity;
+            const fmtK = v => '$' + Math.round(v/1000) + 'k';
+
+            return (
+              <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:16}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8,flexWrap:'wrap',gap:8}}>
+                  <div style={{fontSize:10,color:'var(--cyan)',fontFamily:'var(--font-mono)',letterSpacing:1}}>OOS EQUITY CURVE</div>
+                  <div style={{display:'flex',gap:16,fontSize:10,fontFamily:'var(--font-mono)',color:'var(--text2)'}}>
+                    <span>
+                      <span style={{display:'inline-block',width:14,height:2,background:'var(--cyan)',verticalAlign:'middle',marginRight:6}}></span>
+                      Strategy {fmtK(lastStrat.equity)}
+                    </span>
+                    {spy.length > 0 && lastSpy && (
+                      <span>
+                        <span style={{display:'inline-block',width:14,height:0,verticalAlign:'middle',marginRight:6,borderTop:'2px dashed var(--text3)'}}></span>
+                        SPY {fmtK(lastSpy.equity)}
+                      </span>
+                    )}
+                    <span style={{color:'var(--text3)'}}>
+                      base {fmtK(baseCap)}
+                    </span>
+                  </div>
+                </div>
+                <svg viewBox={`0 0 ${chartW} ${chartH}`} style={{width:'100%',height:chartH}}>
+                  {/* Horizontal gridlines + y-axis labels */}
+                  {[0, 0.25, 0.5, 0.75, 1].map(f => {
+                    const v = minV + (1 - f) * rangeV;
+                    const y = padT + f * drawH;
+                    return (
+                      <g key={f}>
+                        <line x1={padL} y1={y} x2={padL+drawW} y2={y} stroke="var(--border)" strokeWidth="0.5" strokeDasharray="3,3"/>
+                        <text x={padL-4} y={y+3} fill="var(--text3)" fontSize="9" textAnchor="end" fontFamily="var(--font-mono)">{fmtK(v)}</text>
+                      </g>
+                    );
+                  })}
+                  {/* Initial capital baseline */}
+                  {(() => {
+                    const yBase = toY(baseCap);
+                    return <line x1={padL} y1={yBase} x2={padL+drawW} y2={yBase} stroke="var(--text3)" strokeWidth="1" strokeDasharray="2,4" opacity="0.6"/>;
+                  })()}
+                  {/* SPY first so the strategy line sits on top */}
+                  {spy.length > 0 && (
+                    <polyline points={spyPts} fill="none" stroke="var(--text3)" strokeWidth="1.5" strokeDasharray="4,3" opacity="0.75"/>
+                  )}
+                  {/* Strategy curve */}
+                  <polyline points={stratPts} fill="none" stroke="var(--cyan)" strokeWidth="2.2"/>
+                  {/* Window boundary markers */}
+                  {strat.map((p,i) => (
+                    <circle key={i} cx={toX(p.date)} cy={toY(p.equity)}
+                            r={i === 0 || i === strat.length-1 ? 3.8 : 2.6}
+                            fill="var(--cyan)" stroke="var(--bg)" strokeWidth="1.2">
+                      <title>{p.date}: {fmtK(p.equity)} ({((p.equity/baseCap-1)*100).toFixed(1)}%)</title>
+                    </circle>
+                  ))}
+                  {/* X-axis date ticks — 6 evenly spaced calendar months */}
+                  {Array.from({length: 6}).map((_,k) => {
+                    const t = t0 + (k / 5) * rangeT;
+                    const x = padL + (k / 5) * drawW;
+                    const label = new Date(t).toISOString().slice(0,7);
+                    return <text key={k} x={x} y={chartH-6} fill="var(--text3)" fontSize="9" textAnchor="middle" fontFamily="var(--font-mono)">{label}</text>;
+                  })}
+                </svg>
+              </div>
+            );
+          })()}
 
           {/* Macro Context (FRED) — tagged to the OOS span, not train+test */}
           <MacroContextCard ctx={wfResult.macroContext} title="MACRO CONTEXT — OOS WINDOW" />
@@ -9189,6 +9352,164 @@ function ReplayTab() {
               </div>
             </div>
           )}
+
+          {/* ─── Per-window bar chart ──────────────────────────────────
+              One bar per OOS window, colored by sign, with a regime
+              swatch above each bar. Makes "was this edge consistent
+              or carried by one window?" a visual question. */}
+          {wfResult.windows && wfResult.windows.length > 0 && (() => {
+            const wins = wfResult.windows.filter(w => !w.error);
+            if (!wins.length) return null;
+            const chartW = 760, chartH = 180;
+            const padL = 44, padR = 14, padT = 26, padB = 32;
+            const drawW = chartW - padL - padR;
+            const drawH = chartH - padT - padB;
+            const returns = wins.map(w => w.testReturn || 0);
+            const maxAbs = Math.max(...returns.map(Math.abs), 1);
+            const y0 = padT + drawH / 2;
+            const stepX = drawW / wins.length;
+            const barW = stepX * 0.72;
+            const regimeBar = {
+              RISK_ON:  'var(--green)',
+              NEUTRAL:  'var(--amber)',
+              RISK_OFF: 'var(--red)',
+              UNKNOWN:  'var(--text3)',
+            };
+            const hasAnyRegime = wins.some(w => w.regime);
+            return (
+              <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:12}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4,flexWrap:'wrap',gap:8}}>
+                  <div style={{fontSize:10,color:'var(--amber)',fontFamily:'var(--font-mono)',letterSpacing:1}}>PER-WINDOW RETURNS</div>
+                  {hasAnyRegime && (
+                    <div style={{fontSize:9,fontFamily:'var(--font-mono)',color:'var(--text3)',display:'flex',gap:10}}>
+                      <span><span style={{display:'inline-block',width:10,height:4,background:'var(--green)',verticalAlign:'middle',marginRight:4}}></span>RISK-ON</span>
+                      <span><span style={{display:'inline-block',width:10,height:4,background:'var(--amber)',verticalAlign:'middle',marginRight:4}}></span>NEUTRAL</span>
+                      <span><span style={{display:'inline-block',width:10,height:4,background:'var(--red)',verticalAlign:'middle',marginRight:4}}></span>RISK-OFF</span>
+                    </div>
+                  )}
+                </div>
+                <div style={{fontSize:10,color:'var(--text3)',marginBottom:6}}>Colored bar = OOS test return per window. Thin strip above each bar = macro regime during that test span. Hover for exact dates and return.</div>
+                <svg viewBox={`0 0 ${chartW} ${chartH}`} style={{width:'100%',height:chartH}}>
+                  {/* Zero line */}
+                  <line x1={padL} y1={y0} x2={padL+drawW} y2={y0} stroke="var(--border2)" strokeWidth="1"/>
+                  {/* Top and bottom reference lines */}
+                  <line x1={padL} y1={padT}       x2={padL+drawW} y2={padT}       stroke="var(--border)" strokeWidth="0.5" strokeDasharray="3,3"/>
+                  <line x1={padL} y1={padT+drawH} x2={padL+drawW} y2={padT+drawH} stroke="var(--border)" strokeWidth="0.5" strokeDasharray="3,3"/>
+                  <text x={padL-4} y={padT+3}         fill="var(--text3)" fontSize="9" textAnchor="end" fontFamily="var(--font-mono)">+{maxAbs.toFixed(0)}%</text>
+                  <text x={padL-4} y={y0+3}           fill="var(--text3)" fontSize="9" textAnchor="end" fontFamily="var(--font-mono)">0</text>
+                  <text x={padL-4} y={padT+drawH+3}   fill="var(--text3)" fontSize="9" textAnchor="end" fontFamily="var(--font-mono)">−{maxAbs.toFixed(0)}%</text>
+                  {wins.map((w,i) => {
+                    const ret = w.testReturn || 0;
+                    const barH = Math.abs(ret) / maxAbs * (drawH / 2);
+                    const x = padL + i*stepX + (stepX - barW)/2;
+                    const y = ret >= 0 ? y0 - barH : y0;
+                    const color = ret >= 0 ? 'var(--green)' : 'var(--red)';
+                    const regColor = regimeBar[w.regime] || 'var(--text3)';
+                    return (
+                      <g key={i}>
+                        {w.regime && (
+                          <rect x={x} y={padT-14} width={barW} height={4} fill={regColor} opacity="0.85">
+                            <title>{(w.regime||'').replace('_','-')}</title>
+                          </rect>
+                        )}
+                        <rect x={x} y={y} width={barW} height={Math.max(barH, 0.8)} fill={color} opacity="0.85">
+                          <title>{w.testStart}→{w.testEnd}  ·  {ret>0?'+':''}{ret}%  ·  {w.regime ? w.regime.replace('_','-') : 'regime unknown'}</title>
+                        </rect>
+                        {barW >= 26 && (
+                          <text x={x + barW/2} y={ret >= 0 ? y - 3 : y + barH + 10}
+                                fill={color} fontSize="9" textAnchor="middle" fontFamily="var(--font-mono)" fontWeight="700">
+                            {ret>0?'+':''}{ret.toFixed(0)}
+                          </text>
+                        )}
+                        <text x={x + barW/2} y={chartH-8} fill="var(--text3)" fontSize="9" textAnchor="middle" fontFamily="var(--font-mono)">W{i+1}</text>
+                      </g>
+                    );
+                  })}
+                </svg>
+              </div>
+            );
+          })()}
+
+          {/* ─── Parameter heatmap ─────────────────────────────────────
+              Visible only when the param grid has exactly two axes (so
+              we can actually lay it out as a 2-D grid). Uses the first
+              window's full trainScores surface as a representative
+              view of the optimizer's search — shows the neighborhood
+              that was explored, not just the winner. A single bright
+              cell in a sea of red = overfitting; a bright region =
+              robust edge. */}
+          {(() => {
+            const firstWin = wfResult.windows?.find(w => Array.isArray(w.trainScores) && w.trainScores.length > 0);
+            if (!firstWin) return null;
+            const sample = firstWin.trainScores[0].params || {};
+            const keys = Object.keys(sample);
+            if (keys.length !== 2) return null;
+            const [kx, ky] = keys;
+            const scored = firstWin.trainScores.filter(ts => ts.score != null && Number.isFinite(ts.score));
+            if (scored.length < 4) return null;
+            const xs = [...new Set(scored.map(ts => ts.params[kx]))].sort((a,b) => a-b);
+            const ys = [...new Set(scored.map(ts => ts.params[ky]))].sort((a,b) => a-b);
+            const map = {};
+            for (const ts of scored) map[`${ts.params[kx]}|${ts.params[ky]}`] = ts.score;
+            const allScores = scored.map(ts => ts.score);
+            const minS = Math.min(...allScores);
+            const maxS = Math.max(...allScores);
+            const rangeS = (maxS - minS) || 1;
+            const bestParams = firstWin.bestParams || {};
+            const bestKey = `${bestParams[kx]}|${bestParams[ky]}`;
+            // Simple 4-tier coloring that works on the dark theme.
+            const cellColor = s => {
+              const t = (s - minS) / rangeS;
+              if (t >= 0.75) return 'rgba(0,210,120,0.65)';
+              if (t >= 0.50) return 'rgba(0,210,120,0.30)';
+              if (t >= 0.25) return 'rgba(255,170,0,0.30)';
+              return 'rgba(255,70,70,0.28)';
+            };
+            const cellW = 54, cellH = 26, labelW = 58;
+            return (
+              <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:12}}>
+                <div style={{fontSize:10,color:'var(--amber)',fontFamily:'var(--font-mono)',letterSpacing:1,marginBottom:4}}>
+                  PARAMETER HEATMAP — WINDOW 1 TRAIN SCORES ({kx} × {ky})
+                </div>
+                <div style={{fontSize:10,color:'var(--text3)',marginBottom:8}}>
+                  Training scores ({wfResult.config.optimizeMetric}) for the first window. Bright green = best. The ⭐ marks the winning combo. A bright region = robust edge; a single bright cell surrounded by red = overfitting.
+                </div>
+                <div style={{display:'inline-block',overflowX:'auto',maxWidth:'100%'}}>
+                  <div style={{display:'flex',alignItems:'flex-end',marginBottom:4}}>
+                    <div style={{width:labelW,fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)',textAlign:'right',paddingRight:6}}>{ky} ↓ / {kx} →</div>
+                    {xs.map(x => (
+                      <div key={x} style={{width:cellW,fontSize:9,color:'var(--text2)',fontFamily:'var(--font-mono)',textAlign:'center'}}>{x}</div>
+                    ))}
+                  </div>
+                  {ys.slice().reverse().map(y => (
+                    <div key={y} style={{display:'flex',alignItems:'stretch'}}>
+                      <div style={{width:labelW,fontSize:9,color:'var(--text2)',fontFamily:'var(--font-mono)',textAlign:'right',paddingRight:6,lineHeight:`${cellH}px`}}>{y}</div>
+                      {xs.map(x => {
+                        const s = map[`${x}|${y}`];
+                        const isBest = `${x}|${y}` === bestKey;
+                        return (
+                          <div key={x}
+                               title={s != null
+                                 ? `${kx}=${x}, ${ky}=${y} → ${s}${isBest ? ' (winner)' : ''}`
+                                 : `${kx}=${x}, ${ky}=${y} → not evaluated`}
+                               style={{
+                                 width:cellW, height:cellH,
+                                 background: s != null ? cellColor(s) : 'var(--bg2)',
+                                 border: isBest ? '2px solid var(--cyan)' : '1px solid var(--border)',
+                                 fontSize:10, fontFamily:'var(--font-mono)',
+                                 display:'flex',alignItems:'center',justifyContent:'center',
+                                 color:'var(--text)',
+                               }}>
+                            {s != null ? (isBest ? '⭐ ' : '') + (+s).toFixed(2) : '—'}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Per-window results */}
           <div>

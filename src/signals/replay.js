@@ -1144,6 +1144,17 @@ function runWalkForward({
       testStart:  w.testStart,  testEnd:  w.testEnd,
       bestParams: best.params,
       trainScore: +Number(best.score).toFixed(3),
+      // Full training-score surface for this window — every combo that was
+      // evaluated, with its score on the training slice. Used by the UI
+      // heatmap to reveal the shape of the optimizer's search, not just
+      // the single winning point. Small — O(combos) per window, and combos
+      // is already capped at WF_MAX_COMBOS = 256.
+      trainScores: trainScores.map(ts => ({
+        params: ts.params,
+        score:  Number.isFinite(ts.score) ? +ts.score.toFixed(3) : null,
+        trades: ts.trades ?? null,
+        error:  ts.error || null,
+      })),
       testReturn:    testResult.performance?.totalReturn ?? null,
       testSharpe:    testResult.performance?.sharpeRatio ?? null,
       testMaxDD:     testResult.performance?.maxDrawdown ?? null,
@@ -1151,6 +1162,19 @@ function runWalkForward({
       testWinRate:   testResult.trades?.winRate ?? null,
       testAlpha:     testResult.performance?.alpha ?? null,
     });
+  }
+
+  // Per-window macro regime annotation — runs AFTER the main loop so the
+  // hot path stays untouched. We call getMacroContextForRange once per
+  // test window, which is one sqlite read per daily series. Fail-soft: on
+  // any error the window just doesn't get a regime and the UI hides the
+  // color swatch for that bar.
+  for (const wr of windowResults) {
+    if (!wr.testStart || !wr.testEnd) continue;
+    try {
+      const ctx = macroFred().getMacroContextForRange(wr.testStart, wr.testEnd);
+      if (ctx && ctx.regime) wr.regime = ctx.regime;
+    } catch (_) { /* macro_series missing — leave regime undefined */ }
   }
 
   // ─── Aggregate out-of-sample stats ───────────────────────────────────────
@@ -1226,6 +1250,15 @@ function runWalkForward({
       alpha,
       spyReturn: spy?.totalReturn ?? null,
       outperformedSPY: spy ? finalReturn > spy.totalReturn : null,
+      // Full SPY equity curve over the OOS span, normalized to the same
+      // initialCapital as the strategy run so the UI can overlay it
+      // directly on top of oosEquityCurve without rescaling.
+      spyEquityCurve: spy?.equityCurve
+        ? spy.equityCurve.map(p => ({
+            date: p.date,
+            equity: +(initialCapital * (p.equity / 100000)).toFixed(2),
+          }))
+        : null,
     },
     windows: windowResults,
     parameterStability: stabilityList,
