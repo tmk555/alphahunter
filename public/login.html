@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+<title>Alpha Hunter — Login</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2303030b'/%3E%3Ccircle cx='32' cy='32' r='20' fill='none' stroke='%23f0a500' stroke-width='2.5'/%3E%3Ccircle cx='32' cy='32' r='10' fill='none' stroke='%23f0a500' stroke-width='2'/%3E%3Ccircle cx='32' cy='32' r='3' fill='%23f0a500'/%3E%3Cline x1='32' y1='8' x2='32' y2='17' stroke='%23f0a500' stroke-width='2.5' stroke-linecap='round'/%3E%3Cline x1='32' y1='47' x2='32' y2='56' stroke='%23f0a500' stroke-width='2.5' stroke-linecap='round'/%3E%3Cline x1='8' y1='32' x2='17' y2='32' stroke='%23f0a500' stroke-width='2.5' stroke-linecap='round'/%3E%3Cline x1='47' y1='32' x2='56' y2='32' stroke='%23f0a500' stroke-width='2.5' stroke-linecap='round'/%3E%3Cpolyline points='22,38 28,28 34,33 40,22' fill='none' stroke='%2300e676' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"/>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #03030b; --bg2: #07071a; --bg3: #0b0b22;
+    --border: #14142e; --border2: #1e1e40;
+    --text: #e0e0f4; --text2: #b8b8dc; --text3: #8888bb;
+    --green: #00e676; --red: #ff3d57; --amber: #f0a500;
+    --cyan: #00d4ff; --purple: #c44dff; --gold: #ffd700;
+    --font-mono: 'IBM Plex Mono', monospace;
+    --font-sans: 'IBM Plex Sans', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ── Background grid effect ─────────────── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      linear-gradient(rgba(240,165,0,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(240,165,0,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+  }
+
+  .login-container {
+    width: 340px;
+    text-align: center;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ── Logo ────────────────────────────────── */
+  .logo-icon {
+    width: 64px; height: 64px;
+    margin: 0 auto 20px;
+    border-radius: 16px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 40px rgba(240,165,0,0.1);
+  }
+  .logo-icon svg { width: 36px; height: 36px; }
+  .logo-text {
+    font-family: var(--font-mono);
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--amber);
+    letter-spacing: 6px;
+    margin-bottom: 6px;
+  }
+  .logo-sub {
+    font-size: 11px;
+    color: var(--text3);
+    letter-spacing: 2px;
+    margin-bottom: 40px;
+  }
+
+  /* ── PIN dots ────────────────────────────── */
+  .pin-display {
+    display: flex;
+    justify-content: center;
+    gap: 14px;
+    margin-bottom: 30px;
+    height: 20px;
+  }
+  .pin-dot {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    border: 2px solid var(--border2);
+    transition: all 0.15s ease;
+  }
+  .pin-dot.filled {
+    background: var(--amber);
+    border-color: var(--amber);
+    box-shadow: 0 0 10px rgba(240,165,0,0.4);
+  }
+  .pin-dot.error {
+    border-color: var(--red);
+    animation: shake 0.4s ease;
+  }
+  .pin-dot.filled.error {
+    background: var(--red);
+    box-shadow: 0 0 10px rgba(255,61,87,0.4);
+  }
+  .pin-dot.success {
+    background: var(--green);
+    border-color: var(--green);
+    box-shadow: 0 0 10px rgba(0,230,118,0.4);
+  }
+
+  /* ── Keypad ──────────────────────────────── */
+  .keypad {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    max-width: 270px;
+    margin: 0 auto;
+  }
+  .key {
+    height: 60px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg2);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 22px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.12s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .key:hover { background: var(--bg3); border-color: var(--border2); }
+  .key:active {
+    background: var(--amber);
+    color: #000;
+    transform: scale(0.95);
+  }
+  .key-fn {
+    font-size: 13px;
+    color: var(--text3);
+    letter-spacing: 1px;
+  }
+  .key-fn:active { background: var(--bg3); color: var(--text); }
+  .key-backspace svg { width: 22px; height: 22px; stroke: var(--text3); }
+  .key-backspace:active svg { stroke: var(--text); }
+
+  /* ── Error message ──────────────────────── */
+  .error-msg {
+    height: 20px;
+    margin-bottom: 14px;
+    font-size: 12px;
+    color: var(--red);
+    font-family: var(--font-mono);
+    letter-spacing: 0.5px;
+    transition: opacity 0.2s;
+  }
+
+  /* ── Animations ─────────────────────────── */
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20%, 60% { transform: translateX(-8px); }
+    40%, 80% { transform: translateX(8px); }
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .login-container { animation: fadeIn 0.4s ease; }
+
+  /* ── Mobile ─────────────────────────────── */
+  @media (max-width: 400px) {
+    .login-container { width: 300px; }
+    .key { height: 56px; font-size: 20px; }
+    .keypad { gap: 8px; max-width: 240px; }
+  }
+</style>
+</head>
+<body>
+  <div class="login-container">
+    <!-- Logo -->
+    <div class="logo-icon">
+      <svg viewBox="0 0 36 36" fill="none">
+        <circle cx="18" cy="18" r="14" stroke="#f0a500" stroke-width="1.5"/>
+        <circle cx="18" cy="18" r="7" stroke="#f0a500" stroke-width="1.2"/>
+        <circle cx="18" cy="18" r="2" fill="#f0a500"/>
+        <polyline points="10,22 15,15 20,18 26,10" stroke="#00e676" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div class="logo-text">ALPHA HUNTER</div>
+    <div class="logo-sub">TRADING INTELLIGENCE</div>
+
+    <!-- Error -->
+    <div class="error-msg" id="error"></div>
+
+    <!-- PIN display -->
+    <div class="pin-display" id="pin-display">
+      <div class="pin-dot"></div>
+      <div class="pin-dot"></div>
+      <div class="pin-dot"></div>
+      <div class="pin-dot"></div>
+      <div class="pin-dot"></div>
+      <div class="pin-dot"></div>
+    </div>
+
+    <!-- Keypad -->
+    <div class="keypad">
+      <button class="key" data-key="1">1</button>
+      <button class="key" data-key="2">2</button>
+      <button class="key" data-key="3">3</button>
+      <button class="key" data-key="4">4</button>
+      <button class="key" data-key="5">5</button>
+      <button class="key" data-key="6">6</button>
+      <button class="key" data-key="7">7</button>
+      <button class="key" data-key="8">8</button>
+      <button class="key" data-key="9">9</button>
+      <button class="key key-fn" data-key="clear">CLR</button>
+      <button class="key" data-key="0">0</button>
+      <button class="key key-fn key-backspace" data-key="back">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 4H8l-7 8 7 8h13a2 2 0 002-2V6a2 2 0 00-2-2z"/>
+          <line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+<script>
+(function() {
+  const MAX_PIN_LEN = 6;
+  let pin = '';
+  let submitting = false;
+
+  const dots   = document.querySelectorAll('.pin-dot');
+  const errEl  = document.getElementById('error');
+
+  function updateDots() {
+    dots.forEach((d, i) => {
+      d.classList.toggle('filled', i < pin.length);
+      d.classList.remove('error', 'success');
+    });
+  }
+
+  function showError(msg) {
+    errEl.textContent = msg;
+    dots.forEach(d => d.classList.add('error'));
+    setTimeout(() => {
+      dots.forEach(d => d.classList.remove('error'));
+    }, 500);
+  }
+
+  function showSuccess() {
+    dots.forEach(d => {
+      d.classList.remove('error');
+      d.classList.add('success');
+    });
+  }
+
+  async function submitPin() {
+    if (submitting) return;
+    submitting = true;
+    errEl.textContent = '';
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin }),
+        credentials: 'same-origin',
+      });
+      const data = await res.json();
+
+      if (data.ok) {
+        showSuccess();
+        setTimeout(() => { window.location.href = '/'; }, 300);
+      } else {
+        showError(data.error || 'Wrong PIN');
+        pin = '';
+        updateDots();
+      }
+    } catch (e) {
+      showError('Connection error');
+      pin = '';
+      updateDots();
+    }
+    submitting = false;
+  }
+
+  function handleKey(key) {
+    if (submitting) return;
+    errEl.textContent = '';
+
+    if (key === 'clear') {
+      pin = '';
+      updateDots();
+      return;
+    }
+    if (key === 'back') {
+      pin = pin.slice(0, -1);
+      updateDots();
+      return;
+    }
+    if (pin.length >= MAX_PIN_LEN) return;
+
+    pin += key;
+    updateDots();
+
+    // Auto-submit when 4+ digits and user pauses, or at max length
+    if (pin.length >= MAX_PIN_LEN) {
+      submitPin();
+    }
+  }
+
+  // Click/touch on keypad buttons
+  document.querySelectorAll('.key').forEach(btn => {
+    btn.addEventListener('click', () => handleKey(btn.dataset.key));
+  });
+
+  // Keyboard support (desktop)
+  document.addEventListener('keydown', (e) => {
+    if (e.key >= '0' && e.key <= '9') handleKey(e.key);
+    else if (e.key === 'Backspace') handleKey('back');
+    else if (e.key === 'Escape') handleKey('clear');
+    else if (e.key === 'Enter' && pin.length >= 4) submitPin();
+  });
+})();
+</script>
+</body>
+</html>

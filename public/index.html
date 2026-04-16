@@ -1022,6 +1022,12 @@ function App() {
             📖 {guideOpen?'▼':'▶'} GUIDE
           </button>
           <button className="load-btn" onClick={loadAll}>↻ REFRESH ALL</button>
+          <button
+            onClick={async()=>{await fetch('/api/auth/logout',{method:'POST',credentials:'same-origin'});window.location.href='/';}}
+            style={{padding:'7px 12px',background:'transparent',border:'1px solid var(--border)',borderRadius:4,color:'var(--text3)',cursor:'pointer',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:600,letterSpacing:1}}
+            title="Lock & sign out">
+            🔒
+          </button>
         </div>
       </div>
 

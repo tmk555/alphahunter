@@ -7,6 +7,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const path      = require('path');
 
 const { FULL_UNIVERSE, SECTOR_ETFS: UNI_SECTOR_ETFS, INDUSTRY_ETFS, INDUSTRY_STOCKS } = require('./universe');
+const { authRoutes, authGuard, cookieParser, isEnabled: authEnabled } = require('./src/auth');
 
 // ─── Initialize ──────────────────────────────────────────────────────────────
 const app  = express();
@@ -16,6 +17,16 @@ const anthropic = ANTHROPIC_KEY ? new Anthropic({ apiKey: ANTHROPIC_KEY }) : nul
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+app.use(cookieParser);
+
+// ─── Authentication ─────────────────────────────────────────────────────────
+// PIN auth routes must be registered before the guard
+app.use('/api', authRoutes());
+// Login page must be served without auth
+app.get('/login.html', (_, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
+// Guard all other routes (skips if APP_PIN not set in .env)
+app.use(authGuard);
+
 // Disable caching for index.html so code changes load immediately on refresh
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders: (res, filePath) => {
@@ -152,6 +163,7 @@ app.listen(PORT, () => {
   console.log(`   Macro: Yield curve + credit spreads + dollar + commodities + ISM proxy`);
   console.log(`   Institutional: Unusual volume + dark pool proxy + accumulation scoring`);
   console.log(`   Strategies: Multi-strategy framework (momentum/VCP/rotation/reversion)`);
+  console.log(`   Auth: ${authEnabled() ? '✓ PIN protected' : '⚠ No PIN set (open access)'}`);
   console.log(`   Claude: ${anthropic?'✓ sonnet-4-6 / haiku-4-5':'⚠ Set ANTHROPIC_API_KEY'}`);
   console.log(`   Broker: ${alpacaConfig.configured ? '✓ Alpaca' + (alpacaConfig.base.includes('paper') ? ' (paper)' : ' (LIVE)') : '⚠ Set ALPACA_API_KEY'}`);
   console.log(`   Sectors: ${JSON.stringify(counts)}\n`);
