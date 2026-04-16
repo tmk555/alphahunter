@@ -180,6 +180,29 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
   for (const s of results) {
     s.rsTimeframeAlignment = getTimeframeAlignment(s, 80);
   }
+
+  // ── Stage transition detection ──────────────────────────────────────────
+  // Look up each stock's prior-day stage from rs_snapshots so we can flag
+  // S1→S2 breakouts (fresh uptrend entries) in the conviction scorer and UI.
+  try {
+    const { getDB } = require('./data/database');
+    const priorDate = getDB().prepare(
+      `SELECT MAX(date) as date FROM rs_snapshots WHERE date < ? AND type = 'stock'`
+    ).get(today)?.date;
+    if (priorDate) {
+      const priorRows = getDB().prepare(
+        `SELECT symbol, stage FROM rs_snapshots WHERE date = ? AND type = 'stock' AND stage IS NOT NULL`
+      ).all(priorDate);
+      const priorMap = {};
+      for (const r of priorRows) priorMap[r.symbol] = r.stage;
+      for (const s of results) {
+        s.priorStage = priorMap[s.ticker] ?? null;
+      }
+    }
+  } catch (_) {
+    // Non-critical — priorStage will be null on first run
+  }
+
   results.sort((a,b) => b.rsRank - a.rsRank);
 
   // Save today's snapshot (use market date to avoid UTC→tomorrow issues)

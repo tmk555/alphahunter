@@ -84,6 +84,21 @@ function calcConviction(stock, rsTrend, rotationModel) {
     }
   }
 
+  // ─── Weinstein Stage scoring ────────────────────────────────────────────────
+  // Stage 2 is THE buy stage — confirmed uptrend above rising 150MA. Every
+  // other stage is worse. Stage 1 (basing) is neutral: the base could break
+  // either way, so no bonus but no penalty. Stage 3 (topping) and Stage 4
+  // (downtrend) receive progressive penalties — a high-RS stock in Stage 3
+  // is distributing, and Stage 4 should never appear in long picks.
+  const stg = stock.stage;
+  if (stg === 2)       score += 5;    // confirmed uptrend — ideal structure
+  else if (stg === 3)  score -= 8;    // topping — 150MA flattening, institutional exit
+  else if (stg === 4)  score -= 15;   // downtrend — avoid all longs
+
+  // Stage 1→2 transition bonus: stock just broke into uptrend from a base.
+  // These are the earliest institutional breakouts — catching the MA turn.
+  if (stg === 2 && stock.priorStage === 1) score += 10;
+
   if (stock.earningsRisk)   score -= 15;
   if (stock.distFromHigh > 0.15) score -= 10;
 
@@ -109,6 +124,12 @@ function calcConviction(stock, rsTrend, rotationModel) {
   if (rev?.tier === 'strong_upgrade') reasons.push(`Estimates revised UP (score ${rev.revisionScore})`);
   else if (rev?.tier === 'downgrade') reasons.push(`⚠ Estimates revised DOWN`);
   if (stock.earningsRisk) reasons.push(`⚠ Earnings in ${stock.daysToEarnings} days`);
+
+  // Stage reasons
+  if (stg === 2 && stock.priorStage === 1) reasons.push('🆕 Stage 1→2 breakout — fresh uptrend');
+  else if (stg === 2) reasons.push('Stage 2 uptrend ✓');
+  if (stg === 3) reasons.push('⚠ Stage 3 topping — 150MA flattening');
+  if (stg === 4) reasons.push('⚠ Stage 4 downtrend — avoid longs');
 
   return { convictionScore: +score.toFixed(1), reasons };
 }

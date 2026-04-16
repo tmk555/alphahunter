@@ -4,6 +4,7 @@ const router  = express.Router();
 
 const { isSwingCandidate, isPositionCandidate, computeTradeSetup } = require('../signals/candidates');
 const { getMarketRegime } = require('../risk/regime');
+const { getDB } = require('../data/database');
 
 module.exports = function(runRSScanFn, anthropic) {
   // Batch AI trade briefs
@@ -137,7 +138,61 @@ Return JSON array:
       return av !== bv ? av - bv : b.rsRank - a.rsRank;
     });
 
+    // Persist results to DB so they survive page refresh
+    try {
+      const db = getDB();
+      db.prepare(`INSERT INTO deep_scan_cache (mode, results, regime, scanned_count, total_input) VALUES (?, ?, ?, ?, ?)`)
+        .run(mode, JSON.stringify(results.map(r => ({
+          ticker: r.ticker, name: r.name, price: r.price,
+          rsRank: r.rsRank, swingMomentum: r.swingMomentum,
+          sepaScore: r.sepaScore, stage: r.stage,
+          vsMA50: r.vsMA50, vsMA200: r.vsMA200,
+          atr: r.atr, atrPct: r.atrPct,
+          distFromHigh: r.distFromHigh, volumeRatio: r.volumeRatio,
+          volumeSurge: r.volumeSurge, sector: r.sector,
+          vcpForming: r.vcpForming, rsLineNewHigh: r.rsLineNewHigh,
+          ma50: r.ma50, ma200: r.ma200, ma150: r.ma150,
+          convictionScore: r.convictionScore,
+          algoSetup: r.algoSetup, brief: r.brief,
+          bestPattern: r.bestPattern, earningsRisk: r.earningsRisk,
+          daysToEarnings: r.daysToEarnings, earningsDate: r.earningsDate,
+          institutionalTier: r.institutionalTier,
+        }))), JSON.stringify(regime), candidates.length, stocks.length);
+      // Keep only last 10 scans to avoid bloat
+      db.prepare(`DELETE FROM deep_scan_cache WHERE id NOT IN (SELECT id FROM deep_scan_cache ORDER BY created_at DESC LIMIT 10)`).run();
+    } catch (_) { /* non-critical */ }
+
     res.json({ results, regime, hasAI: !!anthropic, scannedCount: candidates.length, totalInput: stocks.length });
+  });
+
+  // GET /api/trade-setups/cached — retrieve last deep scan results (survives refresh)
+  router.get('/trade-setups/cached', (req, res) => {
+    try {
+      const db = getDB();
+      const mode = req.query.mode || null;
+      let row;
+      if (mode) {
+        row = db.prepare(`SELECT * FROM deep_scan_cache WHERE mode = ? ORDER BY created_at DESC LIMIT 1`).get(mode);
+      } else {
+        row = db.prepare(`SELECT * FROM deep_scan_cache ORDER BY created_at DESC LIMIT 1`).get();
+      }
+      if (!row) return res.json({ results: [], cached: false, message: 'No cached scan results' });
+
+      const results = JSON.parse(row.results);
+      const regime = row.regime ? JSON.parse(row.regime) : null;
+      const ageMinutes = Math.round((Date.now() - new Date(row.created_at + 'Z').getTime()) / 60000);
+
+      res.json({
+        results,
+        regime,
+        cached: true,
+        cachedAt: row.created_at,
+        ageMinutes,
+        mode: row.mode,
+        scannedCount: row.scanned_count,
+        totalInput: row.total_input,
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   // POST /api/trade-setups/brief

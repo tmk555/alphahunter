@@ -807,6 +807,24 @@ function initSchema() {
     seed.run('mean_reversion', 'Oversold Mean Reversion', 'mean_reversion', 15, 4, 1.5, 1, 10);
   }
 
+  // ─── Deep Scan Results Cache ─────────────────────────────────────────────
+  // Persists deep scan results so they survive page refresh and server restarts.
+  // The user stages orders from deep scan — if results vanish on refresh, the
+  // context for why an order was staged is lost.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS deep_scan_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      mode TEXT NOT NULL,
+      results JSON NOT NULL,
+      regime JSON,
+      scanned_count INTEGER,
+      total_input INTEGER,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_deep_scan_mode ON deep_scan_cache(mode);
+    CREATE INDEX IF NOT EXISTS idx_deep_scan_created ON deep_scan_cache(created_at);
+  `);
+
   // v8 migration: add new columns to existing tables
   safeAddColumn('trades', 'pattern_type', 'TEXT');
   safeAddColumn('trades', 'revision_score', 'REAL');

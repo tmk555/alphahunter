@@ -231,6 +231,95 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .option-chain-table { width:100%; border-collapse:collapse; font-size:12px; }
 .option-chain-table th { padding:5px 8px; font-size:10px; color:var(--text3); border-bottom:1px solid var(--border); text-align:right; }
 .option-chain-table td { padding:4px 8px; border-bottom:1px solid var(--border); font-family:var(--font-mono); font-size:11px; text-align:right; }
+
+/* ── Trade Setup Redesign ──────────────────── */
+.ts-header { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:16px; }
+.ts-header-left { display:flex; align-items:baseline; gap:12px; }
+.ts-header-title { font-family:var(--font-mono); font-size:16px; font-weight:700; color:var(--text); letter-spacing:2px; }
+.ts-header-title span { color:var(--amber); }
+.ts-header-count { font-size:12px; color:var(--text3); font-family:var(--font-mono); }
+.ts-header-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+
+.ts-toolbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:16px; padding:12px 16px; background:var(--bg2); border:1px solid var(--border); border-radius:6px; }
+.ts-toolbar-group { display:flex; gap:6px; align-items:center; }
+.ts-toolbar-sep { width:1px; height:24px; background:var(--border2); margin:0 4px; }
+.ts-toolbar-label { font-size:9px; color:var(--text3); letter-spacing:1.5px; text-transform:uppercase; font-family:var(--font-mono); white-space:nowrap; }
+
+.ts-filter-chips { display:flex; gap:6px; flex-wrap:wrap; }
+.ts-chip { padding:4px 12px; font-size:10px; font-weight:700; font-family:var(--font-mono); letter-spacing:.5px; background:transparent; color:var(--text3); border:1px solid var(--border); border-radius:20px; cursor:pointer; transition:all .15s; white-space:nowrap; }
+.ts-chip:hover { border-color:var(--text2); color:var(--text2); }
+.ts-chip.active { background:var(--amber); border-color:var(--amber); color:#000; }
+.ts-chip-clear { padding:4px 10px; font-size:10px; background:transparent; color:var(--text3); border:1px solid var(--border); border-radius:20px; cursor:pointer; transition:all .15s; }
+.ts-chip-clear:hover { border-color:var(--red); color:var(--red); }
+
+.ts-sort-select { padding:5px 10px; font-size:11px; font-family:var(--font-mono); background:var(--bg3); color:var(--text2); border:1px solid var(--border); border-radius:4px; cursor:pointer; outline:none; }
+.ts-sort-select:focus { border-color:var(--amber); }
+.ts-sort-select option { background:var(--bg2); color:var(--text); }
+
+.ts-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:14px; }
+@media (max-width:768px) { .ts-grid { grid-template-columns:1fr; } }
+
+.ts-card { background:var(--bg2); border:1px solid var(--border); border-radius:8px; overflow:hidden; transition:border-color .15s, box-shadow .15s; cursor:pointer; }
+.ts-card:hover { border-color:var(--border2); box-shadow:0 2px 16px rgba(0,0,0,0.3); }
+.ts-card.expanded { grid-column:1/-1; cursor:default; }
+.ts-card-top { display:flex; align-items:center; justify-content:space-between; padding:14px 16px 10px; }
+.ts-card-rank { font-family:var(--font-mono); font-size:11px; font-weight:700; width:26px; height:26px; display:flex; align-items:center; justify-content:center; border-radius:50%; flex-shrink:0; }
+.ts-card-identity { flex:1; min-width:0; margin-left:10px; }
+.ts-card-ticker { font-family:var(--font-mono); font-size:18px; font-weight:700; color:var(--cyan); letter-spacing:1px; }
+.ts-card-name { font-size:11px; color:var(--text3); margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ts-card-price { font-family:var(--font-mono); font-size:16px; font-weight:600; color:var(--text); margin-left:auto; padding-left:12px; flex-shrink:0; }
+.ts-card-signals { display:flex; flex-wrap:wrap; gap:5px; padding:0 16px 10px; }
+.ts-signal-tag { font-size:9px; font-weight:700; font-family:var(--font-mono); padding:2px 7px; border-radius:3px; letter-spacing:.3px; }
+.ts-card-metrics { display:grid; grid-template-columns:repeat(5,1fr); gap:0; border-top:1px solid var(--border); border-bottom:1px solid var(--border); }
+.ts-metric { padding:8px 10px; text-align:center; border-right:1px solid var(--border); }
+.ts-metric:last-child { border-right:none; }
+.ts-metric-label { font-size:8px; color:var(--text3); letter-spacing:1px; text-transform:uppercase; font-family:var(--font-mono); }
+.ts-metric-val { font-family:var(--font-mono); font-size:13px; font-weight:700; margin-top:2px; }
+.ts-card-footer { display:flex; align-items:center; justify-content:space-between; padding:10px 16px; }
+.ts-sector { font-size:10px; color:var(--text3); }
+.ts-stage-btn { padding:6px 16px; font-size:11px; font-weight:800; font-family:var(--font-mono); letter-spacing:1px; border-radius:4px; cursor:pointer; border:none; transition:opacity .15s; }
+.ts-stage-btn:hover { opacity:0.85; }
+.ts-stage-btn:disabled { background:var(--bg3) !important; color:var(--text3) !important; cursor:not-allowed; border:1px solid var(--border) !important; }
+
+/* Expanded card detail */
+.ts-detail { padding:0 16px 16px; animation:fadeUp 0.2s ease; }
+.ts-detail-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+@media (max-width:768px) { .ts-detail-grid { grid-template-columns:1fr; } }
+.ts-detail-section { background:var(--bg3); border:1px solid var(--border); border-radius:6px; padding:14px; }
+.ts-detail-title { font-size:10px; color:var(--text2); letter-spacing:2px; font-family:var(--font-mono); font-weight:700; text-transform:uppercase; margin-bottom:10px; }
+.ts-levels-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.ts-level-box { background:var(--bg2); border-radius:4px; padding:8px 10px; text-align:center; }
+.ts-level-label { font-size:8px; color:var(--text3); letter-spacing:.5px; text-transform:uppercase; margin-bottom:3px; }
+.ts-level-val { font-family:var(--font-mono); font-size:15px; font-weight:700; }
+.ts-detail-meta { font-size:10px; color:var(--text3); margin-top:8px; font-family:var(--font-mono); }
+.ts-detail-actions { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+.ts-chart-link { display:inline-flex; align-items:center; gap:4px; padding:6px 14px; font-size:11px; font-family:var(--font-mono); font-weight:600; color:var(--cyan); background:rgba(0,212,255,0.06); border:1px solid rgba(0,212,255,0.2); border-radius:4px; cursor:pointer; text-decoration:none; letter-spacing:.5px; transition:all .15s; }
+.ts-chart-link:hover { background:rgba(0,212,255,0.12); border-color:var(--cyan); }
+
+/* Staging toast (replaces alert) */
+.ts-toast { position:fixed; bottom:24px; right:24px; z-index:999; padding:14px 20px; background:var(--bg2); border:1px solid var(--green); border-radius:8px; color:var(--text); font-size:13px; box-shadow:0 4px 24px rgba(0,0,0,0.5); animation:fadeUp 0.3s ease; max-width:400px; }
+.ts-toast-error { border-color:var(--red); }
+.ts-toast .ts-toast-title { font-family:var(--font-mono); font-weight:700; font-size:12px; letter-spacing:1px; margin-bottom:4px; }
+.ts-toast .ts-toast-body { font-size:12px; color:var(--text2); line-height:1.5; }
+.ts-toast-close { position:absolute; top:8px; right:10px; background:none; border:none; color:var(--text3); cursor:pointer; font-size:14px; }
+
+/* Add-to-universe inline modal */
+.ts-add-modal { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); z-index:998; background:var(--bg2); border:1px solid var(--border2); border-radius:8px; padding:24px; min-width:340px; box-shadow:0 8px 40px rgba(0,0,0,0.6); animation:fadeUp 0.2s ease; }
+.ts-add-backdrop { position:fixed; inset:0; z-index:997; background:rgba(3,3,11,0.7); }
+.ts-add-modal h3 { font-family:var(--font-mono); font-size:13px; color:var(--text); letter-spacing:1.5px; margin-bottom:12px; }
+.ts-add-modal select { width:100%; padding:8px 12px; font-size:13px; background:var(--bg3); color:var(--text); border:1px solid var(--border); border-radius:4px; margin-bottom:14px; outline:none; }
+.ts-add-modal select:focus { border-color:var(--amber); }
+.ts-add-modal .ts-add-btns { display:flex; gap:8px; justify-content:flex-end; }
+
+/* Exit strategy dropdown */
+.ts-exit-select { padding:5px 10px; font-size:11px; font-family:var(--font-mono); background:var(--bg3); color:var(--text2); border:1px solid var(--border); border-radius:4px; cursor:pointer; outline:none; }
+.ts-exit-select:focus { border-color:var(--amber); }
+
+/* Section dividers inside the tab */
+.ts-section-header { display:flex; align-items:center; gap:10px; margin:20px 0 12px; padding-left:2px; }
+.ts-section-title { font-size:11px; font-weight:700; font-family:var(--font-mono); letter-spacing:1.5px; }
+.ts-section-count { font-size:10px; color:var(--text3); }
+.ts-section-line { flex:1; height:1px; background:var(--border); }
 </style>
 </head>
 <body>
@@ -412,7 +501,7 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
   const seriesRef = useRef(null);
   const [chartData, setChartData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [timeframe, setTimeframe] = useState('daily'); // 'daily' | '39m'
+  const [timeframe, setTimeframe] = useState('daily'); // 'daily' | 'weekly' | '39m'
   const [drawTool, setDrawTool] = useState(null); // null | 'hline' | 'trendline' | 'rect' | 'fib' | 'fibext'
   const [drawings, setDrawings] = useState([]);
   const [hoverBar, setHoverBar] = useState(null); // OHLC of hovered bar (falls back to last bar)
@@ -422,7 +511,8 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    const params = new URLSearchParams({ days: 252, timeframe });
+    const tfDays = timeframe === 'weekly' ? 780 : 252; // 780 days ≈ 3 years of weekly bars
+    const params = new URLSearchParams({ days: tfDays, timeframe });
     if (entry) params.set('entry', entry);
     if (stop) params.set('stop', stop);
     if (target1) params.set('target1', target1);
@@ -437,7 +527,9 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
     // Auto-refresh during US market hours (9:30 AM – 4:00 PM ET, Mon–Fri).
     // Daily: 60s so the synthesized "today" bar updates.
     // 39-min: 39s so the current in-progress 39-min bucket updates smoothly.
-    const refreshMs = timeframe === '39m' ? 39_000 : 60_000;
+    // Weekly: 5min — weekly candles only change once at the daily close, so
+    //   frequent refreshes are unnecessary; 5min catches any intraday live bar merge.
+    const refreshMs = timeframe === '39m' ? 39_000 : timeframe === 'weekly' ? 300_000 : 60_000;
     const interval = setInterval(() => {
       const nowET = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
       const [d, t] = nowET.split(', ');
@@ -756,6 +848,7 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
     <div className="chart-container">
       <div className="chart-toolbar">
         <span className="toolbar-label">TF</span>
+        <button className={timeframe==='weekly'?'draw-active':''} onClick={() => setTimeframe('weekly')} title="Weekly candles — 3-year window with 10W/30W/40W MAs. Position trader's primary timeframe for trend and stage analysis.">Weekly</button>
         <button className={timeframe==='daily'?'draw-active':''} onClick={() => setTimeframe('daily')} title="Daily candles — 252-day window with 50/150/200 MAs">Daily</button>
         <button className={timeframe==='39m'?'draw-active':''} onClick={() => setTimeframe('39m')} title="39-minute candles (IBD intraday) — 10 bars per trading day, anchored to 9:30 AM ET open. ~7 days of history.">39-min</button>
         <div className="toolbar-sep"/>
@@ -1758,7 +1851,7 @@ function GlobalTradingGuide({ onClose }) {
 }
 
 // ─── InlineLevels: shows ATR trade levels for any stock row ──────────────────
-function InlineLevels({ stock: s }) {
+function InlineLevels({ stock: s, customEntryPrice }) {
   const [funds, setFunds] = useState(null);
   const [fLoad, setFLoad] = useState(false);
 
@@ -1802,10 +1895,12 @@ function InlineLevels({ stock: s }) {
 
 
   if (!s) return null;
-  const atr   = s.atr || (s.price * 0.02);
-  const price = s.price;
+  // Use custom entry price when set, otherwise market price
+  const price = (customEntryPrice != null && customEntryPrice > 0) ? customEntryPrice : s.price;
+  const atr   = s.atr || (s.price * 0.02); // ATR stays from market data, not custom entry
   const ma50  = s.ma50;
   const ma200 = s.ma200;
+  const isCustomEntry = customEntryPrice != null && customEntryPrice > 0 && customEntryPrice !== s.price;
 
   // ── STOP LOSS — structural support + volatility calibrated ──────────────────
   //
@@ -1859,7 +1954,7 @@ function InlineLevels({ stock: s }) {
     <div>
       <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:8}}>
         <div style={{fontSize:10,color:'var(--amber)',fontWeight:700,alignSelf:'center',minWidth:60}}>⚡ SWING</div>
-        <Cell label="Entry"  val={`$${price?.toFixed(2)}`}         color="var(--cyan)"/>
+        <Cell label={isCustomEntry ? "Entry (custom)" : "Entry"}  val={`$${price?.toFixed(2)}`}         color={isCustomEntry ? "var(--cyan)" : "var(--cyan)"}/>
         <Cell label="Stop"   val={`$${stop} (-${stopPct}%)`}       color="var(--red)"/>
         <Cell label="Target 1" val={`$${t1}`}                      color="var(--green)"/>
         <Cell label="Target 2" val={`$${t2}`}                      color="var(--green)"/>
@@ -2700,8 +2795,11 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
   const [rsStageMode, setRsStageMode] = useState('swing');
   const [rsExitStrategy, setRsExitStrategy] = useState('full_in_scale_out');
   const [strategyFilter, setStrategyFilter] = useState('');
+  // Custom entry price overrides — keyed by ticker, cleared when panel closes
+  const [customEntryPrices, setCustomEntryPrices] = useState({});
   // minRS/setMinRS now from App props — persists across tab switches
   const [expandedTicker, setExpandedTicker] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // ── Universe-as-of filter ────────────────────────────────────────────────
   // A date picker that intersects the live scan with the S&P 500 (or other
@@ -2814,9 +2912,10 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
   async function stageFromRS(ticker, mode) {
     setRsStaging(ticker);
     try {
+      const customEntry = customEntryPrices[ticker];
       const r = await api('/api/staging/from-setup', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ ticker, mode: mode || rsStageMode, exitStrategy: rsExitStrategy, strategy: strategyFilter || undefined }),
+        body: JSON.stringify({ ticker, mode: mode || rsStageMode, exitStrategy: rsExitStrategy, strategy: strategyFilter || undefined, entryPrice: customEntry || undefined }),
       });
       const scaleLabels = { full_in_scale_out:'Full\u2192Scale', full_in_full_out:'Full\u2192Full', scale_in_scale_out:'Scale\u2192Scale', scale_in_full_out:'Scale\u2192Full' };
       const scaleLabel = scaleLabels[rsExitStrategy] || rsExitStrategy;
@@ -2875,8 +2974,11 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
     'ASC': s => s.patternData?.patterns?.ascendingBase?.detected,
     'PWR': s => s.patternData?.patterns?.powerPlay?.detected,
     'HTF': s => s.patternData?.patterns?.highTightFlag?.detected,
+    'S1':  s => s.stage===1,
     'S2':  s => s.stage===2,
+    'S3':  s => s.stage===3,
     'S4':  s => s.stage===4,
+    '1→2': s => s.stage===2 && s.priorStage===1,
     'ACC': s => s.volumeTrend==='accumulating',
     'DIST':s => s.volumeTrend==='distributing',
     '🔥':  s => s.distFromHigh!=null && s.distFromHigh<=0.005,
@@ -2884,12 +2986,15 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
   };
 
   const filtered = (() => {
+    const q = searchQuery.trim().toLowerCase();
     let list = rsData.filter(s => {
       if (!baseFilter(s)) return false;
       if (selectedSectors && selectedSectors.size > 0 && !selectedSectors.has(s.sector)) return false;
       // Universe-as-of filter — only applied when asOfMembers is a live Set.
       // We uppercase once above, so compare uppercase here too.
       if (asOfMembers && !asOfMembers.has((s.ticker || '').toUpperCase())) return false;
+      // Text search — matches ticker or company name (case-insensitive)
+      if (q && !(s.ticker || '').toLowerCase().includes(q) && !(s.name || '').toLowerCase().includes(q)) return false;
       for (const key of sigFilters) {
         if (sigChecks[key] && !sigChecks[key](s)) return false;
       }
@@ -3007,6 +3112,22 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
             </div>
           );
         })()}
+        {/* Search / filter by ticker or name */}
+        <div style={{position:'relative',marginBottom:10,maxWidth:320}}>
+          <input type="text" value={searchQuery}
+            onChange={e=>setSearchQuery(e.target.value)}
+            placeholder="Search ticker or name\u2026"
+            style={{width:'100%',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',padding:'7px 32px 7px 10px',fontSize:12,fontFamily:'var(--font-mono)',outline:'none',transition:'border-color 0.15s',boxSizing:'border-box'}}
+            onFocus={e=>{e.target.style.borderColor='var(--cyan)'}}
+            onBlur={e=>{e.target.style.borderColor='var(--border)'}}/>
+          {searchQuery && (
+            <button onClick={()=>setSearchQuery('')} title="Clear search"
+              style={{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',background:'transparent',border:'none',color:'var(--text3)',cursor:'pointer',fontSize:14,lineHeight:1,padding:'2px 4px'}}>
+              ✕
+            </button>
+          )}
+        </div>
+
         {/* Signal chip filters */}
         <div style={{display:'flex',gap:5,marginBottom:10,flexWrap:'wrap',alignItems:'center'}}>
           <span style={{fontSize:10,color:'var(--text3)',letterSpacing:1,textTransform:'uppercase',marginRight:2}}>Signals</span>
@@ -3019,7 +3140,11 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
             {key:'ASC', label:'ASC',             title:'Ascending Base — 3+ rising lows with tightening range',col:'var(--cyan)'},
             {key:'PWR', label:'PWR',             title:'Power Play — tight consolidation near highs after strong advance',col:'var(--cyan)'},
             {key:'HTF', label:'HTF',             title:'High Tight Flag — 100%+ gain then 10-25% correction',col:'var(--cyan)'},
-            {key:'S2',  label:'S2 Uptrend',      title:'Stage 2: price above rising 150MA',col:'var(--green)'},
+            {key:'S1',  label:'S1 Basing',       title:'Stage 1: basing below flat 150MA — post-downtrend, watch for breakout into S2',col:'var(--text3)'},
+            {key:'S2',  label:'S2 Uptrend',      title:'Stage 2: price above rising 150MA — the ONLY stage to buy longs',col:'var(--green)'},
+            {key:'S3',  label:'S3 Topping',      title:'Stage 3: above 150MA but MA flattening — institutional distribution, reduce/avoid',col:'var(--amber)'},
+            {key:'S4',  label:'S4 Decline',      title:'Stage 4: below declining 150MA — avoid all longs, short candidates only',col:'var(--red)'},
+            {key:'1→2', label:'1→2 Breakout',    title:'Stage 1→2 transition — stock just broke into uptrend from base. Earliest institutional breakout signal.',col:'var(--gold)'},
             {key:'ACC', label:'ACC',              title:'Accumulation: above 50MA + vol >1.2x (institutional buying)',col:'var(--green)'},
             {key:'DIST',label:'DIST',             title:'Distribution: below 50MA + vol >1.2x (institutional selling)',col:'var(--red)'},
             {key:'🔥',  label:'🔥 At High',      title:'Within 0.5% of 52wk high right now',col:'var(--amber)'},
@@ -3085,29 +3210,31 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
         {loading ? <Loader msg={`Scanning ${rsData.length||150}+ stocks...`}/> : (
           <>
             <div style={{overflowX:'auto'}}>
-              <table className="data-table" style={{tableLayout:'fixed',width:'100%',minWidth:920}}>
+              <table className="data-table" style={{tableLayout:'fixed',width:'100%',minWidth:960}}>
                 <colgroup>
                   <col style={{width:'100px'}}/>{/* IBD RS */}
                   <col style={{width:'48px'}}/>{/* Mom */}
                   <col style={{width:'50px'}}/>{/* Accel */}
-                  <col style={{width:'92px'}}/>{/* Signals */}
+                  <col style={{width:'38px'}}/>{/* Stage */}
+                  <col style={{width:'88px'}}/>{/* Signals */}
                   <col style={{width:'58px'}}/>{/* Ticker */}
-                  <col style={{width:'88px'}}/>{/* Name */}
+                  <col style={{width:'84px'}}/>{/* Name */}
                   <col style={{width:'58px'}}/>{/* Price */}
                   <col style={{width:'52px'}}/>{/* 1D */}
                   <col style={{width:'52px'}}/>{/* 1W */}
                   <col style={{width:'64px'}}/>{/* vs 50MA */}
                   <col style={{width:'58px'}}/>{/* 52wkH% */}
-                  <col style={{width:'72px'}}/>{/* Vol */}
-                  <col style={{width:'48px'}}/>{/* Earn */}
-                  <col style={{width:'56px'}}/>{/* Levels */}
+                  <col style={{width:'68px'}}/>{/* Vol */}
+                  <col style={{width:'44px'}}/>{/* Earn */}
+                  <col style={{width:'50px'}}/>{/* Levels */}
                 </colgroup>
                 <thead>
                   <tr>
                     <SH k="rsRank"        label="IBD RS"    title="Percentile rank 1-99 vs universe (12M weighted). ≥ 70 = top 30% institutional quality."/>
                     <SH k="swingMomentum" label="Mom"       title="Raw price velocity NOW — NOT vs peers. Base 50+(5d%×3)+(10d%×1.5)+(21d%×0.5)+5 if above MA10. Score 94≈13% in 5d. Score 50=flat. ≥60=fast, ≥45=ok, <40=stalling."/>
                     <SH k="rsTrend.vs4w"  label="Accel"     title="RS Accel: percentile rank change vs 28 days ago. +12=passed 12% of peers. Sort ↓ to find fastest institutional accumulation."/>
-                    <th title="Signals: ★=Triple (RS>70+Accel+Mom>60). ⭐=RS Line 52wk high. ↗=Emerging RS65-79. VCP=coiling setup. S2=Stage2 uptrend. SEPA/8=Minervini score.">Signals</th>
+                    <SH k="stage"         label="Stage"     title="Weinstein Stage (150MA trend). S1=Basing, S2=Uptrend (buy zone), S3=Topping (reduce), S4=Decline (avoid/short). Sort to cluster by stage."/>
+                    <th title="Signals: ★=Triple (RS>70+Accel+Mom>60). ⭐=RS Line 52wk high. ↗=Emerging RS65-79. VCP=coiling setup. SEPA/8=Minervini score.">Signals</th>
                     <th title="Ticker symbol. Hover for company name.">Ticker</th>
                     <th title="Company name (truncated)">Name</th>
                     <SH k="price"         label="Price"     title="Current market price"/>
@@ -3117,7 +3244,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                     <SH k="distFromHigh"  label="52wkH%"    title="% below 52-week high. <5% = near breakout. Sort ascending to find stocks nearest highs."/>
                     <SH k="volumeRatio"   label="Vol"       title="Today's volume ÷ 3M avg. ⚡=surge ≥2x near highs. ACC=above 50MA+vol>1.2x. DIST=below 50MA+vol>1.2x."/>
                     <th title="Days until next earnings. ⚠ red=7d, amber=14d. Never hold swings into earnings.">Earn</th>
-                    <th style={{width:55}}></th>
+                    <th style={{width:50}}></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -3149,6 +3276,15 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                               : <span className={s.rsTrend.vs4w>3?'up':s.rsTrend.vs4w<-3?'dn':''}>{s.rsTrend.vs4w>0?'+':''}{s.rsTrend.vs4w}</span>)
                           : <span className="muted">—</span>}
                       </td>
+                      <td style={{textAlign:'center',fontFamily:'var(--font-mono)',fontSize:11,fontWeight:700}} title={s.stageName||''}>
+                        {s.stage===2 && s.priorStage===1
+                          ? <span style={{color:'var(--gold)',background:'rgba(255,215,0,0.15)',padding:'1px 4px',borderRadius:3,fontSize:10}}>1→2</span>
+                          : s.stage===2 ? <span style={{color:'var(--green)'}}>S2</span>
+                          : s.stage===3 ? <span style={{color:'var(--amber)'}}>S3</span>
+                          : s.stage===4 ? <span style={{color:'var(--red)'}}>S4</span>
+                          : s.stage===1 ? <span style={{color:'var(--text3)'}}>S1</span>
+                          : <span className="muted">—</span>}
+                      </td>
                       <td style={{whiteSpace:'nowrap',fontSize:10}}>
                         {(s.rsRank>=70 && (s.rsTrend?.vs4w||0)>0 && s.swingMomentum>=60) && (
                           <span title="Triple: RS>70+Accel>0+Mom>60" style={{color:'var(--green)',fontWeight:700,marginRight:3}}>★</span>
@@ -3162,8 +3298,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                         {s.vcpForming && (
                           <span title={`VCP ${s.vcpCount}× contractions. Pivot $${s.vcpPivot}. Stop $${s.vcpStop}. Best with S2.`} style={{color:'var(--purple)',fontWeight:700,marginRight:3}}>VCP</span>
                         )}
-                        {s.stage===2 && <span title="S2: price above rising 150MA. Required for all long setups." style={{color:'var(--green)',fontWeight:700,marginRight:3}}>S2</span>}
-                        {s.stage===4 && <span title="S4: Downtrend. Avoid all longs." style={{color:'var(--red)',fontWeight:700,marginRight:3}}>S4</span>}
+                        {s.stage===2 && s.priorStage===1 && <span title="Stage 1→2 breakout — fresh uptrend from base. Earliest institutional entry signal. +10 conviction bonus." style={{color:'var(--gold)',fontWeight:700,marginRight:3,background:'rgba(255,215,0,0.15)',padding:'0 4px',borderRadius:2,fontSize:9}}>1→2</span>}
                         {s.sepaScore!=null && <span title={s.sepa?Object.entries(s.sepa).map(([k,v])=>`${k}:${v===true?'✓':v===false?'✗':'?'}`).join(' '):'SEPA score'} style={{color:s.sepaScore>=6?'var(--green)':s.sepaScore>=4?'var(--amber)':'var(--text3)',fontWeight:700}}>{s.sepaScore}/8</span>}
                           <PatternBadge patternData={s.patternData} />
                           <InstitutionalBadge data={s.institutionalData} />
@@ -3206,7 +3341,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                     </tr>
                     {expandedTicker===s.ticker && (
                       <tr ref={levelsRef}>
-                        <td colSpan={14} style={{padding:0,background:'var(--bg)',borderLeft:'3px solid var(--amber)',borderBottom:'2px solid var(--amber)'}}>
+                        <td colSpan={15} style={{padding:0,background:'var(--bg)',borderLeft:'3px solid var(--amber)',borderBottom:'2px solid var(--amber)'}}>
                           <div style={{padding:'16px 20px',animation:'fadeUp 0.2s ease'}}>
                             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
                               <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
@@ -3239,13 +3374,35 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                                     </button>
                                   ))}
                                 </div>
+                                <div style={{display:'flex',alignItems:'center',gap:4}}>
+                                  <label style={{fontSize:9,color:'var(--text3)',letterSpacing:0.5}}>ENTRY $</label>
+                                  <input type="number" step="0.01"
+                                    value={customEntryPrices[s.ticker] ?? s.price?.toFixed(2)}
+                                    onChange={e => {
+                                      const v = e.target.value;
+                                      setCustomEntryPrices(prev => ({...prev, [s.ticker]: v === '' ? undefined : parseFloat(v)}));
+                                    }}
+                                    onBlur={e => {
+                                      // Reset to market price if cleared or invalid
+                                      const v = parseFloat(e.target.value);
+                                      if (isNaN(v) || v <= 0) setCustomEntryPrices(prev => { const n = {...prev}; delete n[s.ticker]; return n; });
+                                    }}
+                                    style={{width:80,background:'var(--bg3)',border:`1px solid ${customEntryPrices[s.ticker] != null && customEntryPrices[s.ticker] !== s.price ? 'var(--cyan)' : 'var(--border)'}`,borderRadius:3,color:customEntryPrices[s.ticker] != null && customEntryPrices[s.ticker] !== s.price ? 'var(--cyan)' : 'var(--text)',padding:'4px 6px',fontSize:12,fontFamily:'var(--font-mono)',fontWeight:600,textAlign:'right'}}
+                                  />
+                                  {customEntryPrices[s.ticker] != null && customEntryPrices[s.ticker] !== s.price && (
+                                    <button title="Reset to market price" onClick={() => setCustomEntryPrices(prev => { const n = {...prev}; delete n[s.ticker]; return n; })}
+                                      style={{padding:'2px 5px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:9,cursor:'pointer',fontFamily:'var(--font-mono)'}}>
+                                      ✕
+                                    </button>
+                                  )}
+                                </div>
                                 <button disabled={rsStaging===s.ticker} onClick={()=>stageFromRS(s.ticker)}
                                   style={{padding:'5px 14px',background: rsExitStrategy==='full_in_scale_out'?'var(--green)':rsExitStrategy==='full_in_full_out'?'var(--amber)':rsExitStrategy==='scale_in_scale_out'?'var(--cyan)':'var(--purple,#a78bfa)',border:'1px solid transparent',borderRadius:4,color:'#000',fontSize:11,fontWeight:800,cursor:'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
                                   {rsStaging===s.ticker ? 'STAGING...' : rsExitStrategy.startsWith('scale_in') ? 'STAGE PILOT ⅓' : 'STAGE FULL'}
                                 </button>
                               </div>
                             </div>
-                            <InlineLevels stock={s}/>
+                            <InlineLevels stock={s} customEntryPrice={customEntryPrices[s.ticker]}/>
                             <StockChart symbol={s.ticker} height={300}
                               entry={s.swingEntry} stop={s.swingStop} target1={s.swingTarget1} target2={s.swingTarget2} />
                           </div>
@@ -3269,81 +3426,112 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
   );
 }
 
-// ─── TRADE SETUPS (unified: conviction-ranked picks + ATR levels + regime gate) ──
+// ─── TRADE SETUPS (redesigned: unified card layout with filter chips, sort, and inline staging) ──
 function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegime, scanned, setScanned, summary, setSummary, setupSigFilters, setSetupSigFilters, mode, setMode }) {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   const [picks,   setPicks]   = useState(null);
   const [picksLoad, setPicksLoad] = useState(false);
-  const [staging, setStaging] = useState(null); // ticker currently staging
-  const [exitStrategy, setExitStrategy] = useState('full_in_scale_out'); // full_in_scale_out | full_in_full_out | scale_in_scale_out | scale_in_full_out
+  const [staging, setStaging] = useState(null);
+  const [exitStrategy, setExitStrategy] = useState('full_in_scale_out');
   const [convictionOverrides, setConvictionOverrides] = useState([]);
   const [scoutData, setScoutData] = useState(null);
   const [scoutLoading, setScoutLoading] = useState(false);
+  const [expandedCard, setExpandedCard] = useState(null);
+  const [sortBy, setSortBy] = useState('conviction');
+  const [picksLimit, setPicksLimit] = useState(12);
+  const [toast, setToast] = useState(null);
+  const [addModal, setAddModal] = useState(null);
+  const [addSector, setAddSector] = useState('Technology');
 
-  // Signal filters from App props — persists across tab switches
+  // Signal filter chips — persists across tab switches via App props
+  const FILTER_CHIPS = [
+    { key:'high_conv', label:'High Conviction', check: s => s.convictionScore >= 75 },
+    { key:'VCP',       label:'VCP',             check: s => s.vcpForming },
+    { key:'rs_high',   label:'RS New High',     check: s => s.rsLineNewHigh },
+    { key:'S2',        label:'Stage 2',         check: s => s.stage === 2 },
+    { key:'sepa5',     label:'SEPA 5+',         check: s => (s.sepaScore || 0) >= 5 },
+  ];
+
   const toggleSetupSig = key => setSetupSigFilters(prev => {
     const next = new Set(prev);
     next.has(key) ? next.delete(key) : next.add(key);
     return next;
   });
-  const [picksLimit, setPicksLimit] = useState(7);
 
-  const filteredPicks = useMemo(() => {
+  // Unified filtered + sorted picks
+  const displayPicks = useMemo(() => {
     if (!picks || !picks.length) return [];
-    const sigChecks = {
-      '★':   s => s.rsRank>=70 && (s.rsTrend?.vs4w||0)>0 && s.swingMomentum>=60,
-      '⭐':   s => s.rsLineNewHigh,
-      'VCP': s => s.vcpForming,
-      'S2':  s => s.stage===2,
-    };
-    return picks.filter(s => {
+    let list = picks.filter(s => {
+      // Mode filter
+      if (mode === 'swing' && (s.swingMomentum || 0) < 55) return false;
+      if (mode === 'position') {
+        if (!(s.vsMA50 != null && s.vsMA50 >= -2 && s.vsMA50 <= 5 && s.rsRank >= 70 && (s.sepaScore >= 4 || s.vcpForming || s.stage === 2))) return false;
+      }
+      // Signal filter chips
       if (setupSigFilters.size === 0) return true;
       for (const key of setupSigFilters) {
-        if (sigChecks[key] && !sigChecks[key](s)) return false;
+        const chip = FILTER_CHIPS.find(c => c.key === key);
+        if (chip && !chip.check(s)) return false;
       }
       return true;
-    }).slice(0, picksLimit);
-  }, [picks, setupSigFilters, picksLimit]);
+    });
+    // Sort
+    if (sortBy === 'conviction') list.sort((a, b) => (b.convictionScore || 0) - (a.convictionScore || 0));
+    else if (sortBy === 'rs') list.sort((a, b) => (b.rsRank || 0) - (a.rsRank || 0));
+    else if (sortBy === 'momentum') list.sort((a, b) => (b.swingMomentum || 0) - (a.swingMomentum || 0));
+    else if (sortBy === 'sector') list.sort((a, b) => (a.sector || '').localeCompare(b.sector || ''));
+    else if (sortBy === 'sepa') list.sort((a, b) => (b.sepaScore || 0) - (a.sepaScore || 0));
+    return list.slice(0, picksLimit);
+  }, [picks, setupSigFilters, picksLimit, mode, sortBy]);
 
-  // Split picks into swing vs position candidates
-  const swingPicks = useMemo(() => {
-    return filteredPicks.filter(s => (s.swingMomentum || 0) >= 55);
-  }, [filteredPicks]);
-
-  const positionPicks = useMemo(() => {
-    return filteredPicks.filter(s =>
-      s.vsMA50 != null && s.vsMA50 >= -2 && s.vsMA50 <= 5 &&  // Near 50MA (pullback zone)
-      s.rsRank >= 70 &&                                         // Strong RS
-      (s.sepaScore >= 4 || s.vcpForming || s.stage === 2)       // Good structure
-    );
-  }, [filteredPicks]);
-
-  // Pending pullback: strong stocks too extended for position entry — watch for pullback to 50MA
+  // Pending pullback: strong stocks too extended for position entry
   const pendingPullback = useMemo(() => {
     if (!rsLoaded || !rsData.length) return [];
     return rsData.filter(s =>
-      s.rsRank >= 70 &&                           // Strong RS
-      (s.rsTrend?.vs1m > 0 || s.rsTrend?.vs4w > 0) && // RS still rising
-      s.vsMA200 > 0 &&                            // Above 200MA
-      s.vsMA50 > 5 && s.vsMA50 <= 20 &&           // 5-20% above 50MA (too extended for position, not absurdly extended)
-      (s.sepaScore >= 4 || s.vcpForming || s.stage === 2) // Has quality structure
-    ).sort((a, b) => a.vsMA50 - b.vsMA50)          // Sort by closest to pullback zone first
-     .slice(0, 15);
+      s.rsRank >= 70 &&
+      (s.rsTrend?.vs1m > 0 || s.rsTrend?.vs4w > 0) &&
+      s.vsMA200 > 0 &&
+      s.vsMA50 > 5 && s.vsMA50 <= 20 &&
+      (s.sepaScore >= 4 || s.vcpForming || s.stage === 2)
+    ).sort((a, b) => a.vsMA50 - b.vsMA50).slice(0, 15);
   }, [rsData, rsLoaded]);
 
-  useEffect(() => { loadPicks(); }, []);
+  useEffect(() => {
+    loadPicks();
+    // Auto-load cached deep scan results if none in memory (survives page refresh)
+    if (!results || !results.length) {
+      api('/api/trade-setups/cached?mode=' + mode).then(d => {
+        if (d.cached && d.results && d.results.length > 0) {
+          setResults(d.results);
+          if (d.regime) setRegime(d.regime);
+          setScanned(d.scannedCount || 0);
+          setSummary(`Cached scan from ${new Date(d.cachedAt + 'Z').toLocaleString()} (${d.ageMinutes} min ago)`);
+        }
+      }).catch(() => {});
+    }
+  }, []);
 
-  async function stageFromSetup(ticker, stageMode) {
+  // Toast-based staging (replaces alert/prompt)
+  function showToast(title, body, isError) {
+    setToast({ title, body, isError });
+    setTimeout(() => setToast(null), 5000);
+  }
+
+  async function stageFromSetup(ticker, stageMode, e) {
+    if (e) e.stopPropagation();
     setStaging(ticker);
     try {
       const r = await api('/api/staging/from-setup', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ ticker, mode: stageMode || mode, exitStrategy }),
       });
-      const stratLabel = exitStrategy === 'scale_in_out' ? ' (scale in/out)' : ' (full size)';
-      alert(`Staged ${r.staged?.symbol}: ${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk${stratLabel}. Go to Trading tab to submit.`);
-    } catch(e) { alert(`Stage failed: ${e.message}`); }
+      const label = exitStrategy.includes('scale_in') ? 'pilot' : 'full';
+      showToast(
+        `STAGED: ${r.staged?.symbol}`,
+        `${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk (${label}). Go to Trading tab to submit.`
+      );
+    } catch(e) { showToast('Stage failed', e.message, true); }
     setStaging(null);
   }
 
@@ -3369,7 +3557,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
 
   async function runScan() {
     if (!rsLoaded || !rsData.length) {
-      setError('Load RS data first — click "↻ REFRESH ALL" in the header');
+      setError('Load RS data first -- click REFRESH ALL in the header');
       return;
     }
     setLoading(true); setError(''); setResults([]);
@@ -3386,590 +3574,395 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
     setLoading(false);
   }
 
+  async function addToUniverse(ticker, sector) {
+    try {
+      const r = await api('/api/edge/universe/add', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ symbol: ticker, sector }),
+      });
+      if (r.existed) showToast('Already exists', `${ticker} already in universe (${r.message})`);
+      else {
+        showToast('Added', `${ticker} added to ${sector} -- will appear in next scan`);
+        // Remove from Discovery list immediately so it doesn't linger
+        if (scoutData?.candidates) {
+          setScoutData(prev => ({
+            ...prev,
+            candidates: prev.candidates.filter(c => c.ticker !== ticker),
+            totalCandidates: (prev.totalCandidates || 1) - 1,
+          }));
+        }
+      }
+    } catch(e) { showToast('Error', e.message, true); }
+    setAddModal(null);
+  }
+
   const scoreColor = s => s >= 75 ? 'var(--green)' : s >= 55 ? 'var(--amber)' : 'var(--text3)';
   const noLongs = regime && (regime.regime === 'HIGH RISK / BEAR' || regime.sizeMultiplier === 0);
+  const stageColor = exitStrategy.includes('scale_in') ? 'var(--cyan)' : 'var(--green)';
+  const stageLabel = exitStrategy.includes('scale_in') ? 'STAGE PILOT' : 'STAGE';
+  const totalPicks = picks ? picks.length : 0;
+
+  // Get setup levels for a stock based on current mode
+  const getSetup = (s) => {
+    if (mode === 'position' && s.positionSetup) return { ...s.positionSetup, type: 'position' };
+    if (mode === 'swing' && s.swingSetup) return { ...s.swingSetup, type: 'swing' };
+    // 'both' mode: prefer swing if available
+    if (s.swingSetup) return { ...s.swingSetup, type: 'swing' };
+    if (s.positionSetup) return { ...s.positionSetup, type: 'position' };
+    return null;
+  };
 
   return (
     <div>
-      {/* Regime gate — a pro doesn't buy longs in a bear market */}
+      {/* ── REGIME GATE ── */}
       {noLongs && (
         <div style={{padding:'16px 20px',background:'rgba(255,61,87,0.12)',border:'2px solid rgba(255,61,87,0.5)',borderRadius:6,marginBottom:14}}>
           <div style={{fontFamily:'var(--font-mono)',fontSize:18,fontWeight:800,color:'var(--red)',letterSpacing:2}}>NO NEW LONGS</div>
           <div style={{fontSize:12,color:'var(--text2)',marginTop:4}}>
-            Market regime is <strong style={{color:'var(--red)'}}>{regime.regime}</strong> — size multiplier 0x.
-            A professional trader preserves capital in hostile environments. Setups below are for watchlist only.
+            Market regime is <strong style={{color:'var(--red)'}}>{regime.regime}</strong> -- size multiplier 0x.
+            Setups below are for watchlist only.
           </div>
         </div>
       )}
-
       {regime && !noLongs && <RegimeBanner regime={regime} />}
 
-      <div className="panel" style={{marginBottom:14}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12,flexWrap:'wrap',gap:8}}>
-          <div>
-            <div className="panel-title">Trade <span>Setups</span></div>
-            <div className="panel-sub">Conviction-ranked candidates with ATR-based levels. Run RS Scanner first.</div>
-          </div>
-          <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
-            <div className="btn-group">
-              {['swing','position','both'].map(m => (
-                <button key={m} className={`mode-btn ${mode===m?'active':''}`}
-                  onClick={() => setMode(m)}>
-                  {m === 'swing' ? '⚡ Swing' : m === 'position' ? '📈 Position' : 'Both'}
-                </button>
-              ))}
-            </div>
-            <div className="btn-group">
-              {[
-                {k:'full_in_scale_out', l:'Full In / Scale Out', t:'Full position at entry. Scale out: sell 1/3 at T1, 1/3 at T2, trail last 1/3. DEFAULT for high conviction.', col:'var(--green)'},
-                {k:'full_in_full_out',   l:'Full In / Full Out',  t:'Full position in and out. Binary outcome — all shares exit at stop or single target.', col:'var(--amber)'},
-                {k:'scale_in_scale_out', l:'Scale In / Scale Out',t:'Pilot 1/3 → add on confirmation. Exit: sell 1/3 at T1, 1/3 at T2, trail rest.', col:'var(--cyan)'},
-                {k:'scale_in_full_out',  l:'Scale In / Full Out', t:'Pilot 1/3 → build position. Full exit if RS<50 or stop hit — no partial profit-taking.', col:'var(--purple)'},
-              ].map(s => (
-                <button key={s.k} className={`mode-btn ${exitStrategy===s.k?'active':''}`}
-                  onClick={() => setExitStrategy(s.k)}
-                  title={s.t}
-                  style={exitStrategy===s.k?{borderColor:s.col,color:s.col}:{}}>
-                  {s.l}
-                </button>
-              ))}
-            </div>
-            <button className="btn btn-primary" onClick={runScan} disabled={loading}>
-              {loading ? '⟳ Scanning...' : '⟳ Scan Levels'}
-            </button>
-            <button className="btn btn-sm" onClick={loadPicks} disabled={picksLoad}>
-              {picksLoad ? '⟳...' : '⟳ Refresh Picks'}
-            </button>
-          </div>
+      {/* ── HEADER ── */}
+      <div className="ts-header">
+        <div className="ts-header-left">
+          <div className="ts-header-title">Trade <span>Setups</span></div>
+          {picks && <span className="ts-header-count">{displayPicks.length}{totalPicks !== displayPicks.length ? ` of ${totalPicks}` : ''} picks</span>}
         </div>
-        {error && <ErrorBox msg={error}/>}
+        <div className="ts-header-actions">
+          <button className="btn btn-primary" onClick={runScan} disabled={loading}>
+            {loading ? 'Scanning...' : 'Scan Levels'}
+          </button>
+          <button className="btn btn-sm" onClick={loadPicks} disabled={picksLoad}>
+            {picksLoad ? 'Refreshing...' : 'Refresh Picks'}
+          </button>
+        </div>
       </div>
 
+      {error && <ErrorBox msg={error}/>}
+
+      {/* ── TOOLBAR: Mode + Exit Strategy + Filters + Sort ── */}
+      <div className="ts-toolbar">
+        <span className="ts-toolbar-label">Mode</span>
+        <div className="ts-toolbar-group">
+          {['swing','position','both'].map(m => (
+            <button key={m} className={`mode-btn ${mode===m?'active':''}`} onClick={() => setMode(m)}>
+              {m === 'swing' ? 'Swing' : m === 'position' ? 'Position' : 'Both'}
+            </button>
+          ))}
+        </div>
+
+        <div className="ts-toolbar-sep" />
+
+        <span className="ts-toolbar-label">Exit</span>
+        <select className="ts-exit-select" value={exitStrategy} onChange={e => setExitStrategy(e.target.value)}>
+          <option value="full_in_scale_out">Full In / Scale Out</option>
+          <option value="full_in_full_out">Full In / Full Out</option>
+          <option value="scale_in_scale_out">Scale In / Scale Out</option>
+          <option value="scale_in_full_out">Scale In / Full Out</option>
+        </select>
+
+        <div className="ts-toolbar-sep" />
+
+        <span className="ts-toolbar-label">Sort</span>
+        <select className="ts-sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
+          <option value="conviction">Conviction Score</option>
+          <option value="rs">RS Rank</option>
+          <option value="momentum">Momentum</option>
+          <option value="sepa">SEPA Score</option>
+          <option value="sector">Sector</option>
+        </select>
+      </div>
+
+      {/* ── FILTER CHIPS ── */}
+      <div style={{marginBottom:16,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+        <span className="ts-toolbar-label">Filters</span>
+        <div className="ts-filter-chips">
+          {FILTER_CHIPS.map(c => (
+            <button key={c.key}
+              className={`ts-chip ${setupSigFilters.has(c.key)?'active':''}`}
+              onClick={() => toggleSetupSig(c.key)}>
+              {c.label}
+            </button>
+          ))}
+          {setupSigFilters.size > 0 && (
+            <button className="ts-chip-clear" onClick={() => setSetupSigFilters(new Set())}>Clear</button>
+          )}
+        </div>
+      </div>
+
+      {/* ── LOADING ── */}
       {(loading || picksLoad) && !picks && <div className="panel"><Loader msg="Scanning universe..."/></div>}
 
-      {/* ─── CONVICTION OVERRIDES — high-conviction stocks despite weak regime ─── */}
-      {convictionOverrides.length > 0 && regime && regime.sizeMultiplier < 1.0 && (
+      {/* ── MAIN PICKS GRID ── */}
+      {picks && displayPicks.length > 0 && (
         <div style={{marginBottom:20}}>
-          <div style={{padding:'14px 18px',background:'rgba(255,165,0,0.08)',border:'1px solid rgba(255,165,0,0.3)',borderRadius:6,marginBottom:12}}>
-            <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6}}>
-              <span style={{fontSize:12,fontWeight:800,color:'var(--amber)',fontFamily:'var(--font-mono)',letterSpacing:1.5}}>CONVICTION OVERRIDES</span>
-              <span style={{fontSize:10,color:'var(--text2)'}}>
-                {convictionOverrides.length} stocks with momentum too strong to ignore despite {regime.regime} regime
-              </span>
-            </div>
-            <div style={{fontSize:10,color:'var(--text3)',lineHeight:1.5}}>
-              These stocks qualify for reduced regime penalty based on elite conviction scores.
-              Regime multiplier adjusted from {regime.sizeMultiplier}x to account for individual stock strength.
-              Position size still reduced — not a full-size entry.
-            </div>
-          </div>
-          <div style={{display:'grid',gap:8}}>
-            {convictionOverrides.map((s, i) => {
-              const ov = s.convictionOverride || {};
-              const tierColor = ov.tier === 'elite' ? 'var(--green)' : 'var(--amber)';
+          <div className="ts-grid">
+            {displayPicks.map((s, rank) => {
+              const setup = getSetup(s);
               const sw = s.swingSetup || {};
+              const pos = s.positionSetup || {};
+              const swStop = sw.stopLevel?.split(' (')[0] || '—';
+              const swEntry = sw.entryZone?.split(' – ')[0] || '—';
+              const posStop = pos.stopLevel?.split(' (')[0] || '—';
+              const posEntry = pos.entryZone?.split(' – ')[0] || '—';
+              const rankColor = rank===0?'var(--green)':rank<=2?'var(--amber)':'var(--text3)';
+              const isExpanded = expandedCard === s.ticker;
+              const modeForStage = mode === 'position' ? 'position' : mode === 'swing' ? 'swing' : ((s.swingMomentum || 0) >= 55 ? 'swing' : 'position');
+
               return (
-                <div key={s.ticker} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,borderLeft:`3px solid ${tierColor}`,overflow:'hidden'}}>
-                  <div style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
-                    <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:tierColor,fontWeight:800,padding:'2px 8px',background:`${tierColor}15`,borderRadius:3,border:`1px solid ${tierColor}40`,letterSpacing:1}}>
-                      {ov.tier === 'elite' ? 'ELITE' : 'STRONG'}
+                <div key={s.ticker}
+                  className={`ts-card anim-in${isExpanded?' expanded':''}`}
+                  style={{opacity:noLongs?0.6:1}}
+                  onClick={() => setExpandedCard(isExpanded ? null : s.ticker)}>
+                  {/* Card top: rank + ticker + price */}
+                  <div className="ts-card-top">
+                    <div className="ts-card-rank" style={{background:rankColor+'22',color:rankColor}}>
+                      {rank+1}
                     </div>
-                    <span className="td-ticker" style={{fontSize:17}}>{s.ticker}</span>
-                    <span style={{fontFamily:'var(--font-mono)',fontSize:14,color:'var(--text)',fontWeight:600}}>${s.price?.toFixed(2)}</span>
-                    <div style={{display:'flex',gap:16,flexWrap:'wrap'}}>
-                      {[{label:'CONV',val:s.convictionScore,color:scoreColor(s.convictionScore)},{label:'RS',val:s.rsRank,color:rsColor(s.rsRank)},{label:'MOM',val:s.swingMomentum,color:s.swingMomentum>=60?'var(--green)':'var(--amber)'}].map(m=>(
-                        <div key={m.label} style={{display:'flex',alignItems:'baseline',gap:4}}>
-                          <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>{m.label}</span>
-                          <span style={{fontFamily:'var(--font-mono)',fontSize:13,fontWeight:700,color:m.color}}>{m.val}</span>
-                        </div>
-                      ))}
+                    <div className="ts-card-identity">
+                      <div className="ts-card-ticker">{s.ticker}</div>
+                      <div className="ts-card-name">{s.name || '—'}</div>
                     </div>
-                    <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:10}}>
-                      <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--amber)'}}>
-                        {ov.originalMultiplier}x → {ov.adjustedMultiplier}x
-                      </div>
-                      <button disabled={staging===s.ticker} onClick={()=>stageFromSetup(s.ticker,'swing')}
-                        style={{padding:'5px 14px',background:tierColor,border:`1px solid ${tierColor}`,borderRadius:4,color:'#000',fontSize:11,fontWeight:800,cursor:'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
-                        {staging===s.ticker?'STAGING...':'STAGE OVERRIDE'}
-                      </button>
-                    </div>
+                    <div className="ts-card-price">${s.price?.toFixed(2)}</div>
                   </div>
-                  {ov.reasons && (
-                    <div style={{padding:'6px 16px 10px',display:'flex',gap:8,flexWrap:'wrap'}}>
-                      {ov.reasons.map((r,j) => (
-                        <span key={j} style={{fontSize:10,color:'var(--text3)',background:'var(--bg2)',padding:'2px 8px',borderRadius:3,border:'1px solid var(--border)'}}>{r}</span>
-                      ))}
+
+                  {/* Signal tags */}
+                  <div className="ts-card-signals">
+                    {s.vcpForming && <span className="ts-signal-tag" style={{background:'rgba(196,77,255,0.1)',color:'var(--purple)',border:'1px solid rgba(196,77,255,0.3)'}}>VCP{s.vcpCount ? ` ${s.vcpCount}x`:''}</span>}
+                    {s.rsLineNewHigh && <span className="ts-signal-tag" style={{background:'rgba(255,215,0,0.12)',color:'var(--gold)',border:'1px solid rgba(255,215,0,0.3)'}}>RS New High</span>}
+                    {s.stage === 2 && <span className="ts-signal-tag" style={{background:'rgba(0,230,118,0.1)',color:'var(--green)',border:'1px solid rgba(0,230,118,0.3)'}}>Stage 2</span>}
+                    {(s.sepaScore||0) >= 5 && <span className="ts-signal-tag" style={{background:'rgba(0,212,255,0.08)',color:'var(--cyan)',border:'1px solid rgba(0,212,255,0.2)'}}>SEPA {s.sepaScore}/8</span>}
+                    {s.earningsRisk && <span className="ts-signal-tag" style={{background:'rgba(255,61,87,0.1)',color:'var(--red)',border:'1px solid rgba(255,61,87,0.3)'}}>Earn {s.daysToEarnings}d</span>}
+                  </div>
+
+                  {/* Metrics bar */}
+                  <div className="ts-card-metrics">
+                    {[
+                      {label:'RS Rank', val:s.rsRank,                   color:rsColor(s.rsRank)},
+                      {label:'Conv',    val:s.convictionScore,           color:scoreColor(s.convictionScore)},
+                      {label:'Mom',     val:s.swingMomentum,             color:(s.swingMomentum||0)>=60?'var(--green)':'var(--amber)'},
+                      {label:'SEPA',    val:`${s.sepaScore||0}/8`,       color:(s.sepaScore||0)>=5?'var(--green)':'var(--amber)'},
+                      {label:'Stage',   val:s.stage||'—',               color:s.stage===2?'var(--green)':'var(--text2)'},
+                    ].map(m => (
+                      <div key={m.label} className="ts-metric">
+                        <div className="ts-metric-label">{m.label}</div>
+                        <div className="ts-metric-val" style={{color:m.color}}>{m.val}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Footer: sector + stage button */}
+                  <div className="ts-card-footer">
+                    <span className="ts-sector">{s.sector}</span>
+                    <button className="ts-stage-btn"
+                      disabled={noLongs || staging===s.ticker}
+                      onClick={(e) => stageFromSetup(s.ticker, modeForStage, e)}
+                      style={{background:noLongs?'var(--bg3)':stageColor,color:noLongs?'var(--text3)':'#000'}}>
+                      {staging===s.ticker ? 'STAGING...' : stageLabel}
+                    </button>
+                  </div>
+
+                  {/* Expanded detail panel */}
+                  {isExpanded && (
+                    <div className="ts-detail" onClick={e => e.stopPropagation()}>
+                      <div className="ts-detail-grid">
+                        {/* Swing levels */}
+                        {(mode === 'swing' || mode === 'both') && sw.entryZone && (
+                          <div className="ts-detail-section">
+                            <div className="ts-detail-title" style={{color:'var(--cyan)'}}>Swing Trade -- 2-10 Days</div>
+                            <div className="ts-levels-grid">
+                              {[
+                                {label:'Entry', val:swEntry, color:'var(--green)'},
+                                {label:'Stop',  val:swStop,  color:'var(--red)'},
+                                {label:'Target',val:sw.target1||'—', color:'var(--cyan)'},
+                                {label:'R/R',   val:sw.riskReward||'—', color:'var(--amber)'},
+                              ].map(lv => (
+                                <div key={lv.label} className="ts-level-box">
+                                  <div className="ts-level-label">{lv.label}</div>
+                                  <div className="ts-level-val" style={{color:lv.color}}>{lv.val}</div>
+                                </div>
+                              ))}
+                            </div>
+                            {sw.atrUsed && <div className="ts-detail-meta">ATR ${sw.atrUsed} -- Stop {sw.stopPct}% below entry</div>}
+                          </div>
+                        )}
+
+                        {/* Position levels */}
+                        {(mode === 'position' || mode === 'both') && pos.entryZone && (
+                          <div className="ts-detail-section">
+                            <div className="ts-detail-title" style={{color:'var(--green)'}}>Position Trade -- 3-8 Weeks</div>
+                            <div className="ts-levels-grid">
+                              {[
+                                {label:'Entry', val:posEntry, color:'var(--green)'},
+                                {label:'Stop',  val:posStop,  color:'var(--red)'},
+                                {label:'Target',val:pos.target1||'—', color:'var(--cyan)'},
+                                {label:'R/R',   val:pos.riskReward||'—', color:'var(--amber)'},
+                              ].map(lv => (
+                                <div key={lv.label} className="ts-level-box">
+                                  <div className="ts-level-label">{lv.label}</div>
+                                  <div className="ts-level-val" style={{color:lv.color}}>{lv.val}</div>
+                                </div>
+                              ))}
+                            </div>
+                            {pos.atrUsed && <div className="ts-detail-meta">ATR ${pos.atrUsed} -- 50MA ${s.ma50?.toFixed(2)||'—'} -- Stop {pos.stopPct}%</div>}
+                          </div>
+                        )}
+
+                        {/* Additional metrics */}
+                        <div className="ts-detail-section">
+                          <div className="ts-detail-title">Signal Breakdown</div>
+                          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+                            {[
+                              {label:'RS Accel (4w)', val:`${(s.rsTrend?.vs4w||0)>0?'+':''}${s.rsTrend?.vs4w||0}`, color:(s.rsTrend?.vs4w||0)>5?'var(--green)':'var(--amber)'},
+                              {label:'vs 50MA',       val:s.vsMA50!=null?`${s.vsMA50.toFixed(1)}%`:'—', color:s.vsMA50!=null&&s.vsMA50<=5?'var(--green)':'var(--amber)'},
+                              {label:'vs 200MA',      val:s.vsMA200!=null?`${s.vsMA200.toFixed(1)}%`:'—', color:s.vsMA200!=null&&s.vsMA200>0?'var(--green)':'var(--red)'},
+                              {label:'50MA Price',    val:s.ma50?`$${s.ma50.toFixed(2)}`:'—', color:'var(--text2)'},
+                              {label:'Volume Ratio',  val:s.volumeRatio?`${s.volumeRatio.toFixed(2)}x`:'—', color:(s.volumeRatio||0)>1.5?'var(--green)':'var(--text2)'},
+                              {label:'RS Line High',  val:s.rsLineNewHigh?'Yes':'No', color:s.rsLineNewHigh?'var(--gold)':'var(--text3)'},
+                              {label:'VCP Forming',   val:s.vcpForming?`Yes${s.vcpCount?' ('+s.vcpCount+'x)':''}`:'No', color:s.vcpForming?'var(--purple)':'var(--text3)'},
+                              {label:'Stage',         val:s.stage||'—', color:s.stage===2?'var(--green)':'var(--text2)'},
+                            ].map(m => (
+                              <div key={m.label} style={{display:'flex',justifyContent:'space-between',padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
+                                <span style={{fontSize:10,color:'var(--text3)'}}>{m.label}</span>
+                                <span style={{fontSize:11,fontFamily:'var(--font-mono)',fontWeight:600,color:m.color}}>{m.val}</span>
+                              </div>
+                            ))}
+                          </div>
+                          {(s.earningsDate || s.daysToEarnings != null) && (
+                            <div style={{marginTop:8,padding:'6px 8px',background:(s.daysToEarnings||99)<=7?'rgba(255,61,87,0.12)':'rgba(240,165,0,0.08)',borderRadius:4,fontSize:11,color:(s.daysToEarnings||99)<=7?'var(--red)':'var(--amber)'}}>
+                              Earnings: <strong>{s.earningsDate||'—'}</strong>
+                              {s.daysToEarnings!=null && ` -- ${s.daysToEarnings} days`}
+                              {s.daysToEarnings!=null && s.daysToEarnings<=14 && <strong style={{color:'var(--red)',marginLeft:4}}>DO NOT HOLD</strong>}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Chart link + actions */}
+                        <div className="ts-detail-section">
+                          <div className="ts-detail-title">Actions</div>
+                          <div className="ts-detail-actions">
+                            <a className="ts-chart-link" href={`https://finviz.com/quote.ashx?t=${s.ticker}`} target="_blank" rel="noopener">
+                              FinViz Chart
+                            </a>
+                            <a className="ts-chart-link" href={`https://stockcharts.com/h-sc/ui?s=${s.ticker}`} target="_blank" rel="noopener">
+                              StockCharts
+                            </a>
+                            {mode !== 'swing' && (
+                              <button className="ts-stage-btn"
+                                disabled={noLongs || staging===s.ticker}
+                                onClick={(e) => stageFromSetup(s.ticker, 'position', e)}
+                                style={{background:noLongs?'var(--bg3)':'var(--green)',color:noLongs?'var(--text3)':'#000'}}>
+                                {staging===s.ticker ? 'STAGING...' : 'STAGE POSITION'}
+                              </button>
+                            )}
+                            {mode !== 'position' && (
+                              <button className="ts-stage-btn"
+                                disabled={noLongs || staging===s.ticker}
+                                onClick={(e) => stageFromSetup(s.ticker, 'swing', e)}
+                                style={{background:noLongs?'var(--bg3)':'var(--cyan)',color:noLongs?'var(--text3)':'#000'}}>
+                                {staging===s.ticker ? 'STAGING...' : 'STAGE SWING'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
               );
             })}
           </div>
-        </div>
-      )}
 
-      {/* ─── SWING PICKS ─── */}
-      {picks && swingPicks.length > 0 && (mode === 'swing' || mode === 'both') && (
-        <div style={{marginBottom:20}}>
-          <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:10,paddingLeft:2,flexWrap:'wrap'}}>
-            <span style={{fontSize:10,color:'var(--cyan)',letterSpacing:1.5,fontFamily:'var(--font-mono)',fontWeight:700}}>
-              ⚡ SWING SETUPS — TRADE NOW · {swingPicks.length} candidates
-            </span>
-            <span style={{fontSize:10,color:'var(--text3)'}}>
-              High momentum (≥55), near highs, 2-10 day holds. Click STAGE to create bracket order.
-            </span>
-          </div>
-          <div style={{display:'grid',gap:10}}>
-            {swingPicks.map((s, rank) => {
-              const sw = s.swingSetup || {};
-              const swStop = sw.stopLevel?.split(' (')[0] || '—';
-              const swEntry = sw.entryZone?.split(' – ')[0] || '—';
-              const rankColor = rank===0?'var(--green)':rank<=2?'var(--amber)':'var(--text3)';
-              return (
-                <div key={s.ticker} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,borderLeft:`3px solid ${rankColor}`,opacity:noLongs?0.6:1,overflow:'hidden'}}>
-                  <div style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',borderBottom:'1px solid var(--border)'}}>
-                    <div style={{fontFamily:'var(--font-mono)',fontSize:13,color:rankColor,fontWeight:700,minWidth:24}}>#{rank+1}</div>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:4}}>
-                        <span className="td-ticker" style={{fontSize:17}}>{s.ticker}</span>
-                        <span style={{fontFamily:'var(--font-mono)',fontSize:14,color:'var(--text)',fontWeight:600}}>${s.price?.toFixed(2)}</span>
-                        {s.rsLineNewHigh && <span style={{background:'rgba(255,215,0,0.12)',color:'var(--gold)',fontWeight:700,fontSize:10,padding:'1px 6px',borderRadius:3,border:'1px solid rgba(255,215,0,0.3)'}}>⭐ RS High</span>}
-                        {s.vcpForming && <span style={{background:'rgba(196,77,255,0.1)',color:'var(--purple)',fontWeight:700,fontSize:10,padding:'1px 6px',borderRadius:3,border:'1px solid rgba(196,77,255,0.3)'}}>VCP</span>}
-                        {s.earningsRisk && <span style={{background:'rgba(255,61,87,0.1)',color:'var(--red)',fontWeight:700,fontSize:10,padding:'1px 6px',borderRadius:3,border:'1px solid rgba(255,61,87,0.3)'}}>⚠ Earn {s.daysToEarnings}d</span>}
-                        <span style={{fontSize:10,color:'var(--text3)',marginLeft:'auto'}}>{s.sector}</span>
-                        <button disabled={noLongs||staging===s.ticker} onClick={()=>stageFromSetup(s.ticker,'swing')}
-                          style={{padding:'5px 14px',background:noLongs?'var(--bg3)':'var(--cyan)',border:`1px solid ${noLongs?'var(--border)':'var(--cyan)'}`,borderRadius:4,color:noLongs?'var(--text3)':'#000',fontSize:11,fontWeight:800,cursor:noLongs?'not-allowed':'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
-                          {staging===s.ticker?'STAGING...':`STAGE${exitStrategy.includes('scale_in')?' ⅓':''}`}
-                        </button>
-                      </div>
-                      <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
-                        {[{label:'RS',val:s.rsRank,color:rsColor(s.rsRank)},{label:'MOM',val:s.swingMomentum,color:s.swingMomentum>=60?'var(--green)':'var(--amber)'},{label:'SEPA',val:`${s.sepaScore||0}/8`,color:s.sepaScore>=5?'var(--green)':'var(--amber)'},{label:'CONV',val:s.convictionScore,color:scoreColor(s.convictionScore)}].map(m=>(
-                          <div key={m.label} style={{display:'flex',alignItems:'baseline',gap:4}}>
-                            <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>{m.label}</span>
-                            <span style={{fontFamily:'var(--font-mono)',fontSize:13,fontWeight:700,color:m.color}}>{m.val}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                  <div style={{padding:'12px 16px'}}>
-                    <div style={{fontSize:9,color:'var(--cyan)',letterSpacing:2,fontFamily:'var(--font-mono)',fontWeight:700,marginBottom:10}}>⚡ SWING · 2-10 DAYS</div>
-                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:8}}>
-                      {[{label:'Entry',val:swEntry,color:'var(--green)',bg:'rgba(0,230,118,0.06)',border:'rgba(0,230,118,0.2)'},{label:'Stop',val:swStop,color:'var(--red)',bg:'rgba(255,61,87,0.06)',border:'rgba(255,61,87,0.2)'},{label:'Target',val:sw.target1||'—',color:'var(--cyan)',bg:'rgba(0,212,255,0.06)',border:'rgba(0,212,255,0.2)'},{label:'R/R',val:sw.riskReward||'—',color:'var(--amber)',bg:'rgba(240,165,0,0.06)',border:'rgba(240,165,0,0.2)'}].map(lv=>(
-                        <div key={lv.label} style={{background:lv.bg,border:`1px solid ${lv.border}`,borderRadius:4,padding:'8px 10px'}}>
-                          <div style={{fontSize:9,color:'var(--text3)',letterSpacing:.5,textTransform:'uppercase',marginBottom:4}}>{lv.label}</div>
-                          <div style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:700,color:lv.color}}>{lv.val}</div>
-                        </div>
-                      ))}
-                    </div>
-                    {sw.atrUsed && <div style={{fontSize:10,color:'var(--text3)',marginTop:8}}>ATR ${sw.atrUsed} · Stop {sw.stopPct}% below entry</div>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* ─── POSITION PICKS ─── */}
-      {picks && positionPicks.length > 0 && (mode === 'position' || mode === 'both') && (
-        <div style={{marginBottom:20}}>
-          <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:10,paddingLeft:2,flexWrap:'wrap'}}>
-            <span style={{fontSize:10,color:'var(--green)',letterSpacing:1.5,fontFamily:'var(--font-mono)',fontWeight:700}}>
-              📈 POSITION SETUPS — TRADE NOW · {positionPicks.length} candidates
-            </span>
-            <span style={{fontSize:10,color:'var(--text3)'}}>
-              Within 5% of 50MA, RS ≥ 70, 3-8 week holds. Click STAGE to create bracket order.
-            </span>
-          </div>
-          <div style={{display:'grid',gap:10}}>
-            {positionPicks.map((s, rank) => {
-              const pos = s.positionSetup || {};
-              const posStop = pos.stopLevel?.split(' (')[0] || '—';
-              const posEntry = pos.entryZone?.split(' – ')[0] || '—';
-              const rankColor = rank===0?'var(--green)':rank<=2?'var(--amber)':'var(--text3)';
-              return (
-                <div key={s.ticker} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,borderLeft:`3px solid ${rankColor}`,opacity:noLongs?0.6:1,overflow:'hidden'}}>
-                  <div style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',borderBottom:'1px solid var(--border)'}}>
-                    <div style={{fontFamily:'var(--font-mono)',fontSize:13,color:rankColor,fontWeight:700,minWidth:24}}>#{rank+1}</div>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:4}}>
-                        <span className="td-ticker" style={{fontSize:17}}>{s.ticker}</span>
-                        <span style={{fontFamily:'var(--font-mono)',fontSize:14,color:'var(--text)',fontWeight:600}}>${s.price?.toFixed(2)}</span>
-                        <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:s.vsMA50<=2?'var(--green)':'var(--amber)',fontWeight:700}}>vs50MA: {s.vsMA50?.toFixed(1)}%</span>
-                        {s.rsLineNewHigh && <span style={{background:'rgba(255,215,0,0.12)',color:'var(--gold)',fontWeight:700,fontSize:10,padding:'1px 6px',borderRadius:3,border:'1px solid rgba(255,215,0,0.3)'}}>⭐ RS High</span>}
-                        {s.vcpForming && <span style={{background:'rgba(196,77,255,0.1)',color:'var(--purple)',fontWeight:700,fontSize:10,padding:'1px 6px',borderRadius:3,border:'1px solid rgba(196,77,255,0.3)'}}>VCP</span>}
-                        <span style={{fontSize:10,color:'var(--text3)',marginLeft:'auto'}}>{s.sector}</span>
-                        <button disabled={noLongs||staging===s.ticker} onClick={()=>stageFromSetup(s.ticker,'position')}
-                          style={{padding:'5px 14px',background:noLongs?'var(--bg3)':'var(--green)',border:`1px solid ${noLongs?'var(--border)':'var(--green)'}`,borderRadius:4,color:noLongs?'var(--text3)':'#000',fontSize:11,fontWeight:800,cursor:noLongs?'not-allowed':'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
-                          {staging===s.ticker?'STAGING...':`STAGE${exitStrategy.includes('scale_in')?' ⅓':''}`}
-                        </button>
-                      </div>
-                      <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
-                        {[{label:'RS',val:s.rsRank,color:rsColor(s.rsRank)},{label:'MOM',val:s.swingMomentum,color:s.swingMomentum>=60?'var(--green)':'var(--amber)'},{label:'SEPA',val:`${s.sepaScore||0}/8`,color:s.sepaScore>=5?'var(--green)':'var(--amber)'},{label:'CONV',val:s.convictionScore,color:scoreColor(s.convictionScore)},{label:'50MA',val:`$${s.ma50?.toFixed(2)||'—'}`,color:'var(--text2)'}].map(m=>(
-                          <div key={m.label} style={{display:'flex',alignItems:'baseline',gap:4}}>
-                            <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>{m.label}</span>
-                            <span style={{fontFamily:'var(--font-mono)',fontSize:13,fontWeight:700,color:m.color}}>{m.val}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                  <div style={{padding:'12px 16px'}}>
-                    <div style={{fontSize:9,color:'var(--green)',letterSpacing:2,fontFamily:'var(--font-mono)',fontWeight:700,marginBottom:10}}>📈 POSITION · 3-8 WEEKS · PULLBACK TO 50MA</div>
-                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:8}}>
-                      {[{label:'Entry',val:posEntry,color:'var(--green)',bg:'rgba(0,230,118,0.06)',border:'rgba(0,230,118,0.2)'},{label:'Stop',val:posStop,color:'var(--red)',bg:'rgba(255,61,87,0.06)',border:'rgba(255,61,87,0.2)'},{label:'Target',val:pos.target1||'—',color:'var(--cyan)',bg:'rgba(0,212,255,0.06)',border:'rgba(0,212,255,0.2)'},{label:'R/R',val:pos.riskReward||'—',color:'var(--amber)',bg:'rgba(240,165,0,0.06)',border:'rgba(240,165,0,0.2)'}].map(lv=>(
-                        <div key={lv.label} style={{background:lv.bg,border:`1px solid ${lv.border}`,borderRadius:4,padding:'8px 10px'}}>
-                          <div style={{fontSize:9,color:'var(--text3)',letterSpacing:.5,textTransform:'uppercase',marginBottom:4}}>{lv.label}</div>
-                          <div style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:700,color:lv.color}}>{lv.val}</div>
-                        </div>
-                      ))}
-                    </div>
-                    {pos.atrUsed && <div style={{fontSize:10,color:'var(--text3)',marginTop:8}}>ATR ${pos.atrUsed} · 50MA ${s.ma50?.toFixed(2)||'—'} · Stop {pos.stopPct}%</div>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* ─── LEGACY: full conviction list when no mode split applies ─── */}
-      {picks && picks.length > 0 && !swingPicks.length && !positionPicks.length && (
-        <div style={{marginBottom:20}}>
-          <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:10,paddingLeft:2,flexWrap:'wrap'}}>
-            <span style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>
-              CONVICTION PICKS — {filteredPicks.length}{picks.length !== filteredPicks.length ? ` of ${picks.length}`:''} ranked by RS + Momentum + SEPA
-            </span>
-            <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
-              {[
-                {key:'★',   label:'★ Triple',  col:'var(--green)'},
-                {key:'⭐',   label:'⭐ RS High', col:'var(--gold)'},
-                {key:'VCP', label:'VCP',        col:'var(--purple)'},
-                {key:'S2',  label:'S2',         col:'var(--green)'},
-              ].map(c => (
-                <button key={c.key} onClick={()=>toggleSetupSig(c.key)}
-                  style={{padding:'2px 8px',fontSize:9,fontWeight:700,fontFamily:'var(--font-mono)',
-                    background:setupSigFilters.has(c.key)?`${c.col}22`:'transparent',
-                    color:setupSigFilters.has(c.key)?c.col:'var(--text3)',
-                    border:`1px solid ${setupSigFilters.has(c.key)?c.col:'var(--border)'}`,
-                    borderRadius:3,cursor:'pointer',letterSpacing:.5}}>
-                  {c.label}
+          {/* Show more / fewer */}
+          {totalPicks > 12 && (
+            <div style={{textAlign:'center',marginTop:14}}>
+              {picksLimit <= 12 ? (
+                <button className="btn" onClick={() => setPicksLimit(50)}>
+                  Show All {totalPicks} Candidates
                 </button>
-              ))}
-              {setupSigFilters.size > 0 && (
-                <button onClick={()=>setSetupSigFilters(new Set())}
-                  style={{padding:'2px 6px',fontSize:9,background:'transparent',color:'var(--text3)',border:'1px solid var(--border)',borderRadius:3,cursor:'pointer'}}>
-                  Clear
+              ) : (
+                <button className="btn" onClick={() => setPicksLimit(12)}>
+                  Show Top 12 Only
                 </button>
               )}
             </div>
-          </div>
-          <div style={{display:'grid',gap:10}}>
-            {filteredPicks.map((s, rank) => {
-              const sw = s.swingSetup || {};
-              const pos = s.positionSetup || {};
-              // Extract just the price from stopLevel (strip the parenthetical note)
-              const swStop = sw.stopLevel?.split(' (')[0] || '—';
-              const posStop = pos.stopLevel?.split(' (')[0] || '—';
-              // Extract the low end of entry zone for cleaner display
-              const swEntry = sw.entryZone?.split(' – ')[0] || '—';
-              const posEntry = pos.entryZone?.split(' – ')[0] || '—';
-              const rankColor = rank===0?'var(--green)':rank<=2?'var(--amber)':'var(--text3)';
-              return (
-                <div key={s.ticker} style={{
-                  background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,
-                  borderLeft:`3px solid ${rankColor}`,
-                  opacity: noLongs ? 0.6 : 1,
-                  overflow:'hidden',
-                }}>
-                  {/* Card header */}
-                  <div style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',borderBottom:'1px solid var(--border)'}}>
-                    <div style={{fontFamily:'var(--font-mono)',fontSize:13,color:rankColor,fontWeight:700,minWidth:24}}>#{rank+1}</div>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:4}}>
-                        <span className="td-ticker" style={{fontSize:17}}>{s.ticker}</span>
-                        <span style={{fontFamily:'var(--font-mono)',fontSize:14,color:'var(--text)',fontWeight:600}}>${s.price?.toFixed(2)}</span>
-                        {s.rsLineNewHigh && <span style={{background:'rgba(255,215,0,0.12)',color:'var(--gold)',fontWeight:700,fontSize:10,padding:'1px 6px',borderRadius:3,border:'1px solid rgba(255,215,0,0.3)'}}>⭐ RS Line High</span>}
-                        {s.vcpForming && <span style={{background:'rgba(196,77,255,0.1)',color:'var(--purple)',fontWeight:700,fontSize:10,padding:'1px 6px',borderRadius:3,border:'1px solid rgba(196,77,255,0.3)'}}>VCP {s.vcpCount}x</span>}
-                        {s.earningsRisk && <span style={{background:'rgba(255,61,87,0.1)',color:'var(--red)',fontWeight:700,fontSize:10,padding:'1px 6px',borderRadius:3,border:'1px solid rgba(255,61,87,0.3)'}}>⚠ Earnings {s.daysToEarnings}d</span>}
-                        <span style={{fontSize:10,color:'var(--text3)',marginLeft:'auto'}}>{s.sector}</span>
-                        <button disabled={noLongs || staging===s.ticker} onClick={()=>stageFromSetup(s.ticker)}
-                          style={{padding:'5px 14px',background:noLongs?'var(--bg3)':'var(--green)',border:`1px solid ${noLongs?'var(--border)':'var(--green)'}`,borderRadius:4,color:noLongs?'var(--text3)':'#000',fontSize:11,fontWeight:800,cursor:noLongs?'not-allowed':'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
-                          {staging===s.ticker ? 'STAGING...' : 'STAGE'}
-                        </button>
-                      </div>
-                      {/* Metrics row */}
-                      <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
-                        {[
-                          {label:'RS',    val:s.rsRank,                color:rsColor(s.rsRank)},
-                          {label:'ACCEL', val:`${s.rsTrend?.vs4w>0?'+':''}${s.rsTrend?.vs4w||0}`, color:s.rsTrend?.vs4w>5?'var(--green)':'var(--amber)'},
-                          {label:'MOM',   val:s.swingMomentum,         color:s.swingMomentum>=60?'var(--green)':'var(--amber)'},
-                          {label:'SEPA',  val:`${s.sepaScore||0}/8`,   color:s.sepaScore>=5?'var(--green)':'var(--amber)'},
-                          {label:'CONV',  val:s.convictionScore,       color:scoreColor(s.convictionScore)},
-                        ].map(m => (
-                          <div key={m.label} style={{display:'flex',alignItems:'baseline',gap:4}}>
-                            <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1,textTransform:'uppercase'}}>{m.label}</span>
-                            <span style={{fontFamily:'var(--font-mono)',fontSize:13,fontWeight:700,color:m.color}}>{m.val}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Trade levels */}
-                  <div style={{display:'grid',gridTemplateColumns:mode==='both'?'1fr 1fr':'1fr',gap:0}}>
-                    {(mode==='swing' || mode==='both') && (
-                      <div style={{padding:'12px 16px',borderRight:mode==='both'?'1px solid var(--border)':'none'}}>
-                        <div style={{fontSize:9,color:'var(--cyan)',letterSpacing:2,fontFamily:'var(--font-mono)',fontWeight:700,marginBottom:10}}>⚡ SWING · 2-10 DAYS</div>
-                        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-                          {[
-                            {label:'Entry',  val:swEntry,      color:'var(--green)',  bg:'rgba(0,230,118,0.06)',  border:'rgba(0,230,118,0.2)'},
-                            {label:'Stop',   val:swStop,       color:'var(--red)',    bg:'rgba(255,61,87,0.06)',  border:'rgba(255,61,87,0.2)'},
-                            {label:'Target', val:sw.target1||'—', color:'var(--cyan)',bg:'rgba(0,212,255,0.06)',  border:'rgba(0,212,255,0.2)'},
-                            {label:'R/R',    val:sw.riskReward||'—', color:'var(--amber)',bg:'rgba(240,165,0,0.06)',border:'rgba(240,165,0,0.2)'},
-                          ].map(lv => (
-                            <div key={lv.label} style={{background:lv.bg,border:`1px solid ${lv.border}`,borderRadius:4,padding:'8px 10px'}}>
-                              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:.5,textTransform:'uppercase',marginBottom:4}}>{lv.label}</div>
-                              <div style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:700,color:lv.color}}>{lv.val}</div>
-                            </div>
-                          ))}
-                        </div>
-                        {sw.atrUsed && <div style={{fontSize:10,color:'var(--text3)',marginTop:8}}>ATR ${sw.atrUsed} · Stop {sw.stopPct}% below entry</div>}
-                      </div>
-                    )}
-                    {(mode==='position' || mode==='both') && (
-                      <div style={{padding:'12px 16px'}}>
-                        <div style={{fontSize:9,color:'var(--green)',letterSpacing:2,fontFamily:'var(--font-mono)',fontWeight:700,marginBottom:10}}>📈 POSITION · 3-8 WEEKS · PULLBACK TO 50MA</div>
-                        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-                          {[
-                            {label:'Entry',  val:posEntry,      color:'var(--green)',  bg:'rgba(0,230,118,0.06)',  border:'rgba(0,230,118,0.2)'},
-                            {label:'Stop',   val:posStop,       color:'var(--red)',    bg:'rgba(255,61,87,0.06)',  border:'rgba(255,61,87,0.2)'},
-                            {label:'Target', val:pos.target1||'—', color:'var(--cyan)',bg:'rgba(0,212,255,0.06)',  border:'rgba(0,212,255,0.2)'},
-                            {label:'R/R',    val:pos.riskReward||'—', color:'var(--amber)',bg:'rgba(240,165,0,0.06)',border:'rgba(240,165,0,0.2)'},
-                          ].map(lv => (
-                            <div key={lv.label} style={{background:lv.bg,border:`1px solid ${lv.border}`,borderRadius:4,padding:'8px 10px'}}>
-                              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:.5,textTransform:'uppercase',marginBottom:4}}>{lv.label}</div>
-                              <div style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:700,color:lv.color}}>{lv.val}</div>
-                            </div>
-                          ))}
-                        </div>
-                        {pos.atrUsed && <div style={{fontSize:10,color:'var(--text3)',marginTop:8}}>ATR ${pos.atrUsed} · 50MA ${s.ma50?.toFixed(2)||'—'} · Stop {pos.stopPct}%</div>}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          {picks.length > 7 && picksLimit <= 7 && (
-            <div style={{textAlign:'center',marginTop:10}}>
-              <button onClick={()=>setPicksLimit(50)} style={{padding:'6px 20px',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:600,background:'transparent',color:'var(--text2)',border:'1px solid var(--border)',borderRadius:4,cursor:'pointer',letterSpacing:1}}>
-                Show All {picks.length} Candidates ▼
-              </button>
-            </div>
-          )}
-          {picksLimit > 7 && (
-            <div style={{textAlign:'center',marginTop:10}}>
-              <button onClick={()=>setPicksLimit(7)} style={{padding:'6px 20px',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:600,background:'transparent',color:'var(--text2)',border:'1px solid var(--border)',borderRadius:4,cursor:'pointer',letterSpacing:1}}>
-                Show Top 7 Only ▲
-              </button>
-            </div>
           )}
         </div>
       )}
 
-      {/* Pending pullback — extended stocks to watch for position entry */}
-      {pendingPullback.length > 0 && (
-        <div style={{marginBottom:20}}>
-          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,paddingLeft:2}}>
-            <span style={{fontSize:10,color:'var(--amber)',letterSpacing:1.5,fontFamily:'var(--font-mono)',fontWeight:700}}>
-              ⏳ WATCHLIST — WAIT FOR 50MA PULLBACK · {pendingPullback.length} stocks
-            </span>
-            <span style={{fontSize:10,color:'var(--text3)'}}>
-              Strong RS + structure but 5-20% above 50MA — too extended to buy. You will get a Telegram alert when they pull back to entry zone.
-            </span>
-          </div>
-          <div style={{overflowX:'auto'}}>
-            <table className="rs-table" style={{fontSize:12}}>
-              <thead>
-                <tr>
-                  <th>Ticker</th>
-                  <th>Price</th>
-                  <th>RS</th>
-                  <th>Accel</th>
-                  <th>Mom</th>
-                  <th title="Distance above 50MA — needs to drop to ≤5% for position entry">vs 50MA</th>
-                  <th>50MA</th>
-                  <th title="Position entry zone when stock pulls back">Entry Zone</th>
-                  <th>SEPA</th>
-                  <th>Signals</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pendingPullback.map(s => {
-                  const entryZone = s.ma50 ? `$${(s.ma50 * 0.995).toFixed(2)} – $${(s.ma50 * 1.01).toFixed(2)}` : '—';
-                  return (
-                    <tr key={s.ticker}>
-                      <td><span className="td-ticker">{s.ticker}</span></td>
-                      <td style={{fontFamily:'var(--font-mono)'}}>${s.price?.toFixed(2)}</td>
-                      <td style={{fontFamily:'var(--font-mono)',color:rsColor(s.rsRank),fontWeight:700}}>{s.rsRank}</td>
-                      <td style={{fontFamily:'var(--font-mono)',color:(s.rsTrend?.vs4w||0)>5?'var(--green)':'var(--amber)'}}>{s.rsTrend?.vs4w>0?'+':''}{s.rsTrend?.vs4w||0}</td>
-                      <td style={{fontFamily:'var(--font-mono)',color:s.swingMomentum>=60?'var(--green)':'var(--amber)'}}>{s.swingMomentum}</td>
-                      <td style={{fontFamily:'var(--font-mono)',color:'var(--amber)',fontWeight:700}}>{s.vsMA50?.toFixed(1)}%</td>
-                      <td style={{fontFamily:'var(--font-mono)',color:'var(--text3)'}}>${s.ma50?.toFixed(2)}</td>
-                      <td style={{fontFamily:'var(--font-mono)',color:'var(--cyan)',fontSize:11}}>{entryZone}</td>
-                      <td style={{fontFamily:'var(--font-mono)',color:s.sepaScore>=5?'var(--green)':'var(--amber)'}}>{s.sepaScore||0}/8</td>
-                      <td style={{fontSize:11}}>
-                        {s.rsRank>=70&&(s.rsTrend?.vs4w||0)>0&&s.swingMomentum>=60 && <span style={{color:'var(--green)',fontWeight:700,marginRight:3}}>★</span>}
-                        {s.vcpForming && <span style={{color:'var(--purple)',fontWeight:700,marginRight:3}}>VCP</span>}
-                        {s.stage===2 && <span style={{color:'var(--green)',fontWeight:700,marginRight:3}}>S2</span>}
-                        {s.rsLineNewHigh && <span style={{color:'var(--gold)',fontWeight:700}}>⭐</span>}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* ─── MOMENTUM SCOUT — breakout stocks outside the universe ─── */}
-      <div style={{marginBottom:20}}>
-        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,paddingLeft:2}}>
-          <span style={{fontSize:10,color:'var(--purple)',letterSpacing:1.5,fontFamily:'var(--font-mono)',fontWeight:700}}>
-            🔍 DISCOVERY — Breakouts Outside Universe
-          </span>
-          <button onClick={loadScout} disabled={scoutLoading}
-            style={{padding:'3px 12px',fontSize:10,fontFamily:'var(--font-mono)',fontWeight:700,background:'transparent',color:'var(--purple)',border:'1px solid rgba(196,77,255,0.3)',borderRadius:3,cursor:scoutLoading?'wait':'pointer',letterSpacing:.5}}>
-            {scoutLoading ? 'Scanning...' : 'Scan Expansion List'}
-          </button>
-          {scoutData && <span style={{fontSize:10,color:'var(--text3)'}}>
-            {scoutData.totalCandidates} of {scoutData.scanned} stocks passed momentum filter
-          </span>}
-        </div>
-        {scoutData && scoutData.candidates?.length > 0 && (
-          <div style={{overflowX:'auto'}}>
-            <table className="rs-table" style={{fontSize:12}}>
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Ticker</th>
-                  <th>Price</th>
-                  <th>Mkt Cap</th>
-                  <th>Sector</th>
-                  <th title="Momentum score (0-100)">Score</th>
-                  <th title="% above/below 50-day MA">vs 50MA</th>
-                  <th title="% above/below 200-day MA">vs 200MA</th>
-                  <th title="% below 52-week high">From High</th>
-                  <th title="Today's volume vs 3-month average">Vol Ratio</th>
-                  <th>Signals</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {scoutData.candidates.map((s, i) => (
-                  <tr key={s.ticker}>
-                    <td style={{fontFamily:'var(--font-mono)',color:i<3?'var(--green)':'var(--text3)',fontWeight:700}}>{i+1}</td>
-                    <td><span className="td-ticker">{s.ticker}</span></td>
-                    <td style={{fontFamily:'var(--font-mono)'}}>${s.price?.toFixed(2)}</td>
-                    <td style={{fontFamily:'var(--font-mono)',color:'var(--text3)',fontSize:11}}>{s.mktCapLabel}</td>
-                    <td style={{fontSize:10,color:'var(--text3)'}}>{s.sector}</td>
-                    <td style={{fontFamily:'var(--font-mono)',fontWeight:700,color:s.momentumScore>=70?'var(--green)':s.momentumScore>=50?'var(--amber)':'var(--text3)'}}>{s.momentumScore}</td>
-                    <td style={{fontFamily:'var(--font-mono)',color:s.vsMA50>0?'var(--green)':'var(--red)'}}>{s.vsMA50>0?'+':''}{s.vsMA50}%</td>
-                    <td style={{fontFamily:'var(--font-mono)',color:s.vsMA200>0?'var(--green)':'var(--red)'}}>{s.vsMA200!=null?`${s.vsMA200>0?'+':''}${s.vsMA200}%`:'—'}</td>
-                    <td style={{fontFamily:'var(--font-mono)',color:s.fromHigh<10?'var(--green)':s.fromHigh<20?'var(--amber)':'var(--text3)'}}>{s.fromHigh}%</td>
-                    <td style={{fontFamily:'var(--font-mono)',color:s.volumeRatio>1.5?'var(--green)':s.volumeRatio>1.2?'var(--amber)':'var(--text3)'}}>{s.volumeRatio}x</td>
-                    <td style={{fontSize:10}}>
-                      {s.reasons?.map((r,j) => <span key={j} style={{display:'inline-block',marginRight:4,marginBottom:2,padding:'1px 5px',background:'rgba(196,77,255,0.08)',border:'1px solid rgba(196,77,255,0.2)',borderRadius:2,color:'var(--text2)',fontSize:9}}>{r}</span>)}
-                    </td>
-                    <td>
-                      <button onClick={async()=>{
-                        const sector = prompt(`Add ${s.ticker} to universe. Enter sector:\nTechnology, Comm Services, Consumer Disc, Industrials, Energy, Financials, Healthcare, Materials, Cons Staples, Real Estate, Utilities`, s.sector||'Technology');
-                        if(!sector) return;
-                        try {
-                          const r = await api('/api/edge/universe/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:s.ticker,sector})});
-                          if(r.existed) alert(`${s.ticker} already in universe (${r.message})`);
-                          else alert(`✓ Added ${s.ticker} to ${sector} — will appear in next scan`);
-                        } catch(e) { alert('Error: '+e.message); }
-                      }}
-                        style={{padding:'3px 8px',background:'rgba(0,230,118,0.1)',border:'1px solid rgba(0,230,118,0.3)',borderRadius:3,color:'var(--green)',fontSize:9,cursor:'pointer',fontWeight:700,fontFamily:'var(--font-mono)',whiteSpace:'nowrap'}}>
-                        + ADD
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div style={{fontSize:10,color:'var(--text3)',marginTop:6,paddingLeft:2}}>
-              These stocks are NOT in your universe. Click <strong style={{color:'var(--green)'}}>+ ADD</strong> to include one — persists to database, no file editing needed.
-            </div>
-          </div>
-        )}
-        {scoutData && scoutData.candidates?.length === 0 && (
-          <div style={{padding:16,color:'var(--text3)',fontSize:12,background:'var(--bg3)',borderRadius:6,border:'1px solid var(--border)'}}>
-            No momentum breakouts found in expansion watchlist. All clear.
-          </div>
-        )}
-      </div>
-
-      {/* Detailed trade setup results (when scan is run) */}
+      {/* ── DEEP SCAN RESULTS (AI enriched, when scan is run) ── */}
       {results.length > 0 && (
-        <div>
-          <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>🔬 DEEP SCAN — AI ENRICHED SETUPS ({scanned} candidates · stricter filters: RS≥70, within 7% of high, volume surge)</div>
-          <div className="sl-grid">
-            {results.map(s => {
+        <div style={{marginBottom:20}}>
+          <div className="ts-section-header">
+            <span className="ts-section-title" style={{color:'var(--text2)'}}>DEEP SCAN -- AI ENRICHED</span>
+            <span className="ts-section-count">{scanned} scanned -- RS>=70, within 7% of high, volume surge</span>
+            <div className="ts-section-line" />
+          </div>
+          <div className="ts-grid">
+            {results.map((s, i) => {
               const b = s.brief || {};
+              const isExpanded = expandedCard === `scan-${s.ticker}`;
               return (
-                <div className="sl-card anim-in" key={s.ticker} style={{opacity:noLongs?0.6:1}}>
-                  <div className="sl-card-header">
-                    <div className="sl-card-title">
-                      <div>
-                        <span className="sl-ticker td-ticker">{s.ticker}</span>
-                        <span style={{fontSize:11,color:'var(--text3)',marginLeft:8}}>${fmt(s.price)}</span>
-                      </div>
+                <div key={s.ticker}
+                  className={`ts-card anim-in${isExpanded?' expanded':''}`}
+                  style={{opacity:noLongs?0.6:1}}
+                  onClick={() => setExpandedCard(isExpanded ? null : `scan-${s.ticker}`)}>
+                  <div className="ts-card-top">
+                    <div className="ts-card-rank" style={{background:'var(--text3)22',color:'var(--text3)'}}>{i+1}</div>
+                    <div className="ts-card-identity">
+                      <div className="ts-card-ticker">{s.ticker}</div>
+                      <div className="ts-card-name">{s.name} -- {s.sector}</div>
                     </div>
-                    <div className="sl-name">{s.name} · {s.sector}</div>
-                    <div className="sl-metrics">
-                      <div className="sl-metric">
-                        <div className="sl-metric-label">RS</div>
-                        <div className="sl-metric-val" style={{color:rsColor(s.rsRank)}}>{s.rsRank}</div>
-                      </div>
-                      <div className="sl-metric">
-                        <div className="sl-metric-label">Mom</div>
-                        <div className="sl-metric-val" style={{color:s.swingMomentum>=60?'var(--green)':'var(--amber)'}}>{s.swingMomentum||'—'}</div>
-                      </div>
-                      <div className="sl-metric">
-                        <div className="sl-metric-label">Vol</div>
-                        <div className={`sl-metric-val ${s.volumeRatio>1.5?'up':''}`}>{fmt(s.volumeRatio,2)}x</div>
-                      </div>
+                    <div className="ts-card-price">${fmt(s.price)}</div>
+                  </div>
+                  <div className="ts-card-metrics" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
+                    <div className="ts-metric">
+                      <div className="ts-metric-label">RS</div>
+                      <div className="ts-metric-val" style={{color:rsColor(s.rsRank)}}>{s.rsRank}</div>
+                    </div>
+                    <div className="ts-metric">
+                      <div className="ts-metric-label">Mom</div>
+                      <div className="ts-metric-val" style={{color:(s.swingMomentum||0)>=60?'var(--green)':'var(--amber)'}}>{s.swingMomentum||'—'}</div>
+                    </div>
+                    <div className="ts-metric">
+                      <div className="ts-metric-label">Vol</div>
+                      <div className="ts-metric-val" style={{color:(s.volumeRatio||0)>1.5?'var(--green)':'var(--text2)'}}>{fmt(s.volumeRatio,2)}x</div>
                     </div>
                   </div>
-                  <div className="sl-card-body">
-                    {s.algoSetup && (
-                      <div style={{marginBottom:8}}>
-                        <div className="sl-levels">
-                          <div className="sl-level"><div className="sl-level-label">Entry</div><div className="sl-level-val up">{s.algoSetup.entryZone||'—'}</div></div>
-                          <div className="sl-level"><div className="sl-level-label">Stop</div><div className="sl-level-val dn">{s.algoSetup.stopLevel||'—'}</div></div>
-                          <div className="sl-level"><div className="sl-level-label">T1 ({s.algoSetup.riskReward})</div><div className="sl-level-val" style={{color:'var(--cyan)'}}>{s.algoSetup.target1||'—'}</div></div>
+                  {s.algoSetup && (
+                    <div style={{padding:'10px 16px',display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
+                      {[
+                        {label:'Entry', val:s.algoSetup.entryZone||'—', color:'var(--green)'},
+                        {label:'Stop',  val:s.algoSetup.stopLevel||'—', color:'var(--red)'},
+                        {label:`T1 (${s.algoSetup.riskReward})`, val:s.algoSetup.target1||'—', color:'var(--cyan)'},
+                      ].map(lv => (
+                        <div key={lv.label} className="ts-level-box">
+                          <div className="ts-level-label">{lv.label}</div>
+                          <div className="ts-level-val" style={{color:lv.color,fontSize:13}}>{lv.val}</div>
                         </div>
-                        <div style={{fontSize:10,color:'var(--text3)',marginTop:3}}>ATR: ${s.algoSetup.atrUsed} · Stop: {s.algoSetup.stopPct}%</div>
+                      ))}
+                    </div>
+                  )}
+                  {(s.earningsDate || b?.earningsDate) && (
+                    <div style={{padding:'0 16px 8px'}}>
+                      <div style={{padding:'5px 8px',background:(s.daysToEarnings||99)<=7?'rgba(255,61,87,0.12)':'rgba(240,165,0,0.08)',borderRadius:3,fontSize:10,color:(s.daysToEarnings||99)<=7?'var(--red)':'var(--amber)'}}>
+                        Earnings: <strong>{s.earningsDate||b?.earningsDate}</strong>
+                        {s.daysToEarnings!=null && ` -- ${s.daysToEarnings}d`}
+                        {s.daysToEarnings!=null && s.daysToEarnings<=14 && <strong style={{color:'var(--red)',marginLeft:4}}>DO NOT HOLD</strong>}
                       </div>
-                    )}
-                    {(s.earningsDate || b?.earningsDate) && (
-                      <div className="sl-earnings" style={{background:(s.daysToEarnings||99)<=7?'rgba(255,61,87,0.15)':'rgba(240,165,0,0.08)',borderColor:(s.daysToEarnings||99)<=7?'rgba(255,61,87,0.5)':'rgba(240,165,0,0.3)'}}>
-                        ⚠ Earnings: <strong>{s.earningsDate||b?.earningsDate}</strong>
-                        {s.daysToEarnings!=null && ` — ${s.daysToEarnings}d`}
-                        {(s.daysToEarnings!=null && s.daysToEarnings<=14) && <strong style={{color:'var(--red)',marginLeft:4}}>DO NOT HOLD</strong>}
-                      </div>
-                    )}
-                    <button disabled={noLongs || staging===s.ticker} onClick={()=>stageFromSetup(s.ticker)}
-                      style={{width:'100%',marginTop:8,padding:'6px 0',
-                        background:noLongs?'var(--bg3)':exitStrategy.includes('scale_in')?'var(--cyan)':'var(--green)',
-                        border:`1px solid ${noLongs?'var(--border)':exitStrategy.includes('scale_in')?'var(--cyan)':'var(--green)'}`,
-                        borderRadius:4,color:noLongs?'var(--text3)':'#000',fontSize:11,fontWeight:800,cursor:noLongs?'not-allowed':'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
-                      {staging===s.ticker ? 'STAGING...' : exitStrategy.includes('scale_in') ? 'STAGE PILOT ⅓' : 'STAGE FULL'}
+                    </div>
+                  )}
+                  <div className="ts-card-footer">
+                    <span className="ts-sector">{s.sector}</span>
+                    <button className="ts-stage-btn"
+                      disabled={noLongs || staging===s.ticker}
+                      onClick={(e) => stageFromSetup(s.ticker, undefined, e)}
+                      style={{background:noLongs?'var(--bg3)':stageColor,color:noLongs?'var(--text3)':'#000'}}>
+                      {staging===s.ticker ? 'STAGING...' : stageLabel}
                     </button>
                   </div>
                 </div>
@@ -3979,14 +3972,224 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
         </div>
       )}
 
+      {/* ── CONVICTION OVERRIDES (only in CAUTION / BEAR — not NEUTRAL) ── */}
+      {convictionOverrides.length > 0 && regime && regime.sizeMultiplier <= 0.5 && (
+        <div style={{marginBottom:20}}>
+          <div className="ts-section-header">
+            <span className="ts-section-title" style={{color:'var(--amber)'}}>CONVICTION OVERRIDES</span>
+            <span className="ts-section-count">{convictionOverrides.length} stocks bypassing {regime.regime} regime</span>
+            <div className="ts-section-line" />
+          </div>
+          <div className="ts-grid">
+            {convictionOverrides.map((s, i) => {
+              const ov = s.convictionOverride || {};
+              const tierColor = ov.tier === 'elite' ? 'var(--green)' : 'var(--amber)';
+              const isExpanded = expandedCard === `ov-${s.ticker}`;
+              return (
+                <div key={s.ticker}
+                  className={`ts-card${isExpanded?' expanded':''}`}
+                  style={{borderColor:tierColor+'55'}}
+                  onClick={() => setExpandedCard(isExpanded ? null : `ov-${s.ticker}`)}>
+                  <div className="ts-card-top">
+                    <div className="ts-card-rank" style={{background:tierColor+'22',color:tierColor,fontSize:9,letterSpacing:.5}}>
+                      {ov.tier === 'elite' ? 'ELT' : 'STR'}
+                    </div>
+                    <div className="ts-card-identity">
+                      <div className="ts-card-ticker">{s.ticker}</div>
+                      <div className="ts-card-name">{s.name || s.sector}</div>
+                    </div>
+                    <div className="ts-card-price">${s.price?.toFixed(2)}</div>
+                  </div>
+                  <div className="ts-card-metrics" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
+                    {[
+                      {label:'CONV', val:s.convictionScore, color:scoreColor(s.convictionScore)},
+                      {label:'RS',   val:s.rsRank,          color:rsColor(s.rsRank)},
+                      {label:'MOM',  val:s.swingMomentum,   color:(s.swingMomentum||0)>=60?'var(--green)':'var(--amber)'},
+                      {label:'SIZE', val:`${ov.originalMultiplier}x→${ov.adjustedMultiplier}x`, color:'var(--amber)'},
+                    ].map(m => (
+                      <div key={m.label} className="ts-metric">
+                        <div className="ts-metric-label">{m.label}</div>
+                        <div className="ts-metric-val" style={{color:m.color}}>{m.val}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {ov.reasons && (
+                    <div className="ts-card-signals">
+                      {ov.reasons.map((r,j) => (
+                        <span key={j} className="ts-signal-tag" style={{background:'var(--bg3)',color:'var(--text3)',border:'1px solid var(--border)'}}>{r}</span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="ts-card-footer">
+                    <span className="ts-sector">{s.sector}</span>
+                    <button className="ts-stage-btn"
+                      disabled={staging===s.ticker}
+                      onClick={(e) => stageFromSetup(s.ticker, 'swing', e)}
+                      style={{background:tierColor,color:'#000'}}>
+                      {staging===s.ticker ? 'STAGING...' : 'STAGE OVERRIDE'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── PENDING PULLBACK WATCHLIST ── */}
+      {pendingPullback.length > 0 && (
+        <div style={{marginBottom:20}}>
+          <div className="ts-section-header">
+            <span className="ts-section-title" style={{color:'var(--amber)'}}>PULLBACK WATCHLIST</span>
+            <span className="ts-section-count">{pendingPullback.length} stocks -- strong RS, 5-20% above 50MA, waiting for entry</span>
+            <div className="ts-section-line" />
+          </div>
+          <div className="ts-grid">
+            {pendingPullback.map((s, i) => {
+              const entryZone = s.ma50 ? `$${(s.ma50 * 0.995).toFixed(2)} - $${(s.ma50 * 1.01).toFixed(2)}` : '—';
+              const isExpanded = expandedCard === `pb-${s.ticker}`;
+              return (
+                <div key={s.ticker}
+                  className={`ts-card${isExpanded?' expanded':''}`}
+                  onClick={() => setExpandedCard(isExpanded ? null : `pb-${s.ticker}`)}>
+                  <div className="ts-card-top">
+                    <div className="ts-card-rank" style={{background:'var(--amber)22',color:'var(--amber)'}}>{i+1}</div>
+                    <div className="ts-card-identity">
+                      <div className="ts-card-ticker">{s.ticker}</div>
+                      <div className="ts-card-name">vs 50MA: <span style={{color:'var(--amber)',fontWeight:700}}>{s.vsMA50?.toFixed(1)}%</span> extended</div>
+                    </div>
+                    <div className="ts-card-price">${s.price?.toFixed(2)}</div>
+                  </div>
+                  <div className="ts-card-signals">
+                    {s.rsRank>=70&&(s.rsTrend?.vs4w||0)>0&&s.swingMomentum>=60 && <span className="ts-signal-tag" style={{background:'rgba(0,230,118,0.1)',color:'var(--green)',border:'1px solid rgba(0,230,118,0.3)'}}>Triple</span>}
+                    {s.vcpForming && <span className="ts-signal-tag" style={{background:'rgba(196,77,255,0.1)',color:'var(--purple)',border:'1px solid rgba(196,77,255,0.3)'}}>VCP</span>}
+                    {s.stage===2 && <span className="ts-signal-tag" style={{background:'rgba(0,230,118,0.1)',color:'var(--green)',border:'1px solid rgba(0,230,118,0.3)'}}>Stage 2</span>}
+                    {s.rsLineNewHigh && <span className="ts-signal-tag" style={{background:'rgba(255,215,0,0.12)',color:'var(--gold)',border:'1px solid rgba(255,215,0,0.3)'}}>RS High</span>}
+                  </div>
+                  <div className="ts-card-metrics" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
+                    {[
+                      {label:'RS',    val:s.rsRank, color:rsColor(s.rsRank)},
+                      {label:'Mom',   val:s.swingMomentum, color:(s.swingMomentum||0)>=60?'var(--green)':'var(--amber)'},
+                      {label:'SEPA',  val:`${s.sepaScore||0}/8`, color:(s.sepaScore||0)>=5?'var(--green)':'var(--amber)'},
+                      {label:'Entry', val:entryZone, color:'var(--cyan)'},
+                    ].map(m => (
+                      <div key={m.label} className="ts-metric">
+                        <div className="ts-metric-label">{m.label}</div>
+                        <div className="ts-metric-val" style={{color:m.color,fontSize:m.label==='Entry'?10:13}}>{m.val}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="ts-card-footer">
+                    <span className="ts-sector">{s.sector} -- 50MA ${s.ma50?.toFixed(2)}</span>
+                    <span style={{fontSize:10,color:'var(--amber)',fontFamily:'var(--font-mono)'}}>WAIT FOR PULLBACK</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── MOMENTUM SCOUT (breakouts outside universe) ── */}
+      <div style={{marginBottom:20}}>
+        <div className="ts-section-header">
+          <span className="ts-section-title" style={{color:'var(--purple)'}}>DISCOVERY</span>
+          <span className="ts-section-count">Breakouts outside your universe</span>
+          <div className="ts-section-line" />
+          <button className="btn btn-sm" onClick={loadScout} disabled={scoutLoading} style={{flexShrink:0}}>
+            {scoutLoading ? 'Scanning...' : 'Scan Expansion List'}
+          </button>
+        </div>
+        {scoutData && scoutData.totalCandidates > 0 && (
+          <div style={{fontSize:10,color:'var(--text3)',marginBottom:10}}>{scoutData.totalCandidates} of {scoutData.scanned} passed momentum filter</div>
+        )}
+        {scoutData && scoutData.candidates?.length > 0 && (
+          <div className="ts-grid">
+            {scoutData.candidates.map((s, i) => (
+              <div key={s.ticker} className="ts-card">
+                <div className="ts-card-top">
+                  <div className="ts-card-rank" style={{background:i<3?'var(--green)22':'var(--text3)22',color:i<3?'var(--green)':'var(--text3)'}}>{i+1}</div>
+                  <div className="ts-card-identity">
+                    <div className="ts-card-ticker">{s.ticker}</div>
+                    <div className="ts-card-name">{s.sector} -- {s.mktCapLabel}</div>
+                  </div>
+                  <div className="ts-card-price">${s.price?.toFixed(2)}</div>
+                </div>
+                <div className="ts-card-signals">
+                  {s.reasons?.map((r,j) => (
+                    <span key={j} className="ts-signal-tag" style={{background:'rgba(196,77,255,0.08)',color:'var(--text2)',border:'1px solid rgba(196,77,255,0.2)'}}>{r}</span>
+                  ))}
+                </div>
+                <div className="ts-card-metrics" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
+                  {[
+                    {label:'Score', val:s.momentumScore, color:s.momentumScore>=70?'var(--green)':s.momentumScore>=50?'var(--amber)':'var(--text3)'},
+                    {label:'vs 50MA', val:`${s.vsMA50>0?'+':''}${s.vsMA50}%`, color:s.vsMA50>0?'var(--green)':'var(--red)'},
+                    {label:'From Hi', val:`${s.fromHigh}%`, color:s.fromHigh<10?'var(--green)':s.fromHigh<20?'var(--amber)':'var(--text3)'},
+                    {label:'Vol', val:`${s.volumeRatio}x`, color:s.volumeRatio>1.5?'var(--green)':s.volumeRatio>1.2?'var(--amber)':'var(--text3)'},
+                  ].map(m => (
+                    <div key={m.label} className="ts-metric">
+                      <div className="ts-metric-label">{m.label}</div>
+                      <div className="ts-metric-val" style={{color:m.color}}>{m.val}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="ts-card-footer">
+                  <span className="ts-sector">{s.sector}</span>
+                  <button className="ts-stage-btn"
+                    style={{background:'rgba(0,230,118,0.1)',color:'var(--green)',border:'1px solid rgba(0,230,118,0.3)'}}
+                    onClick={() => { setAddModal(s.ticker); setAddSector(s.sector||'Technology'); }}>
+                    + ADD TO UNIVERSE
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {scoutData && scoutData.candidates?.length === 0 && (
+          <div style={{padding:16,color:'var(--text3)',fontSize:12,background:'var(--bg3)',borderRadius:6,border:'1px solid var(--border)'}}>
+            No momentum breakouts found in expansion watchlist.
+          </div>
+        )}
+      </div>
+
+      {/* ── EMPTY STATE ── */}
       {!picks?.length && !results.length && !loading && !picksLoad && (
         <div className="panel" style={{textAlign:'center',padding:30,color:'var(--text3)'}}>
           Run <strong>RS Scanner</strong> first (RS Dashboard tab), then refresh picks here.
         </div>
       )}
 
-      {/* ─── TRADE SETUP HISTORY (top 7 per day for last 365 days) ─── */}
+      {/* ── SETUP HISTORY ── */}
       <PicksHistoryPanel />
+
+      {/* ── TOAST (replaces alert) ── */}
+      {toast && (
+        <div className={`ts-toast${toast.isError?' ts-toast-error':''}`}>
+          <button className="ts-toast-close" onClick={() => setToast(null)}>x</button>
+          <div className="ts-toast-title" style={{color:toast.isError?'var(--red)':'var(--green)'}}>{toast.title}</div>
+          <div className="ts-toast-body">{toast.body}</div>
+        </div>
+      )}
+
+      {/* ── ADD TO UNIVERSE MODAL (replaces prompt) ── */}
+      {addModal && (
+        <>
+          <div className="ts-add-backdrop" onClick={() => setAddModal(null)} />
+          <div className="ts-add-modal">
+            <h3>Add {addModal} to Universe</h3>
+            <label style={{fontSize:11,color:'var(--text3)',display:'block',marginBottom:6}}>Select sector:</label>
+            <select value={addSector} onChange={e => setAddSector(e.target.value)}>
+              {['Technology','Comm Services','Consumer Disc','Industrials','Energy','Financials','Healthcare','Materials','Cons Staples','Real Estate','Utilities'].map(s => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+            <div className="ts-add-btns">
+              <button className="btn" onClick={() => setAddModal(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={() => addToUniverse(addModal, addSector)}>Add to Universe</button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -6688,6 +6891,33 @@ function PortfolioTab() {
   const [sizeStop, setSizeStop]   = useState('');
   const [editConfig, setEditConfig] = useState(false);
   const [cfgForm, setCfgForm] = useState({});
+  // Manual exit state
+  const [exitTarget, setExitTarget] = useState(null);
+  const [exitPrice, setExitPrice] = useState('');
+  const [exitClosing, setExitClosing] = useState(false);
+  const [exitResult, setExitResult] = useState(null);
+
+  async function confirmClosePosition() {
+    if (!exitTarget) return;
+    setExitClosing(true); setExitResult(null);
+    try {
+      const r = await api('/api/broker/close-position', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          tradeId: exitTarget.localTradeId || null,
+          symbol: exitTarget.symbol,
+          shares: exitTarget.qty,
+          exitPrice: exitPrice ? +exitPrice : null,
+          exitType: 'manual',
+        }),
+      });
+      setExitResult({ ok:true, trade: r.trade });
+      setTimeout(() => { setExitTarget(null); setExitResult(null); loadStatus(); }, 2000);
+    } catch(e) {
+      setExitResult({ ok:false, error: e.message });
+    }
+    setExitClosing(false);
+  }
 
   const prevPortfolio = useRef({status:null,config:null});
 
@@ -6876,7 +7106,7 @@ function PortfolioTab() {
               <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
                 <thead>
                   <tr style={{borderBottom:'1px solid var(--border)'}}>
-                    {['Symbol','Qty','Avg Entry','Current','Mkt Value','P&L $','P&L %','Today','Stop','Target','Journal'].map(h =>
+                    {['Symbol','Qty','Avg Entry','Current','Mkt Value','P&L $','P&L %','Today','Stop','Target','Journal',''].map(h =>
                       <th key={h} style={{padding:'6px 5px',textAlign:'left',fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
                     )}
                   </tr>
@@ -6905,10 +7135,66 @@ function PortfolioTab() {
                           ? <span style={{color:'var(--green)',fontSize:10}}>Yes</span>
                           : <span style={{color:'var(--amber)',fontSize:10,fontWeight:700}}>MISSING</span>}
                       </td>
+                      <td style={{padding:'6px 5px'}}>
+                        <button onClick={()=>{setExitTarget(p);setExitPrice(p.currentPrice?.toFixed(2)||'');setExitResult(null);}}
+                          style={{background:'transparent',border:'1px solid var(--red)',color:'var(--red)',borderRadius:3,padding:'3px 8px',fontSize:10,fontWeight:700,cursor:'pointer',fontFamily:'var(--font-mono)'}}>
+                          Exit
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* ── Exit Position Modal ────────────────────────────── */}
+          {exitTarget && (
+            <div onClick={e=>{if(e.target===e.currentTarget){setExitTarget(null);setExitResult(null);}}}
+              style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.7)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center'}}>
+              <div style={{background:'var(--bg2)',border:'1px solid var(--red)',borderRadius:8,padding:24,maxWidth:400,width:'90%'}}>
+                <div style={{fontSize:10,color:'var(--red)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:12}}>CLOSE POSITION</div>
+                <div style={{fontSize:16,fontWeight:700,color:'var(--text)',marginBottom:4}}>{exitTarget.symbol}</div>
+                <div style={{fontSize:12,color:'var(--text2)',marginBottom:16}}>{exitTarget.qty} shares @ ${fmt(exitTarget.avgEntryPrice)} avg</div>
+
+                <div style={{marginBottom:12}}>
+                  <label style={{fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)',display:'block',marginBottom:4}}>EXIT PRICE (leave blank for market order)</label>
+                  <input type="number" step="0.01" value={exitPrice} onChange={e=>setExitPrice(e.target.value)}
+                    style={{width:'100%',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',padding:'8px 10px',fontSize:14,fontFamily:'var(--font-mono)',fontWeight:600,boxSizing:'border-box'}}
+                    placeholder="Market price"/>
+                </div>
+
+                {exitPrice && exitTarget.avgEntryPrice && (
+                  <div style={{fontSize:11,color:(+exitPrice - exitTarget.avgEntryPrice) >= 0 ? 'var(--green)' : 'var(--red)',marginBottom:12,fontFamily:'var(--font-mono)'}}>
+                    Est. P&L: {((+exitPrice - exitTarget.avgEntryPrice) * exitTarget.qty >= 0 ? '+' : '')}${((+exitPrice - exitTarget.avgEntryPrice) * exitTarget.qty).toFixed(0)}
+                    ({(((+exitPrice - exitTarget.avgEntryPrice) / exitTarget.avgEntryPrice) * 100).toFixed(1)}%)
+                  </div>
+                )}
+
+                <div style={{fontSize:11,color:'var(--text3)',marginBottom:16,lineHeight:1.5}}>
+                  This will cancel all open orders for {exitTarget.symbol} and {exitPrice ? `submit a limit sell at $${exitPrice}` : 'close at market price'}.
+                </div>
+
+                {exitResult && (
+                  <div style={{padding:'8px 12px',borderRadius:4,marginBottom:12,fontSize:12,fontWeight:600,
+                    background: exitResult.ok ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
+                    color: exitResult.ok ? 'var(--green)' : 'var(--red)',
+                    border: `1px solid ${exitResult.ok ? 'var(--green)' : 'var(--red)'}`}}>
+                    {exitResult.ok ? `✓ Position closed. P&L: $${fmt(exitResult.trade?.pnl_dollars||0,0)}` : `✕ ${exitResult.error}`}
+                  </div>
+                )}
+
+                <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+                  <button onClick={()=>{setExitTarget(null);setExitResult(null);}}
+                    style={{background:'var(--bg3)',border:'1px solid var(--border)',color:'var(--text2)',borderRadius:4,padding:'8px 16px',fontSize:12,cursor:'pointer'}}>
+                    Cancel
+                  </button>
+                  <button onClick={confirmClosePosition} disabled={exitClosing}
+                    style={{background:'var(--red)',border:'none',color:'#fff',borderRadius:4,padding:'8px 16px',fontSize:12,fontWeight:700,cursor:'pointer',opacity:exitClosing?0.5:1}}>
+                    {exitClosing ? 'Closing...' : 'Confirm Exit'}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 

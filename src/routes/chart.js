@@ -294,6 +294,115 @@ module.exports = function () {
         });
       }
 
+      // ─── WEEKLY CHART ───────────────────────────────────────────────────
+      // Aggregates daily OHLCV into Mon-Fri weekly candles. Shows 2-3 years
+      // of weekly bars with 10w/30w/40w MAs — the position trader's primary
+      // timeframe for trend identification and stage analysis.
+      if (timeframe === 'weekly' || timeframe === 'w') {
+        const dailyBars = await getHistoryFull(symbol);
+        if (!dailyBars || dailyBars.length === 0) {
+          return res.status(404).json({ error: `No price data for ${symbol}` });
+        }
+
+        // Aggregate dailies into weekly OHLCV. Week boundary = Monday.
+        // Each weekly bar uses Monday's date as the time key.
+        const weeklyBars = [];
+        let currentWeek = null;
+
+        for (const bar of dailyBars) {
+          // Parse date and find the Monday of this bar's week
+          const d = new Date(bar.date + 'T12:00:00Z');
+          const dayOfWeek = d.getUTCDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+          const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+          const monday = new Date(d);
+          monday.setUTCDate(d.getUTCDate() + mondayOffset);
+          const weekKey = monday.toISOString().slice(0, 10);
+
+          if (!currentWeek || currentWeek._weekKey !== weekKey) {
+            currentWeek = {
+              _weekKey: weekKey,
+              date: weekKey,
+              open: bar.open,
+              high: bar.high,
+              low: bar.low,
+              close: bar.close,
+              volume: bar.volume || 0,
+            };
+            weeklyBars.push(currentWeek);
+          } else {
+            if (bar.high > currentWeek.high) currentWeek.high = bar.high;
+            if (bar.low < currentWeek.low) currentWeek.low = bar.low;
+            currentWeek.close = bar.close;
+            currentWeek.volume += bar.volume || 0;
+          }
+        }
+
+        // Trim to requested window (default 156 weeks ≈ 3 years)
+        const weekDays = Math.min(Math.ceil(days / 5), weeklyBars.length);
+        const visibleWeekly = weeklyBars.slice(-weekDays);
+        const wOffset = weeklyBars.length - visibleWeekly.length;
+
+        // Weekly MAs: 10w (≈50d), 30w (≈150d), 40w (≈200d)
+        const wCloses = weeklyBars.map(b => b.close);
+        const wma10  = sma(wCloses, 10);
+        const wma30  = sma(wCloses, 30);
+        const wma40  = sma(wCloses, 40);
+        const wVwap  = rollingVWAP(weeklyBars, 10);
+
+        function wmaSlice(arr) {
+          return arr.slice(wOffset)
+            .map((v, i) => v != null ? { time: visibleWeekly[i].date, value: +v.toFixed(2) } : null)
+            .filter(Boolean);
+        }
+
+        const ohlcv = visibleWeekly.map(b => ({
+          time: b.date,
+          open: +b.open.toFixed(2),
+          high: +b.high.toFixed(2),
+          low: +b.low.toFixed(2),
+          close: +b.close.toFixed(2),
+        }));
+
+        const volumeSeries = visibleWeekly.map(b => ({
+          time: b.date,
+          value: b.volume,
+          color: b.close >= b.open ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)',
+        }));
+
+        // Entry/stop/target markers
+        const markers = [];
+        const entryPrice   = parseFloat(req.query.entry);
+        const stopPrice    = parseFloat(req.query.stop);
+        const target1Price = parseFloat(req.query.target1);
+        const target2Price = parseFloat(req.query.target2);
+        if (!isNaN(entryPrice))   markers.push({ label: 'Entry',    price: entryPrice,   color: '#2196F3' });
+        if (!isNaN(stopPrice))    markers.push({ label: 'Stop',     price: stopPrice,    color: '#f44336' });
+        if (!isNaN(target1Price)) markers.push({ label: 'Target 1', price: target1Price, color: '#4CAF50' });
+        if (!isNaN(target2Price)) markers.push({ label: 'Target 2', price: target2Price, color: '#8BC34A' });
+
+        return res.json({
+          symbol,
+          timeframe: 'weekly',
+          bars: ohlcv,
+          volume: volumeSeries,
+          overlays: {
+            ma50:  wmaSlice(wma10),
+            ma150: wmaSlice(wma30),
+            ma200: wmaSlice(wma40),
+            vwap:  wmaSlice(wVwap),
+          },
+          markers,
+          meta: {
+            timeframe: 'weekly',
+            totalBars: weeklyBars.length,
+            visibleBars: visibleWeekly.length,
+            maLabels: { ma50: '10W', ma150: '30W', ma200: '40W' },
+            vwapLabel: 'VWAP(10W)',
+            lastDate: visibleWeekly[visibleWeekly.length - 1]?.date || null,
+          },
+        });
+      }
+
       // ── Fetch full history so MAs are seeded properly ──────────────────
       const allBars = await getHistoryFull(symbol);
       if (!allBars || allBars.length === 0) {

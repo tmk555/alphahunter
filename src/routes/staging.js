@@ -51,7 +51,7 @@ module.exports = function(db, runScan) {
   // ─── Stage from trade setup (auto-calculate everything) ───────────────────
   router.post('/staging/from-setup', async (req, res) => {
     try {
-      const { ticker, mode = 'swing', exitStrategy = 'full_in_scale_out', strategy } = req.body;
+      const { ticker, mode = 'swing', exitStrategy = 'full_in_scale_out', strategy, entryPrice: userEntryPrice } = req.body;
       if (!ticker) return res.status(400).json({ error: 'ticker required' });
 
       // Run scanner to get fresh stock data
@@ -59,13 +59,19 @@ module.exports = function(db, runScan) {
       const stock = scanResults.find(s => s.ticker === ticker.toUpperCase());
       if (!stock) return res.status(404).json({ error: `${ticker} not found in scan results` });
 
-      // Compute trade setup
-      const setup = computeTradeSetup(stock, mode);
+      // If user supplied an entry price override, clone stock with the custom price
+      // so computeTradeSetup bases stops/targets off the override.
+      const effectiveStock = userEntryPrice != null
+        ? { ...stock, price: parseFloat(userEntryPrice) }
+        : stock;
+
+      // Compute trade setup (uses effectiveStock.price for all level calculations)
+      const setup = computeTradeSetup(effectiveStock, mode);
 
       // Calculate position size
       const config = getConfig();
       const regime = await getMarketRegime();
-      const entryPrice = stock.price;
+      const entryPrice = effectiveStock.price;
       const stopPrice = parseFloat(setup.stopLevel.replace(/[^0-9.]/g, ''));
 
       // Evaluate conviction override for weak regimes
@@ -124,6 +130,7 @@ module.exports = function(db, runScan) {
           sepaScore: stock.sepaScore,
           convictionScore: stock.convictionScore,
         },
+        entryPriceOverride: userEntryPrice != null ? parseFloat(userEntryPrice) : null,
       });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

@@ -171,5 +171,98 @@ module.exports = function(db) {
     }
   });
 
+  // ─── Manual Close Position ─────────────────────────────────────────────────
+  router.post('/broker/close-position', async (req, res) => {
+    try {
+      const { tradeId, symbol, shares, exitPrice, exitType = 'manual' } = req.body;
+      if (!symbol) return res.status(400).json({ error: 'symbol is required' });
+
+      let brokerOrder = null;
+
+      // 1. Cancel any open orders for this symbol (OCO/bracket legs, stops, etc.)
+      try {
+        const openOrders = await alpaca.getOrders({ status: 'open', limit: 200 });
+        const related = openOrders.filter(o => o.symbol === symbol.toUpperCase());
+        for (const o of related) {
+          try { await alpaca.cancelOrder(o.id); } catch (_) { /* already filled/cancelled */ }
+        }
+      } catch (_) { /* no open orders or broker unavailable */ }
+
+      // 2. Submit sell order via Alpaca
+      try {
+        if (exitPrice) {
+          brokerOrder = await alpaca.submitOrder({
+            symbol: symbol.toUpperCase(),
+            qty: shares || undefined,
+            side: 'sell',
+            type: 'limit',
+            time_in_force: 'day',
+            limit_price: exitPrice,
+          });
+        } else {
+          brokerOrder = await alpaca.closePosition(symbol.toUpperCase());
+        }
+      } catch (e) {
+        console.warn(`Broker close-position warning for ${symbol}: ${e.message}`);
+      }
+
+      // 3. Update trade record in database
+      let updatedTrade = null;
+      const findTrade = tradeId
+        ? db.prepare('SELECT * FROM trades WHERE id = ?').get(tradeId)
+        : db.prepare('SELECT * FROM trades WHERE symbol = ? AND exit_date IS NULL ORDER BY id DESC LIMIT 1')
+            .get(symbol.toUpperCase());
+
+      if (findTrade) {
+        const usedExitPrice = exitPrice || findTrade.entry_price;
+        const pnlDollars = findTrade.side === 'long'
+          ? (usedExitPrice - findTrade.entry_price) * (findTrade.shares || 0)
+          : (findTrade.entry_price - usedExitPrice) * (findTrade.shares || 0);
+        const pnlPercent = findTrade.entry_price
+          ? ((usedExitPrice - findTrade.entry_price) / findTrade.entry_price) * 100
+              * (findTrade.side === 'long' ? 1 : -1)
+          : 0;
+        const rMultiple = findTrade.stop_price && findTrade.entry_price !== findTrade.stop_price
+          ? (usedExitPrice - findTrade.entry_price) / (findTrade.entry_price - findTrade.stop_price)
+          : null;
+
+        db.prepare(`
+          UPDATE trades
+          SET exit_date = datetime('now'), exit_price = ?, exit_reason = ?,
+              pnl_dollars = ?, pnl_percent = ?, r_multiple = ?
+          WHERE id = ? AND exit_date IS NULL
+        `).run(usedExitPrice, exitType, pnlDollars, pnlPercent, rMultiple, findTrade.id);
+
+        updatedTrade = db.prepare('SELECT * FROM trades WHERE id = ?').get(findTrade.id);
+      }
+
+      // 4. Fire notification
+      try {
+        const { notifyTradeEvent } = require('../notifications/channels');
+        await notifyTradeEvent({
+          event: 'manual_exit',
+          symbol: symbol.toUpperCase(),
+          details: {
+            shares: updatedTrade?.shares || shares,
+            price: exitPrice || updatedTrade?.exit_price,
+            pnl: updatedTrade?.pnl_dollars,
+            pnl_pct: updatedTrade?.pnl_percent,
+            reason: 'Manual exit via UI',
+            message: brokerOrder ? `Broker order submitted (${brokerOrder.id})` : 'Journal updated (no broker order)',
+          },
+        });
+      } catch (e) {
+        console.warn(`Manual exit notification failed for ${symbol}: ${e.message}`);
+      }
+
+      res.json({
+        ok: true,
+        trade: updatedTrade,
+        brokerOrder: brokerOrder ? { id: brokerOrder.id, status: brokerOrder.status, type: brokerOrder.type } : null,
+        cancelledOrders: true,
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   return router;
 };

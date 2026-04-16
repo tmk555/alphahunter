@@ -366,9 +366,12 @@ async function cancelStagedOrder(stagedId, { suppressNotify = false } = {}) {
 // worth flagging (it's a setup they should either re-stage or re-evaluate).
 
 function expireStaleOrders() {
+  // Expiry window: 48 hours (extended from 24h to give users a full extra
+  // trading day — e.g. stage Wednesday evening, still valid Friday morning).
+  const EXPIRY_HOURS = 48;
   const stale = db().prepare(`
     SELECT id, symbol, qty, entry_price, stop_price FROM staged_orders
-    WHERE status = 'staged' AND created_at < datetime('now', '-24 hours')
+    WHERE status = 'staged' AND created_at < datetime('now', '-${EXPIRY_HOURS} hours')
   `).all();
 
   if (!stale.length) return 0;
@@ -377,7 +380,7 @@ function expireStaleOrders() {
   db().prepare(`UPDATE staged_orders SET status = 'expired' WHERE id IN (${placeholders})`)
     .run(...stale.map(r => r.id));
 
-  console.log(`  Expired ${stale.length} stale staged orders`);
+  console.log(`  Expired ${stale.length} stale staged orders (>${EXPIRY_HOURS}h)`);
 
   for (const row of stale) {
     notifyTradeEvent({
@@ -387,7 +390,7 @@ function expireStaleOrders() {
         shares:  row.qty,
         price:   row.entry_price,
         stop:    row.stop_price,
-        message: `Staged order auto-expired after 24 hours (never submitted)`,
+        message: `Staged order auto-expired after ${EXPIRY_HOURS} hours (never submitted)`,
       },
     }).catch(e => console.error(`Notification error (expired ${row.symbol}):`, e.message));
   }

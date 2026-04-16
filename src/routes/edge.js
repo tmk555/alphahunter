@@ -522,8 +522,8 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
       SECTOR_MAP[sym] = sector;
       UNIVERSE.push(sym);
       // Persist to DB so it survives restarts
-      db.prepare(`INSERT OR REPLACE INTO universe_mgmt (symbol, sector, status, added_date)
-        VALUES (?, ?, 'active', datetime('now'))`).run(sym, sector);
+      db.prepare(`INSERT OR REPLACE INTO universe_mgmt (symbol, sector, added_date, removed_date, reason, source)
+        VALUES (?, ?, date('now'), NULL, 'added via UI', 'manual')`).run(sym, sector);
       // Sync universe tracker
       try {
         const { syncUniverse } = require('../signals/universe-tracker');
@@ -547,8 +547,8 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
       const idx = UNIVERSE.indexOf(sym);
       if (idx !== -1) UNIVERSE.splice(idx, 1);
       // Mark removed in DB
-      db.prepare(`UPDATE universe_mgmt SET status = 'removed', removed_date = datetime('now')
-        WHERE symbol = ? AND status = 'active'`).run(sym);
+      db.prepare(`UPDATE universe_mgmt SET removed_date = date('now'), reason = 'removed via UI'
+        WHERE symbol = ? AND removed_date IS NULL`).run(sym);
       // Freeze snapshot
       try {
         const { freezeSnapshot } = require('../signals/universe-tracker');

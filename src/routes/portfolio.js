@@ -72,6 +72,7 @@ module.exports = function(db) {
             changeToday:   +p.change_today * 100,
             localStop:     local?.stop_price || null,
             localTarget1:  local?.target1 || null,
+            localTradeId:  local?.id || null,
             sector:        local?.sector || null,
             inJournal:     !!local,
           };
