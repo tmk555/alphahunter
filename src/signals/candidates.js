@@ -1,16 +1,19 @@
 // ─── Swing and Position candidate filters ────────────────────────────────────
 
-// SWING: tight filter — must be near breakout AND actively moving
+// SWING: near breakout OR actively moving with strong RS
+// Relaxed from the original (vol≥1.1x AND within 7% of high) which was too
+// restrictive — on a normal day almost nothing qualifies. Now volume surge
+// or proximity to high are additive, not both required.
 function isSwingCandidate(s) {
   const rsRising = s.rsTrend?.direction === 'rising' || s.rsTrend?.vs1m > 3;
-  return (
-    s.rsRank       >= 70   &&
-    rsRising               &&
-    s.swingMomentum >= 55  &&
-    s.vsMA50        >  0   &&
-    s.volumeRatio   >= 1.1 &&
-    (s.distFromHigh||1) <= 0.07
-  );
+  if (s.rsRank < 70 || !rsRising || (s.swingMomentum || 0) < 50 || (s.vsMA50 || 0) <= 0) return false;
+
+  // Must meet at least ONE of: volume surge, near high, or very strong momentum
+  const nearHigh    = (s.distFromHigh || 1) <= 0.12;   // within 12% of 52-week high
+  const volumeSurge = (s.volumeRatio || 0) >= 1.1;
+  const strongMom   = (s.swingMomentum || 0) >= 65;
+
+  return nearHigh || volumeSurge || strongMom;
 }
 
 // POSITION: selective — uptrend + RS rising + pullback opportunity

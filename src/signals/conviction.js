@@ -108,7 +108,7 @@ function calcConviction(stock, rsTrend, rotationModel) {
   if (stock.rsLineNewHigh) reasons.push('RS Line at 52-week high');
   if (stock.vcpForming) reasons.push(`VCP forming (${stock.vcpCount} contractions)`);
   if (stock.swingMomentum >= 65) reasons.push(`Strong momentum (${stock.swingMomentum})`);
-  if (sepa >= 5) reasons.push(`SEPA ${sepa}/6 — ideal structure`);
+  if (sepa >= 5) reasons.push(`SEPA ${sepa}/8 — ideal structure`);
   if (stock.earningsDrift?.strong) reasons.push(`PEAD: +${stock.earningsDrift.gapPct}% gap, holding`);
   if (tfAlign >= 3) reasons.push('RS leader on daily/weekly/monthly');
   else if (tfAlign === 2) reasons.push('RS leader on 2 of 3 timeframes');

@@ -261,6 +261,34 @@ async function getMarketRegime() {
           },
         }).catch(e => console.error('Regime notification error:', e.message));
 
+        // ── Auto-tighten trailing stops on regime downgrade ──
+        // Only fire on downgrades (BULL→NEUTRAL, NEUTRAL→CAUTION, CAUTION→BEAR, etc.)
+        // based on size multiplier direction. Upgrades don't tighten anything.
+        const regimeLevel = (r) => ({
+          'BULL / RISK ON': 0, 'BULL': 0, 'NEUTRAL': 1, 'CAUTION': 2,
+          'HIGH RISK / BEAR': 3, 'BEAR': 3, 'CORRECTION': 3,
+        }[r] ?? 1);
+        const isDowngrade = regimeLevel(regime) > regimeLevel(prevRegime);
+        if (isDowngrade) {
+          try {
+            const { tightenOnRegimeDowngrade } = require('../signals/position-deterioration');
+            // Fire-and-forget — don't block regime detection on broker I/O.
+            // Failures log internally and don't affect the app's behavior.
+            tightenOnRegimeDowngrade({
+              fromRegime: prevRegime,
+              toRegime: regime,
+              // Heavier downgrade = tighter stop: BULL→BEAR uses 3% trail, single-step uses 4%
+              tightTrailPct: regimeLevel(regime) - regimeLevel(prevRegime) >= 2 ? 0.03 : 0.04,
+            }).then(r => {
+              if (r.tightened > 0) {
+                console.log(`  Regime downgrade tightened ${r.tightened} open position(s); ${r.brokerPatched} broker legs patched`);
+              }
+            }).catch(e => console.error('  Regime downgrade tighten failed:', e.message));
+          } catch (e) {
+            console.warn(`  Could not load position-deterioration module: ${e.message}`);
+          }
+        }
+
         // Log regime change to regime_log table (Phase 3.12: persist ftd_date + rally_day)
         const date = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
         let cycleData = null;

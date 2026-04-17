@@ -13,7 +13,7 @@
 const express = require('express');
 const router  = express.Router();
 
-const { yahooQuote } = require('../data/providers/yahoo');
+const { yahooQuote, yahooHistory } = require('../data/providers/yahoo');
 const { getMarketRegime, autoDetectCycleState } = require('../risk/regime');
 const macroFred = require('../signals/macro-fred');
 
@@ -22,6 +22,9 @@ const MACRO_SYMBOLS = [
   {t:'^VIX',n:'VIX'},{t:'TLT',n:'20yr Bond'},{t:'GLD',n:'Gold'},
   {t:'UUP',n:'US Dollar'},{t:'USO',n:'Crude Oil'},{t:'^TNX',n:'10Y Yield'},{t:'^IRX',n:'3M Yield'},
 ];
+
+// Extra symbols fetched for macro overlay sparklines only (not shown as tiles)
+const OVERLAY_SYMBOLS = ['HYG', 'LQD', 'SHY', 'XLI'];
 
 // /api/regime
 router.get('/regime', async (req, res) => {
@@ -33,16 +36,62 @@ router.get('/regime', async (req, res) => {
 router.get('/macro', async (req, res) => {
   try {
     const quotes = await yahooQuote(MACRO_SYMBOLS.map(m => m.t));
-    const macro  = quotes.map(q => {
+
+    // Fetch up to 1 year (252 trading days) of history per symbol in parallel
+    // Client slices down to 5D / 1M / 3M / 1Y as the user picks a period.
+    // Cached 23h — first call is the only expensive one.
+    const allSymbols = [...MACRO_SYMBOLS.map(m => m.t), ...OVERLAY_SYMBOLS];
+    const histories = await Promise.all(
+      allSymbols.map(async sym => {
+        try {
+          const closes = await yahooHistory(sym);
+          return { symbol: sym, history: (closes || []).slice(-252) };
+        } catch (_) { return { symbol: sym, history: [] }; }
+      })
+    );
+    const histMap = Object.fromEntries(histories.map(h => [h.symbol, h.history]));
+
+    const macro = quotes.map(q => {
       const meta = MACRO_SYMBOLS.find(m => m.t === q.symbol) || {};
       return { symbol: q.symbol, name: meta.n, price: q.regularMarketPrice,
                chg1d: q.regularMarketChangePercent, w52h: q.fiftyTwoWeekHigh, w52l: q.fiftyTwoWeekLow,
-               ma50: q.fiftyDayAverage, ma200: q.twoHundredDayAverage };
+               ma50: q.fiftyDayAverage, ma200: q.twoHundredDayAverage,
+               history: histMap[q.symbol] || [] };
     });
+
     const t10 = macro.find(r => r.symbol==='^TNX'), t3m = macro.find(r => r.symbol==='^IRX');
     const spread = t10?.price && t3m?.price ? +(t10.price - t3m.price).toFixed(2) : null;
+
+    // Helper to align two series and compute ratio/spread per bar
+    const alignPair = (a, b, fn) => {
+      if (!a?.length || !b?.length) return [];
+      const len = Math.min(a.length, b.length);
+      const oa = a.length - len, ob = b.length - len;
+      const out = [];
+      for (let i = 0; i < len; i++) {
+        const v = fn(a[i+oa], b[i+ob]);
+        if (v != null && !isNaN(v)) out.push(+v.toFixed(4));
+      }
+      return out;
+    };
+
+    // Build yield curve spread history (10Y - 3M)
+    const spreadHistory = alignPair(histMap['^TNX'], histMap['^IRX'], (x,y) => x - y);
+
+    // Build 30-day sparkline series for each macro overlay component
+    const overlayHistory = {
+      yieldCurve:   spreadHistory,                                                                              // 10Y - 3M spread
+      creditSpread: alignPair(histMap['HYG'], histMap['LQD'], (h,l) => h/l),                                    // HYG/LQD ratio (higher = risk-on)
+      dollar:       histMap['UUP'] || [],                                                                        // UUP price
+      commodities:  alignPair(histMap['USO'], histMap['GLD'], (o,g) => (o+g)/2),                                // USO+GLD avg (fallback to USO)
+      ismProxy:     alignPair(histMap['XLI'], histMap['SPY'], (x,s) => x/s),                                    // XLI/SPY ratio
+      intermarket:  histMap['SPY'] || [],                                                                        // SPY proxy
+    };
+    // Fallbacks when paired series are empty
+    if (!overlayHistory.commodities.length) overlayHistory.commodities = histMap['USO'] || [];
+
     const regime = await getMarketRegime();
-    res.json({ macro, yieldSpread: spread, regime });
+    res.json({ macro, yieldSpread: spread, spreadHistory, overlayHistory, regime });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 

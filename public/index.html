@@ -965,6 +965,8 @@ function App() {
   const [rsQuickFilter, setRsQuickFilter] = useState('all');
   const [setupSigFilters, setSetupSigFilters] = useState(new Set());
   const [setupMode, setSetupMode] = useState('swing');
+  const [setupSortBy, setSetupSortBy] = useState('conviction');
+  const [setupExitStrategy, setSetupExitStrategy] = useState('full_in_scale_out');
 
   // Global ticker click → navigate to Scanner and auto-expand
   const [scannerTarget, setScannerTarget] = useState(null);
@@ -1058,7 +1060,6 @@ function App() {
     { id:'macro',     label:'📉 Macro' },
     { id:'sectors',   label:'🔄 Sectors' },
     { id:'industries',label:'🏭 Industries' },
-    { id:'hedge',     label:'🛡 Hedge' },
     { id:'rs',        label:'📊 Scanner' },
     { id:'setups',    label:'🎯 Trade Setups' },
     { id:'watchlist', label:'📋 Pipeline', badge: badgeCounts.staged || null },
@@ -1066,6 +1067,7 @@ function App() {
     { id:'journal',   label:'📒 Journal', badge: badgeCounts.review || null, badgeWarn: !!badgeCounts.review },
     { id:'replay',    label:'🔁 Replay' },
     { id:'edge',      label:'📈 Analytics' },
+    { id:'hedge',     label:'🛡 Hedge' },
     { id:'settings',  label:'⚙ Settings' },
   ];
 
@@ -1145,7 +1147,7 @@ function App() {
         {tab==='sectors'    && <SectorsTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
         {tab==='industries' && <IndustriesTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
         {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} sigFilters={rsSigFilters} setSigFilters={setRsSigFilters} quickFilter={rsQuickFilter} setQuickFilter={setRsQuickFilter} scannerTarget={scannerTarget} clearScannerTarget={() => setScannerTarget(null)}/>}
-        {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary} setupSigFilters={setupSigFilters} setSetupSigFilters={setSetupSigFilters} mode={setupMode} setMode={setSetupMode}/>}
+        {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary} setupSigFilters={setupSigFilters} setSetupSigFilters={setSetupSigFilters} mode={setupMode} setMode={setSetupMode} sortBy={setupSortBy} setSortBy={setSetupSortBy} exitStrategy={setupExitStrategy} setExitStrategy={setSetupExitStrategy}/>}
         {tab==='watchlist'  && <WatchlistTab rsData={rsData} />}
         {tab==='hedge'      && <HedgeTab />}
         {tab==='trading'    && <><PortfolioTab /><StrategiesSection /><ExecutionTab /></>}
@@ -1979,6 +1981,40 @@ function InlineLevels({ stock: s, customEntryPrice }) {
         {s.volumeTrend==='distributing' && <span style={{color:'var(--red)'}}> · DIST (institutional selling)</span>}
         <span style={{color:'var(--text3)'}}> · Position size = (1% account) ÷ ${risk?.toFixed(2)} = shares</span>
       </div>
+
+      {/* ── Analyst Revision badge (prominent, at top of levels) ── */}
+      {revData?.revision && (
+        <div title="Analyst estimate revision score: Wall Street consensus direction for EPS/revenue. Higher = estimates rising (bullish future catalyst). Minervini's 'rising estimates' check."
+          style={{marginTop:10,padding:'8px 12px',background:revData.revision.revisionScore>=70?'rgba(0,230,118,0.08)':revData.revision.revisionScore>=50?'rgba(139,195,74,0.06)':revData.revision.revisionScore>=30?'rgba(240,165,0,0.06)':'rgba(255,61,87,0.08)',border:`1px solid ${revData.revision.revisionScore>=70?'rgba(0,230,118,0.3)':revData.revision.revisionScore>=50?'rgba(139,195,74,0.2)':revData.revision.revisionScore>=30?'rgba(240,165,0,0.2)':'rgba(255,61,87,0.3)'}`,borderRadius:4,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+          <span style={{fontSize:10,fontFamily:'var(--font-mono)',color:'var(--text3)',letterSpacing:1.5}}>
+            ANALYST REVISIONS
+          </span>
+          <span style={{fontFamily:'var(--font-mono)',fontSize:18,fontWeight:800,color:revData.revision.revisionScore>=70?'var(--green)':revData.revision.revisionScore>=50?'#8bc34a':revData.revision.revisionScore>=30?'var(--amber)':'var(--red)'}}>
+            {revData.revision.revisionScore}/100
+          </span>
+          <span style={{fontSize:10,padding:'2px 8px',borderRadius:3,fontWeight:700,fontFamily:'var(--font-mono)',letterSpacing:1,
+            background:revData.revision.tier?.includes('upgrade')?'rgba(0,230,118,0.15)':revData.revision.tier?.includes('downgrade')?'rgba(255,61,87,0.15)':'rgba(240,165,0,0.12)',
+            color:revData.revision.tier?.includes('upgrade')?'var(--green)':revData.revision.tier?.includes('downgrade')?'var(--red)':'var(--amber)'}}>
+            {(revData.revision.tier || 'neutral').replace(/_/g,' ').toUpperCase()}
+          </span>
+          {revData.revision.direction && (
+            <span style={{fontSize:11,color:'var(--text2)'}}>{revData.revision.direction === 'up' ? '↑ Raising' : revData.revision.direction === 'down' ? '↓ Cutting' : '→ Mixed'}</span>
+          )}
+          <span style={{fontSize:10,color:'var(--text3)',marginLeft:'auto'}}>
+            Future earnings catalyst signal
+          </span>
+        </div>
+      )}
+      {revLoad && !revData && (
+        <div style={{marginTop:10,padding:'8px 12px',background:'var(--bg)',borderRadius:4,fontSize:11,color:'var(--text3)'}}>
+          Loading analyst revision data...
+        </div>
+      )}
+      {!revLoad && !revData?.revision && revData != null && (
+        <div style={{marginTop:10,padding:'8px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,fontSize:11,color:'var(--text3)'}}>
+          <span style={{color:'var(--amber)'}}>⚠</span> No revision history yet for <strong>{s.ticker}</strong>. Data will populate after the daily <code>revision_scan</code> job runs (5 PM weekdays) and requires 2 snapshots to compute change.
+        </div>
+      )}
       {(fLoad || funds || fundsError) && (
         <div style={{marginTop:10,padding:'10px 14px',background:'var(--bg)',borderRadius:4,border:'1px solid var(--border)'}}>
           {fLoad ? <Loader msg="Loading CAN SLIM data..."/> :
@@ -3300,6 +3336,12 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                         )}
                         {s.stage===2 && s.priorStage===1 && <span title="Stage 1→2 breakout — fresh uptrend from base. Earliest institutional entry signal. +10 conviction bonus." style={{color:'var(--gold)',fontWeight:700,marginRight:3,background:'rgba(255,215,0,0.15)',padding:'0 4px',borderRadius:2,fontSize:9}}>1→2</span>}
                         {s.sepaScore!=null && <span title={s.sepa?Object.entries(s.sepa).map(([k,v])=>`${k}:${v===true?'✓':v===false?'✗':'?'}`).join(' '):'SEPA score'} style={{color:s.sepaScore>=6?'var(--green)':s.sepaScore>=4?'var(--amber)':'var(--text3)',fontWeight:700}}>{s.sepaScore}/8</span>}
+                        {(() => { const tf = s.rsTimeframeAlignment ?? s.rsTfAlignment; return tf != null && (
+                          <span title={`Timeframe alignment: ${tf}/3 — Daily RS ${s.rsRank||'?'}, Weekly RS ${s.rsRankWeekly||'?'}, Monthly RS ${s.rsRankMonthly||'?'}. Count of timeframes ≥ 80.`}
+                            style={{marginLeft:4,color:tf>=3?'var(--green)':tf>=2?'var(--amber)':'var(--text3)',fontWeight:700,fontSize:9,fontFamily:'var(--font-mono)'}}>
+                            TF {tf}/3
+                          </span>
+                        ); })()}
                           <PatternBadge patternData={s.patternData} />
                           <InstitutionalBadge data={s.institutionalData} />
                       </td>
@@ -3427,18 +3469,16 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
 }
 
 // ─── TRADE SETUPS (redesigned: unified card layout with filter chips, sort, and inline staging) ──
-function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegime, scanned, setScanned, summary, setSummary, setupSigFilters, setSetupSigFilters, mode, setMode }) {
+function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegime, scanned, setScanned, summary, setSummary, setupSigFilters, setSetupSigFilters, mode, setMode, sortBy, setSortBy, exitStrategy, setExitStrategy }) {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   const [picks,   setPicks]   = useState(null);
   const [picksLoad, setPicksLoad] = useState(false);
   const [staging, setStaging] = useState(null);
-  const [exitStrategy, setExitStrategy] = useState('full_in_scale_out');
   const [convictionOverrides, setConvictionOverrides] = useState([]);
   const [scoutData, setScoutData] = useState(null);
   const [scoutLoading, setScoutLoading] = useState(false);
   const [expandedCard, setExpandedCard] = useState(null);
-  const [sortBy, setSortBy] = useState('conviction');
   const [picksLimit, setPicksLimit] = useState(12);
   const [toast, setToast] = useState(null);
   const [addModal, setAddModal] = useState(null);
@@ -3459,6 +3499,16 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
     return next;
   });
 
+  // Shared chip filter — applies to all sections (picks, deep scan, pullbacks)
+  function passesChipFilters(s) {
+    if (setupSigFilters.size === 0) return true;
+    for (const key of setupSigFilters) {
+      const chip = FILTER_CHIPS.find(c => c.key === key);
+      if (chip && !chip.check(s)) return false;
+    }
+    return true;
+  }
+
   // Unified filtered + sorted picks
   const displayPicks = useMemo(() => {
     if (!picks || !picks.length) return [];
@@ -3468,13 +3518,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
       if (mode === 'position') {
         if (!(s.vsMA50 != null && s.vsMA50 >= -2 && s.vsMA50 <= 5 && s.rsRank >= 70 && (s.sepaScore >= 4 || s.vcpForming || s.stage === 2))) return false;
       }
-      // Signal filter chips
-      if (setupSigFilters.size === 0) return true;
-      for (const key of setupSigFilters) {
-        const chip = FILTER_CHIPS.find(c => c.key === key);
-        if (chip && !chip.check(s)) return false;
-      }
-      return true;
+      return passesChipFilters(s);
     });
     // Sort
     if (sortBy === 'conviction') list.sort((a, b) => (b.convictionScore || 0) - (a.convictionScore || 0));
@@ -3634,10 +3678,10 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
         </div>
         <div className="ts-header-actions">
           <button className="btn btn-primary" onClick={runScan} disabled={loading}>
-            {loading ? 'Scanning...' : 'Scan Levels'}
+            {loading ? 'Scanning...' : 'Deep Scan'}
           </button>
           <button className="btn btn-sm" onClick={loadPicks} disabled={picksLoad}>
-            {picksLoad ? 'Refreshing...' : 'Refresh Picks'}
+            {picksLoad ? 'Refreshing...' : 'Refresh'}
           </button>
         </div>
       </div>
@@ -3700,6 +3744,11 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
       {/* ── MAIN PICKS GRID ── */}
       {picks && displayPicks.length > 0 && (
         <div style={{marginBottom:20}}>
+          <div className="ts-section-header">
+            <span className="ts-section-title" style={{color:'var(--cyan)'}}>TOP PICKS</span>
+            <span className="ts-section-count">Ranked by {sortBy} — top {displayPicks.length} of {totalPicks} qualifying stocks</span>
+            <div className="ts-section-line" />
+          </div>
           <div className="ts-grid">
             {displayPicks.map((s, rank) => {
               const setup = getSetup(s);
@@ -3724,7 +3773,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                       {rank+1}
                     </div>
                     <div className="ts-card-identity">
-                      <div className="ts-card-ticker">{s.ticker}</div>
+                      <div className="ts-card-ticker td-ticker">{s.ticker}</div>
                       <div className="ts-card-name">{s.name || '—'}</div>
                     </div>
                     <div className="ts-card-price">${s.price?.toFixed(2)}</div>
@@ -3894,16 +3943,27 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
         </div>
       )}
 
+      {/* ── DEEP SCAN: "no results" message when scan ran but found nothing ── */}
+      {results.length === 0 && scanned === 0 && summary && !loading && (
+        <div className="panel" style={{marginBottom:14,padding:14}}>
+          <div style={{fontSize:10,color:'var(--amber)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>DEEP SCAN</div>
+          <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.6}}>{summary}</div>
+          <div style={{fontSize:11,color:'var(--text3)',marginTop:8}}>
+            Tip: Try switching mode (Swing / Position / Both) — different modes use different filters.
+          </div>
+        </div>
+      )}
+
       {/* ── DEEP SCAN RESULTS (AI enriched, when scan is run) ── */}
       {results.length > 0 && (
         <div style={{marginBottom:20}}>
           <div className="ts-section-header">
-            <span className="ts-section-title" style={{color:'var(--text2)'}}>DEEP SCAN -- AI ENRICHED</span>
-            <span className="ts-section-count">{scanned} scanned -- RS>=70, within 7% of high, volume surge</span>
+            <span className="ts-section-title" style={{color:'var(--green)'}}>DEEP SCAN</span>
+            <span className="ts-section-count">{results.filter(passesChipFilters).length} setups from {scanned} candidates — full universe scan with computed levels{results[0]?.brief ? ' + AI analysis' : ''}</span>
             <div className="ts-section-line" />
           </div>
           <div className="ts-grid">
-            {results.map((s, i) => {
+            {results.filter(passesChipFilters).map((s, i) => {
               const b = s.brief || {};
               const isExpanded = expandedCard === `scan-${s.ticker}`;
               return (
@@ -3914,7 +3974,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                   <div className="ts-card-top">
                     <div className="ts-card-rank" style={{background:'var(--text3)22',color:'var(--text3)'}}>{i+1}</div>
                     <div className="ts-card-identity">
-                      <div className="ts-card-ticker">{s.ticker}</div>
+                      <div className="ts-card-ticker td-ticker">{s.ticker}</div>
                       <div className="ts-card-name">{s.name} -- {s.sector}</div>
                     </div>
                     <div className="ts-card-price">${fmt(s.price)}</div>
@@ -3981,7 +4041,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
             <div className="ts-section-line" />
           </div>
           <div className="ts-grid">
-            {convictionOverrides.map((s, i) => {
+            {convictionOverrides.filter(passesChipFilters).map((s, i) => {
               const ov = s.convictionOverride || {};
               const tierColor = ov.tier === 'elite' ? 'var(--green)' : 'var(--amber)';
               const isExpanded = expandedCard === `ov-${s.ticker}`;
@@ -3995,7 +4055,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                       {ov.tier === 'elite' ? 'ELT' : 'STR'}
                     </div>
                     <div className="ts-card-identity">
-                      <div className="ts-card-ticker">{s.ticker}</div>
+                      <div className="ts-card-ticker td-ticker">{s.ticker}</div>
                       <div className="ts-card-name">{s.name || s.sector}</div>
                     </div>
                     <div className="ts-card-price">${s.price?.toFixed(2)}</div>
@@ -4041,11 +4101,11 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
         <div style={{marginBottom:20}}>
           <div className="ts-section-header">
             <span className="ts-section-title" style={{color:'var(--amber)'}}>PULLBACK WATCHLIST</span>
-            <span className="ts-section-count">{pendingPullback.length} stocks -- strong RS, 5-20% above 50MA, waiting for entry</span>
+            <span className="ts-section-count">{pendingPullback.filter(passesChipFilters).length} stocks — strong RS but extended, waiting for pullback to 50MA</span>
             <div className="ts-section-line" />
           </div>
           <div className="ts-grid">
-            {pendingPullback.map((s, i) => {
+            {pendingPullback.filter(passesChipFilters).map((s, i) => {
               const entryZone = s.ma50 ? `$${(s.ma50 * 0.995).toFixed(2)} - $${(s.ma50 * 1.01).toFixed(2)}` : '—';
               const isExpanded = expandedCard === `pb-${s.ticker}`;
               return (
@@ -4055,7 +4115,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                   <div className="ts-card-top">
                     <div className="ts-card-rank" style={{background:'var(--amber)22',color:'var(--amber)'}}>{i+1}</div>
                     <div className="ts-card-identity">
-                      <div className="ts-card-ticker">{s.ticker}</div>
+                      <div className="ts-card-ticker td-ticker">{s.ticker}</div>
                       <div className="ts-card-name">vs 50MA: <span style={{color:'var(--amber)',fontWeight:700}}>{s.vsMA50?.toFixed(1)}%</span> extended</div>
                     </div>
                     <div className="ts-card-price">${s.price?.toFixed(2)}</div>
@@ -4110,7 +4170,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                 <div className="ts-card-top">
                   <div className="ts-card-rank" style={{background:i<3?'var(--green)22':'var(--text3)22',color:i<3?'var(--green)':'var(--text3)'}}>{i+1}</div>
                   <div className="ts-card-identity">
-                    <div className="ts-card-ticker">{s.ticker}</div>
+                    <div className="ts-card-ticker td-ticker">{s.ticker}</div>
                     <div className="ts-card-name">{s.sector} -- {s.mktCapLabel}</div>
                   </div>
                   <div className="ts-card-price">${s.price?.toFixed(2)}</div>
@@ -4195,17 +4255,69 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
 }
 
 // ─── MARKET PULSE TAB (regime + cycle + macro — the ONE place a pro checks first) ─
+// Compact sparkline for tiles — inline SVG, no deps
+// Usage: <Sparkline data={[...prices]} width={120} height={26} color="var(--cyan)"/>
+function Sparkline({ data, width=120, height=26, color='var(--cyan)', fill=true, hasZero=false }) {
+  if (!data || data.length < 2) return null;
+  const pad = 2;
+  const w = width - pad*2, h = height - pad*2;
+  const vals = data.filter(v => v != null && !isNaN(v));
+  if (vals.length < 2) return null;
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const yMin = hasZero ? Math.min(min, 0) : min;
+  const yMax = hasZero ? Math.max(max, 0) : max;
+  const range = yMax - yMin || 1;
+  const toX = i => pad + (i / Math.max(vals.length-1, 1)) * w;
+  const toY = v => pad + h - ((v - yMin) / range) * h;
+  const pts = vals.map((v,i) => `${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ');
+  const last = vals[vals.length-1];
+  const first = vals[0];
+  const lineColor = last >= first ? 'var(--green)' : 'var(--red)';
+  const useColor = color === 'auto' ? lineColor : color;
+  const fillColor = useColor === 'var(--green)' ? 'rgba(0,230,118,0.12)'
+                  : useColor === 'var(--red)' ? 'rgba(255,61,87,0.12)'
+                  : 'rgba(0,212,255,0.12)';
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} style={{width:'100%',height,display:'block'}}>
+      {hasZero && yMin < 0 && yMax > 0 && (
+        <line x1={pad} y1={toY(0)} x2={pad+w} y2={toY(0)} stroke="var(--text3)" strokeWidth="0.4" strokeDasharray="2,2" opacity="0.5"/>
+      )}
+      {fill && (
+        <polygon points={`${toX(0).toFixed(1)},${(pad+h).toFixed(1)} ${pts} ${toX(vals.length-1).toFixed(1)},${(pad+h).toFixed(1)}`} fill={fillColor}/>
+      )}
+      <polyline points={pts} fill="none" stroke={useColor} strokeWidth="1.3" strokeLinejoin="round" strokeLinecap="round"/>
+      <circle cx={toX(vals.length-1)} cy={toY(last)} r="1.8" fill={useColor}/>
+    </svg>
+  );
+}
+
 function MarketPulseTab() {
   const [regime,   setRegime]   = useState(null);
   const [cycle,    setCycle]    = useState(null);
   const [macro,    setMacro]    = useState([]);
   const [loading,  setLoading]  = useState(false);
   const [spread,   setSpread]   = useState(null);
+  const [spreadHistory, setSpreadHistory] = useState([]);
+  const [overlayHistory, setOverlayHistory] = useState({});
   const [leaders,  setLeaders]  = useState([]);
   const [laggards, setLaggards] = useState([]);
   const [llLoad,   setLlLoad]   = useState(false);
   const [bWarning, setBWarning] = useState(null);
   const [bwApplying, setBwApplying] = useState(false);
+  const [sparkRange, setSparkRange] = useState('1M');
+
+  // Sparkline period ranges — map to trading-day slice length
+  const SPARK_RANGES = [
+    { k:'5D',  bars:5   },
+    { k:'1M',  bars:22  },
+    { k:'3M',  bars:66  },
+    { k:'1Y',  bars:252 },
+  ];
+  const sliceHist = (arr) => {
+    if (!arr || arr.length < 2) return arr || [];
+    const bars = (SPARK_RANGES.find(r => r.k === sparkRange) || SPARK_RANGES[1]).bars;
+    return arr.slice(-bars);
+  };
 
   useEffect(() => { load(); }, []);
 
@@ -4219,6 +4331,8 @@ function MarketPulseTab() {
       setRegime(rd);
       setMacro(md.macro || []);
       setSpread(md.yieldSpread);
+      setSpreadHistory(md.spreadHistory || []);
+      setOverlayHistory(md.overlayHistory || {});
       setCycle(cd);
       setBWarning(bw);
     } catch(_) {}
@@ -4427,28 +4541,48 @@ function MarketPulseTab() {
             </div>
             <div className="macro-indicator-grid">
               {[
-                { label: 'YIELD CURVE', data: regime.macroOverlay.yieldCurve, key: 'score' },
-                { label: 'CREDIT SPREADS', data: regime.macroOverlay.creditSpread, key: 'score' },
-                { label: 'DOLLAR', data: regime.macroOverlay.dollar, key: 'score' },
-                { label: 'COMMODITIES', data: regime.macroOverlay.commodities, key: 'score' },
-                { label: 'ISM PROXY', data: regime.macroOverlay.ismProxy, key: 'score' },
-                { label: 'INTERMARKET', data: regime.macroOverlay.intermarket, key: 'score' },
+                { label: 'YIELD CURVE',    data: regime.macroOverlay.yieldCurve,   key: 'score', hist: overlayHistory.yieldCurve,   hasZero: true,  tip: '10Y - 3M Treasury spread, 30d' },
+                { label: 'CREDIT SPREADS', data: regime.macroOverlay.creditSpread, key: 'score', hist: overlayHistory.creditSpread, hasZero: false, tip: 'HYG/LQD ratio (higher = risk-on), 30d' },
+                { label: 'DOLLAR',         data: regime.macroOverlay.dollar,       key: 'score', hist: overlayHistory.dollar,       hasZero: false, tip: 'UUP (US Dollar ETF), 30d' },
+                { label: 'COMMODITIES',    data: regime.macroOverlay.commodities,  key: 'score', hist: overlayHistory.commodities,  hasZero: false, tip: 'USO+GLD avg (oil + gold), 30d' },
+                { label: 'ISM PROXY',      data: regime.macroOverlay.ismProxy,     key: 'score', hist: overlayHistory.ismProxy,     hasZero: false, tip: 'XLI/SPY ratio (industrials rel strength), 30d' },
+                { label: 'INTERMARKET',    data: regime.macroOverlay.intermarket,  key: 'score', hist: overlayHistory.intermarket,  hasZero: false, tip: 'SPY (risk-on proxy), 30d' },
               ].map(ind => (
-                <div className="macro-ind-card" key={ind.label}>
+                <div className="macro-ind-card" key={ind.label} title={ind.tip}>
                   <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',fontWeight:600}}>{ind.label}</div>
                   <div style={{fontSize:18,fontWeight:800,fontFamily:'var(--font-mono)',color: (ind.data?.[ind.key]||0)>0?'var(--green)':(ind.data?.[ind.key]||0)<0?'var(--red)':'var(--text2)',marginTop:4}}>
                     {ind.data?.[ind.key] != null ? ((ind.data[ind.key]>0?'+':'')+ind.data[ind.key].toFixed(1)) : '—'}
                   </div>
                   {ind.data?.signal && <div style={{fontSize:10,color:'var(--text2)',marginTop:4}}>{ind.data.signal}</div>}
-                  {ind.data?.detail && <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>{ind.data.detail}</div>}
+                  {ind.hist?.length > 1 && (
+                    <div style={{marginTop:6}}>
+                      <Sparkline data={sliceHist(ind.hist)} color="auto" height={24} hasZero={ind.hasZero}/>
+                    </div>
+                  )}
+                  {ind.data?.detail && <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>{ind.data.detail}</div>}
                 </div>
               ))}
             </div>
           </div>
         )}
 
-      {/* Key market levels */}
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:10,marginBottom:18}}>
+      {/* Sparkline period toggle — applies to all tiles below */}
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10,flexWrap:'wrap'}}>
+        <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',fontWeight:600}}>SPARKLINE PERIOD</span>
+        <div style={{display:'flex',gap:2}}>
+          {SPARK_RANGES.map(r => (
+            <button key={r.k} onClick={() => setSparkRange(r.k)}
+              style={{padding:'3px 10px',background:sparkRange===r.k?'var(--cyan)':'var(--bg3)',border:'1px solid var(--border)',
+                borderRadius:3,color:sparkRange===r.k?'#000':'var(--text2)',fontSize:10,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:1,cursor:'pointer'}}>
+              {r.k}
+            </button>
+          ))}
+        </div>
+        <span style={{fontSize:9,color:'var(--text3)'}}>({(SPARK_RANGES.find(r=>r.k===sparkRange)||{}).bars} trading days)</span>
+      </div>
+
+      {/* Key market levels with sparklines */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:10,marginBottom:18}}>
         {[
           {l:'S&P 500',  q:spy,  big:true,  col:'var(--cyan)'},
           {l:'Nasdaq',   q:qqq,  big:false, col:'var(--purple)'},
@@ -4458,22 +4592,28 @@ function MarketPulseTab() {
           {l:'Yield Curve', q:null, big:false, col:spread&&spread<0?'var(--red)':'var(--green)',
             customVal: spread!=null ? (spread > 0 ? `+${spread}%` : `${spread}%`) : '—',
             customSub: spread&&spread<0 ? '⚠ INVERTED (10Y < 3M)' : spread&&spread===0 ? 'Flat' : `10Y minus 3M = ${spread}%`,
+            customHistory: spreadHistory,
+            customHasZero: true,
             title: 'Yield Curve = 10Y Treasury minus 3M Treasury. Normal: +100 to +250bps. 0 to +100bps = late-cycle caution. Negative = INVERTED: historically 80% recession signal within 12-18 months. Markets often rally 12-18 months after first inversion — do not short on inversion alone. Sustained -50bps for 3+ months = high conviction recession signal.'},
           {l:'Gold',     q:gld,  big:false, col:'var(--gold)'},
           {l:'Bonds TLT',q:tlt,  big:false, col:'var(--text2)'},
           {l:'US Dollar', q:g('UUP'), big:false, col:'var(--cyan)',   title:'UUP ETF tracks US Dollar Index'},
           {l:'Crude Oil',  q:g('USO'), big:false, col:'var(--amber)',  title:'USO ETF tracks WTI crude'},
-        ].map(({l,q,big,col,customVal,customSub,sfx,title}) => (
+        ].map(({l,q,big,col,customVal,customSub,customHistory,customHasZero,sfx,title}) => {
+          const hist = sliceHist(customHistory || q?.history || []);
+          return (
           <div key={l} title={title||''} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:12}}>
             <div style={{fontSize:8,color:'var(--text3)',letterSpacing:2,textTransform:'uppercase',marginBottom:5}}>{l}</div>
             <div style={{fontFamily:'var(--font-mono)',fontSize:big?18:15,color:col,fontWeight:big?700:400}}>
               {customVal || (q ? (sfx ? `${fmt(q.price,2)}${sfx}` : q.price>1000?`$${fmt(q.price,0)}`:`$${fmt(q.price,2)}`) : '—')}
             </div>
-            <div style={{fontSize:10,color:q?.chg1d>=0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)',marginTop:3}}>
+            <div style={{fontSize:10,color:q?.chg1d>=0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)',marginTop:3,marginBottom:4}}>
               {customSub || (q ? fmtP(q.chg1d) : '')}
             </div>
+            {hist.length > 1 && <Sparkline data={hist} color="auto" height={22} hasZero={customHasZero||false}/>}
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* SPY MA status */}
@@ -5910,6 +6050,10 @@ function ExecutionTab() {
   const [showAlertForm, setShowAlertForm] = useState(false);
   // Pre-trade check modal state (Phase 2.10 UI)
   const [riskCheckModal, setRiskCheckModal] = useState(null); // { orderId, checks, error }
+  const [modifyModal, setModifyModal] = useState(null);       // { orderId, symbol, currentEntry, currentStop, status, qty }
+  const [modifyPrice, setModifyPrice] = useState('');
+  const [modifyBusy, setModifyBusy]   = useState(false);
+  const [modifyError, setModifyError] = useState('');
 
   // Refs to track previous values — prevents re-render when data hasn't changed
   const prevData = useRef({broker:null,positions:[],orders:[],staged:[],subs:[],fired:[],stream:null});
@@ -5972,6 +6116,34 @@ function ExecutionTab() {
       await api(`/api/staging/${id}/cancel`, {method:'POST'});
       loadAll();
     } catch(e) { setError(e.message); }
+  }
+
+  function openModifyEntry(o) {
+    setModifyModal({
+      orderId: o.id, symbol: o.symbol, currentEntry: o.entry_price,
+      currentStop: o.stop_price, status: o.status, qty: o.qty,
+      orderType: o.order_type, tranches: o.tranches_json ? JSON.parse(o.tranches_json).length : 1,
+    });
+    setModifyPrice(String(o.entry_price || ''));
+    setModifyError('');
+  }
+
+  async function confirmModifyEntry() {
+    if (!modifyModal) return;
+    const newPrice = +modifyPrice;
+    if (!(newPrice > 0)) { setModifyError('Enter a valid price > 0'); return; }
+    setModifyBusy(true); setModifyError('');
+    try {
+      const r = await fetch(`/api/staging/${modifyModal.orderId}/modify-entry`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ newEntryPrice: newPrice }),
+      });
+      const body = await r.json().catch(()=>({}));
+      if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+      setModifyModal(null); setModifyPrice('');
+      loadAll();
+    } catch(e) { setModifyError(e.message); }
+    setModifyBusy(false);
   }
 
   async function cancelOrder(id) {
@@ -6220,6 +6392,68 @@ function ExecutionTab() {
             </div>
           )}
 
+          {/* Modify Entry Price Modal */}
+          {modifyModal && (
+            <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000}} onClick={()=>!modifyBusy&&setModifyModal(null)}>
+              <div onClick={e=>e.stopPropagation()} style={{background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,padding:20,minWidth:380,maxWidth:440}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+                  <span style={{fontSize:12,fontWeight:700,color:'var(--cyan)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
+                    ✏️ MODIFY ENTRY PRICE — {modifyModal.symbol}
+                  </span>
+                  <button onClick={()=>!modifyBusy&&setModifyModal(null)} style={{background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:10,padding:'3px 10px',cursor:'pointer'}}>✕</button>
+                </div>
+                <div style={{fontSize:11,color:'var(--text3)',marginBottom:14,lineHeight:1.6}}>
+                  Status: <strong style={{color:modifyModal.status==='submitted'?'var(--amber)':'var(--green)'}}>{modifyModal.status.toUpperCase()}</strong>
+                  {modifyModal.status==='submitted' && (
+                    <span> — this will <strong style={{color:'var(--amber)'}}>PATCH {modifyModal.tranches} bracket parent(s)</strong> at Alpaca</span>
+                  )}
+                  {modifyModal.status==='staged' && <span> — updates local row, no broker call yet</span>}
+                </div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:14}}>
+                  <div style={{padding:'8px 10px',background:'var(--bg3)',borderRadius:4}}>
+                    <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>CURRENT ENTRY</div>
+                    <div style={{fontFamily:'var(--font-mono)',fontSize:16,color:'var(--text)',marginTop:2}}>${fmt(modifyModal.currentEntry)}</div>
+                  </div>
+                  <div style={{padding:'8px 10px',background:'var(--bg3)',borderRadius:4}}>
+                    <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>STOP (unchanged)</div>
+                    <div style={{fontFamily:'var(--font-mono)',fontSize:16,color:'var(--red)',marginTop:2}}>${fmt(modifyModal.currentStop)}</div>
+                  </div>
+                </div>
+                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:4,letterSpacing:1,fontFamily:'var(--font-mono)'}}>NEW ENTRY PRICE</label>
+                <input type="number" step="0.01" value={modifyPrice} onChange={e=>setModifyPrice(e.target.value)} autoFocus
+                  style={{width:'100%',padding:'10px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,color:'var(--cyan)',fontSize:18,fontFamily:'var(--font-mono)',fontWeight:700,marginBottom:8}}/>
+                {(() => {
+                  const np = +modifyPrice;
+                  if (!(np > 0) || !modifyModal.currentStop) return null;
+                  const newRisk = Math.abs(np - modifyModal.currentStop) * modifyModal.qty;
+                  const oldRisk = Math.abs(modifyModal.currentEntry - modifyModal.currentStop) * modifyModal.qty;
+                  const riskDelta = newRisk - oldRisk;
+                  return (
+                    <div style={{fontSize:10,color:'var(--text3)',marginBottom:10,fontFamily:'var(--font-mono)'}}>
+                      New risk: <strong style={{color:'var(--red)'}}>${fmt(newRisk,0)}</strong>
+                      {' '}({riskDelta >= 0 ? '+' : ''}${fmt(riskDelta,0)} vs current)
+                    </div>
+                  );
+                })()}
+                {modifyError && (
+                  <div style={{padding:'8px 10px',background:'rgba(255,61,87,0.08)',border:'1px solid rgba(255,61,87,0.3)',borderRadius:3,fontSize:11,color:'var(--red)',marginBottom:10,fontFamily:'var(--font-mono)'}}>
+                    {modifyError}
+                  </div>
+                )}
+                <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+                  <button onClick={()=>setModifyModal(null)} disabled={modifyBusy}
+                    style={{padding:'8px 16px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text2)',fontSize:11,cursor:modifyBusy?'not-allowed':'pointer',opacity:modifyBusy?0.5:1}}>
+                    Cancel
+                  </button>
+                  <button onClick={confirmModifyEntry} disabled={modifyBusy}
+                    style={{padding:'8px 16px',background:'var(--cyan)',border:'none',borderRadius:3,color:'#000',fontSize:11,cursor:modifyBusy?'not-allowed':'pointer',fontWeight:700,opacity:modifyBusy?0.6:1}}>
+                    {modifyBusy ? 'Updating...' : 'Confirm Change'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Staged Orders Table */}
           {staged.length > 0 ? (
             <div className="panel" style={{overflowX:'auto'}}>
@@ -6271,11 +6505,17 @@ function ExecutionTab() {
                       </td>
                       <td style={{padding:'8px 6px',fontSize:10,color:'var(--text3)'}}>{o.created_at?.split(' ')[0]}</td>
                       <td style={{padding:'8px 6px'}}>
-                        <div style={{display:'flex',gap:4}}>
+                        <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
                           {o.status==='staged' && (
                             <button onClick={()=>submitStaged(o.id)}
                               style={{padding:'3px 10px',background:'var(--green)',border:'none',borderRadius:3,color:'#000',fontSize:10,cursor:'pointer',fontWeight:700}}>
                               SUBMIT
+                            </button>
+                          )}
+                          {(o.status==='staged'||o.status==='submitted') && o.order_type==='limit' && (
+                            <button onClick={()=>openModifyEntry(o)} title="Modify entry price"
+                              style={{padding:'3px 8px',background:'transparent',border:'1px solid var(--cyan)',borderRadius:3,color:'var(--cyan)',fontSize:10,cursor:'pointer'}}>
+                              ✏️ Edit
                             </button>
                           )}
                           {(o.status==='staged'||o.status==='submitted') && (
@@ -6301,23 +6541,101 @@ function ExecutionTab() {
       )}
 
       {/* ─── POSITIONS ────────────────────────────── */}
-      {section==='positions' && (
+      {section==='positions' && (() => {
+        // ── Time Stop rule ──
+        // Swing trades (2-10d hold): time stop at 10 trading days
+        // Position trades (3-8wk hold): time stop at 20 trading days
+        // A trade is "stale" if it hasn't moved ≥0.5R in its favor by the deadline.
+        // Weekends/holidays ignored — we approximate trading days as calendar*5/7.
+        const SWING_DAYS = 10;
+        const POSITION_DAYS = 20;
+        const POSITION_STRATEGIES = ['sepa_trend','sector_rotation','position'];
+
+        const classifyPosition = (p) => {
+          const strat = (p.localStrategy || '').toLowerCase();
+          const exit  = (p.localExitStrategy || '').toLowerCase();
+          const isPos = POSITION_STRATEGIES.some(s => strat.includes(s) || exit.includes(s));
+          return isPos ? 'position' : 'swing';
+        };
+
+        const analyzePosition = (p) => {
+          const type = classifyPosition(p);
+          const limitDays = type === 'position' ? POSITION_DAYS : SWING_DAYS;
+          let tradingDays = null;
+          if (p.localEntryDate) {
+            const entry = new Date(p.localEntryDate + 'T00:00:00');
+            const now = new Date();
+            const calDays = Math.max(0, Math.floor((now - entry) / 86400000));
+            tradingDays = Math.round(calDays * 5 / 7);
+          }
+          // R-multiple: how many 1R units has the stock moved from entry (favorably)
+          let rMultiple = null;
+          if (p.localStop && p.avgEntryPrice && p.localStop !== p.avgEntryPrice) {
+            const r = Math.abs(p.avgEntryPrice - p.localStop);
+            rMultiple = (p.currentPrice - p.avgEntryPrice) / r * (p.side === 'long' ? 1 : -1);
+          }
+          const stale = tradingDays != null && tradingDays >= limitDays && (rMultiple == null || rMultiple < 0.5);
+          const pctLimit = tradingDays != null ? Math.min(100, (tradingDays / limitDays) * 100) : 0;
+          const status = stale ? 'stale' : pctLimit >= 80 ? 'approaching' : 'fresh';
+          return { type, tradingDays, limitDays, rMultiple, stale, pctLimit, status };
+        };
+
+        const analyzed = positions.map(p => ({ ...p, _time: analyzePosition(p) }));
+        const staleCount = analyzed.filter(p => p._time.stale).length;
+        const approachingCount = analyzed.filter(p => p._time.status === 'approaching').length;
+
+        return (
         <div>
+          {/* Time Stop legend + summary */}
+          {positions.length > 0 && (
+            <div className="panel" style={{marginBottom:10,padding:10}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:10}}>
+                <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>TIME STOP RULE</div>
+                <div style={{display:'flex',gap:12,fontSize:11,fontFamily:'var(--font-mono)',flexWrap:'wrap'}}>
+                  <span style={{color:'var(--cyan)'}}>Swing: {SWING_DAYS}d limit</span>
+                  <span style={{color:'var(--purple)'}}>Position: {POSITION_DAYS}d limit</span>
+                  <span style={{color:'var(--text3)'}}>Stale = held past limit without moving ≥0.5R</span>
+                </div>
+              </div>
+              {(staleCount > 0 || approachingCount > 0) && (
+                <div style={{marginTop:8,display:'flex',gap:8,flexWrap:'wrap'}}>
+                  {staleCount > 0 && (
+                    <span style={{padding:'3px 10px',background:'rgba(255,61,87,0.1)',border:'1px solid var(--red)',borderRadius:3,color:'var(--red)',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:700}}>
+                      ⏰ {staleCount} stale — consider closing
+                    </span>
+                  )}
+                  {approachingCount > 0 && (
+                    <span style={{padding:'3px 10px',background:'rgba(240,165,0,0.1)',border:'1px solid var(--amber)',borderRadius:3,color:'var(--amber)',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:700}}>
+                      ⚠ {approachingCount} approaching time stop
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {positions.length > 0 ? (
             <div className="panel" style={{overflowX:'auto'}}>
               <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>ALPACA POSITIONS</div>
               <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
                 <thead>
                   <tr style={{borderBottom:'1px solid var(--border)'}}>
-                    {['Symbol','Qty','Side','Avg Entry','Current','Mkt Value','Unrealized P&L','P&L %','Today','Stop','Target'].map(h =>
+                    {['Symbol','Type','Qty','Side','Avg Entry','Current','Mkt Value','P&L','P&L %','R','Today','Stop','Target','Days','Time'].map(h =>
                       <th key={h} style={{padding:'8px 6px',textAlign:'left',fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
                     )}
                   </tr>
                 </thead>
                 <tbody>
-                  {positions.map(p => (
-                    <tr key={p.symbol} style={{borderBottom:'1px solid var(--border)'}}>
+                  {analyzed.map(p => {
+                    const t = p._time;
+                    const rowBg = t.stale ? 'rgba(255,61,87,0.04)' : t.status === 'approaching' ? 'rgba(240,165,0,0.03)' : 'transparent';
+                    const typeColor = t.type === 'swing' ? 'var(--cyan)' : 'var(--purple)';
+                    return (
+                    <tr key={p.symbol} style={{borderBottom:'1px solid var(--border)',background:rowBg}}>
                       <td className="td-ticker" style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{p.symbol}</td>
+                      <td style={{padding:'8px 6px',fontSize:9,fontWeight:700,color:typeColor,letterSpacing:1,fontFamily:'var(--font-mono)'}}>
+                        {t.type.toUpperCase()}
+                      </td>
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{p.qty}</td>
                       <td style={{padding:'8px 6px',color:p.side==='long'?'var(--green)':'var(--red)'}}>{p.side}</td>
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>${fmt(p.avgEntryPrice)}</td>
@@ -6329,13 +6647,33 @@ function ExecutionTab() {
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',fontWeight:700,color:p.unrealizedPLPct>=0?'var(--green)':'var(--red)'}}>
                         {p.unrealizedPLPct>=0?'+':''}{fmt(p.unrealizedPLPct,1)}%
                       </td>
+                      <td title="R-multiple: unrealized move measured in units of initial risk" style={{padding:'8px 6px',fontFamily:'var(--font-mono)',fontWeight:700,color:t.rMultiple==null?'var(--text3)':t.rMultiple>=1?'var(--green)':t.rMultiple>=0?'var(--amber)':'var(--red)'}}>
+                        {t.rMultiple!=null ? ((t.rMultiple>=0?'+':'')+fmt(t.rMultiple,2)+'R') : '—'}
+                      </td>
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:p.changeToday>=0?'var(--green)':'var(--red)'}}>
                         {p.changeToday>=0?'+':''}{fmt(p.changeToday,1)}%
                       </td>
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--red)'}}>{p.localStop?'$'+fmt(p.localStop):'—'}</td>
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--green)'}}>{p.localTarget1?'$'+fmt(p.localTarget1):'—'}</td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:t.stale?'var(--red)':t.status==='approaching'?'var(--amber)':'var(--text2)'}}>
+                        {t.tradingDays!=null ? `${t.tradingDays}/${t.limitDays}` : '—'}
+                      </td>
+                      <td style={{padding:'8px 6px'}}>
+                        {t.tradingDays!=null && (
+                          <div title={t.stale ? `Stale: ${t.tradingDays}d held, R=${t.rMultiple!=null?t.rMultiple.toFixed(2):'?'}. Consider closing — ${t.type} should have moved ≥0.5R by ${t.limitDays} days.` : t.status==='approaching' ? `Approaching ${t.limitDays}d time stop. Watch closely.` : `Fresh — ${Math.round(t.pctLimit)}% of ${t.limitDays}d limit`}
+                            style={{display:'flex',alignItems:'center',gap:6}}>
+                            <div style={{width:50,height:4,background:'var(--bg3)',borderRadius:2,overflow:'hidden'}}>
+                              <div style={{width:`${t.pctLimit}%`,height:'100%',background:t.stale?'var(--red)':t.status==='approaching'?'var(--amber)':'var(--green)',borderRadius:2,transition:'width 0.3s'}}/>
+                            </div>
+                            <span style={{fontSize:10,color:t.stale?'var(--red)':t.status==='approaching'?'var(--amber)':'var(--text3)'}}>
+                              {t.stale ? '⏰' : t.status==='approaching' ? '⚠' : '✓'}
+                            </span>
+                          </div>
+                        )}
+                      </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -6345,7 +6683,8 @@ function ExecutionTab() {
             </div>
           )}
         </div>
-      )}
+        );
+      })()}
 
       {/* ─── ALERTS ───────────────────────────────── */}
       {section==='alerts' && (
@@ -6483,48 +6822,183 @@ function ExecutionTab() {
       )}
 
       {/* ─── BROKER ORDERS ────────────────────────── */}
-      {section==='orders' && (
+      {section==='orders' && (() => {
+        // Group orders by symbol for clearer display
+        const bySymbol = {};
+        for (const o of orders) {
+          if (!bySymbol[o.symbol]) bySymbol[o.symbol] = { orders: [], staged: o._staged || null };
+          bySymbol[o.symbol].orders.push(o);
+          if (o._staged && !bySymbol[o.symbol].staged) bySymbol[o.symbol].staged = o._staged;
+        }
+        return (
         <div>
           {orders.length > 0 ? (
             <div className="panel" style={{overflowX:'auto'}}>
               <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>ALPACA ORDERS</div>
-              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
-                <thead>
-                  <tr style={{borderBottom:'1px solid var(--border)'}}>
-                    {['Symbol','Side','Type','Qty','Limit','Stop','Status','Created',''].map(h =>
-                      <th key={h} style={{padding:'8px 6px',textAlign:'left',fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
-                    )}
-                  </tr>
-                </thead>
-                <tbody>
-                  {orders.map(o => (
-                    <tr key={o.id} style={{borderBottom:'1px solid var(--border)'}}>
-                      <td className="td-ticker" style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{o.symbol}</td>
-                      <td style={{padding:'8px 6px',color:o.side==='buy'?'var(--green)':'var(--red)',fontWeight:700}}>{o.side.toUpperCase()}</td>
-                      <td style={{padding:'8px 6px',fontSize:11}}>{o.order_type||o.type}</td>
-                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{o.qty} {o.filled_qty!=='0'&&o.filled_qty?`(${o.filled_qty} filled)`:''}</td>
-                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{o.limit_price?'$'+o.limit_price:'—'}</td>
-                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--red)'}}>{o.stop_price?'$'+o.stop_price:'—'}</td>
-                      <td style={{padding:'8px 6px'}}>
-                        <span style={{padding:'2px 8px',borderRadius:3,fontSize:10,fontWeight:700,
-                          color:o.status==='filled'?'var(--green)':o.status==='new'||o.status==='accepted'?'var(--cyan)':'var(--text3)',
-                          background:o.status==='filled'?'rgba(0,230,118,0.1)':o.status==='new'||o.status==='accepted'?'rgba(0,212,255,0.1)':'rgba(136,136,187,0.1)'}}>
-                          {o.status.toUpperCase()}
+              {Object.entries(bySymbol).map(([sym, group]) => {
+                const staged = group.staged;
+                const stopOrders  = group.orders.filter(o => o.type === 'stop' || o.order_type === 'stop' || o.type === 'stop_limit' || o.order_type === 'stop_limit');
+                const limitOrders = group.orders.filter(o => (o.type === 'limit' || o.order_type === 'limit') && o.side === 'sell');
+                const buyOrders   = group.orders.filter(o => o.side === 'buy');
+                const otherOrders = group.orders.filter(o => !stopOrders.includes(o) && !limitOrders.includes(o) && !buyOrders.includes(o));
+                const isMultiTranche = (limitOrders.length + stopOrders.length) > 2;
+
+                return (
+                <div key={sym} style={{marginBottom:16,border:'1px solid var(--border)',borderRadius:8,overflow:'hidden'}}>
+                  {/* Symbol header with staged context */}
+                  <div style={{padding:'10px 12px',background:'var(--bg3)',display:'flex',justifyContent:'space-between',alignItems:'center',borderBottom:'1px solid var(--border)'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:10}}>
+                      <span className="td-ticker" style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:700}}>{sym}</span>
+                      {staged?.exitStrategy && (
+                        <span style={{fontSize:9,padding:'2px 6px',borderRadius:3,background:'rgba(0,212,255,0.1)',color:'var(--cyan)',fontFamily:'var(--font-mono)',letterSpacing:0.5}}>
+                          {staged.exitStrategy.replace(/_/g,' ').toUpperCase()}
                         </span>
-                      </td>
-                      <td style={{padding:'8px 6px',color:'var(--text3)',fontSize:10}}>{o.created_at?.split('T')[0]}</td>
-                      <td style={{padding:'8px 6px'}}>
-                        {(o.status==='new'||o.status==='accepted'||o.status==='pending_new') && (
-                          <button onClick={()=>cancelOrder(o.id)}
-                            style={{padding:'3px 8px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:10,cursor:'pointer'}}>
-                            Cancel
-                          </button>
+                      )}
+                      {isMultiTranche && (
+                        <span style={{fontSize:9,padding:'2px 6px',borderRadius:3,background:'rgba(255,167,38,0.1)',color:'var(--amber)',fontFamily:'var(--font-mono)'}}>
+                          {limitOrders.length} TRANCHES
+                        </span>
+                      )}
+                    </div>
+                    {staged && (
+                      <div style={{display:'flex',gap:14,fontSize:10,fontFamily:'var(--font-mono)'}}>
+                        {staged.entryPrice && <span style={{color:'var(--text3)'}}>Entry <span style={{color:'var(--text1)'}}>{'$'+Number(staged.entryPrice).toFixed(2)}</span></span>}
+                        {staged.stopPrice && <span style={{color:'var(--text3)'}}>Stop <span style={{color:'var(--red)'}}>{'$'+Number(staged.stopPrice).toFixed(2)}</span></span>}
+                        {staged.target1 && <span style={{color:'var(--text3)'}}>T1 <span style={{color:'var(--green)'}}>{'$'+Number(staged.target1).toFixed(2)}</span></span>}
+                        {staged.target2 && <span style={{color:'var(--text3)'}}>T2 <span style={{color:'var(--green)'}}>{'$'+Number(staged.target2).toFixed(2)}</span></span>}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Orders table */}
+                  <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                    <thead>
+                      <tr style={{borderBottom:'1px solid var(--border)'}}>
+                        {['','Side','Type','Qty','Price','Status',''].map(h =>
+                          <th key={h} style={{padding:'6px 8px',textAlign:'left',fontSize:9,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
                         )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {/* Buy entry orders first */}
+                      {buyOrders.map(o => (
+                        <tr key={o.id} style={{borderBottom:'1px solid var(--border)'}}>
+                          <td style={{padding:'6px 8px',fontSize:11}}>📥</td>
+                          <td style={{padding:'6px 8px',color:'var(--green)',fontWeight:700,fontSize:11}}>BUY</td>
+                          <td style={{padding:'6px 8px',fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{(o.order_type||o.type||'').toUpperCase()}</td>
+                          <td style={{padding:'6px 8px',fontFamily:'var(--font-mono)'}}>{o.qty}</td>
+                          <td style={{padding:'6px 8px',fontFamily:'var(--font-mono)',color:'var(--cyan)'}}>
+                            {o.limit_price ? '$'+o.limit_price : o.stop_price ? '$'+o.stop_price : '—'}
+                            {o.filled_avg_price && o.filled_avg_price!=='0' && ' → $'+Number(o.filled_avg_price).toFixed(2)}
+                          </td>
+                          <td style={{padding:'6px 8px'}}>
+                            <span style={{padding:'2px 6px',borderRadius:3,fontSize:9,fontWeight:700,
+                              color:o.status==='filled'?'var(--green)':o.status==='new'||o.status==='accepted'?'var(--cyan)':'var(--text3)',
+                              background:o.status==='filled'?'rgba(0,230,118,0.1)':o.status==='new'||o.status==='accepted'?'rgba(0,212,255,0.1)':'rgba(136,136,187,0.1)'}}>
+                              {o.status?.toUpperCase()}
+                            </span>
+                          </td>
+                          <td style={{padding:'6px 8px'}}>
+                            {['new','accepted','pending_new','held'].includes(o.status) && (
+                              <button onClick={()=>cancelOrder(o.id)} style={{padding:'2px 6px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:9,cursor:'pointer'}}>Cancel</button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                      {/* Take-profit (sell limit) orders */}
+                      {limitOrders.map(o => {
+                        const label = o._staged?.trancheLabel;
+                        return (
+                        <tr key={o.id} style={{borderBottom:'1px solid var(--border)'}}>
+                          <td style={{padding:'6px 8px',fontSize:11}}>🎯</td>
+                          <td style={{padding:'6px 8px',color:'var(--green)',fontWeight:600,fontSize:10}}>TP{label ? ` (${label})` : ''}</td>
+                          <td style={{padding:'6px 8px',fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>SELL LIMIT</td>
+                          <td style={{padding:'6px 8px',fontFamily:'var(--font-mono)'}}>{o.qty}</td>
+                          <td style={{padding:'6px 8px',fontFamily:'var(--font-mono)',color:'var(--green)',fontWeight:600}}>
+                            {'$'+(o.limit_price || '—')}
+                          </td>
+                          <td style={{padding:'6px 8px'}}>
+                            <span style={{padding:'2px 6px',borderRadius:3,fontSize:9,fontWeight:700,
+                              color:o.status==='filled'?'var(--green)':o.status==='new'||o.status==='accepted'?'var(--cyan)':o.status==='held'?'var(--amber)':'var(--text3)',
+                              background:o.status==='filled'?'rgba(0,230,118,0.1)':o.status==='new'||o.status==='accepted'?'rgba(0,212,255,0.1)':o.status==='held'?'rgba(255,167,38,0.1)':'rgba(136,136,187,0.1)'}}>
+                              {o.status?.toUpperCase()}
+                            </span>
+                          </td>
+                          <td style={{padding:'6px 8px'}}>
+                            {['new','accepted','pending_new','held'].includes(o.status) && (
+                              <button onClick={()=>cancelOrder(o.id)} style={{padding:'2px 6px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:9,cursor:'pointer'}}>Cancel</button>
+                            )}
+                          </td>
+                        </tr>
+                        );
+                      })}
+                      {/* Stop-loss (sell stop) orders */}
+                      {stopOrders.map(o => {
+                        const label = o._staged?.trancheLabel;
+                        const stopVal = o.stop_price || o._staged?.stopPrice;
+                        return (
+                        <tr key={o.id} style={{borderBottom:'1px solid var(--border)',background:'rgba(244,67,54,0.03)'}}>
+                          <td style={{padding:'6px 8px',fontSize:11}}>🛑</td>
+                          <td style={{padding:'6px 8px',color:'var(--red)',fontWeight:600,fontSize:10}}>STOP{label ? ` (${label})` : ''}</td>
+                          <td style={{padding:'6px 8px',fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>SELL STOP</td>
+                          <td style={{padding:'6px 8px',fontFamily:'var(--font-mono)'}}>{o.qty}</td>
+                          <td style={{padding:'6px 8px',fontFamily:'var(--font-mono)',color:'var(--red)',fontWeight:600}}>
+                            {stopVal ? '$'+stopVal : '—'}
+                          </td>
+                          <td style={{padding:'6px 8px'}}>
+                            <span style={{padding:'2px 6px',borderRadius:3,fontSize:9,fontWeight:700,
+                              color:o.status==='filled'?'var(--green)':o.status==='new'||o.status==='accepted'?'var(--cyan)':o.status==='held'?'var(--amber)':'var(--text3)',
+                              background:o.status==='filled'?'rgba(0,230,118,0.1)':o.status==='new'||o.status==='accepted'?'rgba(0,212,255,0.1)':o.status==='held'?'rgba(255,167,38,0.1)':'rgba(136,136,187,0.1)'}}>
+                              {o.status?.toUpperCase()}
+                            </span>
+                          </td>
+                          <td style={{padding:'6px 8px'}}>
+                            {['new','accepted','pending_new','held'].includes(o.status) && (
+                              <button onClick={()=>cancelOrder(o.id)} style={{padding:'2px 6px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:9,cursor:'pointer'}}>Cancel</button>
+                            )}
+                          </td>
+                        </tr>
+                        );
+                      })}
+                      {/* Other orders (market sells, etc.) */}
+                      {otherOrders.map(o => (
+                        <tr key={o.id} style={{borderBottom:'1px solid var(--border)'}}>
+                          <td style={{padding:'6px 8px',fontSize:11}}>📋</td>
+                          <td style={{padding:'6px 8px',color:o.side==='buy'?'var(--green)':'var(--red)',fontWeight:700,fontSize:11}}>{o.side?.toUpperCase()}</td>
+                          <td style={{padding:'6px 8px',fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{(o.order_type||o.type||'').toUpperCase()}</td>
+                          <td style={{padding:'6px 8px',fontFamily:'var(--font-mono)'}}>{o.qty}</td>
+                          <td style={{padding:'6px 8px',fontFamily:'var(--font-mono)',color:'var(--cyan)'}}>
+                            {o.limit_price ? '$'+o.limit_price : o.stop_price ? '$'+o.stop_price : '—'}
+                          </td>
+                          <td style={{padding:'6px 8px'}}>
+                            <span style={{padding:'2px 6px',borderRadius:3,fontSize:9,fontWeight:700,
+                              color:o.status==='filled'?'var(--green)':o.status==='new'||o.status==='accepted'?'var(--cyan)':'var(--text3)',
+                              background:o.status==='filled'?'rgba(0,230,118,0.1)':o.status==='new'||o.status==='accepted'?'rgba(0,212,255,0.1)':'rgba(136,136,187,0.1)'}}>
+                              {o.status?.toUpperCase()}
+                            </span>
+                          </td>
+                          <td style={{padding:'6px 8px'}}>
+                            {['new','accepted','pending_new','held'].includes(o.status) && (
+                              <button onClick={()=>cancelOrder(o.id)} style={{padding:'2px 6px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:9,cursor:'pointer'}}>Cancel</button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {/* Staged stop fallback: if no stop orders from Alpaca, show from staged data */}
+                  {stopOrders.length === 0 && staged?.stopPrice && (
+                    <div style={{padding:'8px 12px',borderTop:'1px solid var(--border)',background:'rgba(244,67,54,0.04)',display:'flex',alignItems:'center',gap:8}}>
+                      <span style={{fontSize:11}}>🛑</span>
+                      <span style={{fontSize:10,color:'var(--red)',fontFamily:'var(--font-mono)'}}>
+                        {'Stop @ $' + Number(staged.stopPrice).toFixed(2) + ' (from staged order — stop legs may be held by broker)'}
+                      </span>
+                    </div>
+                  )}
+                </div>
+                );
+              })}
             </div>
           ) : (
             <div className="panel" style={{textAlign:'center',padding:30,color:'var(--text3)'}}>
@@ -6532,7 +7006,8 @@ function ExecutionTab() {
             </div>
           )}
         </div>
-      )}
+        );
+      })()}
 
       {/* ─── INTRADAY TIMING ──────────────────────── */}
       {section==='intraday' && <IntradayTimingSection />}
@@ -10405,6 +10880,17 @@ function BreadthSection() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [backfilling, setBackfilling] = useState(false);
+  const [breadthRange, setBreadthRange] = useState('3M');
+  const [mcRange, setMcRange] = useState('3M');
+  const [historyData, setHistoryData] = useState([]);
+
+  const BREADTH_RANGES = [
+    { k:'1M', days:30 },
+    { k:'3M', days:90 },
+    { k:'6M', days:180 },
+    { k:'1Y', days:365 },
+    { k:'ALL', days:1000 },
+  ];
 
   async function load() {
     setLoading(true); setError('');
@@ -10415,12 +10901,31 @@ function BreadthSection() {
     setLoading(false);
   }
 
+  // Fetch extended history for charts
+  async function loadHistory(days) {
+    try {
+      const h = await api(`/api/breadth/history?days=${days}`);
+      setHistoryData(h || []);
+    } catch(e) { console.warn('Breadth history:', e.message); }
+  }
+
+  // Load history whenever either range changes (use the larger of the two)
+  useEffect(() => {
+    const br = BREADTH_RANGES.find(r=>r.k===breadthRange) || BREADTH_RANGES[1];
+    const mr = BREADTH_RANGES.find(r=>r.k===mcRange) || BREADTH_RANGES[1];
+    const maxDays = Math.max(br.days, mr.days);
+    loadHistory(maxDays);
+  }, [breadthRange, mcRange]);
+
   async function backfillHistory() {
     setBackfilling(true);
     try {
       const r = await api('/api/breadth/backfill',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
       alert(`${r.message}`);
       load();
+      const br = BREADTH_RANGES.find(r2=>r2.k===breadthRange) || BREADTH_RANGES[1];
+      const mr = BREADTH_RANGES.find(r2=>r2.k===mcRange) || BREADTH_RANGES[1];
+      loadHistory(Math.max(br.days, mr.days));
     } catch(e) { setError(e.message); }
     setBackfilling(false);
   }
@@ -10428,6 +10933,26 @@ function BreadthSection() {
   useEffect(()=>{ load(); },[]);
 
   const scoreColor = s => s>=80?'var(--green)':s>=60?'#8bc34a':s>=40?'var(--amber)':s>=20?'#ff8c00':'var(--red)';
+
+  // Shared chart builder for breadth charts
+  function buildBreadthChart(points, opts = {}) {
+    const { width=900, height=200, padL=46, padR=12, padT=14, padB=24,
+            minY=opts.minY??null, maxY=opts.maxY??null, hasZero=false } = opts;
+    if (!points.length) return null;
+    const drawW = width - padL - padR, drawH = height - padT - padB;
+    const vals = points.map(p=>p.value).filter(v=>v!=null);
+    const rawMin = Math.min(...vals), rawMax = Math.max(...vals);
+    const yMin = minY != null ? minY : (hasZero ? Math.min(rawMin, -Math.abs(rawMax)*0.1) : rawMin - (rawMax-rawMin)*0.05);
+    const yMax = maxY != null ? maxY : (hasZero ? Math.max(rawMax, Math.abs(rawMin)*0.1) : rawMax + (rawMax-rawMin)*0.05);
+    const yRange = yMax - yMin || 1;
+    const toX = i => padL + (i / Math.max(points.length-1,1)) * drawW;
+    const toY = v => padT + drawH - ((v - yMin) / yRange * drawH);
+    const pts = points.map((p,i) => `${toX(i).toFixed(1)},${toY(p.value).toFixed(1)}`).join(' ');
+    // Date labels (6 evenly spaced)
+    const labelCount = Math.min(6, points.length);
+    const labelIdxs = Array.from({length:labelCount}, (_,i) => Math.round(i * (points.length-1) / Math.max(labelCount-1,1)));
+    return { width, height, padL, padR, padT, padB, drawW, drawH, yMin, yMax, yRange, toX, toY, pts, points, labelIdxs, vals };
+  }
 
   return (
     <div style={{marginTop:14}}>
@@ -10454,30 +10979,51 @@ function BreadthSection() {
                   <span style={{fontSize:12,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{data.composite.sizeMultiplier}x sizing</span>
                 </div>
               </div>
-              <div style={{textAlign:'right'}}>
-                <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)',marginBottom:4}}>COMPONENTS</div>
-                {data.composite.components?.map(c=>(
-                  <div key={c.name} style={{fontSize:11,fontFamily:'var(--font-mono)',color:'var(--text2)'}}>
-                    {c.name}: <span style={{color:scoreColor(c.score/c.weight*100),fontWeight:600}}>{c.score.toFixed(1)}</span>/{c.weight}
-                    {c.value != null && typeof c.value !== 'string' && <span style={{color:'var(--text3)',marginLeft:6}}>({typeof c.value==='number'?c.value.toFixed(1):c.value})</span>}
-                  </div>
-                ))}
-              </div>
             </div>
+            {/* Component breakdown — compact horizontal pills */}
+            {data.composite.components?.length > 0 && (
+              <div style={{marginTop:12,paddingTop:10,borderTop:'1px solid var(--border)',display:'flex',flexWrap:'wrap',gap:8,alignItems:'center'}}>
+                <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginRight:4}}>COMPONENTS:</span>
+                {data.composite.components.map(c => {
+                  const pct = Math.round(c.score / c.weight * 100);
+                  const bar = scoreColor(pct);
+                  return (
+                    <div key={c.name} style={{display:'flex',alignItems:'center',gap:4,padding:'3px 8px',background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)'}}>
+                      <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{c.name}</span>
+                      <div style={{width:30,height:4,background:'var(--bg)',borderRadius:2,overflow:'hidden'}}>
+                        <div style={{width:`${pct}%`,height:'100%',background:bar,borderRadius:2}}/>
+                      </div>
+                      <span style={{fontSize:9,fontWeight:700,color:bar,fontFamily:'var(--font-mono)'}}>{c.score.toFixed(1)}</span>
+                      <span style={{fontSize:8,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>/{c.weight}</span>
+                      {c.value != null && typeof c.value === 'number' && (
+                        <span style={{fontSize:8,color:'var(--text3)',fontFamily:'var(--font-mono)',opacity:0.7}}>({c.value.toFixed(1)})</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
-          {/* 30-Day Breadth Trend Chart */}
-          {data.history?.length > 1 && (() => {
-            const hist = data.history;
-            const maxScore = 100;
-            const chartW = 800, chartH = 120, padL = 36, padR = 8, padT = 6, padB = 18;
-            const drawW = chartW - padL - padR, drawH = chartH - padT - padB;
-            const stepX = drawW / Math.max(hist.length - 1, 1);
+          {/* ── COMPOSITE BREADTH TREND CHART (period-selectable) ── */}
+          {(() => {
+            const rangeDays = (BREADTH_RANGES.find(r=>r.k===breadthRange)||BREADTH_RANGES[1]).days;
+            const hist = (historyData.length > 1 ? historyData : data.history || []).slice(-rangeDays);
+            if (hist.length < 2) return null;
 
-            const scorePts = hist.map((h,i) => `${padL + i*stepX},${padT + drawH - (((h.composite_score??h.compositeScore??0)/maxScore)*drawH)}`).join(' ');
-            const ma50Pts = hist.map((h,i) => `${padL + i*stepX},${padT + drawH - (((h.pct_above_50ma??h.pctAbove50MA??50)/100)*drawH)}`).join(' ');
+            const scorePoints = hist.map(h => ({ date: h.date, value: h.composite_score ?? h.compositeScore ?? 0 }));
+            const ma50Points  = hist.map(h => ({ date: h.date, value: h.pct_above_50ma ?? h.pctAbove50MA ?? 50 }));
+            const chart = buildBreadthChart(scorePoints, { width:900, height:220, minY:0, maxY:100 });
+            if (!chart) return null;
 
-            // Score color zones
+            // Build secondary line manually using same geometry
+            const ma50Pts = ma50Points.map((p,i) => `${chart.toX(i).toFixed(1)},${chart.toY(p.value).toFixed(1)}`).join(' ');
+
+            const first = scorePoints[0]?.value ?? 0;
+            const last = scorePoints[scorePoints.length-1]?.value ?? 0;
+            const delta = last - first;
+
+            // Color zones
             const zones = [
               {y1:0, y2:20, fill:'rgba(255,61,87,0.06)'},
               {y1:20, y2:40, fill:'rgba(255,140,0,0.06)'},
@@ -10486,51 +11032,53 @@ function BreadthSection() {
               {y1:80, y2:100, fill:'rgba(0,230,118,0.05)'},
             ];
 
-            const first = hist[0]?.composite_score ?? hist[0]?.compositeScore ?? 0;
-            const last = hist[hist.length-1]?.composite_score ?? hist[hist.length-1]?.compositeScore ?? 0;
-            const delta = last - first;
-
             return (
               <div className="panel" style={{marginBottom:14}}>
-                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,flexWrap:'wrap',gap:8}}>
                   <div>
-                    <div style={{fontSize:10,color:'var(--text3)',letterSpacing:2,fontFamily:'var(--font-mono)'}}>30-DAY COMPOSITE BREADTH TREND</div>
+                    <div style={{fontSize:10,color:'var(--text3)',letterSpacing:2,fontFamily:'var(--font-mono)'}}>COMPOSITE BREADTH TREND</div>
                     <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>Breadth leads price by days/weeks — catches divergences before MA crosses</div>
                   </div>
-                  <div style={{textAlign:'right'}}>
-                    <span style={{fontSize:13,fontFamily:'var(--font-mono)',fontWeight:700,color:delta>=0?'var(--green)':'var(--red)'}}>
-                      {delta>=0?'+':''}{delta} pts
-                    </span>
-                    <div style={{fontSize:9,color:'var(--text3)'}}>30d change</div>
+                  <div style={{display:'flex',alignItems:'center',gap:10}}>
+                    <div style={{display:'flex',gap:2}}>
+                      {BREADTH_RANGES.map(r => (
+                        <button key={r.k} onClick={()=>setBreadthRange(r.k)}
+                          style={{padding:'4px 8px',background:breadthRange===r.k?'var(--cyan)':'var(--bg3)',border:'1px solid var(--border)',
+                            borderRadius:3,color:breadthRange===r.k?'#000':'var(--text2)',fontSize:10,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:1,cursor:'pointer'}}>
+                          {r.k}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{textAlign:'right'}}>
+                      <span style={{fontSize:13,fontFamily:'var(--font-mono)',fontWeight:700,color:delta>=0?'var(--green)':'var(--red)'}}>
+                        {delta>=0?'+':''}{delta} pts
+                      </span>
+                      <div style={{fontSize:9,color:'var(--text3)'}}>{breadthRange} change</div>
+                    </div>
                   </div>
                 </div>
-                <svg viewBox={`0 0 ${chartW} ${chartH}`} style={{width:'100%',height:chartH}}>
+                <svg viewBox={`0 0 ${chart.width} ${chart.height}`} style={{width:'100%',height:chart.height}}>
                   {/* Zone backgrounds */}
                   {zones.map(z => (
-                    <rect key={z.y1} x={padL} y={padT + drawH - (z.y2/100*drawH)} width={drawW} height={(z.y2-z.y1)/100*drawH} fill={z.fill}/>
+                    <rect key={z.y1} x={chart.padL} y={chart.toY(z.y2)} width={chart.drawW} height={chart.toY(z.y1)-chart.toY(z.y2)} fill={z.fill}/>
                   ))}
                   {/* Grid lines */}
                   {[20,40,60,80].map(v => (
                     <g key={v}>
-                      <line x1={padL} y1={padT + drawH - (v/100*drawH)} x2={padL+drawW} y2={padT + drawH - (v/100*drawH)} stroke="var(--border)" strokeWidth="0.5" strokeDasharray="3,3"/>
-                      <text x={padL-4} y={padT + drawH - (v/100*drawH)+3} fill="var(--text3)" fontSize="8" textAnchor="end" fontFamily="var(--font-mono)">{v}</text>
+                      <line x1={chart.padL} y1={chart.toY(v)} x2={chart.padL+chart.drawW} y2={chart.toY(v)} stroke="var(--border)" strokeWidth="0.5" strokeDasharray="3,3"/>
+                      <text x={chart.padL-4} y={chart.toY(v)+3} fill="var(--text3)" fontSize="8" textAnchor="end" fontFamily="var(--font-mono)">{v}</text>
                     </g>
                   ))}
                   {/* % Above 50MA line (secondary) */}
                   <polyline points={ma50Pts} fill="none" stroke="rgba(0,212,255,0.3)" strokeWidth="1" strokeDasharray="3,2"/>
                   {/* Composite score line (primary) */}
-                  <polyline points={scorePts} fill="none" stroke={scoreColor(last)} strokeWidth="2.5"/>
+                  <polyline points={chart.pts} fill="none" stroke={scoreColor(last)} strokeWidth="2.5"/>
                   {/* Endpoint dot */}
-                  {(() => {
-                    const lastX = padL + (hist.length-1)*stepX;
-                    const lastY = padT + drawH - ((last/maxScore)*drawH);
-                    return <circle cx={lastX} cy={lastY} r="3.5" fill={scoreColor(last)} stroke="var(--bg)" strokeWidth="1.5"/>;
-                  })()}
+                  <circle cx={chart.toX(scorePoints.length-1)} cy={chart.toY(last)} r="3.5" fill={scoreColor(last)} stroke="var(--bg)" strokeWidth="1.5"/>
                   {/* Date labels */}
-                  {hist.filter((_,i) => i===0 || i===hist.length-1 || i===Math.floor(hist.length/2)).map((h,idx) => {
-                    const i = idx===0 ? 0 : idx===1 ? Math.floor(hist.length/2) : hist.length-1;
-                    const d = hist[i]?.date || '';
-                    return <text key={i} x={padL + i*stepX} y={chartH-2} fill="var(--text3)" fontSize="8" textAnchor="middle" fontFamily="var(--font-mono)">{d.slice(5)}</text>;
+                  {chart.labelIdxs.map(i => {
+                    const d = scorePoints[i]?.date || '';
+                    return <text key={i} x={chart.toX(i)} y={chart.height-2} fill="var(--text3)" fontSize="8" textAnchor="middle" fontFamily="var(--font-mono)">{d.slice(5)}</text>;
                   })}
                 </svg>
                 <div style={{display:'flex',gap:16,justifyContent:'center',marginTop:4}}>
@@ -10581,24 +11129,166 @@ function BreadthSection() {
             </div>
           )}
 
-          {/* McClellan Oscillator */}
-          {data.mcclellan && (
-            <div className="panel">
-              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>MCCLELLAN OSCILLATOR <span style={{fontSize:8,opacity:0.6}}>(UNIVERSE BREADTH)</span></div>
-              <div style={{display:'flex',gap:20,alignItems:'center',flexWrap:'wrap'}}>
-                <div>
-                  <span style={{fontSize:28,fontWeight:700,color:data.mcclellan.current>0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)'}}>{data.mcclellan.current}</span>
-                  <span style={{fontSize:11,color:'var(--text3)',marginLeft:8}}>({data.mcclellan.trend})</span>
+          {/* ── McCLELLAN OSCILLATOR CHART (period-selectable) ── */}
+          {data.mcclellan && (() => {
+            const rangeDays = (BREADTH_RANGES.find(r=>r.k===mcRange)||BREADTH_RANGES[1]).days;
+            const hist = (historyData.length > 1 ? historyData : data.history || []).slice(-rangeDays);
+
+            // Current values display
+            const currentVal = data.mcclellan.current;
+            const summation = data.mcclellan.summationIndex;
+            const trend = data.mcclellan.trend;
+            const prev = data.mcclellan.previous;
+
+            // Build oscillator chart data
+            const oscPoints = hist.filter(h => h.mcclellan_osc != null).map(h => ({ date: h.date, value: h.mcclellan_osc }));
+            const sumPoints = hist.filter(h => h.summation_index != null).map(h => ({ date: h.date, value: h.summation_index }));
+            const hasOscData = oscPoints.length > 1;
+
+            // Build oscillator chart geometry
+            const oscChart = hasOscData ? buildBreadthChart(oscPoints, { width:900, height:200, hasZero:true }) : null;
+
+            // Build summation chart geometry
+            const sumChart = sumPoints.length > 1 ? buildBreadthChart(sumPoints, { width:900, height:160, hasZero:true }) : null;
+
+            return (
+              <div className="panel" style={{marginBottom:14}}>
+                {/* Header with current values + period selector */}
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12,flexWrap:'wrap',gap:8}}>
+                  <div>
+                    <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',color:'var(--text3)',marginBottom:6}}>
+                      MCCLELLAN OSCILLATOR <span style={{fontSize:8,opacity:0.6}}>(UNIVERSE BREADTH)</span>
+                    </div>
+                    <div style={{display:'flex',gap:20,alignItems:'center',flexWrap:'wrap'}}>
+                      <div>
+                        <span style={{fontSize:32,fontWeight:700,color:currentVal>0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)'}}>{currentVal}</span>
+                        <span style={{fontSize:11,color:'var(--text3)',marginLeft:8}}>({trend})</span>
+                      </div>
+                      <div style={{display:'flex',gap:16}}>
+                        <div style={{fontSize:11,color:'var(--text2)',fontFamily:'var(--font-mono)'}}>
+                          Summation: <span style={{color:summation>0?'var(--green)':'var(--red)',fontWeight:600}}>{summation}</span>
+                        </div>
+                        <div style={{fontSize:11,color:'var(--text3)'}}>Previous: {prev}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{display:'flex',gap:2}}>
+                    {BREADTH_RANGES.map(r => (
+                      <button key={r.k} onClick={()=>setMcRange(r.k)}
+                        style={{padding:'4px 8px',background:mcRange===r.k?'var(--cyan)':'var(--bg3)',border:'1px solid var(--border)',
+                          borderRadius:3,color:mcRange===r.k?'#000':'var(--text2)',fontSize:10,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:1,cursor:'pointer'}}>
+                        {r.k}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <div style={{fontSize:11,color:'var(--text2)',fontFamily:'var(--font-mono)'}}>
-                  Summation: <span style={{color:data.mcclellan.summationIndex>0?'var(--green)':'var(--red)',fontWeight:600}}>{data.mcclellan.summationIndex}</span>
-                </div>
-                <div style={{fontSize:11,color:'var(--text3)'}}>
-                  Previous: {data.mcclellan.previous}
-                </div>
+
+                {/* Oscillator histogram/line chart */}
+                {oscChart && (
+                  <div style={{marginBottom:12}}>
+                    <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>OSCILLATOR</div>
+                    <svg viewBox={`0 0 ${oscChart.width} ${oscChart.height}`} style={{width:'100%',height:oscChart.height}}>
+                      {/* Zero line */}
+                      <line x1={oscChart.padL} y1={oscChart.toY(0)} x2={oscChart.padL+oscChart.drawW} y2={oscChart.toY(0)}
+                        stroke="var(--text3)" strokeWidth="0.8" strokeDasharray="4,3" opacity="0.5"/>
+                      {/* Grid lines */}
+                      {(() => {
+                        const absMax = Math.max(Math.abs(oscChart.yMin), Math.abs(oscChart.yMax));
+                        const step = absMax > 100 ? 50 : absMax > 40 ? 20 : absMax > 15 ? 10 : 5;
+                        const lines = [];
+                        for (let v = -Math.ceil(absMax/step)*step; v <= Math.ceil(absMax/step)*step; v += step) {
+                          if (v === 0) continue;
+                          if (v < oscChart.yMin || v > oscChart.yMax) continue;
+                          lines.push(v);
+                        }
+                        return lines.map(v => (
+                          <g key={v}>
+                            <line x1={oscChart.padL} y1={oscChart.toY(v)} x2={oscChart.padL+oscChart.drawW} y2={oscChart.toY(v)} stroke="var(--border)" strokeWidth="0.4" strokeDasharray="2,3"/>
+                            <text x={oscChart.padL-4} y={oscChart.toY(v)+3} fill="var(--text3)" fontSize="8" textAnchor="end" fontFamily="var(--font-mono)">{v}</text>
+                          </g>
+                        ));
+                      })()}
+                      {/* Histogram bars */}
+                      {oscPoints.map((p,i) => {
+                        const x = oscChart.toX(i);
+                        const yZero = oscChart.toY(0);
+                        const yVal = oscChart.toY(p.value);
+                        const barW = Math.max(oscChart.drawW / oscPoints.length * 0.7, 1.5);
+                        return (
+                          <rect key={i} x={x - barW/2} y={Math.min(yZero, yVal)} width={barW} height={Math.abs(yVal - yZero)}
+                            fill={p.value >= 0 ? 'rgba(0,230,118,0.5)' : 'rgba(255,61,87,0.5)'} rx="0.5"/>
+                        );
+                      })}
+                      {/* Line overlay */}
+                      <polyline points={oscChart.pts} fill="none" stroke={currentVal>=0?'var(--green)':'var(--red)'} strokeWidth="1.5" opacity="0.8"/>
+                      {/* Endpoint */}
+                      <circle cx={oscChart.toX(oscPoints.length-1)} cy={oscChart.toY(oscPoints[oscPoints.length-1]?.value||0)} r="3" fill={currentVal>=0?'var(--green)':'var(--red)'} stroke="var(--bg)" strokeWidth="1.5"/>
+                      {/* Zero label */}
+                      <text x={oscChart.padL-4} y={oscChart.toY(0)+3} fill="var(--text3)" fontSize="8" textAnchor="end" fontFamily="var(--font-mono)" fontWeight="600">0</text>
+                      {/* Date labels */}
+                      {oscChart.labelIdxs.map(i => {
+                        const d = oscPoints[i]?.date || '';
+                        return <text key={i} x={oscChart.toX(i)} y={oscChart.height-2} fill="var(--text3)" fontSize="8" textAnchor="middle" fontFamily="var(--font-mono)">{d.slice(5)}</text>;
+                      })}
+                    </svg>
+                  </div>
+                )}
+
+                {/* Summation Index line chart */}
+                {sumChart && (
+                  <div>
+                    <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>SUMMATION INDEX</div>
+                    <svg viewBox={`0 0 ${sumChart.width} ${sumChart.height}`} style={{width:'100%',height:sumChart.height}}>
+                      {/* Zero line */}
+                      <line x1={sumChart.padL} y1={sumChart.toY(0)} x2={sumChart.padL+sumChart.drawW} y2={sumChart.toY(0)}
+                        stroke="var(--text3)" strokeWidth="0.8" strokeDasharray="4,3" opacity="0.5"/>
+                      {/* Grid lines */}
+                      {(() => {
+                        const absMax = Math.max(Math.abs(sumChart.yMin), Math.abs(sumChart.yMax));
+                        const step = absMax > 500 ? 200 : absMax > 200 ? 100 : absMax > 50 ? 25 : 10;
+                        const lines = [];
+                        for (let v = -Math.ceil(absMax/step)*step; v <= Math.ceil(absMax/step)*step; v += step) {
+                          if (v === 0) continue;
+                          if (v < sumChart.yMin || v > sumChart.yMax) continue;
+                          lines.push(v);
+                        }
+                        return lines.map(v => (
+                          <g key={v}>
+                            <line x1={sumChart.padL} y1={sumChart.toY(v)} x2={sumChart.padL+sumChart.drawW} y2={sumChart.toY(v)} stroke="var(--border)" strokeWidth="0.4" strokeDasharray="2,3"/>
+                            <text x={sumChart.padL-4} y={sumChart.toY(v)+3} fill="var(--text3)" fontSize="8" textAnchor="end" fontFamily="var(--font-mono)">{v}</text>
+                          </g>
+                        ));
+                      })()}
+                      {/* Area fill under line */}
+                      <polygon points={`${sumChart.toX(0).toFixed(1)},${sumChart.toY(0).toFixed(1)} ${sumChart.pts} ${sumChart.toX(sumPoints.length-1).toFixed(1)},${sumChart.toY(0).toFixed(1)}`}
+                        fill={summation>=0?'rgba(0,230,118,0.08)':'rgba(255,61,87,0.08)'}/>
+                      {/* Line */}
+                      <polyline points={sumChart.pts} fill="none" stroke={summation>=0?'var(--green)':'var(--red)'} strokeWidth="2"/>
+                      {/* Endpoint */}
+                      <circle cx={sumChart.toX(sumPoints.length-1)} cy={sumChart.toY(sumPoints[sumPoints.length-1]?.value||0)} r="3" fill={summation>=0?'var(--green)':'var(--red)'} stroke="var(--bg)" strokeWidth="1.5"/>
+                      {/* Zero label */}
+                      <text x={sumChart.padL-4} y={sumChart.toY(0)+3} fill="var(--text3)" fontSize="8" textAnchor="end" fontFamily="var(--font-mono)" fontWeight="600">0</text>
+                      {/* Date labels */}
+                      {sumChart.labelIdxs.map(i => {
+                        const d = sumPoints[i]?.date || '';
+                        return <text key={i} x={sumChart.toX(i)} y={sumChart.height-2} fill="var(--text3)" fontSize="8" textAnchor="middle" fontFamily="var(--font-mono)">{d.slice(5)}</text>;
+                      })}
+                    </svg>
+                    <div style={{display:'flex',gap:16,justifyContent:'center',marginTop:4}}>
+                      <span style={{fontSize:9,color:'var(--text3)'}}><span style={{display:'inline-block',width:16,height:2,background:summation>=0?'var(--green)':'var(--red)',verticalAlign:'middle',marginRight:4,borderRadius:1}}></span>Summation Index</span>
+                      <span style={{fontSize:9,color:'var(--text3)'}}>Above 0 = bullish breadth trend, Below 0 = bearish breadth trend</span>
+                    </div>
+                  </div>
+                )}
+
+                {!hasOscData && (
+                  <div style={{padding:20,textAlign:'center',color:'var(--text3)',fontSize:12}}>
+                    No McClellan history available. Run "Backfill History" to compute historical data.
+                  </div>
+                )}
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* VIX Structure + Credit */}
           <div className="grid-2">

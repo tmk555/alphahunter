@@ -100,6 +100,11 @@ async function getOrders(params = {}) {
   if (params.after)  qs.set('after', params.after);
   if (params.until)  qs.set('until', params.until);
   if (params.direction) qs.set('direction', params.direction);
+  // NOTE: do NOT use nested=true here. With nested=true, bracket legs are
+  // embedded under their parent order. When parents are filled and we filter
+  // by status=open, the filled parents are excluded — and their nested legs
+  // vanish with them. Without nesting, stop/TP legs appear as independent
+  // flat top-level orders which is exactly what we need.
   const query = qs.toString();
   return request('GET', `/v2/orders${query ? '?' + query : ''}`);
 }

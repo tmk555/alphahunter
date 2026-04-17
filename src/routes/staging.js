@@ -4,7 +4,8 @@ const express = require('express');
 const router  = express.Router();
 
 const { stageOrder, stageFromSetup, getStagedOrders, getStagedOrder,
-        submitStagedOrder, syncOrderStatus, cancelStagedOrder } = require('../broker/staging');
+        submitStagedOrder, syncOrderStatus, cancelStagedOrder,
+        modifyStagedEntryPrice } = require('../broker/staging');
 const { computeTradeSetup } = require('../signals/candidates');
 const { calculatePositionSize } = require('../risk/position-sizer');
 const { calcConviction, evaluateConvictionOverride } = require('../signals/conviction');
@@ -159,6 +160,20 @@ module.exports = function(db, runScan) {
       const result = await cancelStagedOrder(+req.params.id);
       res.json(result);
     } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Modify entry price on staged or submitted order ──────────────────────
+  // Body: { newEntryPrice: number }
+  // For submitted multi-tranche brackets, patches all tranche parents at Alpaca.
+  router.post('/staging/:id/modify-entry', async (req, res) => {
+    try {
+      const newEntryPrice = +req.body?.newEntryPrice;
+      if (!(newEntryPrice > 0)) {
+        return res.status(400).json({ error: 'newEntryPrice must be a positive number' });
+      }
+      const result = await modifyStagedEntryPrice(+req.params.id, newEntryPrice);
+      res.json(result);
+    } catch (e) { res.status(400).json({ error: e.message }); }
   });
 
   // ─── Sync order status from Alpaca ────────────────────────────────────────

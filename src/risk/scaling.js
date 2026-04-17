@@ -78,8 +78,10 @@ function evaluateScalingAction(trade, currentPrice) {
 
   // Trailing stop maintenance for the final third (after target2)
   if (isScaleOut && tookT2 && trade.trailing_stop_active) {
-    // 8% trailing stop on close
-    const trailPct = 0.08;
+    // Per-trade trail percentage — defaults to 8% but the rotation/deterioration
+    // watcher can tighten it to 4% when the trade's thesis erodes
+    // (industry rotation down, individual RS collapse, stage→distribution).
+    const trailPct = trade.trail_pct ?? 0.08;
     const newTrail = isShort
       ? +(currentPrice * (1 + trailPct)).toFixed(2)
       : +(currentPrice * (1 - trailPct)).toFixed(2);
@@ -88,7 +90,7 @@ function evaluateScalingAction(trade, currentPrice) {
       return {
         action: 'update_stop',
         moveStopTo: newTrail,
-        reason: `Trailing stop tightened to ${newTrail} (8% trail)`,
+        reason: `Trailing stop tightened to ${newTrail} (${(trailPct*100).toFixed(0)}% trail)`,
       };
     }
   }

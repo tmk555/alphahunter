@@ -109,7 +109,7 @@ Return JSON array:
     if (!candidates.length) {
       const sw = stocks.filter(isSwingCandidate).length, pos = stocks.filter(isPositionCandidate).length;
       return res.json({ results:[], regime,
-        message:`No candidates matched. Swing: ${sw} stocks (RS≥70+SwingMom≥55+within 7% of high+vol≥1.1x). Position: ${pos} stocks (RS≥65+above 200MA).`,
+        message:`No candidates matched ${mode} filter. Swing: ${sw} (RS≥70, above 50MA, momentum≥50 + near high/vol surge/strong mom). Position: ${pos} (RS≥70, above 200MA, pullback to 50MA). Try a different mode.`,
         totalInput: stocks.length, scannedCount: 0 });
     }
 

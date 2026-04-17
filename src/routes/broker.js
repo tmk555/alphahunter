@@ -46,11 +46,14 @@ module.exports = function(db) {
           unrealizedPLPct: +p.unrealized_plpc * 100,
           changeToday:    +p.change_today * 100,
           // Local enrichments
-          localStop:      local?.stop_price || null,
-          localTarget1:   local?.target1 || null,
-          localTarget2:   local?.target2 || null,
-          localEntryRS:   local?.entry_rs || null,
-          localTradeId:   local?.id || null,
+          localStop:         local?.stop_price || null,
+          localTarget1:      local?.target1 || null,
+          localTarget2:      local?.target2 || null,
+          localEntryRS:      local?.entry_rs || null,
+          localTradeId:      local?.id || null,
+          localEntryDate:    local?.entry_date || null,
+          localStrategy:     local?.strategy || null,
+          localExitStrategy: local?.exit_strategy || null,
         };
       });
 
@@ -59,11 +62,58 @@ module.exports = function(db) {
   });
 
   // ─── Orders ─────────────────────────────────────────────────────────────────
+  //
+  // Returns flat Alpaca orders enriched with local staged_orders data.
+  // After a bracket parent fills, the stop-loss and take-profit legs appear
+  // as independent flat orders. We match each order's ID against our
+  // staged_orders.tranches_json to attach the tranche label, shared stop
+  // price, and target prices so the UI can group and display them clearly.
   router.get('/broker/orders', async (req, res) => {
     try {
       const { status = 'open', limit = 50 } = req.query;
       const orders = await alpaca.getOrders({ status, limit: +limit });
-      res.json({ orders, count: orders.length });
+
+      // ── Build enrichment map from staged_orders ──
+      let enrichById = {};    // orderId → enrichment
+      let enrichBySymbol = {}; // symbol  → enrichment (fallback)
+      try {
+        const submitted = db.prepare(
+          "SELECT * FROM staged_orders WHERE status IN ('submitted', 'filled') AND alpaca_order_id IS NOT NULL ORDER BY created_at DESC"
+        ).all();
+        for (const staged of submitted) {
+          const base = {
+            stagedId:     staged.id,
+            stopPrice:    staged.stop_price,
+            entryPrice:   staged.entry_price,
+            target1:      staged.target1_price,
+            target2:      staged.target2_price,
+            exitStrategy: staged.exit_strategy,
+          };
+          // Map the primary (first tranche) order ID
+          enrichById[staged.alpaca_order_id] = { ...base, trancheLabel: null };
+
+          // Map individual tranche parent + stop leg IDs
+          if (staged.tranches_json) {
+            try {
+              const tranches = JSON.parse(staged.tranches_json);
+              for (const t of tranches) {
+                if (t.orderId)     enrichById[t.orderId]     = { ...base, trancheLabel: t.label, trancheTP: t.tp };
+                if (t.stopOrderId) enrichById[t.stopOrderId] = { ...base, trancheLabel: t.label, isStopLeg: true };
+              }
+            } catch (_) { /* malformed JSON, skip */ }
+          }
+          // Symbol-level fallback (most recent staged order wins)
+          if (!enrichBySymbol[staged.symbol]) enrichBySymbol[staged.symbol] = base;
+        }
+      } catch (_) { /* non-critical — orders still work without enrichment */ }
+
+      // ── Attach enrichment to each order ──
+      const enriched = orders.map(o => ({
+        ...o,
+        _staged: enrichById[o.id] || enrichBySymbol[o.symbol] || null,
+      }));
+
+      res.json({ orders: enriched, count: enriched.length });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

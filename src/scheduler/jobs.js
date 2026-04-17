@@ -278,6 +278,22 @@ registerJobType('pullback_watch', {
   },
 });
 
+// ─── Position Deterioration Watch ─────────────────────────────────────────
+// Tightens trailing stops on positions whose thesis has eroded:
+//   - Industry ETF RS rank dropped ≥20 pts in 10 days (rotation reversal)
+//   - Individual stock RS dropped ≥20 pts in 10 days
+//   - Stage transitioned from 2 (uptrend) → 3 or 4 (distribution/decline)
+// Flips trade.trail_pct from 0.08 → 0.04 and patches broker stop legs.
+
+registerJobType('rotation_watch', {
+  description: 'Tighten trailing stops on positions whose industry has rotated down, RS collapsed, or stage transitioned to distribution',
+  defaultConfig: { rsDropThreshold: 20, lookbackDays: 10, tightTrailPct: 0.04 },
+  handler: async (config) => {
+    const { runPositionDeteriorationScan } = require('../signals/position-deterioration');
+    return runPositionDeteriorationScan(config);
+  },
+});
+
 // ─── 10. Equity Snapshot — Daily portfolio alpha tracking ──────────────────
 
 registerJobType('equity_snapshot', {
@@ -556,6 +572,13 @@ registerJobType('revision_scan', {
       .map(s => s.ticker);
 
     let fetched = 0, stored = 0, withRevisions = 0, errors = 0;
+    const today = marketDate();
+    const insertScore = db().prepare(`
+      INSERT OR REPLACE INTO revision_scores
+        (symbol, date, revision_score, direction, tier,
+         eps_current_yr_chg, eps_next_yr_chg, rev_chg, acceleration)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
 
     for (const symbol of topStocks) {
       try {
@@ -566,7 +589,18 @@ registerJobType('revision_scan', {
         const prior = loadPriorRevisions(db(), symbol);
         if (prior) {
           const score = scoreRevisions(current, prior);
-          if (score) withRevisions++;
+          if (score) {
+            withRevisions++;
+            // Persist the score so the scanner can attach it to scan rows
+            // and the conviction engine can award its +6 upgrade bonus.
+            try {
+              insertScore.run(
+                symbol, today, score.revisionScore, score.direction || null, score.tier || null,
+                score.epsCurrentYrChg ?? null, score.epsNextYrChg ?? null,
+                score.revChg ?? null, score.acceleration ?? null,
+              );
+            } catch (_) { /* table schema may differ on old DBs */ }
+          }
         }
 
         storeRevisions(db(), symbol, current);
@@ -786,6 +820,31 @@ const DEFAULT_JOBS = [
     job_type: 'job_history_cleanup',
     cron_expression: '0 3 * * 0',  // 3:00 AM Sunday
     config: { keepDays: 30 },
+  },
+
+  // Analyst estimate revision scan — daily after market close. Fetches
+  // current EPS/revenue estimates for top RS stocks and stores snapshots
+  // so the revision-trend engine can compute upgrade/downgrade scores.
+  // Without this, the Scanner's "Earnings Estimate Revisions" panel shows
+  // "No revision history yet" indefinitely.
+  {
+    name: 'revision_scan_daily',
+    description: 'Fetch analyst EPS/revenue estimate revisions for top 100 RS stocks',
+    job_type: 'revision_scan',
+    cron_expression: '0 17 * * 1-5',  // 5:00 PM server local, weekdays
+    config: { topN: 100 },
+  },
+
+  // Industry rotation watcher — daily post-close. If an open position's
+  // industry ETF RS rank drops ≥20 points in 2 weeks (rotation reversal
+  // against the stock), auto-tighten its trailing stop from 8% → 4%.
+  // Closes the "rotation reversal" gap in Minervini/O'Neil risk management.
+  {
+    name: 'rotation_watch_daily',
+    description: 'Tighten trailing stops on positions whose industry ETF RS has rotated down',
+    job_type: 'rotation_watch',
+    cron_expression: '15 17 * * 1-5',  // 5:15 PM server local, weekdays
+    config: { rsDropThreshold: 20, lookbackDays: 10, tightTrailPct: 0.04 },
   },
 
   // Correlation drift watcher — hourly during market hours. Looks at every

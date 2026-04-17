@@ -358,6 +358,121 @@ async function cancelStagedOrder(stagedId, { suppressNotify = false } = {}) {
   return getStagedOrder(stagedId);
 }
 
+// ─── Modify Entry Price (staged or submitted) ──────────────────────────────
+//
+// For a STAGED order: just update the local DB row — no broker call.
+// For a SUBMITTED order: PATCH each bracket parent's limit_price at Alpaca.
+// Multi-tranche submissions have N parents; we patch all of them with the
+// same new entry price (the tranches share an entry, only TPs differ).
+//
+// Alpaca allows PATCH on orders in statuses: new, accepted, partially_filled,
+// pending_new, held. Filled or cancelled orders cannot be modified.
+//
+// Note: this does NOT re-run the pre-trade risk check. The position sizing
+// stays the same — you're only adjusting your entry price band, not qty.
+// If you want to resize, cancel + re-stage with new sizing inputs instead.
+async function modifyStagedEntryPrice(stagedId, newEntryPrice) {
+  const staged = getStagedOrder(stagedId);
+  if (!staged) throw new Error(`Staged order #${stagedId} not found`);
+  if (!(newEntryPrice > 0)) throw new Error('newEntryPrice must be > 0');
+
+  // Sanity: stop must still be below entry for longs, above for shorts.
+  const isBuy = (staged.side || 'buy').toLowerCase() === 'buy';
+  if (staged.stop_price != null) {
+    if (isBuy && !(staged.stop_price < newEntryPrice)) {
+      throw new Error(`New entry ${newEntryPrice} must be above stop ${staged.stop_price} for buy orders`);
+    }
+    if (!isBuy && !(staged.stop_price > newEntryPrice)) {
+      throw new Error(`New entry ${newEntryPrice} must be below stop ${staged.stop_price} for sell orders`);
+    }
+  }
+
+  // Case 1: still in local staged state — just update the DB row.
+  if (staged.status === 'staged') {
+    db().prepare('UPDATE staged_orders SET entry_price = ? WHERE id = ?')
+      .run(newEntryPrice, stagedId);
+    return { staged: getStagedOrder(stagedId), patched: [], message: 'Entry price updated (not yet at broker)' };
+  }
+
+  // Case 2: already submitted — PATCH each tranche parent at Alpaca.
+  if (staged.status !== 'submitted') {
+    throw new Error(`Cannot modify entry on order with status '${staged.status}'`);
+  }
+
+  // Only limit-type entries have a limit_price to modify. Market orders fill
+  // immediately at whatever price is available — nothing to patch.
+  if (staged.order_type !== 'limit') {
+    throw new Error(`Only limit orders can have their entry price modified (order is ${staged.order_type})`);
+  }
+
+  // Collect all parent order IDs from tranches_json (multi-tranche) or
+  // alpaca_order_id (single bracket).
+  const ids = [];
+  if (staged.tranches_json) {
+    try {
+      const meta = JSON.parse(staged.tranches_json);
+      for (const t of meta) if (t.orderId) ids.push(t.orderId);
+    } catch (_) { /* fall through */ }
+  }
+  if (!ids.length && staged.alpaca_order_id) ids.push(staged.alpaca_order_id);
+  if (!ids.length) throw new Error('No broker order IDs found for this staged order');
+
+  const broker = getBroker();
+  const patched = [];
+  const errors = [];
+  for (const id of ids) {
+    try {
+      const updated = await broker.patchOrder({ orderId: id, newLimitPrice: newEntryPrice });
+      patched.push({ orderId: id, newId: updated?.id, status: updated?.status });
+    } catch (e) {
+      errors.push({ orderId: id, error: e.message });
+    }
+  }
+
+  // If ANY tranche's ID changed (Alpaca PATCH replaces the order with a new
+  // ID in some versions), update tranches_json so subsequent cancels/syncs
+  // still work. The primary alpaca_order_id gets the first tranche's new ID.
+  if (staged.tranches_json && patched.length) {
+    try {
+      const meta = JSON.parse(staged.tranches_json);
+      for (const p of patched) {
+        const t = meta.find(m => m.orderId === p.orderId);
+        if (t && p.newId && p.newId !== p.orderId) t.orderId = p.newId;
+      }
+      db().prepare('UPDATE staged_orders SET tranches_json = ?, entry_price = ?, alpaca_order_id = ? WHERE id = ?')
+        .run(JSON.stringify(meta), newEntryPrice, meta[0]?.orderId || staged.alpaca_order_id, stagedId);
+    } catch (_) {
+      // Fall back to just updating entry_price
+      db().prepare('UPDATE staged_orders SET entry_price = ? WHERE id = ?').run(newEntryPrice, stagedId);
+    }
+  } else if (patched.length) {
+    const newPrimary = patched[0]?.newId || staged.alpaca_order_id;
+    db().prepare('UPDATE staged_orders SET entry_price = ?, alpaca_order_id = ? WHERE id = ?')
+      .run(newEntryPrice, newPrimary, stagedId);
+  }
+
+  if (errors.length && !patched.length) {
+    throw new Error(`All patches failed: ${errors.map(e => e.error).join('; ')}`);
+  }
+
+  notifyTradeEvent({
+    event: 'entry_modified',
+    symbol: staged.symbol,
+    details: {
+      shares: staged.qty,
+      price:  newEntryPrice,
+      stop:   staged.stop_price,
+      message: `Entry price changed to $${newEntryPrice.toFixed(2)} (${patched.length} of ${ids.length} tranche(s) patched)`,
+    },
+  }).catch(e => console.error(`Notification error (entry_modified ${staged.symbol}):`, e.message));
+
+  return {
+    staged: getStagedOrder(stagedId),
+    patched, errors,
+    message: `Patched ${patched.length} of ${ids.length} tranche(s) to entry $${newEntryPrice.toFixed(2)}`,
+  };
+}
+
 // ─── Expire Stale Orders ────────────────────────────────────────────────────
 //
 // Runs on the hourly cron in monitor.js. Captures the affected rows BEFORE
@@ -515,6 +630,7 @@ module.exports = {
   stageOrder, stageFromSetup,
   getStagedOrder, getStagedOrders,
   submitStagedOrder, syncOrderStatus, cancelStagedOrder,
+  modifyStagedEntryPrice,
   expireStaleOrders, checkPreOpenGaps,
   // Exposed for unit tests — the tranche split logic is pure and worth
   // pinning independently of the DB/broker roundtrip.

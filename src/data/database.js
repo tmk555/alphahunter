@@ -830,6 +830,18 @@ function initSchema() {
   safeAddColumn('trades', 'revision_score', 'REAL');
   safeAddColumn('trades', 'institutional_score', 'REAL');
   safeAddColumn('trades', 'macro_regime_at_entry', 'TEXT');
+  // Capture the exit strategy (full_in_scale_out, etc.) from the staged order
+  // so the journal knows how the position was managed. Used by /api/trades/sync
+  // to mirror staged_orders.exit_strategy into the trade record.
+  safeAddColumn('trades', 'exit_strategy', "TEXT DEFAULT 'full_in_scale_out'");
+  // Per-trade trailing stop percentage — defaults to 0.08 (8%) but the
+  // rotation_watch job flips it to 0.04 (4%) when the stock's industry
+  // ETF RS rank rotates down sharply (Minervini's rotation-aware exit).
+  safeAddColumn('trades', 'trail_pct', 'REAL DEFAULT 0.08');
+  // Timestamp of last rotation-tighten so we can show it in UI and avoid
+  // re-tightening the same trade every cron tick.
+  safeAddColumn('trades', 'trail_tightened_at', 'TEXT');
+  safeAddColumn('trades', 'trail_tightened_reason', 'TEXT');
   safeAddColumn('rs_snapshots', 'pattern_type', 'TEXT');
   safeAddColumn('rs_snapshots', 'pattern_confidence', 'INTEGER');
   safeAddColumn('rs_snapshots', 'revision_score', 'REAL');

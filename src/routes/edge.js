@@ -144,9 +144,9 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
   });
 
   // Apply breadth-based stop tightening (manual trigger)
-  router.post('/breadth/early-warning/apply', (req, res) => {
+  router.post('/breadth/early-warning/apply', async (req, res) => {
     try {
-      const result = runBreadthEarlyWarning({ autoApply: true });
+      const result = await runBreadthEarlyWarning({ autoApply: true });
       res.json(result);
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

@@ -210,18 +210,30 @@ class AlpacaAdapter extends BrokerAdapter {
   }
 
   async patchStopPrice(params) {
-    // Alpaca supports PATCH /v2/orders/{id} with stop_price / stop_limit_price
-    // for orders in new/accepted/partially_filled/pending_new/held statuses.
-    const body = { stop_price: params.newStopPrice };
-    if (params.newStopLimitPrice != null) body.stop_limit_price = params.newStopLimitPrice;
+    return this._patchOrder(params.orderId, {
+      stop_price: params.newStopPrice,
+      ...(params.newStopLimitPrice != null && { stop_limit_price: params.newStopLimitPrice }),
+    });
+  }
 
-    // The low-level client doesn't expose PATCH — use the private request
-    // helper by re-using submitOrder's code path via a direct fetch.
-    const { getConfig } = raw;
-    const { base, configured, key, secret } = getConfig();
+  // Generic PATCH for modifying an order's limit_price, qty, or stop_price.
+  // Alpaca accepts PATCH /v2/orders/{id} for orders in new/accepted/
+  // partially_filled/pending_new/held statuses. Returns the replaced order
+  // (Alpaca generates a new order_id but keeps the client_order_id).
+  async patchOrder(params) {
+    const body = {};
+    if (params.newLimitPrice != null) body.limit_price = params.newLimitPrice;
+    if (params.newStopPrice != null)  body.stop_price  = params.newStopPrice;
+    if (params.newQty != null)        body.qty         = String(params.newQty);
+    if (params.newTimeInForce)        body.time_in_force = params.newTimeInForce;
+    return this._patchOrder(params.orderId, body);
+  }
+
+  async _patchOrder(orderId, body) {
+    const { base, configured, key, secret } = raw.getConfig();
     if (!configured) throw new Error('Alpaca API keys not configured');
     const fetch = require('node-fetch');
-    const r = await fetch(`${base}/v2/orders/${encodeURIComponent(params.orderId)}`, {
+    const r = await fetch(`${base}/v2/orders/${encodeURIComponent(orderId)}`, {
       method: 'PATCH',
       headers: {
         'APCA-API-KEY-ID':     key,
@@ -233,7 +245,7 @@ class AlpacaAdapter extends BrokerAdapter {
     const text = await r.text();
     if (!r.ok) {
       let msg; try { msg = JSON.parse(text).message; } catch (_) { msg = text; }
-      throw new Error(`Alpaca PATCH /v2/orders/${params.orderId} → ${r.status}: ${msg}`);
+      throw new Error(`Alpaca PATCH /v2/orders/${orderId} → ${r.status}: ${msg}`);
     }
     return mapOrder(JSON.parse(text));
   }

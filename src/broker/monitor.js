@@ -531,7 +531,7 @@ function stopMonitor() {
 async function checkBreadthEarlyWarning() {
   try {
     const autoApply = process.env.AUTO_BREADTH_TIGHTEN === 'true';
-    const result = runBreadthEarlyWarning({ autoApply });
+    const result = await runBreadthEarlyWarning({ autoApply });
     lastBreadthWarning = {
       time: new Date().toISOString(),
       ...result.warning,

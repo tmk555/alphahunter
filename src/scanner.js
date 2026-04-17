@@ -203,6 +203,32 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
     // Non-critical — priorStage will be null on first run
   }
 
+  // ── Attach latest analyst revision score for conviction bonus ──────────
+  // The revision engine runs on its own cron; it stores per-symbol scores
+  // in revision_scores. We read the latest row per symbol and attach it
+  // to each scan row so conviction.js's +6 upgrade bonus actually fires,
+  // and the Scanner UI can show a REV↑ badge without a separate API call.
+  try {
+    const { getDB } = require('./data/database');
+    const revRows = getDB().prepare(`
+      SELECT symbol, revision_score, direction, tier
+      FROM revision_scores
+      WHERE date >= date('now', '-14 days')
+      GROUP BY symbol
+      HAVING date = MAX(date)
+    `).all();
+    const revMap = {};
+    for (const r of revRows) revMap[r.symbol] = r;
+    for (const s of results) {
+      const r = revMap[s.ticker];
+      if (r) {
+        s.revisionData = { revisionScore: r.revision_score, direction: r.direction, tier: r.tier };
+        s.revisionScore = r.revision_score;
+        s.revisionTier = r.tier;
+      }
+    }
+  } catch (_) { /* revision_scores table may not exist on first run */ }
+
   results.sort((a,b) => b.rsRank - a.rsRank);
 
   // Save today's snapshot (use market date to avoid UTC→tomorrow issues)

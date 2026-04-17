@@ -322,9 +322,9 @@ function assessCreditSpread(tltPrice, hygPrice, tltHistory, hygHistory) {
 
 function computeCompositeBreadthScore(breadthData, vixStructure, creditSpread) {
   if (!breadthData) {
-    // Fall back to last known breadth snapshot instead of returning UNKNOWN
+    // Fall back to last known breadth snapshot — reconstruct components from stored fields
     const last = db().prepare(
-      'SELECT composite_score, regime FROM breadth_snapshots WHERE composite_score IS NOT NULL ORDER BY date DESC LIMIT 1'
+      'SELECT * FROM breadth_snapshots WHERE composite_score IS NOT NULL ORDER BY date DESC LIMIT 1'
     ).get();
     if (last) {
       const score = last.composite_score;
@@ -334,9 +334,35 @@ function computeCompositeBreadthScore(breadthData, vixStructure, creditSpread) {
       else if (score >= 40) { regime = regime || 'MIXED'; sizeMultiplier = 0.60; color = '#f0a500'; }
       else if (score >= 20) { regime = regime || 'DETERIORATING'; sizeMultiplier = 0.30; color = '#ff8c00'; }
       else { regime = regime || 'BROKEN'; sizeMultiplier = 0.0; color = '#ff3d57'; }
-      return { score, regime, sizeMultiplier, color, components: [], detail: 'From cached breadth snapshot' };
+
+      // Reconstruct component breakdown from stored snapshot fields
+      const components = [];
+      if (last.pct_above_50ma != null) {
+        const v = last.pct_above_50ma;
+        const s = Math.min(25, Math.max(0, v > 70 ? 25 : v > 50 ? 15 + (v-50)*0.5 : v > 30 ? 5 + (v-30)*0.5 : v*0.17));
+        components.push({ name: '% Above 50MA', value: v, score: +s.toFixed(1), weight: 25 });
+      }
+      if (last.pct_above_200ma != null) {
+        const v = last.pct_above_200ma;
+        const s = Math.min(15, Math.max(0, v > 65 ? 15 : v > 45 ? 8 + (v-45)*0.35 : v*0.18));
+        components.push({ name: '% Above 200MA', value: v, score: +s.toFixed(1), weight: 15 });
+      }
+      if (last.new_highs != null && last.new_lows != null) {
+        const ratio = last.new_lows > 0 ? last.new_highs / last.new_lows : (last.new_highs > 0 ? 10 : 1);
+        const s = Math.min(20, Math.max(0, ratio >= 3 ? 20 : ratio >= 1.5 ? 12 + (ratio-1.5)*5.3 : ratio >= 0.5 ? (ratio-0.5)*12 : 0));
+        components.push({ name: 'Highs/Lows Ratio', value: +ratio.toFixed(1), score: +s.toFixed(1), weight: 20 });
+      }
+      if (last.ad_ratio != null) {
+        const v = last.ad_ratio;
+        const s = Math.min(15, Math.max(0, v >= 2.0 ? 15 : v >= 1.0 ? 8 + (v-1.0)*7 : v*8));
+        components.push({ name: 'A/D Ratio', value: v, score: +s.toFixed(1), weight: 15 });
+      }
+      components.push({ name: 'VIX Structure', value: 'cached', score: 8, weight: 15 });
+      components.push({ name: 'Credit Spread', value: 'cached', score: 5, weight: 10 });
+
+      return { score, regime, sizeMultiplier, color, components, detail: 'From cached breadth snapshot' };
     }
-    return { score: 50, regime: 'UNKNOWN', detail: 'No breadth data' };
+    return { score: 50, regime: 'UNKNOWN', components: [], detail: 'No breadth data' };
   }
 
   let score = 0;
@@ -351,7 +377,7 @@ function computeCompositeBreadthScore(breadthData, vixStructure, creditSpread) {
     breadthData.pctAbove50MA * 0.17
   ));
   score += ma50Score;
-  components.push({ name: 'pctAbove50MA', value: breadthData.pctAbove50MA, score: +ma50Score.toFixed(1), weight: 25 });
+  components.push({ name: '% Above 50MA', value: breadthData.pctAbove50MA, score: +ma50Score.toFixed(1), weight: 25 });
 
   // 2. % above 200MA (15% weight) — slower but more structural
   const ma200Score = Math.min(15, Math.max(0,
@@ -360,7 +386,7 @@ function computeCompositeBreadthScore(breadthData, vixStructure, creditSpread) {
     breadthData.pctAbove200MA * 0.18
   ));
   score += ma200Score;
-  components.push({ name: 'pctAbove200MA', value: breadthData.pctAbove200MA, score: +ma200Score.toFixed(1), weight: 15 });
+  components.push({ name: '% Above 200MA', value: breadthData.pctAbove200MA, score: +ma200Score.toFixed(1), weight: 15 });
 
   // 3. New highs vs lows (20% weight) — momentum breadth
   const hlScore = Math.min(20, Math.max(0,
@@ -370,7 +396,7 @@ function computeCompositeBreadthScore(breadthData, vixStructure, creditSpread) {
     0
   ));
   score += hlScore;
-  components.push({ name: 'highsLowsRatio', value: breadthData.hlRatio, score: +hlScore.toFixed(1), weight: 20 });
+  components.push({ name: 'Highs/Lows Ratio', value: breadthData.hlRatio, score: +hlScore.toFixed(1), weight: 20 });
 
   // 4. A/D ratio (15% weight)
   const adScore = Math.min(15, Math.max(0,
@@ -379,17 +405,17 @@ function computeCompositeBreadthScore(breadthData, vixStructure, creditSpread) {
     breadthData.adRatio * 8
   ));
   score += adScore;
-  components.push({ name: 'adRatio', value: breadthData.adRatio, score: +adScore.toFixed(1), weight: 15 });
+  components.push({ name: 'A/D Ratio', value: breadthData.adRatio, score: +adScore.toFixed(1), weight: 15 });
 
   // 5. VIX structure (15% weight)
   if (vixStructure) {
     const vixMap = { very_calm: 13, calm: 15, neutral: 10, stress: 3, panic: 0 };
     const vixScore = vixMap[vixStructure.signal] ?? 8;
     score += vixScore;
-    components.push({ name: 'vixStructure', value: vixStructure.signal, score: vixScore, weight: 15 });
+    components.push({ name: 'VIX Structure', value: vixStructure.signal, score: vixScore, weight: 15 });
   } else {
     score += 8; // neutral default
-    components.push({ name: 'vixStructure', value: 'unknown', score: 8, weight: 15 });
+    components.push({ name: 'VIX Structure', value: 'unknown', score: 8, weight: 15 });
   }
 
   // 6. Credit spread (10% weight)
@@ -397,10 +423,10 @@ function computeCompositeBreadthScore(breadthData, vixStructure, creditSpread) {
     const creditMap = { risk_on: 10, neutral: 6, risk_off: 1, unknown: 5 };
     const creditScore = creditMap[creditSpread.signal] ?? 5;
     score += creditScore;
-    components.push({ name: 'creditSpread', value: creditSpread.signal, score: creditScore, weight: 10 });
+    components.push({ name: 'Credit Spread', value: creditSpread.signal, score: creditScore, weight: 10 });
   } else {
     score += 5;
-    components.push({ name: 'creditSpread', value: 'unknown', score: 5, weight: 10 });
+    components.push({ name: 'Credit Spread', value: 'unknown', score: 5, weight: 10 });
   }
 
   score = Math.min(100, Math.max(0, Math.round(score)));
@@ -632,7 +658,7 @@ function backfillBreadthHistory() {
     ORDER BY date ASC
   `).all().map(r => r.date);
 
-  // Get dates we already have breadth for
+  // Phase 1: backfill basic breadth + composite for missing dates
   const existing = new Set(
     db().prepare('SELECT DISTINCT date FROM breadth_snapshots').all().map(r => r.date)
   );
@@ -654,11 +680,55 @@ function backfillBreadthHistory() {
     saved++;
   }
 
+  // Phase 2: compute McClellan oscillator across ALL dates and update rows
+  // McClellan requires a running EMA, so we must walk dates chronologically.
+  let mcUpdated = 0;
+  if (dates.length >= 40) {
+    // Compute daily A/D diff for each date
+    const adSeries = [];
+    for (const date of dates) {
+      const breadth = computeBreadthFromSnapshots(date);
+      if (breadth) {
+        adSeries.push({ date, adDiff: breadth.advancing - breadth.declining });
+      }
+    }
+
+    if (adSeries.length >= 40) {
+      const adDiffs = adSeries.map(d => d.adDiff);
+      const ema19 = computeEMA(adDiffs, 19);
+      const ema39 = computeEMA(adDiffs, 39);
+
+      // Build oscillator + summation series
+      let summation = 0;
+      const updateStmt = db().prepare(
+        'UPDATE breadth_snapshots SET mcclellan_osc = ?, summation_index = ? WHERE date = ?'
+      );
+      const updateMany = db().transaction((updates) => {
+        for (const u of updates) updateStmt.run(u.osc, u.sum, u.date);
+      });
+
+      const updates = [];
+      for (let i = 0; i < adSeries.length; i++) {
+        if (ema19[i] != null && ema39[i] != null) {
+          const osc = +(ema19[i] - ema39[i]).toFixed(2);
+          summation += osc;
+          updates.push({ date: adSeries[i].date, osc, sum: +summation.toFixed(2) });
+        }
+      }
+
+      if (updates.length > 0) {
+        updateMany(updates);
+        mcUpdated = updates.length;
+      }
+    }
+  }
+
   return {
     totalDates: dates.length,
     alreadyExisted: skipped,
     newlySaved: saved,
-    message: `Backfilled ${saved} breadth snapshots from ${dates.length} RS scan dates`,
+    mcClellanUpdated: mcUpdated,
+    message: `Backfilled ${saved} breadth snapshots, updated McClellan for ${mcUpdated} dates`,
   };
 }
 

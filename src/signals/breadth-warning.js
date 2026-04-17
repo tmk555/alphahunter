@@ -233,10 +233,14 @@ function computeStopAdjustments(warningLevel) {
 }
 
 // ─── Apply Stop Adjustments ────────────────────────────────────────────────
-// Writes tighter stops to the trades table and updates alert subscriptions.
+// Writes tighter stops to the trades table, updates alert subscriptions,
+// AND patches every open stop leg at the broker. Without the broker patch,
+// the local DB and the actual bracket order diverge — the position could
+// get stopped out at the OLD price while the app thinks the stop is tighter.
+// That silent divergence is a real-money risk, not a logging issue.
 
-function applyStopAdjustments(adjustments) {
-  if (!adjustments?.length) return { applied: 0 };
+async function applyStopAdjustments(adjustments) {
+  if (!adjustments?.length) return { applied: 0, brokerPatched: 0, brokerFailed: 0 };
 
   const updateStop = db().prepare('UPDATE trades SET stop_price = ? WHERE id = ?');
   const deactivateAlerts = db().prepare(
@@ -251,42 +255,61 @@ function applyStopAdjustments(adjustments) {
   `);
 
   const applied = [];
+  // Phase 1: local DB updates inside a transaction so they're atomic.
   const applyAll = db().transaction(() => {
     for (const adj of adjustments) {
-      // Update stop price
       updateStop.run(adj.newStop, adj.tradeId);
-
-      // Deactivate old stop alert and create new one
       deactivateAlerts.run(adj.tradeId, 'stop_violation');
       insertAlert.run(
-        adj.symbol,
-        'stop_violation',
-        adj.newStop,
-        adj.side === 'short' ? 'above' : 'below',
-        adj.tradeId,
+        adj.symbol, 'stop_violation', adj.newStop,
+        adj.side === 'short' ? 'above' : 'below', adj.tradeId,
         `${adj.symbol} breadth-tightened stop at $${adj.newStop}`,
       );
-
-      // Log the breadth warning action
       logAlert.run(
-        'breadth_warning',
-        adj.symbol,
+        'breadth_warning', adj.symbol,
         `${adj.reason} — stop moved from $${adj.currentStop} to $${adj.newStop}`,
         JSON.stringify(adj),
       );
-
       applied.push(adj);
     }
   });
-
   applyAll();
-  return { applied: applied.length, adjustments: applied };
+
+  // Phase 2: patch broker bracket stop legs so they match the new local stop.
+  // Done outside the DB transaction because broker calls are I/O and slow.
+  // On failure per-symbol, we log but don't roll back — the local row IS the
+  // source of truth for the monitor, and the monitor's next tick will attempt
+  // to reconcile via evaluateScalingAction → replaceStopsForSymbol again.
+  let brokerPatched = 0, brokerFailed = 0;
+  try {
+    const { getBroker } = require('../broker');
+    const broker = getBroker();
+    for (const adj of applied) {
+      try {
+        const result = await broker.replaceStopsForSymbol({
+          symbol: adj.symbol,
+          newStopPrice: adj.newStop,
+        });
+        if (result?.length) brokerPatched++;
+        else console.warn(`  breadth-warning: no open stop legs found for ${adj.symbol} (position may be closed or bracket parent not filled yet)`);
+      } catch (e) {
+        brokerFailed++;
+        console.error(`  breadth-warning broker patch failed for ${adj.symbol}: ${e.message}`);
+      }
+    }
+  } catch (e) {
+    // Broker not configured — local stops still moved, user will see divergence
+    // in the Trading tab's orders grid. Not fatal.
+    console.warn(`  breadth-warning: broker unavailable, local stops moved but Alpaca not patched: ${e.message}`);
+  }
+
+  return { applied: applied.length, brokerPatched, brokerFailed, adjustments: applied };
 }
 
 // ─── Full Early Warning Check (called from monitor cron) ───────────────────
 // Evaluates warning, computes adjustments, optionally auto-applies.
 
-function runBreadthEarlyWarning({ autoApply = false } = {}) {
+async function runBreadthEarlyWarning({ autoApply = false } = {}) {
   const warning = evaluateBreadthWarning();
 
   if (warning.level === 0) {
@@ -297,8 +320,8 @@ function runBreadthEarlyWarning({ autoApply = false } = {}) {
 
   let applyResult = null;
   if (autoApply && adjustments.length > 0) {
-    applyResult = applyStopAdjustments(adjustments);
-    console.log(`  Breadth Early Warning [${warning.label}]: Applied ${applyResult.applied} stop adjustment(s)`);
+    applyResult = await applyStopAdjustments(adjustments);
+    console.log(`  Breadth Early Warning [${warning.label}]: Applied ${applyResult.applied} local, ${applyResult.brokerPatched} broker legs (${applyResult.brokerFailed} failed)`);
   } else if (adjustments.length > 0) {
     console.log(`  Breadth Early Warning [${warning.label}]: ${adjustments.length} stop adjustment(s) pending (auto-apply disabled)`);
   }

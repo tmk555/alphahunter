@@ -70,11 +70,14 @@ module.exports = function(db) {
             unrealizedPL:  +p.unrealized_pl,
             unrealizedPLPct: +p.unrealized_plpc * 100,
             changeToday:   +p.change_today * 100,
-            localStop:     local?.stop_price || null,
-            localTarget1:  local?.target1 || null,
-            localTradeId:  local?.id || null,
-            sector:        local?.sector || null,
-            inJournal:     !!local,
+            localStop:         local?.stop_price || null,
+            localTarget1:      local?.target1 || null,
+            localTradeId:      local?.id || null,
+            localEntryDate:    local?.entry_date || null,
+            localStrategy:     local?.strategy || null,
+            localExitStrategy: local?.exit_strategy || null,
+            sector:            local?.sector || null,
+            inJournal:         !!local,
           };
         });
       } catch (_) { /* broker unavailable — fall back to local-only */ }

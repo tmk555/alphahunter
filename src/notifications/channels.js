@@ -536,6 +536,8 @@ const TRADE_EVENT_EMOJIS = {
   conditional_expired: '⏰', plan_completed: '🏁',
   correlation_drift: '🔗',  // Phase 2.8 — pair of positions drifted into lockstep
   manual_exit: '🚪',       // Manual position close via UI
+  entry_modified: '✏️',    // Entry price changed on staged/submitted order
+  trail_tightened: '🔒',   // Deterioration detected — trailing stop tightened
   // Broker lifecycle terminal transitions — fired by the order-status
   // poller in broker/monitor.js + direct hooks in broker/staging.js.
   cancelled: '🚫', expired: '⏰', rejected: '⛔',
