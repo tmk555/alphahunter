@@ -61,12 +61,12 @@ router.post('/replay/run', (req, res) => {
 // ─── Compare strategies ───────────────────────────────────────────────────
 router.post('/replay/compare', (req, res) => {
   try {
-    const { strategies, startDate, endDate, maxPositions, initialCapital } = req.body;
+    const { strategies, startDate, endDate, maxPositions, initialCapital, tradeMode } = req.body;
     if (!strategies || !startDate || !endDate) {
       return res.status(400).json({ error: 'strategies[], startDate, and endDate required' });
     }
     const result = compareStrategies({
-      strategies, startDate, endDate,
+      strategies, startDate, endDate, tradeMode: tradeMode || undefined,
       maxPositions: maxPositions || 10,
       initialCapital: initialCapital || 100000,
     });

@@ -97,6 +97,7 @@ const revisionRoutes      = require('./src/routes/revisions')(db, runScan);
 const chartRoutes         = require('./src/routes/chart')();
 const optionsRoutes       = require('./src/routes/options')(db);
 const strategiesRoutes    = require('./src/routes/strategies')(db);
+const telemetryRoutes     = require('./src/routes/telemetry');
 const pyramidPlansRoutes  = require('./src/routes/pyramidPlans')(runScan);
 
 app.use('/api', scanRoutes);
@@ -123,6 +124,7 @@ app.use('/api', revisionRoutes);
 app.use('/api', chartRoutes);
 app.use('/api', optionsRoutes);
 app.use('/api', strategiesRoutes);
+app.use('/api', telemetryRoutes);
 app.use('/api', pyramidPlansRoutes);
 
 // ─── SPA fallback ────────────────────────────────────────────────────────────
@@ -165,6 +167,7 @@ app.listen(PORT, () => {
   console.log(`   Macro: Yield curve + credit spreads + dollar + commodities + ISM proxy`);
   console.log(`   Institutional: Unusual volume + dark pool proxy + accumulation scoring`);
   console.log(`   Strategies: Multi-strategy framework (momentum/VCP/rotation/reversion)`);
+  console.log(`   Edge Telemetry: signal_outcomes logger + nightly closer + calibration`);
   console.log(`   Auth: ${authEnabled() ? '✓ PIN protected' : '⚠ No PIN set (open access)'}`);
   console.log(`   Claude: ${anthropic?'✓ sonnet-4-6 / haiku-4-5':'⚠ Set ANTHROPIC_API_KEY'}`);
   console.log(`   Broker: ${alpacaConfig.configured ? '✓ Alpaca' + (alpacaConfig.base.includes('paper') ? ' (paper)' : ' (LIVE)') : '⚠ Set ALPACA_API_KEY'}`);

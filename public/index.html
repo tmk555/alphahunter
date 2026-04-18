@@ -1067,6 +1067,7 @@ function App() {
     { id:'journal',   label:'📒 Journal', badge: badgeCounts.review || null, badgeWarn: !!badgeCounts.review },
     { id:'replay',    label:'🔁 Replay' },
     { id:'edge',      label:'📈 Analytics' },
+    { id:'telemetry', label:'📡 Edge Telemetry' },
     { id:'hedge',     label:'🛡 Hedge' },
     { id:'settings',  label:'⚙ Settings' },
   ];
@@ -1154,6 +1155,7 @@ function App() {
         {tab==='journal'    && <><PerformanceTab /><TradeJournalTab /></>}
         {tab==='replay'     && <ReplayTab />}
         {tab==='edge'       && <EdgeDashboardTab />}
+        {tab==='telemetry'  && <TelemetryTab />}
         {tab==='settings'   && <SettingsTab />}
       </div>
     </div>
@@ -9781,6 +9783,7 @@ function ReplayTab() {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
           strategies: strats, startDate: form.startDate, endDate: form.endDate,
+          tradeMode: form.tradeMode || undefined,
           maxPositions: form.maxPositions, initialCapital: form.initialCapital,
         }),
       });
@@ -10169,7 +10172,7 @@ function ReplayTab() {
         <div className="panel">
           <div className="panel-title">⚔️ <span>STRATEGY</span> COMPARISON</div>
           <div style={{fontSize:11,color:'var(--text3)',marginBottom:12,fontFamily:'var(--font-mono)'}}>
-            {result.period?.startDate} → {result.period?.endDate} · Ranked by {result.rankedBy}
+            {result.period?.startDate} → {result.period?.endDate} · Mode <span style={{color:'var(--cyan)'}}>{(result.tradeMode||'all').toUpperCase()}</span> · Ranked by {result.rankedBy}
           </div>
           <table className="data-table">
             <thead><tr>
@@ -11028,6 +11031,308 @@ function UniverseTrackingSection() {
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ─── EDGE TELEMETRY TAB (Layer 1) ───────────────────────────────────────────
+// Reads signal_outcomes via /api/telemetry/report. Four sub-panels:
+//   Overview     — headline metrics (hit rate, Brier, expectancy, PF, Sharpe)
+//   Calibration  — per-tier predicted vs realized with reliability gap
+//   By Strategy  — metrics table per strategy tag
+//   Drift        — taken (staged_order) vs emitted-but-skipped (trade_setup)
+
+function TelemetryTab() {
+  const [section, setSection] = useState('overview');
+  const [report, setReport] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [closing, setClosing] = useState(false);
+
+  async function load() {
+    setLoading(true); setError('');
+    try {
+      const r = await api('/api/telemetry/report?rolling=50');
+      setReport(r);
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+  async function closeNow() {
+    setClosing(true);
+    try {
+      const r = await api('/api/telemetry/close-now', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'
+      });
+      alert(`Closer ran: examined ${r.examined}, resolved ${r.resolved}, errors ${r.errors?.length||0}`);
+      await load();
+    } catch(e) { alert('Closer failed: ' + e.message); }
+    setClosing(false);
+  }
+  useEffect(()=>{ load(); },[]);
+
+  const SECTIONS = [
+    { id:'overview',    label:'Overview' },
+    { id:'calibration', label:'Calibration' },
+    { id:'strategy',    label:'By Strategy' },
+    { id:'drift',       label:'Discretion Drift' },
+  ];
+
+  return (
+    <div>
+      <div className="panel" style={{marginBottom:0,paddingBottom:8}}>
+        <div className="panel-title" style={{marginBottom:4}}>EDGE <span>TELEMETRY</span></div>
+        <div className="panel-sub">Live-signal calibration. Tracks every signal emitted, resolves outcomes at 5/10/20d, scores whether your system's predicted confidence matches reality.</div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:8,alignItems:'center'}}>
+          {SECTIONS.map(s=>(
+            <button key={s.id} className={`mode-btn ${section===s.id?'active':''}`}
+              onClick={()=>setSection(s.id)} style={{fontSize:11,padding:'5px 14px'}}>
+              {s.label}
+            </button>
+          ))}
+          <div style={{flex:1}}/>
+          <button className="btn btn-sm" onClick={load} disabled={loading}>Refresh</button>
+          <button className="btn btn-sm" onClick={closeNow} disabled={closing} title="Run outcome closer for signals ≥ 5d old">
+            {closing?'Closing…':'Close Now'}
+          </button>
+        </div>
+      </div>
+      {loading && !report && <div className="panel"><Loader msg="Loading telemetry..."/></div>}
+      {error && <ErrorBox msg={error}/>}
+      {report && report.sampleSize === 0 && (
+        <div className="panel" style={{textAlign:'center',padding:30,color:'var(--text3)',marginTop:14}}>
+          <div style={{fontSize:14,marginBottom:8}}>No resolved signals yet</div>
+          <div style={{fontSize:12}}>Signals resolve 20 trading days after emission. The nightly closer runs weekdays at 5:30 PM. Hit <b>Close Now</b> to force a pass.</div>
+        </div>
+      )}
+      {report && report.sampleSize > 0 && (
+        <>
+          {section==='overview'    && <TelemetryOverview report={report}/>}
+          {section==='calibration' && <TelemetryCalibration report={report}/>}
+          {section==='strategy'    && <TelemetryByStrategy report={report}/>}
+          {section==='drift'       && <TelemetryDrift report={report}/>}
+        </>
+      )}
+    </div>
+  );
+}
+
+function TelemetryOverview({ report }) {
+  const o = report.overall;
+  const b = report.calibration.brier;
+  const pct = (v, d=1) => v==null ? '—' : `${(v*100).toFixed(d)}%`;
+  const num = (v, d=2) => v==null ? '—' : v.toFixed(d);
+  const pfColor = o.profitFactor>2?'var(--green)':o.profitFactor>1.2?'#8bc34a':o.profitFactor>=1?'var(--amber)':'var(--red)';
+  const hrColor = o.hitRate>=0.55?'var(--green)':o.hitRate>=0.45?'var(--amber)':'var(--red)';
+  const brColor = b.score==null?'var(--text3)':b.score<0.15?'var(--green)':b.score<0.22?'var(--amber)':'var(--red)';
+  return (
+    <div style={{marginTop:14}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))',gap:10,marginBottom:14}}>
+        {[
+          {label:'Sample Size',   val:o.n,                         color:'var(--cyan)',  sub:`${o.winners||0}W / ${o.losers||0}L / ${o.neutrals||0}N`},
+          {label:'Hit Rate',      val:pct(o.hitRate),              color:hrColor,        sub:`target ≥55%`},
+          {label:'Brier Score',   val:num(b.score,4),              color:brColor,        sub:`n=${b.sampleSize||0} · 0.25=random`},
+          {label:'Expectancy',    val:pct(o.expectancy,2),         color:(o.expectancy||0)>0?'var(--green)':'var(--red)', sub:'per-signal ret_20d'},
+          {label:'Profit Factor', val:num(o.profitFactor,2),       color:pfColor,        sub:'gains / |losses|'},
+          {label:'Sharpe (ann.)', val:num(o.sharpe,2),             color:(o.sharpe||0)>1?'var(--green)':'var(--amber)', sub:'√(252/20)-scaled'},
+          {label:'Avg R',         val:num(o.avgR,2),               color:(o.avgR||0)>0?'var(--green)':'var(--red)', sub:'ret / stop-risk'},
+          {label:'Stop/Target',   val:`${pct(o.stopHitRate,0)} / ${pct(o.targetHitRate,0)}`, color:'var(--text2)', sub:'hit rates'},
+        ].map(m=>(
+          <div key={m.label} className="panel" style={{padding:12,textAlign:'center'}}>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>{m.label.toUpperCase()}</div>
+            <div style={{fontSize:22,fontWeight:700,color:m.color,fontFamily:'var(--font-mono)'}}>{m.val}</div>
+            <div style={{fontSize:9,color:'var(--text3)',marginTop:3}}>{m.sub}</div>
+          </div>
+        ))}
+      </div>
+      <div className="panel">
+        <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>MFE / MAE (MAX EXCURSION)</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+          <div>
+            <div style={{fontSize:11,color:'var(--text2)',marginBottom:4}}>Avg Max Favorable Excursion</div>
+            <div style={{fontSize:18,fontFamily:'var(--font-mono)',color:'var(--green)'}}>{pct(o.avgMFE,2)}</div>
+            <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>How high prices got in your favor before 20d close</div>
+          </div>
+          <div>
+            <div style={{fontSize:11,color:'var(--text2)',marginBottom:4}}>Avg Max Adverse Excursion</div>
+            <div style={{fontSize:18,fontFamily:'var(--font-mono)',color:'var(--red)'}}>{pct(o.avgMAE,2)}</div>
+            <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>How far underwater before recovery / stop</div>
+          </div>
+        </div>
+      </div>
+      <div style={{fontSize:10,color:'var(--text3)',marginTop:10,fontFamily:'var(--font-mono)'}}>
+        generated: {new Date(report.generatedAt).toLocaleString()} · rolling window: {report.filters.rolling}
+      </div>
+    </div>
+  );
+}
+
+function TelemetryCalibration({ report }) {
+  const tiers = report.calibration.byTier || {};
+  const order = ['high','medium','low'];
+  const pct = v => v==null ? '—' : `${(v*100).toFixed(1)}%`;
+  const gapColor = g => g==null ? 'var(--text3)' : Math.abs(g)<0.05?'var(--green)':Math.abs(g)<0.15?'var(--amber)':'var(--red)';
+
+  return (
+    <div style={{marginTop:14}}>
+      <div className="panel" style={{marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>RELIABILITY BY CONFIDENCE TIER</div>
+        <div style={{fontSize:11,color:'var(--text2)',marginBottom:12}}>
+          Perfect calibration: predicted = realized. Gap &lt;5% is excellent. Large positive gap = overconfident. Large negative gap = underconfident.
+        </div>
+        <table className="data-table">
+          <thead><tr><th>Tier</th><th>n</th><th>Predicted</th><th>Realized</th><th>Gap</th><th>Winners</th><th>Losers</th><th>Tier Brier</th></tr></thead>
+          <tbody>
+            {order.map(t => {
+              const row = tiers[t];
+              if (!row) return null;
+              return (
+                <tr key={t}>
+                  <td style={{fontWeight:600,color:t==='high'?'var(--green)':t==='medium'?'var(--amber)':'var(--text2)',textTransform:'uppercase'}}>{t}</td>
+                  <td>{row.n}</td>
+                  <td style={{fontFamily:'var(--font-mono)'}}>{pct(row.predicted)}</td>
+                  <td style={{fontFamily:'var(--font-mono)'}}>{pct(row.realized)}</td>
+                  <td style={{fontFamily:'var(--font-mono)',color:gapColor(row.gap)}}>
+                    {row.gap==null?'—':(row.gap>0?'+':'')+(row.gap*100).toFixed(1)+'%'}
+                  </td>
+                  <td>{row.winners}</td>
+                  <td>{row.losers}</td>
+                  <td style={{fontFamily:'var(--font-mono)'}}>{row.brier==null?'—':row.brier.toFixed(4)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="panel">
+        <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>READING THE GAP</div>
+        <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
+          • <b style={{color:'var(--red)'}}>Overconfident</b> (predicted &gt; realized): the system is calling "high" on trades that don't deliver. Either tighten the high-confidence threshold or discount high-conf signals in sizing.<br/>
+          • <b style={{color:'var(--amber)'}}>Underconfident</b> (predicted &lt; realized): you're leaving edge on the table on "low" signals that actually work. Consider upgrading them.<br/>
+          • <b style={{color:'var(--green)'}}>Calibrated</b> (gap &lt;5%): trust the confidence tier as a probability — size positions accordingly.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TelemetryByStrategy({ report }) {
+  const byStrat = report.byStrategy || {};
+  const degrad = report.degradation || {};
+  const rows = Object.entries(byStrat)
+    .filter(([,m]) => m.n > 0)
+    .sort((a,b) => (b[1].expectancy||0) - (a[1].expectancy||0));
+  const pct = v => v==null ? '—' : `${(v*100).toFixed(1)}%`;
+  const num = (v,d=2) => v==null ? '—' : v.toFixed(d);
+  const statusColor = s => s==='hot'?'var(--green)':s==='stable'?'#8bc34a':s==='degraded'?'var(--red)':'var(--text3)';
+
+  if (!rows.length) {
+    return <div className="panel" style={{marginTop:14,textAlign:'center',padding:30,color:'var(--text3)'}}>No strategy data yet.</div>;
+  }
+
+  return (
+    <div style={{marginTop:14}}>
+      <div className="panel">
+        <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>PER-STRATEGY METRICS (sorted by expectancy)</div>
+        <table className="data-table">
+          <thead><tr>
+            <th>Strategy</th><th>n</th><th>Hit%</th><th>Expectancy</th><th>PF</th>
+            <th>Sharpe</th><th>Avg R</th><th>Stop%</th><th>Tgt%</th>
+            <th>Status</th><th>Multiplier</th>
+          </tr></thead>
+          <tbody>
+            {rows.map(([name, m]) => {
+              const d = degrad[name] || {};
+              return (
+                <tr key={name}>
+                  <td style={{fontWeight:600,color:'var(--cyan)'}}>{name}</td>
+                  <td>{m.n}</td>
+                  <td style={{color:(m.hitRate||0)>=0.55?'var(--green)':(m.hitRate||0)>=0.45?'var(--amber)':'var(--red)'}}>{pct(m.hitRate)}</td>
+                  <td style={{color:(m.expectancy||0)>0?'var(--green)':'var(--red)'}}>{pct(m.expectancy,2)}</td>
+                  <td>{num(m.profitFactor)}</td>
+                  <td>{num(m.sharpe)}</td>
+                  <td>{num(m.avgR)}</td>
+                  <td>{pct(m.stopHitRate,0)}</td>
+                  <td>{pct(m.targetHitRate,0)}</td>
+                  <td style={{color:statusColor(d.status),textTransform:'uppercase',fontSize:10,fontWeight:600}}>{d.status||'—'}</td>
+                  <td style={{fontFamily:'var(--font-mono)'}}>{d.multiplier==null?'—':d.multiplier.toFixed(2)+'×'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="panel" style={{marginTop:14}}>
+        <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>DEGRADATION MULTIPLIER</div>
+        <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>
+          Compares the strategy's recent-{report.filters.rolling} hit rate vs its lifetime baseline. &lt; 0.75× = degraded (drop size). &gt; 1.10× = hot (size normally; don't chase). Advisory only — not auto-applied to sizer yet.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TelemetryDrift({ report }) {
+  const sources = report.bySource || {};
+  const setup  = sources['trade_setup']  || null;   // what the system surfaced
+  const staged = sources['staged_order'] || null;   // what you actually acted on
+  const pct = v => v==null ? '—' : `${(v*100).toFixed(1)}%`;
+  const num = (v,d=2) => v==null ? '—' : v.toFixed(d);
+
+  if (!setup && !staged) {
+    return <div className="panel" style={{marginTop:14,textAlign:'center',padding:30,color:'var(--text3)'}}>Need at least one resolved signal from each source.</div>;
+  }
+
+  const driftHit  = setup && staged && setup.hitRate!=null && staged.hitRate!=null ? staged.hitRate - setup.hitRate : null;
+  const driftExp  = setup && staged && setup.expectancy!=null && staged.expectancy!=null ? staged.expectancy - setup.expectancy : null;
+  const verdict =
+    driftHit==null ? { txt:'insufficient data', color:'var(--text3)' } :
+    driftHit > 0.05 ? { txt:'adding edge — your filter picks winners', color:'var(--green)' } :
+    driftHit < -0.05 ? { txt:'destroying edge — you skip winners or pick losers', color:'var(--red)' } :
+                      { txt:'neutral — discretion is a wash', color:'var(--amber)' };
+
+  const row = (label, m, color) => (
+    <div className="panel" style={{padding:12}}>
+      <div style={{fontSize:11,color,fontWeight:600,marginBottom:6,textTransform:'uppercase',letterSpacing:1}}>{label}</div>
+      {!m ? <div style={{fontSize:12,color:'var(--text3)'}}>no data yet</div> : (
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,fontSize:11}}>
+          <div><span style={{color:'var(--text3)'}}>n: </span>{m.n}</div>
+          <div><span style={{color:'var(--text3)'}}>hit: </span>{pct(m.hitRate)}</div>
+          <div><span style={{color:'var(--text3)'}}>exp: </span>{pct(m.expectancy,2)}</div>
+          <div><span style={{color:'var(--text3)'}}>PF: </span>{num(m.profitFactor)}</div>
+          <div><span style={{color:'var(--text3)'}}>Sharpe: </span>{num(m.sharpe)}</div>
+          <div><span style={{color:'var(--text3)'}}>avg R: </span>{num(m.avgR)}</div>
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div style={{marginTop:14}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:14}}>
+        {row('EMITTED (trade_setup)', setup,  'var(--cyan)')}
+        {row('TAKEN (staged_order)',   staged, 'var(--amber)')}
+      </div>
+      <div className="panel">
+        <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>DRIFT VERDICT</div>
+        <div style={{fontSize:14,fontWeight:600,color:verdict.color,marginBottom:10}}>{verdict.txt}</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,fontSize:12}}>
+          <div>
+            <div style={{color:'var(--text3)',fontSize:10,marginBottom:4,letterSpacing:1}}>Δ HIT RATE (taken − emitted)</div>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:18,color:(driftHit||0)>0?'var(--green)':(driftHit||0)<0?'var(--red)':'var(--text2)'}}>
+              {driftHit==null?'—':(driftHit>0?'+':'')+(driftHit*100).toFixed(1)+'%'}
+            </div>
+          </div>
+          <div>
+            <div style={{color:'var(--text3)',fontSize:10,marginBottom:4,letterSpacing:1}}>Δ EXPECTANCY</div>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:18,color:(driftExp||0)>0?'var(--green)':(driftExp||0)<0?'var(--red)':'var(--text2)'}}>
+              {driftExp==null?'—':(driftExp>0?'+':'')+(driftExp*100).toFixed(2)+'%'}
+            </div>
+          </div>
+        </div>
+        <div style={{fontSize:10,color:'var(--text3)',marginTop:14,lineHeight:1.5}}>
+          <b>Emitted</b> = every signal the system surfaced (LLM briefs + conviction top-N). <b>Taken</b> = the subset you staged an order on. If taken is worse than emitted, your discretion is losing money. If better, keep doing what you're doing. Caveat: sell-side discretion (early exits) isn't captured here — signals are measured at a fixed 20-day horizon.
+        </div>
       </div>
     </div>
   );
