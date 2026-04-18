@@ -1,10 +1,9 @@
 // ─── Tests: 50 SMA Pullback Monitor (src/signals/pullback-monitor.js) ──────
 //
-// The three bands are mutually exclusive:
-//   kissing:     price ≤ ma50 + 0.3*atr
-//   in_zone:     price ≤ ma50 * 1.03  (but above kissing band)
-//   approaching: price ≤ ma50 * 1.08  (but above in_zone band)
-//   null:        price > ma50 * 1.08
+// The two bands are mutually exclusive:
+//   kissing:  price ≤ ma50 + 0.3*atr
+//   in_zone:  price ≤ ma50 * 1.02  (but above kissing band)
+//   null:     price > ma50 * 1.02
 //
 // Tests are hand-computed so every assertion is verifiable with a calculator.
 
@@ -53,26 +52,20 @@ test('getPullbackState: null/invalid inputs return null', () => {
 });
 
 test('getPullbackState: price way above MA50 → null (not a pullback)', () => {
-  // 20% above: 120 > 108 (1.08 * 100) → null
+  // 20% above: 120 > 102 (1.02 * 100) → null
   assert.equal(getPullbackState({ price: 120, ma50: 100, atr: 2 }), null);
-  // 8.01% above: just outside approaching → null
-  assert.equal(getPullbackState({ price: 108.01, ma50: 100, atr: 2 }), null);
+  // 2.01% above: just outside in_zone → null
+  assert.equal(getPullbackState({ price: 102.01, ma50: 100, atr: 2 }), null);
+  // Anything above 2% is noise now — the old "approaching" band was removed.
+  assert.equal(getPullbackState({ price: 105, ma50: 100, atr: 2 }), null);
+  assert.equal(getPullbackState({ price: 107, ma50: 100, atr: 2 }), null);
 });
 
-test('getPullbackState: approaching band (3% < d ≤ 8%)', () => {
-  // 7% above: 107 ≤ 108 but > 103 → approaching
-  assert.equal(getPullbackState({ price: 107, ma50: 100, atr: 2 }), 'approaching');
-  // 5% above: 105 ≤ 108 but > 103 → approaching
-  assert.equal(getPullbackState({ price: 105, ma50: 100, atr: 2 }), 'approaching');
-  // Edge: exactly 108 → approaching (≤ boundary)
-  assert.equal(getPullbackState({ price: 108, ma50: 100, atr: 2 }), 'approaching');
-});
-
-test('getPullbackState: in_zone band (kissingUpper < d ≤ 3%)', () => {
-  // 2% above with ATR=2 → kissingUpper = 100.6, so 102 > 100.6 and 102 ≤ 103 → in_zone
+test('getPullbackState: in_zone band (kissingUpper < d ≤ 2%)', () => {
+  // 1% above with ATR=2 → kissingUpper = 100.6, so 101 > 100.6 and 101 ≤ 102 → in_zone
+  assert.equal(getPullbackState({ price: 101, ma50: 100, atr: 2 }), 'in_zone');
+  // 2% above with ATR=2 → 102 > 100.6 and 102 ≤ 102 → in_zone
   assert.equal(getPullbackState({ price: 102, ma50: 100, atr: 2 }), 'in_zone');
-  // 3% above with ATR=2 → 103 > 100.6 and 103 ≤ 103 → in_zone
-  assert.equal(getPullbackState({ price: 103, ma50: 100, atr: 2 }), 'in_zone');
 });
 
 test('getPullbackState: kissing band (price ≤ ma50 + 0.3*ATR)', () => {
@@ -85,10 +78,10 @@ test('getPullbackState: kissing band (price ≤ ma50 + 0.3*ATR)', () => {
 });
 
 test('getPullbackState: wide-ATR stock gets proportional kissing band', () => {
-  // ATR=10 → kissingUpper = 103. At 102.5 → kissing, not in_zone.
-  assert.equal(getPullbackState({ price: 102.5, ma50: 100, atr: 10 }), 'kissing');
-  // Same price with tight ATR=1 → kissingUpper = 100.3, so 102.5 > 100.3, falls to in_zone.
-  assert.equal(getPullbackState({ price: 102.5, ma50: 100, atr: 1 }), 'in_zone');
+  // ATR=10 → kissingUpper = 103. At 101.5 → kissing (inside wide ATR band).
+  assert.equal(getPullbackState({ price: 101.5, ma50: 100, atr: 10 }), 'kissing');
+  // Same price with tight ATR=1 → kissingUpper = 100.3, so 101.5 > 100.3, falls to in_zone.
+  assert.equal(getPullbackState({ price: 101.5, ma50: 100, atr: 1 }), 'in_zone');
 });
 
 test('getPullbackState: missing ATR falls back to 1% of ma50', () => {
@@ -100,39 +93,47 @@ test('getPullbackState: missing ATR falls back to 1% of ma50', () => {
 
 // ─── isLeadershipCandidate: gate filters ────────────────────────────────────
 
-test('isLeadershipCandidate: rejects weak RS', () => {
-  assert.equal(isLeadershipCandidate({ rs_rank: 69, vs_ma200: 5, stage: 2 }), false);
+test('isLeadershipCandidate: rejects weak RS (< 80)', () => {
+  assert.equal(isLeadershipCandidate({ rs_rank: 79, vs_ma200: 5, stage: 2, volume_ratio: 0.8 }), false);
+  assert.equal(isLeadershipCandidate({ rs_rank: 69, vs_ma200: 5, stage: 2, volume_ratio: 0.8 }), false);
 });
 
 test('isLeadershipCandidate: rejects below 200MA', () => {
-  assert.equal(isLeadershipCandidate({ rs_rank: 85, vs_ma200: -1, stage: 2 }), false);
+  assert.equal(isLeadershipCandidate({ rs_rank: 85, vs_ma200: -1, stage: 2, volume_ratio: 0.8 }), false);
 });
 
-test('isLeadershipCandidate: rejects no qualifying structure', () => {
-  // RS + 200MA OK but stage≠2, no VCP, SEPA low
+test('isLeadershipCandidate: rejects non-stage-2 (VCP/SEPA no longer substitute)', () => {
   assert.equal(isLeadershipCandidate({
-    rs_rank: 85, vs_ma200: 5, stage: 1, vcp_forming: 0, sepa_score: 3
+    rs_rank: 85, vs_ma200: 5, stage: 1, vcp_forming: 1, sepa_score: 6, volume_ratio: 0.8,
+  }), false);
+  assert.equal(isLeadershipCandidate({
+    rs_rank: 85, vs_ma200: 5, stage: 3, vcp_forming: 1, sepa_score: 8, volume_ratio: 0.8,
   }), false);
 });
 
-test('isLeadershipCandidate: accepts stage 2 leader', () => {
+test('isLeadershipCandidate: rejects heavy-volume pullback (volume_ratio ≥ 1.0)', () => {
+  // Healthy pullbacks are dry — volume spike on a pullback = distribution.
   assert.equal(isLeadershipCandidate({
-    rs_rank: 85, vs_ma200: 5, stage: 2, vcp_forming: 0, sepa_score: 0
+    rs_rank: 90, vs_ma200: 10, stage: 2, volume_ratio: 1.2,
+  }), false);
+  assert.equal(isLeadershipCandidate({
+    rs_rank: 90, vs_ma200: 10, stage: 2, volume_ratio: 1.0,
+  }), false);
+});
+
+test('isLeadershipCandidate: accepts stage 2 + RS 80 + dry volume', () => {
+  assert.equal(isLeadershipCandidate({
+    rs_rank: 80, vs_ma200: 5, stage: 2, volume_ratio: 0.8,
+  }), true);
+  assert.equal(isLeadershipCandidate({
+    rs_rank: 95, vs_ma200: 15, stage: 2, volume_ratio: 0.5,
   }), true);
 });
 
-test('isLeadershipCandidate: accepts VCP forming leader', () => {
+test('isLeadershipCandidate: accepts when volume_ratio is missing (fail-open)', () => {
+  // Missing volume data shouldn't block an otherwise-qualifying candidate.
   assert.equal(isLeadershipCandidate({
-    rs_rank: 75, vs_ma200: 5, stage: 1, vcp_forming: 1, sepa_score: 0
-  }), true);
-});
-
-test('isLeadershipCandidate: accepts strong-SEPA leader', () => {
-  assert.equal(isLeadershipCandidate({
-    rs_rank: 80, vs_ma200: 10, stage: 1, vcp_forming: 0, sepa_score: 4
-  }), true);
-  assert.equal(isLeadershipCandidate({
-    rs_rank: 80, vs_ma200: 10, stage: 1, vcp_forming: 0, sepa_score: 8
+    rs_rank: 85, vs_ma200: 5, stage: 2,
   }), true);
 });
 

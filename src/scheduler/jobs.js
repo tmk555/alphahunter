@@ -151,6 +151,18 @@ registerJobType('portfolio_reconcile', {
   },
 });
 
+// ─── 5b. Broker Fills Sync — Pull filled orders into journal + slippage log ──
+
+registerJobType('broker_fills_sync', {
+  description: 'Sync Alpaca fills into trades journal; captures slippage in execution_log',
+  defaultConfig: {},
+  handler: async () => {
+    const { syncBrokerFills } = require('../broker/fills-sync');
+    const result = await syncBrokerFills();
+    return { synced: result.synced.length, exited: result.exited.length, backfilled: result.backfilled };
+  },
+});
+
 // ─── 6. RS History Cleanup — Prune old snapshots ────────────────────────────
 
 registerJobType('rs_history_cleanup', {
@@ -702,6 +714,29 @@ registerJobType('weekly_digest', {
   },
 });
 
+// ─── Edge Telemetry — Nightly Outcome Closer (Layer 1) ─────────────────────
+// Walks every open row in signal_outcomes older than 5 trading days, fetches
+// forward OHLCV bars for each symbol (once per symbol), and resolves 5/10/20d
+// returns + MFE/MAE + stop/target hits. Rows become 'resolved' only once the
+// full 20d horizon has elapsed — before that partial metrics are updated in
+// place so the dashboard stays fresh.
+//
+// Why post-close and why 5:30pm: the RS scan finishes at 16:30 and the
+// revision scan at 17:00. Running the closer last means all same-day price
+// data that Yahoo publishes has had a chance to land before we use it.
+
+registerJobType('edge_close_outcomes', {
+  description: 'Resolve open signal_outcomes rows with 5/10/20d forward returns + MFE/MAE (Layer 1 telemetry)',
+  defaultConfig: { minAgeDays: 5, limit: 500 },
+  handler: async (config) => {
+    const { runOutcomeCloser } = require('../signals/edge-closer');
+    return await runOutcomeCloser({
+      minAgeDays: config.minAgeDays ?? 5,
+      limit: config.limit ?? 500,
+    });
+  },
+});
+
 // Shared helper — builds channel list from env vars when no DB channels exist
 function _envFallbackChannels() {
   const channels = [];
@@ -780,6 +815,25 @@ const DEFAULT_JOBS = [
     description: 'Reconcile local trade journal with broker positions',
     job_type: 'portfolio_reconcile',
     cron_expression: '0 17 * * 1-5',  // 5:00 PM server local, weekdays
+    config: {},
+  },
+
+  // Broker fills sync — pulls filled orders into the trades journal and
+  // writes to execution_log, which is how slippage becomes measurable
+  // without a manual button-press. Runs every 15 min during market hours
+  // and once 10 min after close as a safety sweep.
+  {
+    name: 'broker_fills_sync_intraday',
+    description: 'Auto-sync Alpaca fills into trade journal + slippage log (market hours)',
+    job_type: 'broker_fills_sync',
+    cron_expression: '*/15 9-16 * * 1-5',  // every 15 min, 9am–4pm weekdays
+    config: {},
+  },
+  {
+    name: 'broker_fills_sync_eod',
+    description: 'EOD sweep: catch any fills missed by the intraday sync',
+    job_type: 'broker_fills_sync',
+    cron_expression: '10 17 * * 1-5',  // 5:10 PM server local, weekdays
     config: {},
   },
 
@@ -876,6 +930,18 @@ const DEFAULT_JOBS = [
     job_type: 'morning_brief',
     cron_expression: '45 8 * * 1-5',  // 8:45 AM server local, weekdays
     config: {},
+  },
+
+  // ─── Edge Telemetry — Nightly outcome closer ──────────────────────────
+  // Resolves open signal_outcomes (LLM briefs, staged orders) with forward
+  // 5/10/20d returns + MFE/MAE. Without this job the logger records signals
+  // but calibration/strategy metrics stay blank. Runs post-scan, post-revision.
+  {
+    name: 'edge_close_outcomes_daily',
+    description: 'Resolve 5/10/20d forward outcomes for emitted signals (Layer 1 telemetry)',
+    job_type: 'edge_close_outcomes',
+    cron_expression: '30 17 * * 1-5',  // 5:30 PM server local, weekdays
+    config: { minAgeDays: 5, limit: 500 },
   },
 
   // ─── Weekly Digest — Sunday evening performance summary ────────────────

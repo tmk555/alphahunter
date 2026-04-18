@@ -1620,11 +1620,11 @@ function runMonteCarlo({
 
 // ─── Compare Strategies ────────────────────────────────────────────────────
 
-function compareStrategies({ strategies, startDate, endDate, maxPositions = 10, initialCapital = 100000 }) {
+function compareStrategies({ strategies, startDate, endDate, maxPositions = 10, initialCapital = 100000, tradeMode }) {
   const results = [];
   for (const { strategy, params } of strategies) {
     try {
-      const result = runReplay({ strategy, params, startDate, endDate, maxPositions, initialCapital });
+      const result = runReplay({ strategy, tradeMode, params, startDate, endDate, maxPositions, initialCapital });
       results.push(result);
     } catch (e) {
       results.push({ strategy, error: e.message });
@@ -1633,7 +1633,7 @@ function compareStrategies({ strategies, startDate, endDate, maxPositions = 10, 
 
   // Rank by total return
   results.sort((a, b) => (b.performance?.totalReturn || -Infinity) - (a.performance?.totalReturn || -Infinity));
-  return { comparisons: results, period: { startDate, endDate }, rankedBy: 'totalReturn' };
+  return { comparisons: results, period: { startDate, endDate }, tradeMode: tradeMode || 'all', rankedBy: 'totalReturn' };
 }
 
 // ─── Replay History ────────────────────────────────────────────────────────

@@ -218,6 +218,66 @@ function getDrawdownStatus(currentEquity) {
   };
 }
 
+// ─── Two-Signal Confirmation Gate ────────────────────────────────────────────
+// A single hot reading (e.g. RS alone) is noisy. Requiring ≥2 independent
+// confirmations dramatically cuts false-positive stages. Signals evaluated:
+//   1. rs_strong     — rs_rank ≥ 85 (top decile, not just top quintile)
+//   2. stage_2       — Weinstein stage = 2 (actual uptrend, not base/topping)
+//   3. revision_up   — earnings revisions trending up (fundamental confirm)
+//   4. pattern       — vcp_forming OR rs_snapshots.pattern_type non-null
+//   5. breadth_ok    — latest breadth regime not distribution/correction
+//
+// Data source: rs_snapshots (latest), revision_scores (latest), breadth_snapshots
+// (latest). Fail-open when NO signal data exists at all (fresh DB, unseen symbol)
+// — the caller can still override the block via `allowLowConfidence: true`.
+function evaluateSignalConfirmation(symbol) {
+  if (!symbol) return { count: 0, present: [], missing: [], hasData: false };
+  const present = [];
+  const missing = [];
+  let hasData = false;
+
+  try {
+    const snap = db().prepare(`
+      SELECT rs_rank, stage, vcp_forming, pattern_type
+      FROM rs_snapshots WHERE symbol = ? AND type = 'stock'
+      ORDER BY date DESC LIMIT 1
+    `).get(symbol);
+    if (snap) {
+      hasData = true;
+      if ((snap.rs_rank || 0) >= 85) present.push('rs_strong'); else missing.push('rs_strong');
+      if (snap.stage === 2) present.push('stage_2'); else missing.push('stage_2');
+      if (snap.vcp_forming || snap.pattern_type) present.push('pattern'); else missing.push('pattern');
+    }
+  } catch (_) {}
+
+  try {
+    const rev = db().prepare(`
+      SELECT direction, revision_score FROM revision_scores
+      WHERE symbol = ? ORDER BY date DESC LIMIT 1
+    `).get(symbol);
+    if (rev) {
+      hasData = true;
+      if (rev.direction === 'up' || (rev.revision_score || 0) > 0) present.push('revision_up');
+      else missing.push('revision_up');
+    }
+  } catch (_) {}
+
+  try {
+    const breadth = db().prepare(`
+      SELECT regime, composite_score FROM breadth_snapshots
+      ORDER BY date DESC LIMIT 1
+    `).get();
+    if (breadth) {
+      hasData = true;
+      const healthy = breadth.regime && !/distribution|correction|bearish/i.test(breadth.regime)
+        && (breadth.composite_score == null || breadth.composite_score >= 40);
+      if (healthy) present.push('breadth_ok'); else missing.push('breadth_ok');
+    }
+  } catch (_) {}
+
+  return { count: present.length, present, missing, hasData };
+}
+
 // ─── Pre-trade Validation ────────────────────────────────────────────────────
 // Checks all rules before allowing a new position.
 //
@@ -316,7 +376,47 @@ function preTradeCheck(candidate, openPositions, regime, currentPrices = {}) {
     checks.push({ rule: 'Position Size', pass: true, detail: `${posPct.toFixed(1)}% of account` });
   }
 
-  // 7. Wash-sale blocker (Phase 2.10)
+  // 7. Two-signal confirmation (2026-04)
+  // Require ≥2 of {rs_strong, stage_2, revision_up, pattern, breadth_ok}.
+  // Single-signal entries (e.g. RS alone) slipped too many low-quality stages
+  // through — this gate is the primary "quality filter" upstream of sizing.
+  //
+  // Fail-open rules:
+  //   - No signal data for the symbol (fresh DB, unseen ticker) → pass with
+  //     a visible "skipped" detail. We don't silently block every trade on a
+  //     fresh install.
+  //   - `allowLowConfidence: true` override → explicit bypass (same pattern
+  //     as allowWashSale for the tax-hit override).
+  const symbolForSignals = candidate.symbol || candidate.ticker;
+  const sig = evaluateSignalConfirmation(symbolForSignals);
+  if (!sig.hasData) {
+    checks.push({
+      rule: 'Two-Signal Confirmation',
+      pass: true,
+      detail: 'skipped (no signal data for symbol)',
+    });
+  } else if (sig.count >= 2) {
+    checks.push({
+      rule: 'Two-Signal Confirmation',
+      pass: true,
+      detail: `${sig.count}/5 signals confirm: ${sig.present.join(', ')}`,
+    });
+  } else if (candidate.allowLowConfidence) {
+    checks.push({
+      rule: 'Two-Signal Confirmation',
+      pass: true,
+      detail: `OVERRIDE: only ${sig.count}/5 signals (${sig.present.join(', ') || 'none'}) — trader accepted low confidence`,
+    });
+  } else {
+    checks.push({
+      rule: 'Two-Signal Confirmation',
+      pass: false,
+      detail: `Only ${sig.count}/5 signals confirm${sig.present.length ? ` (${sig.present.join(', ')})` : ''} — need ≥2. Missing: ${sig.missing.join(', ')}`,
+    });
+    approved = false;
+  }
+
+  // 8. Wash-sale blocker (Phase 2.10)
   // Checks tax_lots + trades for a recent loss on this symbol inside the
   // 30-day IRS §1091 window. Fires a BLOCKING check — approval flips to
   // false unless the caller passes `allowWashSale: true`, which is the

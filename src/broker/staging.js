@@ -16,6 +16,7 @@ const { getBroker } = require('./index');
 const { preTradeCheck } = require('../risk/portfolio');
 const { getMarketRegime } = require('../risk/regime');
 const { notifyTradeEvent } = require('../notifications/channels');
+const { logSignal } = require('../signals/edge-telemetry');
 
 // ─── Tranche splitting ──────────────────────────────────────────────────────
 //
@@ -90,6 +91,28 @@ function stageOrder({ symbol, side = 'buy', order_type = 'limit', qty, entry_pri
     replayStrategy || null,
   );
   const order = getStagedOrder(result.lastInsertRowid);
+
+  // Layer 1 telemetry: every staged order is an emitted signal the trader
+  // chose to act on. Log it so we can attribute forward outcomes back to the
+  // strategy that produced it. Failure here is non-critical — the order row
+  // is already persisted and committed.
+  try {
+    logSignal({
+      source: 'staged_order',
+      symbol,
+      strategy: replayStrategy || source || 'manual',
+      setup_type: 'entry',
+      side,
+      conviction_score,
+      entry_price,
+      stop_price,
+      target1_price,
+      target2_price,
+      horizon_days: 20,
+      meta: { staged_order_id: order.id, exit_strategy: exitStrat, order_type, qty },
+    });
+  } catch (_) { /* telemetry never blocks */ }
+
   // Don't send Telegram for staging — only notify on actual fills/stops/exits
   return order;
 }

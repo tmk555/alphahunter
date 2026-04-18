@@ -849,6 +849,69 @@ function initSchema() {
   safeAddColumn('scan_results', 'pattern_data', 'JSON');
   safeAddColumn('scan_results', 'revision_data', 'JSON');
   safeAddColumn('scan_results', 'institutional_data', 'JSON');
+
+  // ─── Layer 1: Edge Telemetry ─────────────────────────────────────────────
+  //
+  // One row per emitted signal (LLM brief, staged order, pullback alert, etc.).
+  // A signal is the thing the app TELLS THE TRADER TO CONSIDER. Outcomes are
+  // filled by the nightly closer using forward OHLCV bars.
+  //
+  // Why a separate table from `trades`: many signals are never traded, and
+  // even those that are traded fill/exit at different prices than the signal's
+  // reference entry. We need the raw emission→outcome mapping to answer "does
+  // confidence:high actually outperform confidence:low?" independently of
+  // execution quality (which execution_log already tracks).
+  //
+  // horizon_days is the intended holding window. The closer records 5/10/20d
+  // forward returns regardless, and additionally computes MFE/MAE (max
+  // favorable / max adverse excursion) within the horizon for path analysis.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS signal_outcomes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      emitted_at TEXT NOT NULL DEFAULT (datetime('now')),
+      emission_date TEXT NOT NULL,
+      source TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      strategy TEXT,
+      setup_type TEXT,
+      side TEXT DEFAULT 'long',
+      verdict TEXT,
+      confidence TEXT,
+      confidence_prob REAL,
+      conviction_score REAL,
+      entry_price REAL,
+      stop_price REAL,
+      target1_price REAL,
+      target2_price REAL,
+      rs_rank INTEGER,
+      swing_momentum INTEGER,
+      sepa_score INTEGER,
+      stage INTEGER,
+      regime TEXT,
+      atr_pct REAL,
+      horizon_days INTEGER DEFAULT 20,
+      meta JSON,
+      status TEXT NOT NULL DEFAULT 'open',
+      closed_at TEXT,
+      close_price_5d REAL,
+      close_price_10d REAL,
+      close_price_20d REAL,
+      ret_5d REAL,
+      ret_10d REAL,
+      ret_20d REAL,
+      max_favorable REAL,
+      max_adverse REAL,
+      hit_stop INTEGER DEFAULT 0,
+      hit_target1 INTEGER DEFAULT 0,
+      hit_target2 INTEGER DEFAULT 0,
+      realized_r REAL,
+      outcome_label TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_sigout_source_date ON signal_outcomes(source, emission_date);
+    CREATE INDEX IF NOT EXISTS idx_sigout_symbol_date ON signal_outcomes(symbol, emission_date);
+    CREATE INDEX IF NOT EXISTS idx_sigout_status ON signal_outcomes(status);
+    CREATE INDEX IF NOT EXISTS idx_sigout_strategy ON signal_outcomes(strategy);
+  `);
 }
 
 // One-time migration from legacy JSON files into SQLite

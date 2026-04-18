@@ -19,14 +19,16 @@
 //
 // What this module does:
 //   - Recomputes SMA50 from OHLCV closes on every run (not Yahoo's cache).
-//   - Tracks three explicit distance bands per symbol: approaching / in_zone /
-//     kissing — see getPullbackState() for exact thresholds.
+//   - Tracks two explicit distance bands per symbol: in_zone / kissing — see
+//     getPullbackState() for exact thresholds. (The old "approaching" band
+//     was removed because it flooded the trader with pre-entry noise.)
 //   - Stores the last-fired state in a small `pullback_states` table so the
 //     same state never fires twice. Only a STATE TRANSITION (e.g. approaching
 //     → in_zone) produces a new notification.
-//   - Gates candidates by real leadership filters: RS ≥ 70, above 200MA,
-//     and at least one of (stage 2, VCP forming, SEPA ≥ 4). A pullback on a
-//     weak stock is a downtrend — we want pullbacks on leaders only.
+//   - Gates candidates by real leadership filters: RS ≥ 80, above 200MA,
+//     stage=2 mandatory, and dry volume (volume_ratio < 1.0). A pullback on
+//     a weak stock is a downtrend — we want pullbacks on leaders only, and
+//     healthy pullbacks contract on volume.
 //
 // Designed to be called on a 1-minute cron during RTH with live Alpaca/Yahoo
 // quotes. The OHLCV history is cached (23h TTL), so the per-run cost is
@@ -41,23 +43,21 @@ function db() { return getDB(); }
 
 // ─── State thresholds (intentional, documented) ────────────────────────────
 //
-// APPROACHING: within 5–8% of 50 SMA (upside). Gives the trader time to
-//   pre-stage a bracket order before price actually reaches the zone.
-// IN_ZONE:     within 3% of 50 SMA. This is the primary "fill me" alert —
-//   classic O'Neil/Minervini 5% pullback entry range.
-// KISSING:     at or just below the 50 SMA (within 0.3 ATR). This captures
+// IN_ZONE:     within 2% of 50 SMA. Primary "fill me" alert — classic
+//   O'Neil/Minervini tight-pullback entry. Tightened from 3% because at 3%
+//   half the alerts still had meaningful room to drop and the trader got
+//   flooded with premature notifications.
+// KISSING:     at or just below the 50 SMA (within 0.3 ATR). Captures
 //   intraday undercut-and-reclaim setups where price wicks below the line
-//   then reverses — a secondary entry for aggressive traders.
+//   then reverses.
+//
+// APPROACHING (5–8% above) was removed intentionally — those alerts fired on
+// stocks that often never reached the zone, producing phone noise without
+// actionable setups. The trader now only hears about pullbacks that are
+// already actionable.
 //
 // NOTE: Bands are mutually exclusive and evaluated in order from tightest to
-// widest, so a single price produces a single state name. A stock sitting at
-// MA50 * 1.025 is "in_zone", not "approaching", even though it's also <1.08.
-
-const BANDS = {
-  // price ≤ ma50 + 0.3*ATR → kissing (may be at/below the line)
-  // price ≤ ma50 * 1.03    → in_zone
-  // price ≤ ma50 * 1.08    → approaching
-};
+// widest, so a single price produces a single state name.
 
 function getPullbackState({ price, ma50, atr }) {
   if (price == null || ma50 == null || ma50 <= 0) return null;
@@ -67,11 +67,8 @@ function getPullbackState({ price, ma50, atr }) {
   const kissingUpper = ma50 + 0.3 * (atr || ma50 * 0.01);
   if (price <= kissingUpper) return 'kissing';
 
-  // In-zone: within 3% of MA50 — the canonical "pulled-in" alert.
-  if (price <= ma50 * 1.03) return 'in_zone';
-
-  // Approaching: 3–8% above. Early warning for pre-staging.
-  if (price <= ma50 * 1.08) return 'approaching';
+  // In-zone: within 2% of MA50 — the canonical "pulled-in" alert.
+  if (price <= ma50 * 1.02) return 'in_zone';
 
   return null;  // out of range, not a pullback candidate right now
 }
@@ -90,15 +87,18 @@ function computeMA50(closes) {
 // Pullback-entry logic only makes sense on real leaders. On a weak stock a
 // pullback is just a downtrend; we're not trying to bottom-fish.
 
+// Tightened 2026-04: RS 70 → 80 (top-decile only), stage=2 mandatory
+// (no more VCP/SEPA substitutes), dry volume required (volume_ratio < 1.0 —
+// healthy pullbacks contract on volume). Net: fewer phone alerts, each one
+// backed by a real Stage-2 leader pulling in dry.
 function isLeadershipCandidate(snap) {
   if (!snap) return false;
-  if ((snap.rs_rank || 0) < 70) return false;
+  if ((snap.rs_rank || 0) < 80) return false;
   if ((snap.vs_ma200 || 0) <= 0) return false;
-  const qualifyingStructure =
-    snap.stage === 2 ||
-    !!snap.vcp_forming ||
-    (snap.sepa_score || 0) >= 4;
-  return qualifyingStructure;
+  if (snap.stage !== 2) return false;
+  const volRatio = snap.volume_ratio;
+  if (volRatio != null && volRatio >= 1.0) return false;
+  return true;
 }
 
 // ─── State tracking table (idempotency) ───────────────────────────────────
@@ -236,8 +236,8 @@ async function runPullbackScan(options = {}) {
     const lastState = last?.state || null;
 
     // Out-of-range transition: if we previously had a state but price ran
-    // back above 1.08 × ma50, clear the sticky state so the next pullback
-    // gets a fresh sequence of alerts.
+    // back above 1.02 × ma50 + kissing-ATR-band, clear the sticky state so
+    // the next pullback gets a fresh sequence of alerts.
     if (newState == null) {
       if (lastState) {
         clearLastState(symbol);
@@ -258,8 +258,7 @@ async function runPullbackScan(options = {}) {
 
       const distPct = +(((livePrice - ma50) / ma50) * 100).toFixed(2);
       const label =
-        newState === 'approaching' ? 'APPROACHING 50MA'
-        : newState === 'in_zone'    ? 'IN PULLBACK ZONE'
+        newState === 'in_zone' ? 'IN PULLBACK ZONE'
         : 'KISSING 50MA (undercut)';
 
       notifyTradeEvent({

@@ -5,6 +5,7 @@ const router  = express.Router();
 const { isSwingCandidate, isPositionCandidate, computeTradeSetup } = require('../signals/candidates');
 const { getMarketRegime } = require('../risk/regime');
 const { getDB } = require('../data/database');
+const { logSignalsBatch } = require('../signals/edge-telemetry');
 
 module.exports = function(runRSScanFn, anthropic) {
   // Batch AI trade briefs
@@ -130,6 +131,46 @@ Return JSON array:
         console.warn('AI briefs failed (continuing with algo levels):', e.message);
       }
     }
+
+    // Layer 1 telemetry: log every emitted LLM brief so we can calibrate
+    // confidence tiers against realized 5/10/20d outcomes. Wrapped in try/catch
+    // so a telemetry failure never blocks the trade-setup response.
+    try {
+      const toLog = [];
+      for (const r of results) {
+        if (!r.brief) continue;
+        toLog.push({
+          source: 'trade_setup',
+          symbol: r.ticker,
+          strategy: tradeMode,                      // 'swing' | 'position'
+          setup_type: r.brief.verdict,              // BUY | WATCH | AVOID
+          verdict: r.brief.verdict,
+          confidence: r.brief.confidence,
+          conviction_score: r.convictionScore,
+          entry_price: r.price,                     // reference price; actual entry lives in brief.entryZone
+          stop_price: r.brief.stopLevel,
+          target1_price: r.brief.target1,
+          target2_price: r.brief.target2,
+          rs_rank: r.rsRank,
+          swing_momentum: r.swingMomentum,
+          sepa_score: r.sepaScore,
+          stage: r.stage,
+          regime: regime?.regime,
+          atr_pct: r.atrPct,
+          horizon_days: tradeMode === 'swing' ? 10 : 30,
+          meta: {
+            thesis: r.brief.thesis,
+            riskFlags: r.brief.riskFlags,
+            catalysts: r.brief.catalysts,
+            earningsRisk: r.brief.earningsRisk,
+            daysToEarnings: r.brief.daysToEarnings,
+            riskScore: r.brief.riskScore,
+            rsTrend: r.rsTrend?.direction,
+          },
+        });
+      }
+      if (toLog.length) logSignalsBatch(toLog);
+    } catch (_) { /* telemetry never blocks */ }
 
     const order = {BUY:0,WATCH:1,AVOID:2};
     results.sort((a,b) => {
