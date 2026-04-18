@@ -56,11 +56,36 @@ module.exports = function(db) {
           buyingPower:   +account.buying_power,
           portfolioValue: +account.portfolio_value,
         };
-        // Build enriched broker positions with local trade data
+        // Build enriched broker positions with local trade data.
+        // Multi-tranche positions have multiple trade rows per symbol — prefer
+        // the row that has stop/target data set (others may be sibling tranches
+        // without setup context because the sync couldn't match their order id).
+        const tradesBySymbol = {};
+        for (const t of openPositions) {
+          if (!tradesBySymbol[t.symbol]) tradesBySymbol[t.symbol] = [];
+          tradesBySymbol[t.symbol].push(t);
+        }
         const tradeMap = {};
-        for (const t of openPositions) tradeMap[t.symbol] = t;
+        for (const [sym, rows] of Object.entries(tradesBySymbol)) {
+          tradeMap[sym] = rows.find(r => r.stop_price != null)
+                       || rows.find(r => r.target1 != null)
+                       || rows[0];
+        }
+
+        // Also pull staged_orders as a fallback source for stop/target —
+        // some older trades never had the trades.stop_price field synced.
+        const { getDB } = require('../data/database');
+        const stagedRows = getDB().prepare(
+          "SELECT symbol, stop_price, target1_price, target2_price, exit_strategy FROM staged_orders WHERE status IN ('submitted','filled') ORDER BY created_at DESC"
+        ).all();
+        const stagedMap = {};
+        for (const s of stagedRows) {
+          if (!stagedMap[s.symbol]) stagedMap[s.symbol] = s;
+        }
+
         brokerPositions = positions.map(p => {
           const local = tradeMap[p.symbol];
+          const staged = stagedMap[p.symbol];
           return {
             symbol:        p.symbol,
             qty:           +p.qty,
@@ -71,12 +96,13 @@ module.exports = function(db) {
             unrealizedPL:  +p.unrealized_pl,
             unrealizedPLPct: +p.unrealized_plpc * 100,
             changeToday:   +p.change_today * 100,
-            localStop:         local?.stop_price || null,
-            localTarget1:      local?.target1 || null,
+            localStop:         local?.stop_price   || staged?.stop_price     || null,
+            localTarget1:      local?.target1      || staged?.target1_price  || null,
+            localTarget2:      local?.target2      || staged?.target2_price  || null,
             localTradeId:      local?.id || null,
             localEntryDate:    local?.entry_date || null,
             localStrategy:     local?.strategy || null,
-            localExitStrategy: local?.exit_strategy || null,
+            localExitStrategy: local?.exit_strategy || staged?.exit_strategy || null,
             sector:            local?.sector || null,
             inJournal:         !!local,
           };

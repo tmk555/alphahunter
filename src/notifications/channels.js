@@ -538,6 +538,12 @@ const TRADE_EVENT_EMOJIS = {
   manual_exit: '🚪',       // Manual position close via UI
   entry_modified: '✏️',    // Entry price changed on staged/submitted order
   trail_tightened: '🔒',   // Deterioration detected — trailing stop tightened
+  pyramid_tranche_fired:  '🔺',  // Pyramid tranche fired (pilot / add1 / add2)
+  pyramid_tranche_filled: '✅',  // Pyramid tranche bracket parent filled
+  pyramid_gap_abort:      '⚠️',   // Pyramid plan cancelled — gap too wide
+  pyramid_stopped:        '🛑',  // Pyramid pilot stopped out — remaining tranches cancelled
+  pyramid_expired:        '⏰',  // Pyramid plan expired — pilot never fired
+  pyramid_cancelled:      '🚫',  // Pyramid plan manually cancelled
   // Broker lifecycle terminal transitions — fired by the order-status
   // poller in broker/monitor.js + direct hooks in broker/staging.js.
   cancelled: '🚫', expired: '⏰', rejected: '⛔',

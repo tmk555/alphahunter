@@ -1855,7 +1855,7 @@ function GlobalTradingGuide({ onClose }) {
 }
 
 // ─── InlineLevels: shows ATR trade levels for any stock row ──────────────────
-function InlineLevels({ stock: s, customEntryPrice }) {
+function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
   const [funds, setFunds] = useState(null);
   const [fLoad, setFLoad] = useState(false);
 
@@ -1931,8 +1931,11 @@ function InlineLevels({ stock: s, customEntryPrice }) {
     : +(price - 2.5 * atr).toFixed(2);        // fallback: 2.5×ATR from price
 
   // Swing is ALWAYS tighter than position (correct — swing exits fast, position holds)
-  const stop        = swingStop;
-  const stopReason  = ma50Buffer ? `50MA $${ma50?.toFixed(2)} - 0.5×ATR` : '1.5×ATR (50MA too far)';
+  const isCustomStop = customStopPrice != null && customStopPrice > 0 && customStopPrice < price;
+  const stop        = isCustomStop ? +customStopPrice : swingStop;
+  const stopReason  = isCustomStop
+    ? 'Custom stop (manual override)'
+    : ma50Buffer ? `50MA $${ma50?.toFixed(2)} - 0.5×ATR` : '1.5×ATR (50MA too far)';
   const posStopRsn  = ma50Buffer ? `50MA $${ma50?.toFixed(2)} - 1.5×ATR` : '2.5×ATR (50MA too far)';
 
   const t1      = +(price + 2.5 * atr).toFixed(2);
@@ -1941,7 +1944,8 @@ function InlineLevels({ stock: s, customEntryPrice }) {
   const rr      = risk > 0 ? +((t1 - price) / risk).toFixed(1) : 0;
   const stopPct = risk > 0 ? ((risk/price)*100).toFixed(1) : '?';
 
-  const posRisk    = price - posStop;
+  const effectivePosStop = isCustomStop ? +customStopPrice : posStop;
+  const posRisk    = price - effectivePosStop;
   const posT1      = +(price + 3.0 * atr).toFixed(2);
   const posT2      = +(price + 5.0 * atr).toFixed(2);
   const posRR      = posRisk > 0 ? +((posT1-price)/posRisk).toFixed(1) : 0;
@@ -1959,7 +1963,7 @@ function InlineLevels({ stock: s, customEntryPrice }) {
       <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:8}}>
         <div style={{fontSize:10,color:'var(--amber)',fontWeight:700,alignSelf:'center',minWidth:60}}>⚡ SWING</div>
         <Cell label={isCustomEntry ? "Entry (custom)" : "Entry"}  val={`$${price?.toFixed(2)}`}         color={isCustomEntry ? "var(--cyan)" : "var(--cyan)"}/>
-        <Cell label="Stop"   val={`$${stop} (-${stopPct}%)`}       color="var(--red)"/>
+        <Cell label={isCustomStop ? "Stop (custom)" : "Stop"}  val={`$${stop} (-${stopPct}%)`}       color="var(--red)"/>
         <Cell label="Target 1" val={`$${t1}`}                      color="var(--green)"/>
         <Cell label="Target 2" val={`$${t2}`}                      color="var(--green)"/>
         <Cell label="R/R"    val={`${rr.toFixed(1)}:1`}            color={rr>=2?'var(--green)':'var(--amber)'}/>
@@ -1969,7 +1973,7 @@ function InlineLevels({ stock: s, customEntryPrice }) {
         <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:6}}>
           <div style={{fontSize:10,color:'var(--green)',fontWeight:700,alignSelf:'center',minWidth:60}}>📈 POSITION</div>
           <Cell label="Entry zone" val={`$${(price*0.995).toFixed(2)}–$${(price*1.01).toFixed(2)}`} color="var(--cyan)"/>
-          <Cell label={`Stop: ${posStopRsn}`} val={`$${posStop} (-${posStopPct}%)`}                                  color="var(--red)"/>
+          <Cell label={isCustomStop ? 'Stop: custom' : `Stop: ${posStopRsn}`} val={`$${effectivePosStop} (-${posStopPct}%)`}                                  color="var(--red)"/>
           <Cell label="Target 1"   val={`$${posT1}`}                                                  color="var(--green)"/>
           <Cell label="R/R"        val={`${posRR}:1`}                                                 color={posRR>=2?'var(--green)':'var(--amber)'}/>
         </div>
@@ -2220,25 +2224,11 @@ function InlineLevels({ stock: s, customEntryPrice }) {
         </div>
       )}
 
-      {/* ── Earnings Estimate Revisions ─────────────────────────────────── */}
-      {revLoad && <div style={{marginTop:10,fontSize:11,color:'var(--text3)'}}>Loading revision data...</div>}
-      {revData && (
-        <div style={{marginTop:10,padding:'10px 14px',background:'var(--bg)',borderRadius:4,border:'1px solid var(--border)'}}>
-          <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:8}}>
-            <span style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,textTransform:'uppercase'}}>Earnings Estimate Revisions</span>
-            {revData.revision && (
-              <span style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:700,
-                color:revData.revision.revisionScore>=70?'var(--green)':revData.revision.revisionScore>=40?'var(--amber)':'var(--red)'}}>
-                Score: {revData.revision.revisionScore}
-              </span>
-            )}
-            {revData.revision?.tier && (
-              <span style={{fontSize:10,padding:'2px 8px',borderRadius:3,fontWeight:700,
-                background:revData.revision.tier.includes('upgrade')?'rgba(0,230,118,0.12)':revData.revision.tier.includes('downgrade')?'rgba(255,61,87,0.12)':'rgba(240,165,0,0.12)',
-                color:revData.revision.tier.includes('upgrade')?'var(--green)':revData.revision.tier.includes('downgrade')?'var(--red)':'var(--amber)'}}>
-                {revData.revision.tier.replace(/_/g,' ').toUpperCase()}
-              </span>
-            )}
+      {/* ── Estimate Details (score banner is shown separately at top of Levels) ── */}
+      {revData?.estimates && (
+        <div style={{marginTop:8,padding:'10px 14px',background:'var(--bg)',borderRadius:4,border:'1px solid var(--border)'}}>
+          <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,textTransform:'uppercase',marginBottom:8,fontFamily:'var(--font-mono)'}}>
+            Estimate Details
           </div>
           {revData.estimates && (
             <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:8}}>
@@ -2269,9 +2259,6 @@ function InlineLevels({ stock: s, customEntryPrice }) {
                 </div>
               )}
             </div>
-          )}
-          {!revData.revision && !revData.estimates && (
-            <div style={{fontSize:11,color:'var(--text3)'}}>No revision history yet — data will populate after first snapshot is stored.</div>
           )}
         </div>
       )}
@@ -2835,6 +2822,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
   const [strategyFilter, setStrategyFilter] = useState('');
   // Custom entry price overrides — keyed by ticker, cleared when panel closes
   const [customEntryPrices, setCustomEntryPrices] = useState({});
+  const [customStopPrices, setCustomStopPrices] = useState({});
   // minRS/setMinRS now from App props — persists across tab switches
   const [expandedTicker, setExpandedTicker] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -2951,15 +2939,76 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
     setRsStaging(ticker);
     try {
       const customEntry = customEntryPrices[ticker];
+      const customStop  = customStopPrices[ticker];
+
+      // ── Pyramid path: use preview first to let user see detected pivot ──
+      if (rsExitStrategy === 'pyramid_auto') {
+        const preview = await api('/api/pyramid-plans/preview', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ ticker, pivot: customEntry || undefined }),
+        });
+        if (!preview.ok) {
+          alert(`Cannot pyramid ${ticker}: ${preview.error}`);
+          setRsStaging(null);
+          return;
+        }
+        // Default qty = account position sized for pilot-stop distance
+        const accountSize = 100000; // rough default; could fetch from /api/portfolio
+        const riskPerTrade = 1000;  // 1% default
+        const pilotRisk = preview.triggers.pilot - preview.stop;
+        const totalQty = Math.max(3, Math.floor((riskPerTrade * 3) / pilotRisk));
+
+        const pace = preview.volumePaceNow?.pace != null ? ` (live pace ${preview.volumePaceNow.pace}x)` : '';
+        const patternDesc = preview.pattern ? `${preview.pattern.name} (conf ${preview.pattern.confidence}%)` : 'manual pivot';
+        const t = preview.targets || {};
+        const confirm = window.confirm(
+          `🔺 PYRAMID PLAN — ${ticker}\n\n` +
+          `Pattern: ${patternDesc}\n\n` +
+          `ENTRIES\n` +
+          `  Pilot trigger:  $${preview.triggers.pilot}  (+${preview.pilotDistPct}% from current $${preview.price})\n` +
+          `  Add 1 trigger:  $${preview.triggers.add1}\n` +
+          `  Add 2 trigger:  $${preview.triggers.add2}\n\n` +
+          `EXITS (each tranche)\n` +
+          `  Pilot → Target 1: $${t.pilotTp||'—'}  (~${t.t1R||0}R)\n` +
+          `  Add 1 → Target 2: $${t.add1Tp||'—'}  (~${t.t2R||0}R)\n` +
+          `  Add 2 → Runner:   $${t.add2Tp||'—'}  (trailing stop handles real exit)\n` +
+          `  Stop (shared):    $${preview.stop}  (-${preview.stopDistPct}%)\n\n` +
+          `Total qty: ${totalQty} shares (split 1/3 each, ~${Math.floor(totalQty/3)} per tranche)\n` +
+          `Volume gate: 1.2x pace minimum per tranche${pace}\n\n` +
+          `Gap guard: reduces pilot qty if gap +3-7%, aborts if >7%.\n` +
+          `Gap-down guard: abort if base breaks down 3%+ below pivot.\n\n` +
+          `Confirm create pyramid plan?`
+        );
+        if (!confirm) { setRsStaging(null); return; }
+
+        const r = await api('/api/pyramid-plans', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ ticker, totalQty, pivot: customEntry || undefined, stopPrice: customStop || undefined }),
+        });
+        alert(`🔺 Pyramid plan #${r.id} created for ${r.symbol}.\n\nPilot waits at $${preview.triggers.pilot}.\nWatch Trading tab for fire notifications.`);
+        if (customEntry) setCustomEntryPrices(prev => { const n = {...prev}; delete n[ticker]; return n; });
+        if (customStop)  setCustomStopPrices(prev => { const n = {...prev}; delete n[ticker]; return n; });
+        setRsStaging(null);
+        return;
+      }
+
+      // ── Normal staging path ──
       const r = await api('/api/staging/from-setup', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ ticker, mode: mode || rsStageMode, exitStrategy: rsExitStrategy, strategy: strategyFilter || undefined, entryPrice: customEntry || undefined }),
+        body: JSON.stringify({ ticker, mode: mode || rsStageMode, exitStrategy: rsExitStrategy, strategy: strategyFilter || undefined,
+          entryPrice: customEntry || undefined,
+          stopPrice:  customStop  || undefined }),
       });
-      const scaleLabels = { full_in_scale_out:'Full\u2192Scale', full_in_full_out:'Full\u2192Full', scale_in_scale_out:'Scale\u2192Scale', scale_in_full_out:'Scale\u2192Full' };
+      const scaleLabels = { full_in_scale_out:'Full\u2192Scale', full_in_full_out:'Full\u2192Full' };
       const scaleLabel = scaleLabels[rsExitStrategy] || rsExitStrategy;
       const slip = r.sizing?.slippagePrediction;
       const slipNote = slip ? `\nSlippage: ${slip.predictedSlippageBps}bps (tier ${slip.tier}) \u2192 effective entry $${r.sizing.effectiveEntry?.toFixed(2)}` : '';
-      alert(`Staged ${r.staged?.symbol} (${mode || rsStageMode}): ${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk [${scaleLabel}].${slipNote}\nGo to Trading tab to submit.`);
+      const overrides = [];
+      if (customEntry) overrides.push(`entry=$${customEntry}`);
+      if (customStop)  overrides.push(`stop=$${customStop}`);
+      const overrideNote = overrides.length ? `\nOverrides: ${overrides.join(', ')}` : '';
+      alert(`Staged ${r.staged?.symbol} (${mode || rsStageMode}): ${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk [${scaleLabel}].${slipNote}${overrideNote}\nGo to Trading tab to submit.`);
+      if (customStop) setCustomStopPrices(prev => { const n = {...prev}; delete n[ticker]; return n; });
     } catch(e) { alert(`Stage failed: ${e.message}`); }
     setRsStaging(null);
   }
@@ -3021,6 +3070,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
     'DIST':s => s.volumeTrend==='distributing',
     '🔥':  s => s.distFromHigh!=null && s.distFromHigh<=0.005,
     '⚡':  s => s.volumeSurge,
+    'REV↑':s => (s.revisionScore||0) >= 50,
   };
 
   const filtered = (() => {
@@ -3154,7 +3204,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
         <div style={{position:'relative',marginBottom:10,maxWidth:320}}>
           <input type="text" value={searchQuery}
             onChange={e=>setSearchQuery(e.target.value)}
-            placeholder="Search ticker or name\u2026"
+            placeholder="Search ticker or name…"
             style={{width:'100%',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',padding:'7px 32px 7px 10px',fontSize:12,fontFamily:'var(--font-mono)',outline:'none',transition:'border-color 0.15s',boxSizing:'border-box'}}
             onFocus={e=>{e.target.style.borderColor='var(--cyan)'}}
             onBlur={e=>{e.target.style.borderColor='var(--border)'}}/>
@@ -3187,6 +3237,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
             {key:'DIST',label:'DIST',             title:'Distribution: below 50MA + vol >1.2x (institutional selling)',col:'var(--red)'},
             {key:'🔥',  label:'🔥 At High',      title:'Within 0.5% of 52wk high right now',col:'var(--amber)'},
             {key:'⚡',  label:'⚡ Vol Surge',     title:'Volume surge ≥2× average near highs',col:'var(--amber)'},
+            {key:'REV↑',label:'REV↑',            title:'Analyst estimate revisions score ≥50 — Wall Street raising EPS/revenue forecasts (future earnings catalyst)',col:'var(--green)'},
           ].map(({key,label,title,col})=>(
             <button key={key} title={title}
               onClick={()=>toggleSig(key)}
@@ -3344,6 +3395,12 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                             TF {tf}/3
                           </span>
                         ); })()}
+                        {s.revisionScore != null && (
+                          <span title={`Analyst estimate revisions: ${s.revisionScore}/100 (${s.revisionTier?.replace(/_/g,' ')||'neutral'}). Rising estimates signal future earnings catalyst.`}
+                            style={{marginLeft:4,color:s.revisionScore>=70?'var(--green)':s.revisionScore>=50?'#8bc34a':s.revisionScore>=30?'var(--amber)':'var(--red)',fontWeight:700,fontSize:9,fontFamily:'var(--font-mono)'}}>
+                            {s.revisionScore>=50 ? 'REV↑' : s.revisionScore>=30 ? 'REV→' : 'REV↓'}
+                          </span>
+                        )}
                           <PatternBadge patternData={s.patternData} />
                           <InstitutionalBadge data={s.institutionalData} />
                       </td>
@@ -3406,10 +3463,9 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                                 </div>
                                 <div className="btn-group" title="Entry × Exit strategy: Full = single entry at full size. Scale = build/exit in thirds">
                                   {[
-                                    {k:'full_in_scale_out',label:'Full→Scale',color:'var(--green)'},
-                                    {k:'full_in_full_out',label:'Full→Full',color:'var(--amber)'},
-                                    {k:'scale_in_scale_out',label:'Scale→Scale',color:'var(--cyan)'},
-                                    {k:'scale_in_full_out',label:'Scale→Full',color:'var(--purple,#a78bfa)'}
+                                    {k:'full_in_scale_out',label:'Full→Scale',color:'var(--green)',title:'Buy full size at pivot, exit in 3 tranches (T1/T2/runner). DEFAULT.'},
+                                    {k:'full_in_full_out',label:'Full→Full',color:'var(--amber)',title:'Buy full size, exit all at target. Simplest.'},
+                                    {k:'pyramid_auto',label:'🔺 Pyramid',color:'var(--cyan)',title:'Pyramid in: pilot fires at pivot, adds fire on +confirmation. True scale-in with volume gates.'},
                                   ].map(m => (
                                     <button key={m.k} className={`mode-btn ${rsExitStrategy===m.k?'active':''}`}
                                       style={{padding:'3px 8px',fontSize:9,borderColor: rsExitStrategy===m.k ? m.color : undefined, color: rsExitStrategy===m.k ? m.color : undefined}}
@@ -3440,13 +3496,36 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                                     </button>
                                   )}
                                 </div>
+                                <div style={{display:'flex',alignItems:'center',gap:4}}>
+                                  <label title="Override default stop. Tighter (closer to entry) = more shares, same $ risk. Wider = fewer shares."
+                                    style={{fontSize:9,color:'var(--text3)',letterSpacing:0.5}}>STOP $</label>
+                                  <input type="number" step="0.01"
+                                    placeholder="auto"
+                                    value={customStopPrices[s.ticker] ?? ''}
+                                    onChange={e => {
+                                      const v = e.target.value;
+                                      setCustomStopPrices(prev => ({...prev, [s.ticker]: v === '' ? undefined : parseFloat(v)}));
+                                    }}
+                                    onBlur={e => {
+                                      const v = parseFloat(e.target.value);
+                                      if (isNaN(v) || v <= 0) setCustomStopPrices(prev => { const n = {...prev}; delete n[s.ticker]; return n; });
+                                    }}
+                                    style={{width:80,background:'var(--bg3)',border:`1px solid ${customStopPrices[s.ticker] != null ? 'var(--red)' : 'var(--border)'}`,borderRadius:3,color:customStopPrices[s.ticker] != null ? 'var(--red)' : 'var(--text)',padding:'4px 6px',fontSize:12,fontFamily:'var(--font-mono)',fontWeight:600,textAlign:'right'}}
+                                  />
+                                  {customStopPrices[s.ticker] != null && (
+                                    <button title="Reset to calculated stop" onClick={() => setCustomStopPrices(prev => { const n = {...prev}; delete n[s.ticker]; return n; })}
+                                      style={{padding:'2px 5px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:9,cursor:'pointer',fontFamily:'var(--font-mono)'}}>
+                                      ✕
+                                    </button>
+                                  )}
+                                </div>
                                 <button disabled={rsStaging===s.ticker} onClick={()=>stageFromRS(s.ticker)}
-                                  style={{padding:'5px 14px',background: rsExitStrategy==='full_in_scale_out'?'var(--green)':rsExitStrategy==='full_in_full_out'?'var(--amber)':rsExitStrategy==='scale_in_scale_out'?'var(--cyan)':'var(--purple,#a78bfa)',border:'1px solid transparent',borderRadius:4,color:'#000',fontSize:11,fontWeight:800,cursor:'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
-                                  {rsStaging===s.ticker ? 'STAGING...' : rsExitStrategy.startsWith('scale_in') ? 'STAGE PILOT ⅓' : 'STAGE FULL'}
+                                  style={{padding:'5px 14px',background: rsExitStrategy==='full_in_scale_out'?'var(--green)':rsExitStrategy==='full_in_full_out'?'var(--amber)':rsExitStrategy==='pyramid_auto'?'var(--cyan)':'var(--text3)',border:'1px solid transparent',borderRadius:4,color:'#000',fontSize:11,fontWeight:800,cursor:'pointer',letterSpacing:1,fontFamily:'var(--font-mono)'}}>
+                                  {rsStaging===s.ticker ? 'STAGING...' : rsExitStrategy==='pyramid_auto' ? '🔺 STAGE PYRAMID' : 'STAGE FULL'}
                                 </button>
                               </div>
                             </div>
-                            <InlineLevels stock={s} customEntryPrice={customEntryPrices[s.ticker]}/>
+                            <InlineLevels stock={s} customEntryPrice={customEntryPrices[s.ticker]} customStopPrice={customStopPrices[s.ticker]}/>
                             <StockChart symbol={s.ticker} height={300}
                               entry={s.swingEntry} stop={s.swingStop} target1={s.swingTarget1} target2={s.swingTarget2} />
                           </div>
@@ -3705,10 +3784,9 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
 
         <span className="ts-toolbar-label">Exit</span>
         <select className="ts-exit-select" value={exitStrategy} onChange={e => setExitStrategy(e.target.value)}>
-          <option value="full_in_scale_out">Full In / Scale Out</option>
-          <option value="full_in_full_out">Full In / Full Out</option>
-          <option value="scale_in_scale_out">Scale In / Scale Out</option>
-          <option value="scale_in_full_out">Scale In / Full Out</option>
+          <option value="full_in_scale_out">Full / Scale Out (default)</option>
+          <option value="full_in_full_out">Full / Full Out</option>
+          <option value="pyramid_auto">🔺 Pyramid Auto</option>
         </select>
 
         <div className="ts-toolbar-sep" />
@@ -6039,6 +6117,7 @@ function ExecutionTab() {
   const [positions, setPositions] = useState([]);
   const [orders, setOrders]     = useState([]);
   const [staged, setStaged]     = useState([]);
+  const [pyramidPlans, setPyramidPlans] = useState([]);
   const [subs, setSubs]         = useState([]);
   const [firedAlerts, setFired] = useState([]);
   const [streamStatus, setStreamStatus] = useState(null);
@@ -6063,7 +6142,7 @@ function ExecutionTab() {
   async function loadAll() {
     setLoading(true); setError('');
     try {
-      const [b, p, o, s, al, fa, ss] = await Promise.all([
+      const [b, p, o, s, al, fa, ss, py] = await Promise.all([
         api('/api/broker/status').catch(()=>null),
         api('/api/broker/positions').catch(()=>({positions:[]})),
         api('/api/broker/orders').catch(()=>({orders:[]})),
@@ -6071,12 +6150,14 @@ function ExecutionTab() {
         api('/api/alerts/subscriptions').catch(()=>({subscriptions:[]})),
         api('/api/alerts?limit=20').catch(()=>({alerts:[]})),
         api('/api/broker/stream/status').catch(()=>null),
+        api('/api/pyramid-plans').catch(()=>({plans:[]})),
       ]);
       // Only setState when data actually changed — eliminates flicker on 30s poll
       setIfChanged(setBroker, prevData, 'broker', b);
       setIfChanged(setPositions, prevData, 'positions', p.positions||[]);
       setIfChanged(setOrders, prevData, 'orders', o.orders||[]);
       setIfChanged(setStaged, prevData, 'staged', s.orders||[]);
+      setPyramidPlans(py.plans || []);
       setIfChanged(setSubs, prevData, 'subs', al.subscriptions||[]);
       setIfChanged(setFired, prevData, 'fired', fa.alerts||[]);
       setIfChanged(setStreamStatus, prevData, 'stream', ss);
@@ -6116,6 +6197,14 @@ function ExecutionTab() {
   async function cancelStaged(id) {
     try {
       await api(`/api/staging/${id}/cancel`, {method:'POST'});
+      loadAll();
+    } catch(e) { setError(e.message); }
+  }
+
+  async function cancelPyramid(id) {
+    if (!window.confirm(`Cancel pyramid plan #${id}? Any unfilled tranches will be cancelled at the broker.`)) return;
+    try {
+      await api(`/api/pyramid-plans/${id}/cancel`, {method:'POST'});
       loadAll();
     } catch(e) { setError(e.message); }
   }
@@ -6207,6 +6296,7 @@ function ExecutionTab() {
     {id:'positions', label:`Positions (${positions.length})`},
     {id:'alerts',    label:`Alerts (${subs.length})`},
     {id:'orders',    label:`Broker Orders (${orders.length})`},
+    {id:'pyramid',   label:`🔺 Pyramid (${pyramidPlans.filter(p=>['armed_pilot','pilot_filled','add1_filled'].includes(p.status)).length})`},
     {id:'intraday',  label:'Intraday'},
     {id:'conditional', label:'Conditional'},
     {id:'scalein',   label:'Scale-In'},
@@ -6570,16 +6660,23 @@ function ExecutionTab() {
             const calDays = Math.max(0, Math.floor((now - entry) / 86400000));
             tradingDays = Math.round(calDays * 5 / 7);
           }
-          // R-multiple: how many 1R units has the stock moved from entry (favorably)
+          // R-multiple: uses ORIGINAL risk (entry - INITIAL stop), NOT current stop.
+          // Otherwise a trade whose stop moved to breakeven divides by zero or gets
+          // a wrong R reading. The initial stop is frozen at staging time and stored
+          // on staged_orders.stop_price — that's our 1R forever.
+          const initialStop = p.localInitialStop || p.localStop;
           let rMultiple = null;
-          if (p.localStop && p.avgEntryPrice && p.localStop !== p.avgEntryPrice) {
-            const r = Math.abs(p.avgEntryPrice - p.localStop);
+          if (initialStop && p.avgEntryPrice && initialStop !== p.avgEntryPrice) {
+            const r = Math.abs(p.avgEntryPrice - initialStop);
             rMultiple = (p.currentPrice - p.avgEntryPrice) / r * (p.side === 'long' ? 1 : -1);
           }
-          const stale = tradingDays != null && tradingDays >= limitDays && (rMultiple == null || rMultiple < 0.5);
+          // If any tranche already hit its target (partial_exits non-empty), the
+          // position is WORKING — never flag stale, regardless of days held.
+          const hasPartialExit = (p.localPartialExits || []).length > 0;
+          const stale = !hasPartialExit && tradingDays != null && tradingDays >= limitDays && (rMultiple == null || rMultiple < 0.5);
           const pctLimit = tradingDays != null ? Math.min(100, (tradingDays / limitDays) * 100) : 0;
-          const status = stale ? 'stale' : pctLimit >= 80 ? 'approaching' : 'fresh';
-          return { type, tradingDays, limitDays, rMultiple, stale, pctLimit, status };
+          const status = hasPartialExit ? 'working' : stale ? 'stale' : pctLimit >= 80 ? 'approaching' : 'fresh';
+          return { type, tradingDays, limitDays, rMultiple, stale, pctLimit, status, hasPartialExit };
         };
 
         const analyzed = positions.map(p => ({ ...p, _time: analyzePosition(p) }));
@@ -6596,7 +6693,7 @@ function ExecutionTab() {
                 <div style={{display:'flex',gap:12,fontSize:11,fontFamily:'var(--font-mono)',flexWrap:'wrap'}}>
                   <span style={{color:'var(--cyan)'}}>Swing: {SWING_DAYS}d limit</span>
                   <span style={{color:'var(--purple)'}}>Position: {POSITION_DAYS}d limit</span>
-                  <span style={{color:'var(--text3)'}}>Stale = held past limit without moving ≥0.5R</span>
+                  <span style={{color:'var(--text3)'}}>Stale = held past limit without moving ≥0.5R from ORIGINAL stop (🎯 working = partial target hit, exempt)</span>
                 </div>
               </div>
               {(staleCount > 0 || approachingCount > 0) && (
@@ -6622,7 +6719,7 @@ function ExecutionTab() {
               <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
                 <thead>
                   <tr style={{borderBottom:'1px solid var(--border)'}}>
-                    {['Symbol','Type','Qty','Side','Avg Entry','Current','Mkt Value','P&L','P&L %','R','Today','Stop','Target','Days','Time'].map(h =>
+                    {['Symbol','Type','Qty','Side','Avg Entry','Current','Mkt Value','P&L','P&L %','R','Today','Stop','T1','T2','Days','Time'].map(h =>
                       <th key={h} style={{padding:'8px 6px',textAlign:'left',fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
                     )}
                   </tr>
@@ -6630,7 +6727,7 @@ function ExecutionTab() {
                 <tbody>
                   {analyzed.map(p => {
                     const t = p._time;
-                    const rowBg = t.stale ? 'rgba(255,61,87,0.04)' : t.status === 'approaching' ? 'rgba(240,165,0,0.03)' : 'transparent';
+                    const rowBg = t.stale ? 'rgba(255,61,87,0.04)' : t.status === 'working' ? 'rgba(0,212,255,0.03)' : t.status === 'approaching' ? 'rgba(240,165,0,0.03)' : 'transparent';
                     const typeColor = t.type === 'swing' ? 'var(--cyan)' : 'var(--purple)';
                     return (
                     <tr key={p.symbol} style={{borderBottom:'1px solid var(--border)',background:rowBg}}>
@@ -6655,20 +6752,40 @@ function ExecutionTab() {
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:p.changeToday>=0?'var(--green)':'var(--red)'}}>
                         {p.changeToday>=0?'+':''}{fmt(p.changeToday,1)}%
                       </td>
-                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--red)'}}>{p.localStop?'$'+fmt(p.localStop):'—'}</td>
-                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--green)'}}>{p.localTarget1?'$'+fmt(p.localTarget1):'—'}</td>
+                      <td title={p.localStop ? `Current stop — may have moved up from initial (${p.localInitialStop ? '$'+fmt(p.localInitialStop) : '?'}) after partial exits` : ''} style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--red)'}}>
+                        {p.localStop?'$'+fmt(p.localStop):'—'}
+                        {p.localStop && p.localInitialStop && p.localStop !== p.localInitialStop && (
+                          <span style={{fontSize:9,color:'var(--green)',marginLeft:4}}>↑</span>
+                        )}
+                      </td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--green)'}}>
+                        {p.localTarget1 ? (
+                          <span style={{textDecoration: (p.localPartialExits||[]).some(e=>e.level==='target1') ? 'line-through' : 'none', opacity: (p.localPartialExits||[]).some(e=>e.level==='target1') ? 0.5 : 1}}>
+                            ${fmt(p.localTarget1)}
+                            {(p.localPartialExits||[]).some(e=>e.level==='target1') && <span title="Target 1 hit" style={{marginLeft:4,color:'var(--green)'}}>✓</span>}
+                          </span>
+                        ) : '—'}
+                      </td>
+                      <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--green)'}}>
+                        {p.localTarget2 ? (
+                          <span style={{textDecoration: (p.localPartialExits||[]).some(e=>e.level==='target2') ? 'line-through' : 'none', opacity: (p.localPartialExits||[]).some(e=>e.level==='target2') ? 0.5 : 1}}>
+                            ${fmt(p.localTarget2)}
+                            {(p.localPartialExits||[]).some(e=>e.level==='target2') && <span title="Target 2 hit" style={{marginLeft:4,color:'var(--green)'}}>✓</span>}
+                          </span>
+                        ) : '—'}
+                      </td>
                       <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:t.stale?'var(--red)':t.status==='approaching'?'var(--amber)':'var(--text2)'}}>
                         {t.tradingDays!=null ? `${t.tradingDays}/${t.limitDays}` : '—'}
                       </td>
                       <td style={{padding:'8px 6px'}}>
                         {t.tradingDays!=null && (
-                          <div title={t.stale ? `Stale: ${t.tradingDays}d held, R=${t.rMultiple!=null?t.rMultiple.toFixed(2):'?'}. Consider closing — ${t.type} should have moved ≥0.5R by ${t.limitDays} days.` : t.status==='approaching' ? `Approaching ${t.limitDays}d time stop. Watch closely.` : `Fresh — ${Math.round(t.pctLimit)}% of ${t.limitDays}d limit`}
+                          <div title={t.stale ? `Stale: ${t.tradingDays}d held, R=${t.rMultiple!=null?t.rMultiple.toFixed(2):'?'} (uses ORIGINAL 1R). Consider closing — ${t.type} should have moved ≥0.5R by ${t.limitDays} days.` : t.status==='working' ? `Working — partial target already hit, remaining runner` : t.status==='approaching' ? `Approaching ${t.limitDays}d time stop. Watch closely.` : `Fresh — ${Math.round(t.pctLimit)}% of ${t.limitDays}d limit`}
                             style={{display:'flex',alignItems:'center',gap:6}}>
                             <div style={{width:50,height:4,background:'var(--bg3)',borderRadius:2,overflow:'hidden'}}>
-                              <div style={{width:`${t.pctLimit}%`,height:'100%',background:t.stale?'var(--red)':t.status==='approaching'?'var(--amber)':'var(--green)',borderRadius:2,transition:'width 0.3s'}}/>
+                              <div style={{width:`${t.pctLimit}%`,height:'100%',background:t.stale?'var(--red)':t.status==='working'?'var(--cyan)':t.status==='approaching'?'var(--amber)':'var(--green)',borderRadius:2,transition:'width 0.3s'}}/>
                             </div>
-                            <span style={{fontSize:10,color:t.stale?'var(--red)':t.status==='approaching'?'var(--amber)':'var(--text3)'}}>
-                              {t.stale ? '⏰' : t.status==='approaching' ? '⚠' : '✓'}
+                            <span style={{fontSize:10,color:t.stale?'var(--red)':t.status==='working'?'var(--cyan)':t.status==='approaching'?'var(--amber)':'var(--text3)'}}>
+                              {t.stale ? '⏰' : t.status==='working' ? '🎯' : t.status==='approaching' ? '⚠' : '✓'}
                             </span>
                           </div>
                         )}
@@ -7010,6 +7127,90 @@ function ExecutionTab() {
         </div>
         );
       })()}
+
+      {/* ─── PYRAMID PLANS ────────────────────────── */}
+      {section==='pyramid' && (
+        <div>
+          {pyramidPlans.length > 0 ? (
+            <div className="panel" style={{overflowX:'auto'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,flexWrap:'wrap',gap:8}}>
+                <div>
+                  <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>🔺 PYRAMID PLANS</div>
+                  <div style={{fontSize:10,color:'var(--text3)',marginTop:3}}>
+                    Progressive entry: pilot fires at pivot, adds fire on +confirmation with volume gate. Gap guard reduces/aborts if gap &gt;3/7%.
+                  </div>
+                </div>
+                <button className="btn btn-sm" onClick={loadAll}>↻ Refresh</button>
+              </div>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                <thead>
+                  <tr style={{borderBottom:'1px solid var(--border)'}}>
+                    {['#','Symbol','Status','Pilot','Add1','Add2','Stop','Total Qty','Created','Actions'].map(h =>
+                      <th key={h} style={{padding:'8px 6px',textAlign:'left',fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {pyramidPlans.map(p => {
+                    const tranches = p.tranches || [];
+                    const [pilot, add1, add2] = [tranches[0], tranches[1], tranches[2]];
+                    const cellFor = (t) => {
+                      if (!t) return <span style={{color:'var(--text3)'}}>—</span>;
+                      const statusColor = t.status==='filled'?'var(--green)':t.status==='submitted'?'var(--cyan)':t.status==='armed'?'var(--amber)':t.status==='rejected'||t.status==='cancelled'?'var(--red)':'var(--text3)';
+                      const icon = t.status==='filled' ? '✅' : t.status==='submitted' ? '⏳' : t.status==='armed' ? '🎯' : t.status==='rejected' || t.status==='cancelled' ? '✕' : '⏸';
+                      return (
+                        <div style={{display:'flex',flexDirection:'column',gap:1}}>
+                          <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--text)'}}>{icon} ${fmt(t.trigger)}</span>
+                          <span style={{fontSize:9,color:statusColor,letterSpacing:0.5,fontFamily:'var(--font-mono)'}}>{t.status.toUpperCase()} · {t.actualQty || t.qty}sh</span>
+                        </div>
+                      );
+                    };
+                    const statusLabel = p.status.replace(/_/g,' ').toUpperCase();
+                    const statusColor = p.status==='complete'?'var(--green)':p.status==='armed_pilot'?'var(--amber)':p.status==='pilot_filled'||p.status==='add1_filled'?'var(--cyan)':p.status==='cancelled'||p.status==='expired'||p.status==='failed'?'var(--red)':'var(--text3)';
+                    const isActive = ['armed_pilot','pilot_filled','add1_filled'].includes(p.status);
+                    return (
+                      <tr key={p.id} style={{borderBottom:'1px solid var(--border)'}}>
+                        <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--text3)'}}>{p.id}</td>
+                        <td className="td-ticker" style={{padding:'8px 6px',fontFamily:'var(--font-mono)',fontWeight:700}}>{p.symbol}</td>
+                        <td style={{padding:'8px 6px'}}>
+                          <span style={{padding:'2px 8px',borderRadius:3,fontSize:10,fontWeight:700,color:statusColor,background:statusColor+'15',border:'1px solid '+statusColor+'30'}}>
+                            {statusLabel}
+                          </span>
+                        </td>
+                        <td style={{padding:'8px 6px'}}>{cellFor(pilot)}</td>
+                        <td style={{padding:'8px 6px'}}>{cellFor(add1)}</td>
+                        <td style={{padding:'8px 6px'}}>{cellFor(add2)}</td>
+                        <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--red)'}}>${fmt(p.stop_price)}</td>
+                        <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{p.total_qty}</td>
+                        <td style={{padding:'8px 6px',fontSize:10,color:'var(--text3)'}}>{p.created_at?.split(' ')[0]}</td>
+                        <td style={{padding:'8px 6px'}}>
+                          {isActive && (
+                            <button onClick={()=>cancelPyramid(p.id)}
+                              style={{padding:'3px 8px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:10,cursor:'pointer'}}>
+                              Cancel
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {pyramidPlans.some(p => p.notes) && (
+                <div style={{marginTop:10,fontSize:10,color:'var(--text3)',padding:8,background:'var(--bg3)',borderRadius:4}}>
+                  {pyramidPlans.filter(p => p.notes).slice(0,3).map(p => (
+                    <div key={p.id}>#{p.id} {p.symbol}: <span style={{color:'var(--text2)'}}>{p.notes}</span></div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="panel" style={{textAlign:'center',padding:30,color:'var(--text3)'}}>
+              No pyramid plans. Stage from Scanner → Levels → pick <strong style={{color:'var(--cyan)'}}>🔺 Pyramid</strong> exit strategy.
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ─── INTRADAY TIMING ──────────────────────── */}
       {section==='intraday' && <IntradayTimingSection />}

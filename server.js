@@ -98,6 +98,7 @@ const chartRoutes         = require('./src/routes/chart')();
 const optionsRoutes       = require('./src/routes/options')(db);
 const strategiesRoutes    = require('./src/routes/strategies')(db);
 const telemetryRoutes     = require('./src/routes/telemetry');
+const pyramidPlansRoutes  = require('./src/routes/pyramidPlans')(runScan);
 
 app.use('/api', scanRoutes);
 app.use('/api', sectorRoutes);
@@ -124,6 +125,7 @@ app.use('/api', chartRoutes);
 app.use('/api', optionsRoutes);
 app.use('/api', strategiesRoutes);
 app.use('/api', telemetryRoutes);
+app.use('/api', pyramidPlansRoutes);
 
 // ─── SPA fallback ────────────────────────────────────────────────────────────
 app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));

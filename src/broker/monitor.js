@@ -507,6 +507,38 @@ async function startStopMonitor() {
           console.error(`  Status poll failed for staged #${row.id}: ${e.message}`);
         }
       }
+
+      // ── Pyramid tranche fill poll ──
+      // Iterate pyramid plans with 'submitted' tranches; check each tranche's
+      // broker order status, and call handleTrancheFill() on transition to
+      // filled so the NEXT tranche gets armed for the live checker to fire.
+      try {
+        const { handleTrancheFill } = require('./pyramid-plans');
+        const pyramidRows = db().prepare(
+          "SELECT id, tranches_json FROM pyramid_plans WHERE status IN ('armed_pilot','pilot_filled','add1_filled')"
+        ).all();
+        for (const pRow of pyramidRows) {
+          let tranches; try { tranches = JSON.parse(pRow.tranches_json); } catch (_) { continue; }
+          for (const t of tranches) {
+            if (t.status !== 'submitted' || !t.orderId) continue;
+            try {
+              const ord = await alpaca.getOrder(t.orderId);
+              if (ord?.status === 'filled') {
+                handleTrancheFill(t.orderId);
+              } else if (['canceled','cancelled','expired','rejected'].includes(ord?.status)) {
+                // Tranche killed before fill — mark failed so it doesn't block the chain
+                t.status = ord.status === 'rejected' ? 'rejected' : 'cancelled';
+                db().prepare('UPDATE pyramid_plans SET tranches_json = ?, updated_at = datetime(\'now\') WHERE id = ?')
+                  .run(JSON.stringify(tranches), pRow.id);
+              }
+            } catch (e) {
+              console.error(`  Pyramid tranche poll ${t.orderId}: ${e.message}`);
+            }
+          }
+        }
+      } catch (e) {
+        console.error(`  Pyramid poll error: ${e.message}`);
+      }
     }, { scheduled: true });
 
     console.log('   Cron Backup: ✓ Running (every 5 min, market hours)');

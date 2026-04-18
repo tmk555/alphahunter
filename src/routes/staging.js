@@ -52,7 +52,8 @@ module.exports = function(db, runScan) {
   // ─── Stage from trade setup (auto-calculate everything) ───────────────────
   router.post('/staging/from-setup', async (req, res) => {
     try {
-      const { ticker, mode = 'swing', exitStrategy = 'full_in_scale_out', strategy, entryPrice: userEntryPrice } = req.body;
+      const { ticker, mode = 'swing', exitStrategy = 'full_in_scale_out', strategy,
+              entryPrice: userEntryPrice, stopPrice: userStopPrice } = req.body;
       if (!ticker) return res.status(400).json({ error: 'ticker required' });
 
       // Run scanner to get fresh stock data
@@ -69,11 +70,37 @@ module.exports = function(db, runScan) {
       // Compute trade setup (uses effectiveStock.price for all level calculations)
       const setup = computeTradeSetup(effectiveStock, mode);
 
-      // Calculate position size
       const config = getConfig();
       const regime = await getMarketRegime();
+
+      // ── Custom stop override ──
+      // If user supplied a stop price, replace the computed stop with their value.
+      // This recalculates R:R + position size so total $ risk stays at the
+      // configured riskPerTrade (shares adjust: tighter stop = more shares,
+      // wider stop = fewer shares). Lets the trader tighten on A+ VCP setups
+      // or widen on pullback-to-50MA entries where noise is expected.
       const entryPrice = effectiveStock.price;
-      const stopPrice = parseFloat(setup.stopLevel.replace(/[^0-9.]/g, ''));
+      let stopPrice;
+      if (userStopPrice != null) {
+        const overrideStop = parseFloat(userStopPrice);
+        // Sanity: for longs, stop must be below entry. Reject otherwise.
+        if (!(overrideStop > 0)) {
+          return res.status(400).json({ error: 'stopPrice must be > 0' });
+        }
+        if (overrideStop >= entryPrice) {
+          return res.status(400).json({ error: `Stop ($${overrideStop}) must be below entry ($${entryPrice}) for a long` });
+        }
+        stopPrice = overrideStop;
+        const stopPct = +((entryPrice - stopPrice) / entryPrice * 100).toFixed(1);
+        const t1 = parseFloat(setup.target1.replace(/[^0-9.]/g, ''));
+        const rr = stopPrice < entryPrice ? +((t1 - entryPrice) / (entryPrice - stopPrice)).toFixed(2) : 0;
+        setup.stopLevel = `$${stopPrice} (custom — ${stopPct}% below entry)`;
+        setup.riskReward = `${rr}:1`;
+        setup.stopPct = stopPct;
+        setup.customStop = true;
+      } else {
+        stopPrice = parseFloat(setup.stopLevel.replace(/[^0-9.]/g, ''));
+      }
 
       // Evaluate conviction override for weak regimes
       let convictionOverride = null;

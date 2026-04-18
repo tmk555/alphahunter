@@ -842,6 +842,37 @@ function initSchema() {
   // re-tightening the same trade every cron tick.
   safeAddColumn('trades', 'trail_tightened_at', 'TEXT');
   safeAddColumn('trades', 'trail_tightened_reason', 'TEXT');
+
+  // ─── Pyramid Plans ────────────────────────────────────────────────────────
+  // True pyramiding entry — pilot fires at pivot, tranche 2 fires only after
+  // pilot is filled AND price advances to confirmation trigger, tranche 3
+  // fires after tranche 2. Each tranche has optional volume-pace gate so we
+  // don't chase thin-volume fakeouts.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pyramid_plans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      symbol TEXT NOT NULL,
+      side TEXT NOT NULL DEFAULT 'buy',
+      status TEXT NOT NULL DEFAULT 'armed_pilot',
+        -- armed_pilot | pilot_filled | add1_filled | add2_filled | complete | failed | cancelled
+      total_qty INTEGER NOT NULL,
+      stop_price REAL NOT NULL,
+      target1_price REAL,
+      target2_price REAL,
+      tranches_json JSON NOT NULL,
+        -- [{label:'pilot',     qty, trigger, volumePaceMin, status, orderId, filledAt},
+        --  {label:'add1',      qty, trigger, volumePaceMin, status, orderId, filledAt},
+        --  {label:'add2',      qty, trigger, volumePaceMin, status, orderId, filledAt}]
+      source TEXT DEFAULT 'manual',
+      conviction_score INTEGER,
+      expires_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      notes TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_pyramid_plans_status ON pyramid_plans(status);
+    CREATE INDEX IF NOT EXISTS idx_pyramid_plans_symbol ON pyramid_plans(symbol);
+  `);
   safeAddColumn('rs_snapshots', 'pattern_type', 'TEXT');
   safeAddColumn('rs_snapshots', 'pattern_confidence', 'INTEGER');
   safeAddColumn('rs_snapshots', 'revision_score', 'REAL');
