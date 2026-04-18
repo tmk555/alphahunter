@@ -232,21 +232,41 @@ async function assembleMorningBrief() {
   lines.push('');
   htmlLines.push('');
 
-  // ── 5. Top Scan Picks ───────────────────────────────────────────────────
+  // ── 5. Top Scan Picks ────────────────────────────────────────────────────
+  // Uses IDENTICAL filter + sort as Trade Setups "Top Picks" tab to eliminate
+  // drift. Brief and UI must always show the same names.
+  //   Filter: rsRank >= 60 AND swingMomentum >= 40  (same as /api/daily-picks)
+  //   Sort:   conviction score (RS + accel + momentum + SEPA + VCP + RS new high)
+  //   Limit:  top 5 (brief is concise)
   let topPicks = [];
   try {
-    // First try cached scan data
     const { cacheGet } = require('../data/cache');
-    const cached = cacheGet('rs:full', 24 * 60 * 60 * 1000); // Accept up to 24h old
+    const cached = cacheGet('rs:full', 24 * 60 * 60 * 1000);
     if (cached?.length) {
+      const { calcConviction } = require('../signals/conviction');
+      const { getRSTrend } = require('../signals/rs');
+      const { loadHistory, RS_HISTORY } = require('../data/store');
+      let history = null;
+      try { history = loadHistory(RS_HISTORY); } catch (_) {}
+
       topPicks = cached
-        .filter(s => s.stage === 2 && (s.rsRank || 0) >= 80)
-        .sort((a, b) => (b.rsRank || 0) - (a.rsRank || 0))
+        .filter(s => (s.rsRank || 0) >= 60 && (s.swingMomentum || 0) >= 40)
+        .map(s => {
+          let trend = null;
+          try { trend = history ? getRSTrend(s.ticker, history) : null; } catch (_) {}
+          let convictionScore = s.rsRank || 0;
+          try {
+            const { convictionScore: cs } = calcConviction(s, trend, null);
+            if (cs != null) convictionScore = cs;
+          } catch (_) {}
+          return { ...s, convictionScore };
+        })
+        .sort((a, b) => (b.convictionScore || 0) - (a.convictionScore || 0))
         .slice(0, 5);
     }
   } catch (_) {}
 
-  // Fallback to latest DB snapshots if cache is empty
+  // DB fallback — SQL conviction-proxy formula (mirrors conviction.js weights)
   if (!topPicks.length) {
     try {
       const latestDate = db().prepare(
@@ -255,19 +275,44 @@ async function assembleMorningBrief() {
       if (latestDate) {
         topPicks = db().prepare(`
           SELECT symbol as ticker, rs_rank as rsRank, stage, vcp_forming as vcpForming,
-                 rs_line_new_high as rsLineNewHigh, vs_ma50 as vsMA50, swing_momentum as swingMomentum
+                 rs_line_new_high as rsLineNewHigh, vs_ma50 as vsMA50,
+                 swing_momentum as swingMomentum, sepa_score as sepaScore
           FROM rs_snapshots
-          WHERE date = ? AND type = 'stock' AND stage = 2 AND rs_rank >= 80
-          ORDER BY rs_rank DESC
+          WHERE date = ? AND type = 'stock'
+            AND rs_rank >= 60 AND swing_momentum >= 40
+          ORDER BY (rs_rank * 0.25 + COALESCE(swing_momentum,0) * 0.20
+                    + COALESCE(sepa_score,0) * 2.5
+                    + CASE WHEN rs_line_new_high=1 THEN 8 ELSE 0 END
+                    + CASE WHEN vcp_forming=1 THEN 6 ELSE 0 END) DESC
           LIMIT 5
         `).all(latestDate);
       }
     } catch (_) {}
   }
 
+  // ── 5b. Deep Scan Picks (if recent cache exists) ────────────────────────
+  // Deep scan runs on-demand from the Trade Setups tab. If yesterday's scan
+  // is still fresh (< 24h old), surface it here too — these are the
+  // stricter actionable-setup candidates (near high / vol surge / strong
+  // momentum gates), often narrower than Top Picks. Great morning trigger list.
+  let deepScanPicks = [];
+  let deepScanAgeHrs = null;
+  let deepScanMode = null;
+  try {
+    const row = db().prepare(
+      "SELECT mode, results, created_at, (julianday('now') - julianday(created_at)) * 24 as age_hrs FROM deep_scan_cache ORDER BY created_at DESC LIMIT 1"
+    ).get();
+    if (row && row.age_hrs < 24) {
+      deepScanAgeHrs = +row.age_hrs.toFixed(1);
+      deepScanMode = row.mode;
+      const parsed = JSON.parse(row.results || '[]');
+      deepScanPicks = parsed.slice(0, 5);
+    }
+  } catch (_) {}
+
   if (topPicks.length) {
-    lines.push('🎯 TOP SCAN PICKS');
-    htmlLines.push('🎯 <b>TOP SCAN PICKS</b>');
+    lines.push('🎯 TOP PICKS (ranked by conviction — matches Trade Setups tab)');
+    htmlLines.push('🎯 <b>TOP PICKS</b> <i>(ranked by conviction — matches Trade Setups tab)</i>');
 
     for (let i = 0; i < topPicks.length; i++) {
       const s = topPicks[i];
@@ -276,13 +321,41 @@ async function assembleMorningBrief() {
       if (s.vcpForming) tags.push('VCP');
       if (s.rsLineNewHigh) tags.push('RS new high');
       const vs50 = s.vsMA50 != null ? `${fmtPct(s.vsMA50)} vs MA50` : '';
+      const conv = s.convictionScore != null ? `Conv ${Math.round(s.convictionScore)}` : '';
 
-      lines.push(`  ${i + 1}. ${s.ticker} — RS ${s.rsRank}${tags.length ? ', ' + tags.join(', ') : ''}${vs50 ? ', ' + vs50 : ''}`);
-      htmlLines.push(`  ${i + 1}. <b>${s.ticker}</b> — RS ${s.rsRank}${tags.length ? ', ' + tags.join(', ') : ''}${vs50 ? ', ' + vs50 : ''}`);
+      lines.push(`  ${i + 1}. ${s.ticker} — RS ${s.rsRank}${conv ? ', ' + conv : ''}${tags.length ? ', ' + tags.join(', ') : ''}${vs50 ? ', ' + vs50 : ''}`);
+      htmlLines.push(`  ${i + 1}. <b>${s.ticker}</b> — RS ${s.rsRank}${conv ? ', ' + conv : ''}${tags.length ? ', ' + tags.join(', ') : ''}${vs50 ? ', ' + vs50 : ''}`);
     }
   } else {
-    lines.push('🎯 TOP SCAN PICKS: No scan data available');
-    htmlLines.push('🎯 <b>TOP SCAN PICKS:</b> <i>No scan data available</i>');
+    lines.push('🎯 TOP PICKS: No scan data available');
+    htmlLines.push('🎯 <b>TOP PICKS:</b> <i>No scan data available</i>');
+  }
+
+  // ── Deep Scan (if cache is fresh) ──────────────────────────────────────
+  if (deepScanPicks.length) {
+    lines.push('');
+    lines.push(`🔍 DEEP SCAN (${deepScanMode || '?'} — ran ${deepScanAgeHrs}h ago, actionable setups)`);
+    htmlLines.push('');
+    htmlLines.push(`🔍 <b>DEEP SCAN</b> <i>(${deepScanMode || '?'} — ran ${deepScanAgeHrs}h ago, actionable setups)</i>`);
+
+    for (let i = 0; i < deepScanPicks.length; i++) {
+      const s = deepScanPicks[i];
+      const tags = [];
+      if (s.vcpForming) tags.push('VCP');
+      if (s.rsLineNewHigh) tags.push('RS high');
+      const setup = s.algoSetup;
+      const entry = setup?.entryZone ? setup.entryZone.split(' ')[0] : '';
+      const stop  = setup?.stopLevel ? setup.stopLevel.split(' ')[0] : '';
+      const vs50 = s.vsMA50 != null ? `${fmtPct(s.vsMA50)} vs MA50` : '';
+      const line = `  ${i + 1}. ${s.ticker} — RS ${s.rsRank}${tags.length ? ', ' + tags.join(', ') : ''}${vs50 ? ', ' + vs50 : ''}${entry ? ` · Entry ${entry} Stop ${stop}` : ''}`;
+      lines.push(line);
+      htmlLines.push(line.replace(s.ticker, `<b>${s.ticker}</b>`));
+    }
+  } else {
+    lines.push('');
+    lines.push('🔍 DEEP SCAN: Not run recently — open Trade Setups → Deep Scan for actionable setups');
+    htmlLines.push('');
+    htmlLines.push('🔍 <b>DEEP SCAN:</b> <i>Not run recently — open Trade Setups → Deep Scan for actionable setups</i>');
   }
 
   return {

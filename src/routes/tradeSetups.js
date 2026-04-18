@@ -5,6 +5,9 @@ const router  = express.Router();
 const { isSwingCandidate, isPositionCandidate, computeTradeSetup } = require('../signals/candidates');
 const { getMarketRegime } = require('../risk/regime');
 const { getDB } = require('../data/database');
+const { calcConviction } = require('../signals/conviction');
+const { getRSTrend } = require('../signals/rs');
+const { loadHistory, RS_HISTORY } = require('../data/store');
 
 module.exports = function(runRSScanFn, anthropic) {
   // Batch AI trade briefs
@@ -114,11 +117,31 @@ Return JSON array:
     }
 
     const tradeMode = mode==='both' ? 'swing' : mode;
-    const results = candidates.map(s => ({
-      ...s,
-      algoSetup: computeTradeSetup(s, tradeMode),
-      brief: null,
-    }));
+
+    // Compute conviction for each candidate so sort can use it even without AI.
+    // The rsData sent from the frontend doesn't include conviction (that's
+    // added by the /api/daily-picks pipeline, not by the base scanner), so
+    // we compute here from the raw RS history.
+    let rsHistory = null;
+    try { rsHistory = loadHistory(RS_HISTORY); } catch (_) {}
+    const results = candidates.map(s => {
+      let rsTrend = s.rsTrend || null;
+      let convictionScore = s.convictionScore || 0;
+      if (rsHistory) {
+        try {
+          rsTrend = rsTrend || getRSTrend(s.ticker, rsHistory);
+          const { convictionScore: cs } = calcConviction(s, rsTrend, null);
+          if (cs != null) convictionScore = cs;
+        } catch (_) { /* fall back to whatever was on the stock */ }
+      }
+      return {
+        ...s,
+        rsTrend,
+        convictionScore,
+        algoSetup: computeTradeSetup(s, tradeMode),
+        brief: null,
+      };
+    });
 
     if (anthropic) {
       try {
@@ -131,11 +154,22 @@ Return JSON array:
       }
     }
 
+    // Sort: AI verdict (if present) → conviction score → RS rank
+    // Without an Anthropic key, brief.verdict is null for all stocks and the
+    // first comparator is a no-op — the sort then falls through to conviction
+    // score, which is a MUCH richer signal than RS rank alone (it integrates
+    // RS + SEPA + VCP + institutional flow + patterns + revisions + stage).
+    // Previously this sort degraded to RS-only when AI was disabled, which
+    // wasted the conviction calculation already attached to every candidate.
     const order = {BUY:0,WATCH:1,AVOID:2};
     results.sort((a,b) => {
       const av = order[a.brief?.verdict] ?? 3;
       const bv = order[b.brief?.verdict] ?? 3;
-      return av !== bv ? av - bv : b.rsRank - a.rsRank;
+      if (av !== bv) return av - bv;
+      const ac = a.convictionScore || 0;
+      const bc = b.convictionScore || 0;
+      if (ac !== bc) return bc - ac;
+      return (b.rsRank || 0) - (a.rsRank || 0);
     });
 
     // Persist results to DB so they survive page refresh

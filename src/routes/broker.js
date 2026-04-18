@@ -27,13 +27,54 @@ module.exports = function(db) {
   router.get('/broker/positions', async (req, res) => {
     try {
       const positions = await alpaca.getPositions();
-      // Enrich with local trade data
+      // Enrich with local trade data. Multi-tranche positions have multiple
+      // trade rows per symbol (one per tranche). Only the row synced from the
+      // original staged_order has stop/target populated — sibling tranche
+      // rows have NULLs because they didn't match an alpaca_order_id lookup.
+      // So we:
+      //   1. Group trades by symbol
+      //   2. Prefer the row that HAS stop_price/target data (real setup context)
+      //   3. Aggregate totals across all tranches (shares, partial_exits, etc.)
       const localTrades = db.prepare('SELECT * FROM trades WHERE exit_date IS NULL').all();
+      const tradesBySymbol = {};
+      for (const t of localTrades) {
+        if (!tradesBySymbol[t.symbol]) tradesBySymbol[t.symbol] = [];
+        tradesBySymbol[t.symbol].push(t);
+      }
+      // For each symbol pick the "canonical" trade row — one with setup data.
+      // Fall back to the first row if none have stop data.
       const tradeMap = {};
-      for (const t of localTrades) tradeMap[t.symbol] = t;
+      for (const [sym, rows] of Object.entries(tradesBySymbol)) {
+        const withStop = rows.find(r => r.stop_price != null);
+        const withTarget = rows.find(r => r.target1 != null);
+        tradeMap[sym] = withStop || withTarget || rows[0];
+      }
+
+      // Also fetch matching staged_orders for tranches_json (lets UI show
+      // each tranche's individual TP level). We key by symbol; for multi-
+      // tranche setups this will pick the most recent submitted row.
+      const stagedRows = db.prepare(
+        "SELECT * FROM staged_orders WHERE status IN ('submitted','filled') AND tranches_json IS NOT NULL ORDER BY created_at DESC"
+      ).all();
+      const stagedMap = {};
+      for (const s of stagedRows) {
+        if (!stagedMap[s.symbol]) stagedMap[s.symbol] = s;
+      }
 
       const enriched = positions.map(p => {
         const local = tradeMap[p.symbol];
+        const staged = stagedMap[p.symbol];
+        let trancheTargets = null;
+        if (staged?.tranches_json) {
+          try {
+            trancheTargets = JSON.parse(staged.tranches_json)
+              .map(t => ({ label: t.label, qty: t.qty, tp: t.tp }));
+          } catch (_) {}
+        }
+        // Parse partial exits so UI can know if any tranches already fired
+        let partialExits = [];
+        try { partialExits = JSON.parse(local?.partial_exits || '[]'); } catch (_) {}
+
         return {
           symbol:         p.symbol,
           qty:            +p.qty,
@@ -46,14 +87,20 @@ module.exports = function(db) {
           unrealizedPLPct: +p.unrealized_plpc * 100,
           changeToday:    +p.change_today * 100,
           // Local enrichments
-          localStop:         local?.stop_price || null,
-          localTarget1:      local?.target1 || null,
-          localTarget2:      local?.target2 || null,
+          localStop:         local?.stop_price || staged?.stop_price || null,
+          // ORIGINAL stop from staged_orders — used for R-multiple calc.
+          // This never changes even after stop moves to breakeven post-T1.
+          localInitialStop:  staged?.stop_price || local?.stop_price || null,
+          localTarget1:      local?.target1 || staged?.target1_price || null,
+          localTarget2:      local?.target2 || staged?.target2_price || null,
           localEntryRS:      local?.entry_rs || null,
           localTradeId:      local?.id || null,
           localEntryDate:    local?.entry_date || null,
           localStrategy:     local?.strategy || null,
-          localExitStrategy: local?.exit_strategy || null,
+          localExitStrategy: local?.exit_strategy || staged?.exit_strategy || null,
+          localPartialExits: partialExits,  // [{level: 'target1', shares, price, pnl, timestamp}, ...]
+          localTrailPct:     local?.trail_pct ?? null,
+          trancheTargets,    // array of {label, qty, tp} for multi-tranche display
         };
       });
 

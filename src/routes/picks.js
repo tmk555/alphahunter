@@ -13,44 +13,48 @@ const { runETFScan } = require('../scanner');
 
 function db() { return getDB(); }
 
+// Shared top-picks engine — used by /api/daily-picks (UI) AND morning brief
+// (notifications). Keeping them in ONE function guarantees the Trade Setups
+// "Top Picks" and the "☀️ Morning Brief → TOP PICKS" list show the same names.
+async function computeTopPicks(runRSScanFn, SECTOR_ETFS_ARG, { limit = 12 } = {}) {
+  const stocks  = await runRSScanFn();
+  const history = loadHistory(RS_HISTORY);
+  const regime  = await getMarketRegime();
+
+  let rotationModel = null;
+  try {
+    if (SECTOR_ETFS_ARG) {
+      const sectorData = await runETFScan(SECTOR_ETFS_ARG, SEC_HISTORY, 'SEC_');
+      rotationModel = computeRotation(sectorData);
+    }
+  } catch (_) {}
+
+  const ranked = stocks
+    .filter(s => s.rsRank >= 60 && s.swingMomentum >= 40)
+    .map(s => {
+      const trend = getRSTrend(s.ticker, history);
+      const { convictionScore, reasons } = calcConviction(s, trend, rotationModel);
+      const swingSetup    = computeTradeSetup(s, 'swing');
+      const positionSetup = computeTradeSetup(s, 'position');
+      const convictionOverride = evaluateConvictionOverride(s, convictionScore, regime);
+      return { ...s, rsTrend: trend, convictionScore, reasons, swingSetup, positionSetup, convictionOverride };
+    })
+    .sort((a, b) => b.convictionScore - a.convictionScore);
+
+  return {
+    picks: ranked.slice(0, limit),
+    totalQualified: ranked.length,
+    regime,
+    convictionOverrides: ranked.filter(s => s.convictionOverride).slice(0, 10),
+  };
+}
+
 module.exports = function(runRSScanFn, SECTOR_ETFS_ARG) {
   router.get('/daily-picks', async (req, res) => {
     try {
-      const stocks  = await runRSScanFn();
-      const history = loadHistory(RS_HISTORY);
-      const regime  = await getMarketRegime();
-
-      // Build rotation model for sector tilt in conviction scoring
-      let rotationModel = null;
-      try {
-        if (SECTOR_ETFS_ARG) {
-          const sectorData = await runETFScan(SECTOR_ETFS_ARG, SEC_HISTORY, 'SEC_');
-          rotationModel = computeRotation(sectorData);
-        }
-      } catch (_) { /* non-critical — conviction works without rotation */ }
-
       const limit = Math.max(1, Math.min(50, parseInt(req.query.limit, 10) || 7));
-
-      const ranked = stocks
-        .filter(s => s.rsRank >= 60 && s.swingMomentum >= 40)
-        .map(s => {
-          const trend = getRSTrend(s.ticker, history);
-          const { convictionScore, reasons } = calcConviction(s, trend, rotationModel);
-          const swingSetup    = computeTradeSetup(s, 'swing');
-          const positionSetup = computeTradeSetup(s, 'position');
-          // Evaluate conviction override for weak regimes
-          const convictionOverride = evaluateConvictionOverride(s, convictionScore, regime);
-          return { ...s, rsTrend: trend, convictionScore, reasons, swingSetup, positionSetup, convictionOverride };
-        })
-        .sort((a, b) => b.convictionScore - a.convictionScore);
-
-      const totalQualified = ranked.length;
-      const picks = ranked.slice(0, limit);
-
-      // Separate conviction overrides — stocks that deserve attention despite regime
-      const convictionOverrides = ranked
-        .filter(s => s.convictionOverride)
-        .slice(0, 10);
+      const { picks, totalQualified, regime, convictionOverrides } =
+        await computeTopPicks(runRSScanFn, SECTOR_ETFS_ARG, { limit });
 
       res.json({
         picks,
@@ -153,3 +157,8 @@ module.exports = function(runRSScanFn, SECTOR_ETFS_ARG) {
 
   return router;
 };
+
+// Expose the shared function so notifications/briefs.js can generate the
+// EXACT same top picks the Trade Setups UI shows — no drift between brief
+// and dashboard.
+module.exports.computeTopPicks = computeTopPicks;

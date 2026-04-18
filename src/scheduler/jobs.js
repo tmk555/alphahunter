@@ -294,6 +294,20 @@ registerJobType('rotation_watch', {
   },
 });
 
+// ─── Pyramid Plans Watcher ──────────────────────────────────────────────────
+// Runs every minute during market hours. Checks every armed pyramid plan
+// for trigger + volume-pace + gap conditions, and fires the next tranche
+// when all gates pass.
+
+registerJobType('pyramid_watch', {
+  description: 'Monitor pyramid plans — fire pilot/add1/add2 tranches when triggers hit + volume confirms',
+  defaultConfig: {},
+  handler: async () => {
+    const { checkPyramidPlans } = require('../broker/pyramid-plans');
+    return checkPyramidPlans();
+  },
+});
+
 // ─── 10. Equity Snapshot — Daily portfolio alpha tracking ──────────────────
 
 registerJobType('equity_snapshot', {
@@ -845,6 +859,16 @@ const DEFAULT_JOBS = [
     job_type: 'rotation_watch',
     cron_expression: '15 17 * * 1-5',  // 5:15 PM server local, weekdays
     config: { rsDropThreshold: 20, lookbackDays: 10, tightTrailPct: 0.04 },
+  },
+
+  // Pyramid plans watcher — runs every 1 min during market hours.
+  // Fires armed tranches when price + volume pace + gap gates pass.
+  {
+    name: 'pyramid_watch_intraday',
+    description: 'Fire armed pyramid tranches on trigger + volume confirmation',
+    job_type: 'pyramid_watch',
+    cron_expression: '*/1 9-15 * * 1-5',  // every 1 min, 9am-3:59pm, weekdays
+    config: {},
   },
 
   // Correlation drift watcher — hourly during market hours. Looks at every
