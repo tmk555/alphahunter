@@ -9923,7 +9923,7 @@ function ReplayTab() {
             </div>
           )}
           <div style={{display:'flex',alignItems:'center',gap:6}}>
-            <input type="number" value={bfForm.lookbackDays} onChange={e=>setBfForm({...bfForm,lookbackDays:+e.target.value})} min={1} max={366} style={{width:60,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'5px 6px',color:'var(--text)',fontSize:10,fontFamily:'var(--font-mono)',textAlign:'center'}}/>
+            <input type="number" value={bfForm.lookbackDays} onChange={e=>setBfForm({...bfForm,lookbackDays:+e.target.value})} min={1} max={730} style={{width:60,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'5px 6px',color:'var(--text)',fontSize:10,fontFamily:'var(--font-mono)',textAlign:'center'}}/>
             <span style={{fontSize:9,color:'var(--text3)'}}>days</span>
             <button className="load-btn" onClick={runBackfill} disabled={bfLoading} style={{fontSize:9,padding:'5px 12px',background:'var(--orange, #ff6d00)'}}>{bfLoading?'BACKFILLING...':'BACKFILL'}</button>
           </div>
@@ -10111,24 +10111,60 @@ function ReplayTab() {
             </div>
           )}
 
-          {/* Regime Breakdown (regime_adaptive only) */}
-          {result.regimeBreakdown && (
+          {/* Regime day distribution (how many days of the window spent in each regime) */}
+          {result.regimeDayCounts && (
             <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:16}}>
               <div style={{display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
-                <span style={{fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1,color:'var(--cyan)'}}>REGIME BREAKDOWN</span>
-                {Object.entries(result.regimeBreakdown).map(([regime, days])=>{
+                <span style={{fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1,color:'var(--cyan)'}}>REGIME DAYS</span>
+                {Object.entries(result.regimeDayCounts).map(([regime, days])=>{
                   const colors = {BULL:'var(--green)',NEUTRAL:'var(--text2)',CAUTION:'var(--amber)',CORRECTION:'var(--red)'};
-                  const total = Object.values(result.regimeBreakdown).reduce((a,b)=>a+b,0);
+                  const total = Object.values(result.regimeDayCounts).reduce((a,b)=>a+b,0);
                   return <span key={regime} style={{fontSize:11,color:colors[regime]||'var(--text)'}}>
                     <strong>{regime}</strong>: {days}d ({total?(days/total*100).toFixed(0):0}%)
                   </span>;
                 })}
               </div>
               <div style={{display:'flex',marginTop:8,height:6,borderRadius:3,overflow:'hidden'}}>
-                {Object.entries(result.regimeBreakdown).map(([regime, days])=>{
+                {Object.entries(result.regimeDayCounts).map(([regime, days])=>{
                   const colors = {BULL:'#00e676',NEUTRAL:'#888',CAUTION:'#ff9800',CORRECTION:'#ff3d57'};
-                  const total = Object.values(result.regimeBreakdown).reduce((a,b)=>a+b,0);
+                  const total = Object.values(result.regimeDayCounts).reduce((a,b)=>a+b,0);
                   return <div key={regime} style={{width:(days/total*100)+'%',background:colors[regime]||'#555'}}/>;
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Per-regime trade performance — segmentation of trades by entry-day regime */}
+          {result.regimeBreakdown && Object.values(result.regimeBreakdown).some(v => v.n > 0) && (
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:16}}>
+              <div style={{fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1,color:'var(--cyan)',marginBottom:8}}>🌡 PERFORMANCE BY ENTRY REGIME</div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8}}>
+                {['BULL','NEUTRAL','CAUTION','CORRECTION'].map(regime=>{
+                  const r = result.regimeBreakdown[regime] || {n:0};
+                  const colors = {BULL:'var(--green)',NEUTRAL:'var(--text2)',CAUTION:'var(--amber)',CORRECTION:'var(--red)'};
+                  if (!r.n) return (
+                    <div key={regime} style={{padding:'8px 10px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,opacity:0.5}}>
+                      <div style={{fontSize:10,fontFamily:'var(--font-mono)',color:colors[regime]}}>{regime}</div>
+                      <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>no entries</div>
+                    </div>
+                  );
+                  return (
+                    <div key={regime} style={{padding:'8px 10px',background:'var(--bg)',border:`1px solid ${colors[regime]}55`,borderRadius:4}}>
+                      <div style={{fontSize:10,fontFamily:'var(--font-mono)',color:colors[regime],letterSpacing:1}}>{regime}</div>
+                      <div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginTop:4}}>
+                        <span style={{color:'var(--text3)'}}>n</span><span style={{fontFamily:'var(--font-mono)',fontWeight:600}}>{r.n}</span>
+                      </div>
+                      <div style={{display:'flex',justifyContent:'space-between',fontSize:11}}>
+                        <span style={{color:'var(--text3)'}}>win%</span><span style={{fontFamily:'var(--font-mono)',fontWeight:600,color:r.winRate>=50?'var(--green)':'var(--red)'}}>{r.winRate}%</span>
+                      </div>
+                      <div style={{display:'flex',justifyContent:'space-between',fontSize:11}}>
+                        <span style={{color:'var(--text3)'}}>exp</span><span style={{fontFamily:'var(--font-mono)',fontWeight:600,color:r.expectancy>0?'var(--green)':'var(--red)'}}>{r.expectancy>0?'+':''}{r.expectancy}%</span>
+                      </div>
+                      <div style={{display:'flex',justifyContent:'space-between',fontSize:11}}>
+                        <span style={{color:'var(--text3)'}}>PF</span><span style={{fontFamily:'var(--font-mono)',fontWeight:600}}>{r.profitFactor===Infinity?'∞':r.profitFactor}</span>
+                      </div>
+                    </div>
+                  );
                 })}
               </div>
             </div>
