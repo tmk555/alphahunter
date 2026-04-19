@@ -120,13 +120,24 @@ const BUILT_IN_STRATEGIES = {
 //   0-2 → healthy
 //   3   → CAUTION (pressure building, tighten stops)
 //   4+  → CORRECTION (institutions clearly selling)
-function detectRegimeForDate(spyByDate, date) {
+function detectRegimeForDate(spyByDate, date, strict = true) {
   const spy = spyByDate[date];
   if (!spy || spy.vs_ma50 == null || spy.vs_ma200 == null) return 'NEUTRAL';
   const above50  = spy.vs_ma50  > 0;
   const above200 = spy.vs_ma200 > 0;
 
-  // Compute distribution-day count over last 25 sessions using available data
+  // Non-strict mode: legacy MA-only regime (optimistic — matches old behavior
+  // before distribution-day detection was added). Useful for edge-case
+  // analysis and comparing against the strict default.
+  if (!strict) {
+    if (above50 && above200) return 'BULL';
+    if (!above50 && above200) return 'NEUTRAL';
+    if (above50 && !above200) return 'CAUTION';
+    return 'CORRECTION';
+  }
+
+  // Strict mode (default): layer distribution-day analysis on top of MAs.
+  // Matches live regime engine's institutional-selling detection.
   let distDays = 0;
   const allDates = Object.keys(spyByDate).sort();
   const idx = allDates.indexOf(date);
@@ -142,12 +153,10 @@ function detectRegimeForDate(spyByDate, date) {
     }
   }
 
-  // Distribution-day overrides (stricter than pure MA check)
   if (distDays >= 5) return 'CORRECTION';     // 5+ = institutions clearly selling
   if (distDays >= 4) return above50 ? 'CAUTION' : 'CORRECTION';
-  if (distDays >= 3 && above50 && above200) return 'CAUTION';  // pressure in a bull
+  if (distDays >= 3 && above50 && above200) return 'CAUTION';
 
-  // Standard MA-based regime fallback
   if (above50 && above200) return 'BULL';
   if (!above50 && above200) return 'NEUTRAL';
   if (above50 && !above200) return 'CAUTION';
@@ -568,8 +577,9 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
   function resolveSub(date) {
     // Always detect the day's regime — non-adaptive strategies still tag
     // each trade's entryRegime so the per-regime breakdown works across
-    // the full Compare All, not just the adaptive path.
-    const regime = detectRegimeForDate(spyByDate, date);
+    // the full Compare All, not just the adaptive path. Strict flag from
+    // params.strictRegime (default true = dist-days + MA, false = MA only).
+    const regime = detectRegimeForDate(spyByDate, date, mergedParams.strictRegime !== false);
     regimeStats[regime]++;
     if (!isAdaptive) return { key: strategy, def: stratDef, regime };
     const subKey = regimeToSubStrategy(regime, mergedParams);
@@ -701,7 +711,7 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
 
       // Force-exit longs when regime turns risk-off (all long strategies)
       if (!exitCheck.exit && !posIsShort) {
-        const regimeForExit = todayRegime || detectRegimeForDate(spyByDate, date);
+        const regimeForExit = todayRegime || detectRegimeForDate(spyByDate, date, mergedParams.strictRegime !== false);
         if (regimeForExit === 'CAUTION' || regimeForExit === 'CORRECTION') {
           exitCheck = { exit: true, reason: `regime_${regimeForExit.toLowerCase()}` };
         }
@@ -808,7 +818,7 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
         }
 
         // Regime re-check: ensure regime is still favorable on fill day
-        const fillRegime = detectRegimeForDate(spyByDate, date);
+        const fillRegime = detectRegimeForDate(spyByDate, date, mergedParams.strictRegime !== false);
         if (!pe.isShort && (fillRegime === 'CAUTION' || fillRegime === 'CORRECTION')) continue;
 
         // Phase 2.6: pile `nextDayOpenGapBps` on top of regular slippage so
@@ -858,7 +868,7 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     // Adaptive: handled by sub-strategy mapping (CAUTION/CORRECTION→cash).
     // All other long strategies: block new entries in CAUTION/CORRECTION.
     const cashToday = isAdaptive && !sub.def;
-    const regime = detectRegimeForDate(spyByDate, date);
+    const regime = detectRegimeForDate(spyByDate, date, mergedParams.strictRegime !== false);
     if (!isAdaptive) regimeStats[regime]++;
     const regimeBlocked = !isAdaptive && !isShort && (regime === 'CAUTION' || regime === 'CORRECTION');
     if (!cashToday && !regimeBlocked && positions.size < maxPositions) {
@@ -1896,7 +1906,14 @@ function getWFHistory(limit = 10) {
 function getWFResult(id) {
   const row = db().prepare('SELECT * FROM wf_results WHERE id = ?').get(id);
   if (!row) return null;
-  return { ...row, result: JSON.parse(row.result) };
+  // Return the saved result payload with the DB id attached, matching the
+  // shape returned by runWalkForward() so the UI can re-render identically
+  // whether loading from history or viewing a fresh run. Previously this
+  // returned { ...row, result: parsed } which nested the payload inside
+  // .result and broke the UI (wfResult.outOfSample was undefined).
+  let payload = {};
+  try { payload = JSON.parse(row.result); } catch (_) {}
+  return { ...payload, id: row.id, savedAt: row.created_at };
 }
 
 module.exports = {

@@ -1,6 +1,12 @@
 // ─── Multi-Provider Manager ─────────────────────────────────────────────────
-// Cascading fallback: Polygon → Yahoo → FMP → Alpha Vantage
+// Cascading fallback: Polygon → Alpaca → Yahoo → FMP → Alpha Vantage
 // Tracks provider health, auto-promotes/demotes based on success rate
+//
+// Alpaca placement rationale: right after Polygon (when configured, both
+// deliver 9+ years of daily bars — far beyond Yahoo's 2-year ceiling). Yahoo
+// is still kept as a fallback for users without either. Ordering within the
+// cascade means Alpaca wins over Yahoo for historical backtests while Yahoo
+// still wins for unauthenticated lookups.
 const { getDB } = require('../database');
 const { cacheGet, cacheSet } = require('../cache');
 
@@ -9,6 +15,7 @@ function db() { return getDB(); }
 // Provider registry — order = priority (Polygon first for reliability)
 const providers = [
   { key: 'polygon',       name: 'Polygon.io',      module: () => require('./polygon') },
+  { key: 'alpaca',        name: 'Alpaca Markets',  module: () => require('./alpaca') },
   { key: 'yahoo',         name: 'Yahoo Finance',   module: () => require('./yahoo') },
   { key: 'fmp',           name: 'FMP',             module: () => require('./fmp') },
   { key: 'alphavantage',  name: 'Alpha Vantage',   module: () => require('./alphavantage') },
@@ -90,9 +97,14 @@ async function withFallback(operation, methodMap) {
 
 // ─── Public API (drop-in replacement for yahoo.js) ─────────────────────────
 
+// Live quotes: skip Alpaca intentionally. Alpaca's free-tier quote feed is
+// IEX-only (~2% of volume), which can slightly lag the consolidated tape on
+// less-liquid names. Yahoo's free quote is consolidated and sufficient for
+// scanner/dashboard use. Alpaca remains history-only for the 9-year bar depth.
 async function getQuotes(symbols) {
   const { data } = await withFallback(`quote(${symbols.length} symbols)`, (mod, key) => {
     if (key === 'polygon') return () => mod.polygonQuote(symbols);
+    if (key === 'alpaca')  return null;  // Alpaca = history-only (see note above)
     if (key === 'yahoo') return () => mod.yahooQuote(symbols);
     if (key === 'fmp') return () => mod.fmpQuote(symbols);
     if (key === 'alphavantage') return () => mod.avQuote(symbols);
@@ -104,6 +116,7 @@ async function getQuotes(symbols) {
 async function getHistory(symbol) {
   const { data } = await withFallback(`history(${symbol})`, (mod, key) => {
     if (key === 'polygon') return () => mod.polygonHistory(symbol);
+    if (key === 'alpaca')  return () => mod.alpacaHistory(symbol);
     if (key === 'yahoo') return () => mod.yahooHistory(symbol);
     if (key === 'fmp') return () => mod.fmpHistory(symbol);
     if (key === 'alphavantage') return () => mod.avHistory(symbol);
@@ -115,6 +128,7 @@ async function getHistory(symbol) {
 async function getHistoryFull(symbol) {
   const { data } = await withFallback(`historyFull(${symbol})`, (mod, key) => {
     if (key === 'polygon') return () => mod.polygonHistoryFull(symbol);
+    if (key === 'alpaca')  return () => mod.alpacaHistoryFull(symbol);
     if (key === 'yahoo') return () => mod.yahooHistoryFull(symbol);
     if (key === 'fmp') return () => mod.fmpHistoryFull(symbol);
     if (key === 'alphavantage') return () => mod.avHistoryFull(symbol);
