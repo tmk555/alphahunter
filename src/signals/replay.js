@@ -105,11 +105,49 @@ const BUILT_IN_STRATEGIES = {
 //   NEUTRAL:    SPY above 200d but below 50d (pullback)    → risk-on, quality
 //   CAUTION:    SPY below 200d but above 50d (recovery)    → flat, wait for FTD
 //   CORRECTION: SPY below both                             → flat or short
+// Historical regime detection for backtests — upgraded to use distribution
+// days in addition to SPY vs MAs. Previously only used 2-factor MA check which
+// let a backtest stay "BULL" during Q1 2025 while distribution days were
+// spiking (institutions selling) — the live system would have flagged
+// UPTREND_PRESSURE or early CORRECTION, blocking new trades.
+//
+// Distribution day rules (O'Neil canonical, approximated for snapshot data):
+//   SPY down ≥ 0.2% day-over-day + volume_ratio > 1.0 (above 50-day avg)
+//   → counts as a distribution day. (Raw volume vs prior-day would be ideal
+//   but our snapshots only persist volume_ratio, so we use the avg-based proxy.)
+//
+// Count over rolling 25 sessions:
+//   0-2 → healthy
+//   3   → CAUTION (pressure building, tighten stops)
+//   4+  → CORRECTION (institutions clearly selling)
 function detectRegimeForDate(spyByDate, date) {
   const spy = spyByDate[date];
   if (!spy || spy.vs_ma50 == null || spy.vs_ma200 == null) return 'NEUTRAL';
   const above50  = spy.vs_ma50  > 0;
   const above200 = spy.vs_ma200 > 0;
+
+  // Compute distribution-day count over last 25 sessions using available data
+  let distDays = 0;
+  const allDates = Object.keys(spyByDate).sort();
+  const idx = allDates.indexOf(date);
+  if (idx >= 25) {
+    const window = allDates.slice(idx - 25, idx + 1);
+    for (let i = 1; i < window.length; i++) {
+      const bar  = spyByDate[window[i]];
+      const prev = spyByDate[window[i-1]];
+      if (!bar?.price || !prev?.price) continue;
+      const chg = (bar.price - prev.price) / prev.price;
+      const volAboveAvg = (bar.volume_ratio || 0) > 1.0;
+      if (chg <= -0.002 && volAboveAvg) distDays++;
+    }
+  }
+
+  // Distribution-day overrides (stricter than pure MA check)
+  if (distDays >= 5) return 'CORRECTION';     // 5+ = institutions clearly selling
+  if (distDays >= 4) return above50 ? 'CAUTION' : 'CORRECTION';
+  if (distDays >= 3 && above50 && above200) return 'CAUTION';  // pressure in a bull
+
+  // Standard MA-based regime fallback
   if (above50 && above200) return 'BULL';
   if (!above50 && above200) return 'NEUTRAL';
   if (above50 && !above200) return 'CAUTION';
@@ -224,7 +262,10 @@ function evaluateExit(stock, entryStock, strategy, params, holdingDays, position
     const stopPrice = entryStock.price - (stopATR * atr);
     const targetPrice = entryStock.price + (targetATR * atr);
     if (stock.price <= stopPrice) return { exit: true, reason: 'stop_hit' };
-    if (stock.price >= targetPrice) return { exit: true, reason: 'target_hit' };
+    // BUG FIX: when scaleOut is enabled, the 3.0×ATR generic target would fire
+    // BEFORE scale-out T2 (3.5×ATR), collapsing Full→Scale to ~Full→Full. Skip
+    // the generic target when scaleOut is on — let the T1/T2/trail ladder run.
+    if (!params.scaleOut && stock.price >= targetPrice) return { exit: true, reason: 'target_hit' };
   }
 
   // ─── Scale-out logic (if enabled) ─────────────────────────────────────────
@@ -609,6 +650,40 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     const sub = resolveSub(date);
     const todayRegime = sub.regime || null;
 
+    // ─── Pyramid add-on entries (before exit checks) ───────────────────────
+    // For positions opened with pyramidEntry=true, the initial fill was only
+    // 1/3 of the intended size. Each subsequent day, check if price hit the
+    // add1 (+2%) or add2 (+4%) trigger and buy the next 1/3 at that day's
+    // price. This simulates staggered entry on breakout confirmation.
+    if (mergedParams.pyramidEntry) {
+      for (const [symbol, pos] of positions) {
+        if (!pos.pyramidEntryTranche || pos.pyramidEntryTranche >= 3) continue;
+        if (pos.isShort) continue;  // pyramid only for longs
+        const stock = stockMap[symbol];
+        if (!stock?.price) continue;
+
+        const addTriggerPct = pos.pyramidEntryTranche === 1 ? 0.02 : 0.04;
+        const addTrigger = pos.pyramidPilotPrice * (1 + addTriggerPct);
+        if (stock.price < addTrigger) continue;
+
+        // Volume gate: daily volume ratio must be >= 1.1x for confirmation
+        if (stock.volume_ratio != null && stock.volume_ratio < 1.1) continue;
+
+        // Buy another 1/3 worth at this day's price
+        const addShares = Math.floor(pos.pyramidTargetShares / 3);
+        if (addShares <= 0) continue;
+        const addCost = addShares * stock.price;
+        if (addCost > capital) continue;  // out of capital
+
+        capital -= addCost;
+        pos.shares += addShares;
+        pos.collateral += addCost;
+        pos.pyramidEntryTranche += 1;
+        // Blend entry price (weighted avg) so R-multiples are honest
+        pos.entryPrice = +((pos.entryPrice * (pos.shares - addShares) + stock.price * addShares) / pos.shares).toFixed(4);
+      }
+    }
+
     // Check exits first
     for (const [symbol, pos] of positions) {
       const stock = stockMap[symbol];
@@ -743,8 +818,13 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
           ? applySlippage(rawEntryPrice, totalEntryBps, 'sell')
           : applySlippage(rawEntryPrice, totalEntryBps, 'buy');
         const posSize = Math.max(0, capital) / Math.max(1, maxPositions - positions.size);
-        const shares = Math.floor(posSize / entryPrice);
-        if (shares <= 0 || posSize < 100) continue;
+        const targetShares = Math.floor(posSize / entryPrice);
+        if (targetShares <= 0 || posSize < 100) continue;
+
+        // Pyramid mode: only buy 1/3 initially. Adds fire on +2%/+4% confirmation
+        // via the pyramid-entry block in the day loop.
+        const pyramidOn = mergedParams.pyramidEntry && !pe.isShort && targetShares >= 3;
+        const shares = pyramidOn ? Math.floor(targetShares / 3) : targetShares;
 
         const slippageCost = Math.abs(rawEntryPrice - entryPrice) * shares;
         totalSlippageCost += slippageCost;
@@ -760,6 +840,11 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
           subStrategy: pe.subStrategy,
           isShort: pe.isShort,
           entryRegime: pe.entryRegime,
+          ...(pyramidOn && {
+            pyramidEntryTranche: 1,
+            pyramidPilotPrice: +entryPrice.toFixed(4),
+            pyramidTargetShares: targetShares,
+          }),
         });
         filled++;
       }
@@ -860,7 +945,12 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
           const entryPrice = todayIsShort
             ? applySlippage(rawEntryPrice, exec.entrySlippageBps, 'sell')   // Short = sell
             : applySlippage(rawEntryPrice, exec.entrySlippageBps, 'buy');
-          const shares = Math.floor(positionSize / entryPrice);
+          const targetShares = Math.floor(positionSize / entryPrice);
+          if (targetShares <= 0) continue;
+
+          // Pyramid mode: only buy 1/3 at signal — adds fire on +2%/+4% confirmation
+          const pyramidOn = mergedParams.pyramidEntry && !todayIsShort && targetShares >= 3;
+          const shares = pyramidOn ? Math.floor(targetShares / 3) : targetShares;
           if (shares <= 0) continue;
 
           const slippageCost = Math.abs(rawEntryPrice - entryPrice) * shares;
@@ -878,6 +968,11 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
             subStrategy: todayStrategy,
             isShort: todayIsShort,
             entryRegime: todayRegime,
+            ...(pyramidOn && {
+              pyramidEntryTranche: 1,
+              pyramidPilotPrice: +entryPrice.toFixed(4),
+              pyramidTargetShares: targetShares,
+            }),
           });
         }
       }
