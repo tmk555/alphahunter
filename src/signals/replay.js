@@ -1052,6 +1052,48 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     macroContext = macroFred().getMacroContextForRange(startDate, endDate);
   } catch (_) { /* no macro table or out-of-coverage window — UI hides the card */ }
 
+  // ─── Per-regime performance breakdown (2026-04) ─────────────────────────
+  // Segment closed trades by the macro regime on their entry date. A blended
+  // "win rate = 48%" across all regimes hides the truth that most strategies
+  // crush in BULL and bleed in NEUTRAL/CAUTION. This table exposes that so the
+  // user can pick strategies conditionally on the regime the system forecasts.
+  //
+  // Win rate, expectancy, PF, and avg R are computed on the slice of trades
+  // whose entryRegime matches each bucket. Buckets with zero trades are still
+  // returned (with n:0) so the UI can render a stable 4-column table.
+  const regimePerf = (() => {
+    const buckets = { BULL: [], NEUTRAL: [], CAUTION: [], CORRECTION: [], UNKNOWN: [] };
+    for (const t of trades) {
+      const key = (t.entryRegime || 'UNKNOWN').toUpperCase();
+      (buckets[key] || (buckets.UNKNOWN)).push(t);
+    }
+    const out = {};
+    for (const [regime, group] of Object.entries(buckets)) {
+      if (!group.length) { out[regime] = { n: 0, winRate: 0, avgR: 0, expectancy: 0, profitFactor: 0, totalPnl: 0 }; continue; }
+      const wins    = group.filter(t => t.pnl > 0);
+      const losses  = group.filter(t => t.pnl <= 0);
+      const winSum  = wins.reduce((a, t) => a + t.pnl, 0);
+      const lossSum = Math.abs(losses.reduce((a, t) => a + t.pnl, 0));
+      const pfVal   = lossSum > 0 ? winSum / lossSum : (winSum > 0 ? Infinity : 0);
+      const avgWin  = wins.length ? wins.reduce((a, t) => a + t.pnlPct, 0) / wins.length : 0;
+      const avgLoss = losses.length ? losses.reduce((a, t) => a + t.pnlPct, 0) / losses.length : 0;
+      const wr      = group.length ? wins.length / group.length : 0;
+      const expct   = wr * avgWin + (1 - wr) * avgLoss;
+      const rSum    = group.reduce((a, t) => a + ((t.pnlPct || 0) / (t.atrPct || 2.5)), 0);
+      out[regime] = {
+        n: group.length,
+        winRate: +(wr * 100).toFixed(1),
+        avgWin: +avgWin.toFixed(2),
+        avgLoss: +avgLoss.toFixed(2),
+        expectancy: +expct.toFixed(2),
+        profitFactor: Number.isFinite(pfVal) ? +pfVal.toFixed(2) : pfVal,
+        avgR: +(rSum / group.length).toFixed(2),
+        totalPnl: +group.reduce((a, t) => a + (t.pnl || 0), 0).toFixed(2),
+      };
+    }
+    return out;
+  })();
+
   // ─── Persist replay result ───────────────────────────────────────────────
 
   let replayId = null;
@@ -1131,7 +1173,8 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     },
     tradeLog: trades,
     equityCurve: equityCurve.filter((_, i) => i % Math.max(1, Math.floor(equityCurve.length / 100)) === 0 || i === equityCurve.length - 1),
-    regimeBreakdown: regimeStats,
+    regimeBreakdown: regimePerf,
+    regimeDayCounts: regimeStats,
     macroContext,
   };
 }
@@ -1633,7 +1676,35 @@ function compareStrategies({ strategies, startDate, endDate, maxPositions = 10, 
 
   // Rank by total return
   results.sort((a, b) => (b.performance?.totalReturn || -Infinity) - (a.performance?.totalReturn || -Infinity));
-  return { comparisons: results, period: { startDate, endDate }, tradeMode: tradeMode || 'all', rankedBy: 'totalReturn' };
+
+  // Cross-strategy regime winner table — for each regime, which strategy had
+  // the highest expectancy on trades entered during that regime? This is the
+  // answer to "which strategy should I lean on in a CAUTION tape?"
+  const REGIMES = ['BULL', 'NEUTRAL', 'CAUTION', 'CORRECTION'];
+  const regimeWinners = {};
+  for (const regime of REGIMES) {
+    const ranked = results
+      .filter(r => r?.regimeBreakdown?.[regime]?.n > 0)
+      .map(r => ({
+        strategy:    r.strategy,
+        strategyKey: r.strategyKey,
+        n:           r.regimeBreakdown[regime].n,
+        winRate:     r.regimeBreakdown[regime].winRate,
+        expectancy:  r.regimeBreakdown[regime].expectancy,
+        profitFactor: r.regimeBreakdown[regime].profitFactor,
+        avgR:        r.regimeBreakdown[regime].avgR,
+      }))
+      .sort((a, b) => (b.expectancy ?? -Infinity) - (a.expectancy ?? -Infinity));
+    regimeWinners[regime] = ranked;
+  }
+
+  return {
+    comparisons: results,
+    period: { startDate, endDate },
+    tradeMode: tradeMode || 'all',
+    rankedBy: 'totalReturn',
+    regimeWinners,
+  };
 }
 
 // ─── Replay History ────────────────────────────────────────────────────────

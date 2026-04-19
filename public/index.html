@@ -10195,6 +10195,80 @@ function ReplayTab() {
               ))}
             </tbody>
           </table>
+
+          {/* ─── Regime-segmented breakdown per strategy ─────────────────
+              Blended "win rate = 48%" hides that most strategies crush in
+              BULL and bleed in NEUTRAL. This matrix shows win-rate and
+              expectancy for each strategy conditioned on the regime active
+              on the entry date, so the trader can pick strategies by the
+              regime the system currently forecasts. */}
+          <div style={{marginTop:20,borderTop:'1px solid var(--border2)',paddingTop:14}}>
+            <div style={{fontSize:11,color:'var(--text2)',marginBottom:8,letterSpacing:1,fontWeight:600}}>🌡 BREAKDOWN BY ENTRY REGIME (win% · expectancy · n)</div>
+            <table className="data-table" style={{fontSize:10}}>
+              <thead><tr>
+                <th>Strategy</th>
+                <th style={{color:'var(--green)'}}>BULL</th>
+                <th style={{color:'var(--cyan)'}}>NEUTRAL</th>
+                <th style={{color:'var(--amber)'}}>CAUTION</th>
+                <th style={{color:'var(--red)'}}>CORRECTION</th>
+              </tr></thead>
+              <tbody>
+                {result.comparisons.map((c,i)=>{
+                  const rb = c.regimeBreakdown || {};
+                  const cell = r => {
+                    if (!r || !r.n) return <span style={{color:'var(--text3)'}}>—</span>;
+                    const exColor = r.expectancy > 0 ? 'var(--green)' : r.expectancy < 0 ? 'var(--red)' : 'var(--text3)';
+                    return (
+                      <span>
+                        <span>{r.winRate}%</span>{' · '}
+                        <span style={{color:exColor,fontWeight:600}}>{(r.expectancy>0?'+':'')+r.expectancy}%</span>
+                        <span style={{color:'var(--text3)'}}> · n={r.n}</span>
+                      </span>
+                    );
+                  };
+                  return (
+                    <tr key={i}>
+                      <td style={{fontWeight:600,color:'var(--cyan)'}}>{c.strategy||c.strategyKey||'—'}</td>
+                      <td>{cell(rb.BULL)}</td>
+                      <td>{cell(rb.NEUTRAL)}</td>
+                      <td>{cell(rb.CAUTION)}</td>
+                      <td>{cell(rb.CORRECTION)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* ─── Regime winners: "which strategy wins in each regime?" ─── */}
+          {result.regimeWinners && (
+            <div style={{marginTop:20,borderTop:'1px solid var(--border2)',paddingTop:14}}>
+              <div style={{fontSize:11,color:'var(--text2)',marginBottom:8,letterSpacing:1,fontWeight:600}}>🏆 BEST STRATEGY PER REGIME (ranked by expectancy)</div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(4, 1fr)',gap:10}}>
+                {['BULL','NEUTRAL','CAUTION','CORRECTION'].map(regime => {
+                  const ranked = result.regimeWinners[regime] || [];
+                  const regimeColor = regime==='BULL'?'var(--green)':regime==='NEUTRAL'?'var(--cyan)':regime==='CAUTION'?'var(--amber)':'var(--red)';
+                  return (
+                    <div key={regime} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:4,padding:10}}>
+                      <div style={{fontSize:10,color:regimeColor,letterSpacing:1,fontWeight:700,marginBottom:6}}>{regime}</div>
+                      {ranked.length === 0 ? (
+                        <div style={{fontSize:10,color:'var(--text3)'}}>No trades entered in this regime</div>
+                      ) : (
+                        ranked.slice(0,3).map((r,j)=>(
+                          <div key={j} style={{fontSize:10,marginBottom:4,fontFamily:'var(--font-mono)'}}>
+                            <div style={{color:j===0?'var(--amber)':'var(--text2)',fontWeight:j===0?700:400}}>{j+1}. {r.strategy}</div>
+                            <div style={{color:'var(--text3)',marginLeft:10}}>
+                              exp <span style={{color:r.expectancy>0?'var(--green)':'var(--red)'}}>{(r.expectancy>0?'+':'')+r.expectancy}%</span> · {r.winRate}% · n={r.n}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
