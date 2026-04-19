@@ -9718,8 +9718,11 @@ function ReplayTab() {
   const [wfResult, setWfResult]     = useState(null);
   const [mcResult, setMcResult]     = useState(null);
   const [loading, setLoading]       = useState(false);
-  const [error, setError]           = useState('');
-  const [form, setForm] = useState({ strategy:'rs_momentum', tradeMode:'', exitStrategy:'pyramid_auto', startDate:'', endDate:'', maxPositions:10, initialCapital:100000, params:'{}' });
+  const [error, setError]           = useState('');       // generic/shared
+  const [replayError, setReplayError] = useState('');     // Replay section
+  const [wfError, setWfError]         = useState('');     // Walk-Forward section
+  const [mcError, setMcError]         = useState('');     // Monte Carlo section
+  const [form, setForm] = useState({ strategy:'rs_momentum', tradeMode:'', exitStrategy:'pyramid_auto', startDate:'', endDate:'', maxPositions:10, initialCapital:100000, params:'{}', strictRegime: true });
   const [wfForm, setWfForm] = useState({ trainDays:120, testDays:60, optimizeMetric:'sharpeRatio', paramGrid:'{\n  "minRS": [70, 80, 90],\n  "minMomentum": [50, 60, 70]\n}' });
   const [mcForm, setMcForm] = useState({ iterations:1000, method:'permutation', positionFraction:0.10, selectedReplayId:null });
   const [mcHistory, setMcHistory] = useState([]);
@@ -9743,10 +9746,23 @@ function ReplayTab() {
       setHistory(h.history||[]);
       setMcHistory(mch.history||[]);
       setWfHistory(wfh.history||[]);
-      // Only auto-populate dates on initial load — don't overwrite user's selections
+      // Auto-populate dates on initial load. Once set, user can manually change
+      // via the date inputs OR use the ← FULL / LATEST → buttons to reset.
       if (!datesInitialized.current && r?.rs_snapshots?.start_date) {
         setForm(f=>({...f, startDate:r.rs_snapshots.start_date, endDate:r.rs_snapshots.safe_end_date||r.rs_snapshots.end_date||''}));
         datesInitialized.current = true;
+      } else if (r?.rs_snapshots?.start_date) {
+        // Subsequent loads: if the form's startDate is OUTSIDE the now-available
+        // range (e.g., stale from an older session before backfill), pull it
+        // back into range. Preserves user edits when they're within bounds.
+        setForm(f => {
+          const start = r.rs_snapshots.start_date;
+          const end   = r.rs_snapshots.safe_end_date || r.rs_snapshots.end_date;
+          const newStart = (f.startDate && f.startDate >= start) ? f.startDate : start;
+          const newEnd   = (f.endDate   && f.endDate   <= end)   ? f.endDate   : end;
+          if (newStart === f.startDate && newEnd === f.endDate) return f;
+          return { ...f, startDate: newStart, endDate: newEnd };
+        });
       }
       // Auto-pick most-recent replay for MC on first load so the RUN MC
       // button doesn't error with "Select or run a backtest first".
@@ -9760,7 +9776,7 @@ function ReplayTab() {
 
   async function runReplay() {
     if (!form.strategy || !form.startDate || !form.endDate) return;
-    setLoading(true); setError(''); setResult(null);
+    setLoading(true); setError(''); setReplayError(''); setResult(null);
     try {
       let params = {};
       try { params = JSON.parse(form.params); } catch(_) {}
@@ -9774,6 +9790,9 @@ function ReplayTab() {
         params.scaleOut = true;
         params.pyramidEntry = true;
       }
+      // Regime strictness: strict (default) uses dist-day-aware detection matching
+      // live trading; unchecked uses simple SPY-vs-MA only (optimistic, legacy).
+      params.strictRegime = form.strictRegime !== false;
       const execution = {};
       if (form.nextDayEntry === false) execution.nextDayEntry = false;  // Default is true; only override when unchecked
       const r = await api('/api/replay/run', {
@@ -9784,13 +9803,13 @@ function ReplayTab() {
         }),
       });
       setResult(r); loadAll();
-    } catch(e) { setError(e.message); }
+    } catch(e) { setReplayError(e.message); }
     setLoading(false);
   }
 
   async function runCompare() {
     if (!form.startDate || !form.endDate) return;
-    setLoading(true); setError(''); setResult(null);
+    setLoading(true); setReplayError(''); setResult(null);
     try {
       const strats = strategies.map(s=>({strategy:s.key, params:{}}));
       const r = await api('/api/replay/compare', {
@@ -9802,7 +9821,7 @@ function ReplayTab() {
         }),
       });
       setResult(r); loadAll();
-    } catch(e) { setError(e.message); }
+    } catch(e) { setReplayError(e.message); }
     setLoading(false);
   }
 
@@ -9847,11 +9866,11 @@ function ReplayTab() {
 
   async function runWalkForward() {
     if (!form.strategy || !form.startDate || !form.endDate) return;
-    setLoading(true); setError(''); setWfResult(null);
+    setLoading(true); setWfError(''); setWfResult(null);
     try {
       let paramGrid = {};
       try { paramGrid = JSON.parse(wfForm.paramGrid); }
-      catch(_) { setError('Invalid paramGrid JSON'); setLoading(false); return; }
+      catch(_) { setWfError('Invalid paramGrid JSON'); setLoading(false); return; }
       const r = await api('/api/replay/walk-forward', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
@@ -9863,17 +9882,17 @@ function ReplayTab() {
         }),
       });
       setWfResult(r); loadAll();
-    } catch(e) { setError(e.message); }
+    } catch(e) { setWfError(e.message); }
     setLoading(false);
   }
 
   async function runMonteCarlo() {
     const replayId = mcForm.selectedReplayId || result?.id || history[0]?.id;
     if (!replayId) {
-      setError('Select or run a backtest first to feed Monte Carlo');
+      setMcError('Select or run a backtest first to feed Monte Carlo');
       return;
     }
-    setLoading(true); setError(''); setMcResult(null);
+    setLoading(true); setMcError(''); setMcResult(null);
     try {
       const r = await api('/api/replay/monte-carlo', {
         method:'POST', headers:{'Content-Type':'application/json'},
@@ -9883,7 +9902,7 @@ function ReplayTab() {
         }),
       });
       setMcResult(r); loadAll();
-    } catch(e) { setError(e.message); }
+    } catch(e) { setMcError(e.message); }
     setLoading(false);
   }
 
@@ -9894,7 +9913,21 @@ function ReplayTab() {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ lookbackDays: +bfForm.lookbackDays }),
       });
-      setBfResult(r); loadAll(); // refresh date range
+      setBfResult(r);
+      // After backfill: refresh range, then update form defaults to match
+      // the newly-available data range. Without this, the date inputs would
+      // still show the OLD (shorter) range and users would run backtests
+      // against partial data without realizing it.
+      const range = await api('/api/replay/range').catch(() => null);
+      setDateRange(range);
+      if (range?.rs_snapshots?.start_date) {
+        setForm(f => ({
+          ...f,
+          startDate: range.rs_snapshots.start_date,
+          endDate: range.rs_snapshots.safe_end_date || range.rs_snapshots.end_date || f.endDate,
+        }));
+      }
+      loadAll();
     } catch(e) { setError(e.message); }
     setBfLoading(false);
   }
@@ -9912,8 +9945,6 @@ function ReplayTab() {
           </div>
         </div>
 
-        {error && <div style={{background:'rgba(255,61,87,0.1)',border:'1px solid var(--red)',borderRadius:4,padding:'8px 12px',marginBottom:12,fontSize:12,color:'var(--red)'}}>{error}</div>}
-
         {/* Date range + backfill */}
         <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:12,flexWrap:'wrap'}}>
           {dateRange && (
@@ -9923,7 +9954,7 @@ function ReplayTab() {
             </div>
           )}
           <div style={{display:'flex',alignItems:'center',gap:6}}>
-            <input type="number" value={bfForm.lookbackDays} onChange={e=>setBfForm({...bfForm,lookbackDays:+e.target.value})} min={1} max={366} style={{width:60,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'5px 6px',color:'var(--text)',fontSize:10,fontFamily:'var(--font-mono)',textAlign:'center'}}/>
+            <input type="number" value={bfForm.lookbackDays} onChange={e=>setBfForm({...bfForm,lookbackDays:+e.target.value})} min={1} max={2500} style={{width:70,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'5px 6px',color:'var(--text)',fontSize:10,fontFamily:'var(--font-mono)',textAlign:'center'}} title="Max 2500 days (~9 years via Alpaca). Yahoo alone caps at 730 (2 years)."/>
             <span style={{fontSize:9,color:'var(--text3)'}}>days</span>
             <button className="load-btn" onClick={runBackfill} disabled={bfLoading} style={{fontSize:9,padding:'5px 12px',background:'var(--orange, #ff6d00)'}}>{bfLoading?'BACKFILLING...':'BACKFILL'}</button>
           </div>
@@ -9952,12 +9983,30 @@ function ReplayTab() {
             </select>
           </div>
           <div>
-            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>START DATE</div>
-            <input type="date" value={form.startDate} onChange={e=>setForm({...form,startDate:e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <span>START DATE</span>
+              {dateRange?.rs_snapshots?.start_date && form.startDate !== dateRange.rs_snapshots.start_date && (
+                <button title={`Reset to earliest available (${dateRange.rs_snapshots.start_date})`}
+                  onClick={()=>setForm({...form,startDate:dateRange.rs_snapshots.start_date})}
+                  style={{padding:'1px 4px',fontSize:8,border:'1px solid var(--cyan)',borderRadius:2,background:'transparent',color:'var(--cyan)',cursor:'pointer',fontFamily:'var(--font-mono)'}}>
+                  ← FULL
+                </button>
+              )}
+            </div>
+            <input type="date" value={form.startDate} min={dateRange?.rs_snapshots?.start_date||undefined} max={dateRange?.rs_snapshots?.end_date||undefined} onChange={e=>setForm({...form,startDate:e.target.value})} style={{width:'100%',background:'var(--bg)',border:`1px solid ${dateRange?.rs_snapshots?.start_date && form.startDate < dateRange.rs_snapshots.start_date ? 'var(--red)' : 'var(--border2)'}`,borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
           </div>
           <div>
-            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>END DATE</div>
-            <input type="date" value={form.endDate} onChange={e=>setForm({...form,endDate:e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <span>END DATE</span>
+              {dateRange?.rs_snapshots?.end_date && form.endDate !== (dateRange.rs_snapshots.safe_end_date || dateRange.rs_snapshots.end_date) && (
+                <button title={`Reset to latest available (${dateRange.rs_snapshots.safe_end_date || dateRange.rs_snapshots.end_date})`}
+                  onClick={()=>setForm({...form,endDate:dateRange.rs_snapshots.safe_end_date || dateRange.rs_snapshots.end_date})}
+                  style={{padding:'1px 4px',fontSize:8,border:'1px solid var(--cyan)',borderRadius:2,background:'transparent',color:'var(--cyan)',cursor:'pointer',fontFamily:'var(--font-mono)'}}>
+                  LATEST →
+                </button>
+              )}
+            </div>
+            <input type="date" value={form.endDate} min={dateRange?.rs_snapshots?.start_date||undefined} max={dateRange?.rs_snapshots?.end_date||undefined} onChange={e=>setForm({...form,endDate:e.target.value})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
           </div>
           <div>
             <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>MAX POSITIONS</div>
@@ -10007,6 +10056,19 @@ function ReplayTab() {
           </span>
         </div>
 
+        {/* Regime strictness toggle */}
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,padding:'8px 12px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,flexWrap:'wrap'}}>
+          <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',fontSize:11,color:'var(--text2)'}}>
+            <input type="checkbox" checked={form.strictRegime!==false} onChange={e=>setForm({...form,strictRegime:e.target.checked})}/>
+            <span style={{fontWeight:600}}>Strict Regime</span>
+          </label>
+          <span style={{fontSize:10,color:'var(--text3)'}}>
+            {form.strictRegime !== false
+              ? 'Dist-days + MA (matches live — realistic). Blocks entries on 5+ distribution days even above 50MA.'
+              : 'MA-only (optimistic). Legacy behavior — only checks SPY vs 50MA/200MA, ignores institutional selling.'}
+          </span>
+        </div>
+
         {/* Strategy params override */}
         <textarea placeholder='Params override JSON (optional)' value={form.params} onChange={e=>setForm({...form,params:e.target.value})} rows={2} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 10px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)',marginBottom:10,resize:'vertical'}}/>
 
@@ -10014,19 +10076,28 @@ function ReplayTab() {
           <button className="load-btn" onClick={runReplay} disabled={loading} style={{fontSize:10,padding:'6px 18px'}}>{loading?'RUNNING...':'RUN REPLAY'}</button>
           <button className="load-btn" onClick={runCompare} disabled={loading} style={{fontSize:10,padding:'6px 18px',background:'var(--cyan)'}}>{loading?'...':'COMPARE ALL'}</button>
         </div>
+        {replayError && (
+          <div style={{marginTop:10,background:'rgba(255,61,87,0.1)',border:'1px solid var(--red)',borderRadius:4,padding:'8px 12px',fontSize:12,color:'var(--red)'}}>
+            ⚠ {replayError}
+          </div>
+        )}
       </div>
 
       {/* ─── Replay Results (right after controls) ─────────────────── */}
       {result && !result.comparisons && result.performance && (
         <div className="panel">
           <div className="panel-title">📈 <span>{result.strategy||result.strategyKey}</span> RESULTS</div>
-          <div style={{fontSize:11,color:'var(--text3)',marginBottom:12,fontFamily:'var(--font-mono)',display:'flex',gap:12,flexWrap:'wrap'}}>
+          <div style={{fontSize:11,color:'var(--text3)',marginBottom:12,fontFamily:'var(--font-mono)',display:'flex',gap:12,flexWrap:'wrap',alignItems:'center'}}>
             <span>{result.period?.startDate} → {result.period?.endDate} · {result.period?.tradingDays} trading days</span>
-            {(result.params?.pyramidEntry || result.params?.scaleOut) != null && (
-              <span style={{padding:'1px 8px',borderRadius:3,background:'var(--bg3)',border:'1px solid var(--border)',color: result.params?.pyramidEntry ? 'var(--cyan)' : result.params?.scaleOut ? 'var(--green)' : 'var(--amber)'}}>
-                EXIT: {result.params?.pyramidEntry ? '🔺 PYRAMID' : result.params?.scaleOut ? 'FULL→SCALE' : 'FULL→FULL'}
-              </span>
-            )}
+            <span style={{padding:'2px 10px',borderRadius:3,background:'var(--bg3)',border:'1px solid var(--border)',fontWeight:700,color: result.params?.pyramidEntry ? 'var(--cyan)' : result.params?.scaleOut ? 'var(--green)' : 'var(--amber)'}}>
+              EXIT: {result.params?.pyramidEntry ? '🔺 PYRAMID' : result.params?.scaleOut ? 'FULL→SCALE' : 'FULL→FULL'}
+            </span>
+            <span style={{padding:'2px 10px',borderRadius:3,background:'var(--bg3)',border:'1px solid var(--border)',fontWeight:700,color: result.params?.strictRegime !== false ? 'var(--cyan)' : 'var(--amber)'}}>
+              REGIME: {result.params?.strictRegime !== false ? 'STRICT' : 'MA-ONLY'}
+            </span>
+            <span style={{fontSize:9,color:'var(--text3)'}}>
+              params: {JSON.stringify({scaleOut: !!result.params?.scaleOut, pyramidEntry: !!result.params?.pyramidEntry, strictRegime: result.params?.strictRegime !== false})}
+            </span>
           </div>
 
           {/* KPI cards */}
@@ -10326,15 +10397,33 @@ function ReplayTab() {
         <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>PARAM GRID JSON</div>
         <textarea value={wfForm.paramGrid} onChange={e=>setWfForm({...wfForm,paramGrid:e.target.value})} rows={4} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 10px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)',marginBottom:10,resize:'vertical'}}/>
         <button className="load-btn" onClick={runWalkForward} disabled={loading} style={{fontSize:10,padding:'6px 18px',background:'var(--amber)'}}>{loading?'OPTIMIZING...':'RUN WALK-FORWARD'}</button>
+        {wfError && (
+          <div style={{marginTop:10,background:'rgba(255,61,87,0.1)',border:'1px solid var(--red)',borderRadius:4,padding:'8px 12px',fontSize:12,color:'var(--red)'}}>
+            ⚠ {wfError}
+          </div>
+        )}
       </div>
 
       {/* ─── Walk-Forward Results (right after controls) ──────────── */}
       {wfResult && wfResult.outOfSample && (
         <div className="panel">
           <div className="panel-title">🔄 <span>WALK-FORWARD</span> RESULTS — {wfResult.strategyName}</div>
-          <div style={{fontSize:11,color:'var(--text3)',marginBottom:12,fontFamily:'var(--font-mono)'}}>
+          <div style={{fontSize:11,color:'var(--text3)',marginBottom:6,fontFamily:'var(--font-mono)'}}>
             {wfResult.config.combos} param combos × {wfResult.config.windowsTested} windows · train {wfResult.config.trainDays}d / test {wfResult.config.testDays}d · optimize {wfResult.config.optimizeMetric}
           </div>
+          {wfResult.outOfSample?.startDate && wfResult.outOfSample?.endDate && (() => {
+            const oosStart = new Date(wfResult.outOfSample.startDate);
+            const oosEnd = new Date(wfResult.outOfSample.endDate);
+            const oosDays = Math.round((oosEnd - oosStart) / 86400000);
+            const windowsCount = wfResult.config.windowsTested || 0;
+            const narrow = oosDays < 500 || windowsCount < 10;
+            return (
+              <div style={{fontSize:11,marginBottom:12,padding:'6px 10px',borderRadius:3,background:narrow?'rgba(240,165,0,0.08)':'rgba(0,230,118,0.06)',border:`1px solid ${narrow?'rgba(240,165,0,0.3)':'rgba(0,230,118,0.2)'}`,color:narrow?'var(--amber)':'var(--green)',fontFamily:'var(--font-mono)'}}>
+                <strong>OOS SPAN:</strong> {wfResult.outOfSample.startDate} → {wfResult.outOfSample.endDate} · {oosDays}d · {windowsCount} windows
+                {narrow && <span> · ⚠ narrow — consider smaller trainDays or wider date range for meaningful validation (want ≥10 windows, ≥500 days)</span>}
+              </div>
+            );
+          })()}
 
           {/* ─── Scorecard verdict chips ───────────────────────────────
               Quick visual summary of whether this walk-forward result
@@ -10748,7 +10837,7 @@ function ReplayTab() {
                   <td>{h.oos_sharpe}</td>
                   <td>{h.oos_trades}</td>
                   <td style={{color:pctColor(h.alpha),fontWeight:600}}>{h.alpha!=null?((h.alpha>0?'+':'')+h.alpha+'%'):'—'}</td>
-                  <td><button onClick={async()=>{try{const r=await fetch('/api/replay/wf/'+h.id);const d=await r.json();setWfResult(d);}catch(e){console.error(e);}}} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 10px',color:'var(--amber)',fontSize:10,cursor:'pointer'}}>VIEW</button></td>
+                  <td><button onClick={async()=>{try{const d=await api('/api/replay/wf/'+h.id);setWfResult(d);window.scrollTo({top:0,behavior:'smooth'});}catch(e){setWfError('Load WF #'+h.id+' failed: '+e.message);}}} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 10px',color:'var(--amber)',fontSize:10,cursor:'pointer'}}>VIEW</button></td>
                 </tr>
               ))}
             </tbody>
@@ -10797,6 +10886,11 @@ function ReplayTab() {
             <button className="load-btn" onClick={runMonteCarlo} disabled={loading} style={{width:'100%',fontSize:10,padding:'7px 18px',background:'var(--violet, #9d4edd)'}}>{loading?'SIMULATING...':'RUN MC'}</button>
           </div>
         </div>
+        {mcError && (
+          <div style={{marginTop:10,background:'rgba(255,61,87,0.1)',border:'1px solid var(--red)',borderRadius:4,padding:'8px 12px',fontSize:12,color:'var(--red)'}}>
+            ⚠ {mcError}
+          </div>
+        )}
       </div>
 
       {/* ─── Monte Carlo Results (right after controls) ──────────── */}

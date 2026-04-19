@@ -146,8 +146,8 @@ router.post('/replay/backfill', async (req, res) => {
     if (!useSymbols.length) {
       return res.status(400).json({ error: 'no symbols available — provide symbols[] or populate universe' });
     }
-    if (lookbackDays < 1 || lookbackDays > 366) {
-      return res.status(400).json({ error: 'lookbackDays must be between 1 and 366' });
+    if (lookbackDays < 1 || lookbackDays > 2500) {
+      return res.status(400).json({ error: 'lookbackDays must be between 1 and 2500 (Alpaca: ~9 years / Yahoo: 2 years)' });
     }
     const summary = await runBackfill({
       symbols: useSymbols,
