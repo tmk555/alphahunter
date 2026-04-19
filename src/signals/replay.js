@@ -566,9 +566,12 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
   // to know whether to filter long or short candidates and which exit logic
   // to apply.
   function resolveSub(date) {
-    if (!isAdaptive) return { key: strategy, def: stratDef };
+    // Always detect the day's regime — non-adaptive strategies still tag
+    // each trade's entryRegime so the per-regime breakdown works across
+    // the full Compare All, not just the adaptive path.
     const regime = detectRegimeForDate(spyByDate, date);
     regimeStats[regime]++;
+    if (!isAdaptive) return { key: strategy, def: stratDef, regime };
     const subKey = regimeToSubStrategy(regime, mergedParams);
     if (!subKey || subKey === 'cash') return { key: null, def: null, regime };
     const def = BUILT_IN_STRATEGIES[subKey];
