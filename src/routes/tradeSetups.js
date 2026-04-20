@@ -2,15 +2,12 @@
 const express = require('express');
 const router  = express.Router();
 
-const { isSwingCandidate, isPositionCandidate, computeTradeSetup } = require('../signals/candidates');
-const { getMarketRegime } = require('../risk/regime');
+const { isSwingCandidate, isPositionCandidate } = require('../signals/candidates');
 const { getDB } = require('../data/database');
 const { logSignalsBatch } = require('../signals/edge-telemetry');
-const { calcConviction } = require('../signals/conviction');
-const { getRSTrend } = require('../signals/rs');
-const { loadHistory, RS_HISTORY } = require('../data/store');
+const { runDeepScan, persistDeepScan } = require('../signals/deep-scan');
 
-module.exports = function(runRSScanFn, anthropic) {
+module.exports = function(runRSScanFn, anthropic, sectorEtfs) {
   // Batch AI trade briefs
   async function getBatchTradeBriefs(candidates, tradeType, regime) {
     const tickers = candidates.map(s => s.ticker);
@@ -100,94 +97,67 @@ Return JSON array:
     }));
   }
 
-  // POST /api/trade-setups/scan
+  // POST /api/trade-setups/scan — unified scan (absorbs legacy Top Picks).
+  // Filters via isSwingCandidate/isPositionCandidate, scores with convictionScore
+  // (RS + SEPA + VCP + rotation), returns both swingSetup + positionSetup per
+  // candidate. AI briefs optional (if anthropic is configured).
   router.post('/trade-setups/scan', async (req, res) => {
-    const { stocks = [], mode = 'swing' } = req.body;
+    const { stocks = [], mode = 'both' } = req.body;
     if (!stocks.length) return res.status(400).json({ error: 'No stocks provided' });
 
-    const filter = mode==='swing' ? isSwingCandidate : mode==='position' ? isPositionCandidate
-                 : s => isSwingCandidate(s)||isPositionCandidate(s);
-    const candidates = stocks.filter(filter).slice(0, 20);
-    const regime = await getMarketRegime();
+    const scan = await runDeepScan({ stocks, mode, sectorEtfs });
 
-    if (!candidates.length) {
-      const sw = stocks.filter(isSwingCandidate).length, pos = stocks.filter(isPositionCandidate).length;
-      return res.json({ results:[], regime,
-        message:`No candidates matched ${mode} filter. Swing: ${sw} (RS≥70, above 50MA, momentum≥50 + near high/vol surge/strong mom). Position: ${pos} (RS≥70, above 200MA, pullback to 50MA). Try a different mode.`,
-        totalInput: stocks.length, scannedCount: 0 });
+    if (!scan.candidates) {
+      const sw = stocks.filter(isSwingCandidate).length;
+      const pos = stocks.filter(isPositionCandidate).length;
+      return res.json({
+        results: [], regime: scan.regime, convictionOverrides: [],
+        message: `No candidates matched ${mode} filter. Swing: ${sw} (RS≥70, above 50MA, momentum≥50 + near high/vol surge/strong mom). Pullback: ${pos} (RS≥70, above 200MA, pullback to 50MA zone). Try a different mode.`,
+        totalInput: stocks.length, scannedCount: 0,
+      });
     }
 
-    const tradeMode = mode==='both' ? 'swing' : mode;
-
-    // Compute conviction for each candidate so sort can use it even without AI.
-    // The rsData sent from the frontend doesn't include conviction (that's
-    // added by the /api/daily-picks pipeline, not by the base scanner), so
-    // we compute here from the raw RS history.
-    let rsHistory = null;
-    try { rsHistory = loadHistory(RS_HISTORY); } catch (_) {}
-    const results = candidates.map(s => {
-      let rsTrend = s.rsTrend || null;
-      let convictionScore = s.convictionScore || 0;
-      if (rsHistory) {
-        try {
-          rsTrend = rsTrend || getRSTrend(s.ticker, rsHistory);
-          const { convictionScore: cs } = calcConviction(s, rsTrend, null);
-          if (cs != null) convictionScore = cs;
-        } catch (_) { /* fall back to whatever was on the stock */ }
-      }
-      return {
-        ...s,
-        rsTrend,
-        convictionScore,
-        algoSetup: computeTradeSetup(s, tradeMode),
-        brief: null,
-      };
-    });
+    const tradeMode = mode === 'both' ? 'swing' : mode;
+    const results = scan.results;
 
     if (anthropic) {
       try {
-        const briefs = await getBatchTradeBriefs(candidates, tradeMode, regime);
+        const briefs = await getBatchTradeBriefs(results, tradeMode, scan.regime);
         for (const r of results) {
           r.brief = briefs.find(b => b.ticker === r.ticker) || null;
         }
-      } catch(e) {
+        // AI verdict dominates sort when present
+        const order = {BUY:0,WATCH:1,AVOID:2};
+        results.sort((a,b) => {
+          const av = order[a.brief?.verdict] ?? 3;
+          const bv = order[b.brief?.verdict] ?? 3;
+          if (av !== bv) return av - bv;
+          return (b.convictionScore || 0) - (a.convictionScore || 0);
+        });
+      } catch (e) {
         console.warn('AI briefs failed (continuing with algo levels):', e.message);
       }
     }
 
     // Layer 1 telemetry: log every emitted LLM brief so we can calibrate
-    // confidence tiers against realized 5/10/20d outcomes. Wrapped in try/catch
-    // so a telemetry failure never blocks the trade-setup response.
+    // confidence tiers against realized 5/10/20d outcomes.
     try {
       const toLog = [];
       for (const r of results) {
         if (!r.brief) continue;
         toLog.push({
-          source: 'trade_setup',
-          symbol: r.ticker,
-          strategy: tradeMode,                      // 'swing' | 'position'
-          setup_type: r.brief.verdict,              // BUY | WATCH | AVOID
-          verdict: r.brief.verdict,
-          confidence: r.brief.confidence,
-          conviction_score: r.convictionScore,
-          entry_price: r.price,                     // reference price; actual entry lives in brief.entryZone
-          stop_price: r.brief.stopLevel,
-          target1_price: r.brief.target1,
-          target2_price: r.brief.target2,
-          rs_rank: r.rsRank,
-          swing_momentum: r.swingMomentum,
-          sepa_score: r.sepaScore,
-          stage: r.stage,
-          regime: regime?.regime,
-          atr_pct: r.atrPct,
+          source: 'trade_setup', symbol: r.ticker, strategy: tradeMode,
+          setup_type: r.brief.verdict, verdict: r.brief.verdict,
+          confidence: r.brief.confidence, conviction_score: r.convictionScore,
+          entry_price: r.price, stop_price: r.brief.stopLevel,
+          target1_price: r.brief.target1, target2_price: r.brief.target2,
+          rs_rank: r.rsRank, swing_momentum: r.swingMomentum, sepa_score: r.sepaScore,
+          stage: r.stage, regime: scan.regime?.regime, atr_pct: r.atrPct,
           horizon_days: tradeMode === 'swing' ? 10 : 30,
           meta: {
-            thesis: r.brief.thesis,
-            riskFlags: r.brief.riskFlags,
-            catalysts: r.brief.catalysts,
-            earningsRisk: r.brief.earningsRisk,
-            daysToEarnings: r.brief.daysToEarnings,
-            riskScore: r.brief.riskScore,
+            thesis: r.brief.thesis, riskFlags: r.brief.riskFlags,
+            catalysts: r.brief.catalysts, earningsRisk: r.brief.earningsRisk,
+            daysToEarnings: r.brief.daysToEarnings, riskScore: r.brief.riskScore,
             rsTrend: r.rsTrend?.direction,
           },
         });
@@ -195,49 +165,16 @@ Return JSON array:
       if (toLog.length) logSignalsBatch(toLog);
     } catch (_) { /* telemetry never blocks */ }
 
-    // Sort: AI verdict (if present) → conviction score → RS rank
-    // Without an Anthropic key, brief.verdict is null for all stocks and the
-    // first comparator is a no-op — the sort then falls through to conviction
-    // score, which is a MUCH richer signal than RS rank alone (it integrates
-    // RS + SEPA + VCP + institutional flow + patterns + revisions + stage).
-    // Previously this sort degraded to RS-only when AI was disabled, which
-    // wasted the conviction calculation already attached to every candidate.
-    const order = {BUY:0,WATCH:1,AVOID:2};
-    results.sort((a,b) => {
-      const av = order[a.brief?.verdict] ?? 3;
-      const bv = order[b.brief?.verdict] ?? 3;
-      if (av !== bv) return av - bv;
-      const ac = a.convictionScore || 0;
-      const bc = b.convictionScore || 0;
-      if (ac !== bc) return bc - ac;
-      return (b.rsRank || 0) - (a.rsRank || 0);
+    persistDeepScan({
+      mode, results, regime: scan.regime,
+      scannedCount: scan.candidates, totalInput: scan.totalInput,
     });
 
-    // Persist results to DB so they survive page refresh
-    try {
-      const db = getDB();
-      db.prepare(`INSERT INTO deep_scan_cache (mode, results, regime, scanned_count, total_input) VALUES (?, ?, ?, ?, ?)`)
-        .run(mode, JSON.stringify(results.map(r => ({
-          ticker: r.ticker, name: r.name, price: r.price,
-          rsRank: r.rsRank, swingMomentum: r.swingMomentum,
-          sepaScore: r.sepaScore, stage: r.stage,
-          vsMA50: r.vsMA50, vsMA200: r.vsMA200,
-          atr: r.atr, atrPct: r.atrPct,
-          distFromHigh: r.distFromHigh, volumeRatio: r.volumeRatio,
-          volumeSurge: r.volumeSurge, sector: r.sector,
-          vcpForming: r.vcpForming, rsLineNewHigh: r.rsLineNewHigh,
-          ma50: r.ma50, ma200: r.ma200, ma150: r.ma150,
-          convictionScore: r.convictionScore,
-          algoSetup: r.algoSetup, brief: r.brief,
-          bestPattern: r.bestPattern, earningsRisk: r.earningsRisk,
-          daysToEarnings: r.daysToEarnings, earningsDate: r.earningsDate,
-          institutionalTier: r.institutionalTier,
-        }))), JSON.stringify(regime), candidates.length, stocks.length);
-      // Keep only last 10 scans to avoid bloat
-      db.prepare(`DELETE FROM deep_scan_cache WHERE id NOT IN (SELECT id FROM deep_scan_cache ORDER BY created_at DESC LIMIT 10)`).run();
-    } catch (_) { /* non-critical */ }
-
-    res.json({ results, regime, hasAI: !!anthropic, scannedCount: candidates.length, totalInput: stocks.length });
+    res.json({
+      results, regime: scan.regime, hasAI: !!anthropic,
+      convictionOverrides: scan.convictionOverrides,
+      scannedCount: scan.candidates, totalInput: scan.totalInput,
+    });
   });
 
   // GET /api/trade-setups/cached — retrieve last deep scan results (survives refresh)

@@ -997,7 +997,7 @@ function App() {
   const [setupSigFilters, setSetupSigFilters] = useState(new Set());
   const [setupMode, setSetupMode] = useState('swing');
   const [setupSortBy, setSetupSortBy] = useState('conviction');
-  const [setupExitStrategy, setSetupExitStrategy] = useState('full_in_scale_out');
+  const [setupExitStrategy, setSetupExitStrategy] = useState('pyramid_auto');
 
   // Global ticker click → navigate to Scanner and auto-expand
   const [scannerTarget, setScannerTarget] = useState(null);
@@ -2849,7 +2849,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
   const [error,   setError]   = useState('');
   const [rsStaging, setRsStaging] = useState(null);
   const [rsStageMode, setRsStageMode] = useState('swing');
-  const [rsExitStrategy, setRsExitStrategy] = useState('full_in_scale_out');
+  const [rsExitStrategy, setRsExitStrategy] = useState('pyramid_auto');
   const [strategyFilter, setStrategyFilter] = useState('');
   // Custom entry price overrides — keyed by ticker, cleared when panel closes
   const [customEntryPrices, setCustomEntryPrices] = useState({});
@@ -3494,9 +3494,9 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
                                 </div>
                                 <div className="btn-group" title="Entry × Exit strategy: Full = single entry at full size. Scale = build/exit in thirds">
                                   {[
-                                    {k:'full_in_scale_out',label:'Full→Scale',color:'var(--green)',title:'Buy full size at pivot, exit in 3 tranches (T1/T2/runner). DEFAULT.'},
+                                    {k:'pyramid_auto',label:'🔺 Pyramid',color:'var(--cyan)',title:'Pyramid in: pilot fires at pivot, adds fire on +confirmation. True scale-in with volume gates. DEFAULT.'},
+                                    {k:'full_in_scale_out',label:'Full→Scale',color:'var(--green)',title:'Buy full size at pivot, exit in 3 tranches (T1/T2/runner).'},
                                     {k:'full_in_full_out',label:'Full→Full',color:'var(--amber)',title:'Buy full size, exit all at target. Simplest.'},
-                                    {k:'pyramid_auto',label:'🔺 Pyramid',color:'var(--cyan)',title:'Pyramid in: pilot fires at pivot, adds fire on +confirmation. True scale-in with volume gates.'},
                                   ].map(m => (
                                     <button key={m.k} className={`mode-btn ${rsExitStrategy===m.k?'active':''}`}
                                       style={{padding:'3px 8px',fontSize:9,borderColor: rsExitStrategy===m.k ? m.color : undefined, color: rsExitStrategy===m.k ? m.color : undefined}}
@@ -3692,12 +3692,27 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
   }
 
   async function loadPicks() {
+    // Deep Scan is the single source. Prefer the scheduler-populated cache;
+    // if nothing fresh is there, run a scan inline so the grid isn't empty.
     setPicksLoad(true);
     try {
-      const d = await api('/api/daily-picks?limit=50');
-      setPicks(d.picks || []);
-      setConvictionOverrides(d.convictionOverrides || []);
-      if (d.regime) setRegime(d.regime);
+      const d = await api('/api/trade-setups/cached?mode=' + (mode || 'both'));
+      if (d.cached && d.results?.length) {
+        setPicks(d.results);
+        setConvictionOverrides(d.results.filter(r => r.convictionOverride).slice(0, 10));
+        if (d.regime) setRegime(d.regime);
+        setScanned(d.scannedCount || 0);
+        setSummary(`Cached scan from ${new Date(d.cachedAt + 'Z').toLocaleString()} (${d.ageMinutes} min ago)`);
+      } else if (rsLoaded && rsData?.length) {
+        const r = await api('/api/trade-setups/scan', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ stocks: rsData, mode: mode || 'both' }),
+        });
+        setPicks(r.results || []);
+        setConvictionOverrides(r.convictionOverrides || []);
+        if (r.regime) setRegime(r.regime);
+        setScanned(r.scannedCount || 0);
+      }
     } catch(_) {}
     setPicksLoad(false);
   }
@@ -3805,8 +3820,9 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
         <span className="ts-toolbar-label">Mode</span>
         <div className="ts-toolbar-group">
           {['swing','position','both'].map(m => (
-            <button key={m} className={`mode-btn ${mode===m?'active':''}`} onClick={() => setMode(m)}>
-              {m === 'swing' ? 'Swing' : m === 'position' ? 'Position' : 'Both'}
+            <button key={m} className={`mode-btn ${mode===m?'active':''}`} onClick={() => setMode(m)}
+              title={m==='swing'?'Act today — entry at/near current price, tight ATR stop':m==='position'?'Pullback trade — limit order waits at 50MA, fires when price pulls back':'Both swing and pullback candidates'}>
+              {m === 'swing' ? 'Swing' : m === 'position' ? 'Pullback' : 'Both'}
             </button>
           ))}
         </div>
@@ -3815,9 +3831,9 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
 
         <span className="ts-toolbar-label">Exit</span>
         <select className="ts-exit-select" value={exitStrategy} onChange={e => setExitStrategy(e.target.value)}>
-          <option value="full_in_scale_out">Full / Scale Out (default)</option>
+          <option value="pyramid_auto">🔺 Pyramid Auto (default)</option>
+          <option value="full_in_scale_out">Full / Scale Out</option>
           <option value="full_in_full_out">Full / Full Out</option>
-          <option value="pyramid_auto">🔺 Pyramid Auto</option>
         </select>
 
         <div className="ts-toolbar-sep" />
@@ -3852,12 +3868,12 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
       {/* ── LOADING ── */}
       {(loading || picksLoad) && !picks && <div className="panel"><Loader msg="Scanning universe..."/></div>}
 
-      {/* ── MAIN PICKS GRID ── */}
+      {/* ── MAIN PICKS GRID (Deep Scan results) ── */}
       {picks && displayPicks.length > 0 && (
         <div style={{marginBottom:20}}>
           <div className="ts-section-header">
-            <span className="ts-section-title" style={{color:'var(--cyan)'}}>TOP PICKS</span>
-            <span className="ts-section-count">Ranked by {sortBy} — top {displayPicks.length} of {totalPicks} qualifying stocks</span>
+            <span className="ts-section-title" style={{color:'var(--cyan)'}}>DEEP SCAN</span>
+            <span className="ts-section-count">Ranked by {sortBy} — top {displayPicks.length} of {totalPicks} qualifying stocks{summary ? ` · ${summary}` : ''}</span>
             <div className="ts-section-line" />
           </div>
           <div className="ts-grid">
@@ -4061,84 +4077,6 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
           <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.6}}>{summary}</div>
           <div style={{fontSize:11,color:'var(--text3)',marginTop:8}}>
             Tip: Try switching mode (Swing / Position / Both) — different modes use different filters.
-          </div>
-        </div>
-      )}
-
-      {/* ── DEEP SCAN RESULTS (AI enriched, when scan is run) ── */}
-      {results.length > 0 && (
-        <div style={{marginBottom:20}}>
-          <div className="ts-section-header">
-            <span className="ts-section-title" style={{color:'var(--green)'}}>DEEP SCAN</span>
-            <span className="ts-section-count">{results.filter(passesChipFilters).length} setups from {scanned} candidates — full universe scan with computed levels{results[0]?.brief ? ' + AI analysis' : ''}</span>
-            <div className="ts-section-line" />
-          </div>
-          <div className="ts-grid">
-            {results.filter(passesChipFilters).map((s, i) => {
-              const b = s.brief || {};
-              const isExpanded = expandedCard === `scan-${s.ticker}`;
-              return (
-                <div key={s.ticker}
-                  className={`ts-card anim-in${isExpanded?' expanded':''}`}
-                  style={{opacity:noLongs?0.6:1}}
-                  onClick={() => setExpandedCard(isExpanded ? null : `scan-${s.ticker}`)}>
-                  <div className="ts-card-top">
-                    <div className="ts-card-rank" style={{background:'var(--text3)22',color:'var(--text3)'}}>{i+1}</div>
-                    <div className="ts-card-identity">
-                      <div className="ts-card-ticker td-ticker">{s.ticker}</div>
-                      <div className="ts-card-name">{s.name} -- {s.sector}</div>
-                    </div>
-                    <div className="ts-card-price">${fmt(s.price)}</div>
-                  </div>
-                  <div className="ts-card-metrics" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
-                    <div className="ts-metric">
-                      <div className="ts-metric-label">RS</div>
-                      <div className="ts-metric-val" style={{color:rsColor(s.rsRank)}}>{s.rsRank}</div>
-                    </div>
-                    <div className="ts-metric">
-                      <div className="ts-metric-label">Mom</div>
-                      <div className="ts-metric-val" style={{color:(s.swingMomentum||0)>=60?'var(--green)':'var(--amber)'}}>{s.swingMomentum||'—'}</div>
-                    </div>
-                    <div className="ts-metric">
-                      <div className="ts-metric-label">Vol</div>
-                      <div className="ts-metric-val" style={{color:(s.volumeRatio||0)>1.5?'var(--green)':'var(--text2)'}}>{fmt(s.volumeRatio,2)}x</div>
-                    </div>
-                  </div>
-                  {s.algoSetup && (
-                    <div style={{padding:'10px 16px',display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
-                      {[
-                        {label:'Entry', val:s.algoSetup.entryZone||'—', color:'var(--green)'},
-                        {label:'Stop',  val:s.algoSetup.stopLevel||'—', color:'var(--red)'},
-                        {label:`T1 (${s.algoSetup.riskReward})`, val:s.algoSetup.target1||'—', color:'var(--cyan)'},
-                      ].map(lv => (
-                        <div key={lv.label} className="ts-level-box">
-                          <div className="ts-level-label">{lv.label}</div>
-                          <div className="ts-level-val" style={{color:lv.color,fontSize:13}}>{lv.val}</div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {(s.earningsDate || b?.earningsDate) && (
-                    <div style={{padding:'0 16px 8px'}}>
-                      <div style={{padding:'5px 8px',background:(s.daysToEarnings||99)<=7?'rgba(255,61,87,0.12)':'rgba(240,165,0,0.08)',borderRadius:3,fontSize:10,color:(s.daysToEarnings||99)<=7?'var(--red)':'var(--amber)'}}>
-                        Earnings: <strong>{s.earningsDate||b?.earningsDate}</strong>
-                        {s.daysToEarnings!=null && ` -- ${s.daysToEarnings}d`}
-                        {s.daysToEarnings!=null && s.daysToEarnings<=14 && <strong style={{color:'var(--red)',marginLeft:4}}>DO NOT HOLD</strong>}
-                      </div>
-                    </div>
-                  )}
-                  <div className="ts-card-footer">
-                    <span className="ts-sector">{s.sector}</span>
-                    <button className="ts-stage-btn"
-                      disabled={noLongs || staging===s.ticker}
-                      onClick={(e) => stageFromSetup(s.ticker, undefined, e)}
-                      style={{background:noLongs?'var(--bg3)':stageColor,color:noLongs?'var(--text3)':'#000'}}>
-                      {staging===s.ticker ? 'STAGING...' : stageLabel}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
           </div>
         </div>
       )}
@@ -5303,7 +5241,7 @@ function WatchlistTab({ rsData }) {
   const [editVal,   setEditVal]  = useState('');
   const [stageFilter, setStageFilter] = useState('all');
   const [staging,   setStaging] = useState(null);
-  const [wlExitStrategy, setWlExitStrategy] = useState('full_size');
+  const [wlExitStrategy, setWlExitStrategy] = useState('pyramid_auto');
   const { sortData: sortWL, SH: WLSH } = useSortTable('addedAt', -1);
 
   useEffect(() => { loadWL(); loadStaged(); }, []);
@@ -5353,12 +5291,55 @@ function WatchlistTab({ rsData }) {
   async function stageFromPipeline(ticker, mode) {
     setStaging(ticker);
     try {
+      // ── Pyramid path: preview + confirm + create plan (mirrors scanner) ──
+      if (wlExitStrategy === 'pyramid_auto') {
+        const preview = await api('/api/pyramid-plans/preview', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ ticker }),
+        });
+        if (!preview.ok) {
+          alert(`Cannot pyramid ${ticker}: ${preview.error}`);
+          setStaging(null);
+          return;
+        }
+        const accountSize = 100000;
+        const riskPerTrade = 1000;
+        const pilotRisk = preview.triggers.pilot - preview.stop;
+        const totalQty = Math.max(3, Math.floor((riskPerTrade * 3) / pilotRisk));
+        const patternDesc = preview.pattern ? `${preview.pattern.name} (conf ${preview.pattern.confidence}%)` : 'manual pivot';
+        const t = preview.targets || {};
+        const confirm = window.confirm(
+          `🔺 PYRAMID PLAN — ${ticker}\n\n` +
+          `Pattern: ${patternDesc}\n\n` +
+          `ENTRIES\n` +
+          `  Pilot trigger:  $${preview.triggers.pilot}  (+${preview.pilotDistPct}% from $${preview.price})\n` +
+          `  Add 1 trigger:  $${preview.triggers.add1}\n` +
+          `  Add 2 trigger:  $${preview.triggers.add2}\n\n` +
+          `EXITS\n` +
+          `  Pilot → T1: $${t.pilotTp||'—'} (~${t.t1R||0}R)\n` +
+          `  Add 1 → T2: $${t.add1Tp||'—'} (~${t.t2R||0}R)\n` +
+          `  Add 2 → Runner: $${t.add2Tp||'—'} (trailing)\n` +
+          `  Stop: $${preview.stop} (-${preview.stopDistPct}%)\n\n` +
+          `Total qty: ${totalQty} shares (1/3 each tranche).\n\n` +
+          `Confirm create pyramid plan?`
+        );
+        if (!confirm) { setStaging(null); return; }
+        const r = await api('/api/pyramid-plans', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ ticker, totalQty }),
+        });
+        alert(`🔺 Pyramid plan #${r.id} created for ${r.symbol}.\nPilot waits at $${preview.triggers.pilot}.`);
+        setStaging(null);
+        return;
+      }
+
+      // ── Standard staging path (full_in_scale_out / full_in_full_out) ──
       const r = await api('/api/staging/from-setup', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ ticker, mode: mode || 'swing', exitStrategy: wlExitStrategy }),
       });
       await loadStaged();
-      const stratLabel = wlExitStrategy === 'scale_in_out' ? ' (scale in/out)' : ' (full size)';
+      const stratLabel = wlExitStrategy === 'full_in_scale_out' ? ' (full → scale out)' : ' (full → full out)';
       alert(`Staged ${r.staged?.symbol}: ${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk${stratLabel}`);
     } catch(e) { alert(`Stage failed: ${e.message}`); }
     setStaging(null);
@@ -5405,10 +5386,14 @@ function WatchlistTab({ rsData }) {
             style={{flex:1,minWidth:120,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',padding:'8px 10px',fontSize:12,outline:'none'}}/>
           <button className="btn btn-primary btn-sm" onClick={add} disabled={loading||!ticker}>+ Add</button>
           <div className="btn-group" style={{marginLeft:8}}>
-            {[{k:'full_size',l:'Full'},{k:'scale_in_out',l:'Scale'}].map(s => (
+            {[
+              {k:'pyramid_auto',l:'🔺 Pyramid',t:'Pilot fires at pivot, adds fire on +confirmation. True scale-in with volume gates. DEFAULT.'},
+              {k:'full_in_scale_out',l:'Full→Scale',t:'Buy full size at pivot, exit in 3 tranches (T1/T2/runner).'},
+              {k:'full_in_full_out',l:'Full→Full',t:'Buy full size, exit all at target. Simplest.'},
+            ].map(s => (
               <button key={s.k} className={`mode-btn ${wlExitStrategy===s.k?'active':''}`}
                 onClick={() => setWlExitStrategy(s.k)} style={{fontSize:10,padding:'5px 10px'}}
-                title={s.k==='full_size'?'Full size in/out':'Dynamic scale in/out (1/3 partials)'}>
+                title={s.t}>
                 {s.l}
               </button>
             ))}
@@ -5515,9 +5500,9 @@ function WatchlistTab({ rsData }) {
                             style={{padding:'3px 8px',fontSize:10,background:'rgba(240,165,0,0.15)',border:'1px solid rgba(240,165,0,0.3)',borderRadius:3,color:'var(--amber)',cursor:'pointer',fontWeight:600}}>↑ Candidate</button>
                         )}
                         {w.stage === 'candidate' && !isStaged && (
-                          <button onClick={()=>stageFromPipeline(w.ticker)} disabled={staging===w.ticker} title="Auto-size and stage bracket order"
+                          <button onClick={()=>stageFromPipeline(w.ticker)} disabled={staging===w.ticker} title={wlExitStrategy==='pyramid_auto'?'Create pyramid plan (pilot + adds)':'Auto-size and stage bracket order'}
                             style={{padding:'3px 8px',fontSize:10,background:'rgba(0,210,211,0.15)',border:'1px solid rgba(0,210,211,0.3)',borderRadius:3,color:'var(--cyan)',cursor:'pointer',fontWeight:600}}>
-                            {staging===w.ticker?'Staging...':'⚡ Stage'}
+                            {staging===w.ticker?'Staging...':wlExitStrategy==='pyramid_auto'?'🔺 Pyramid':'⚡ Stage'}
                           </button>
                         )}
                         {isStaged && <span style={{fontSize:10,color:'var(--green)',fontWeight:700}}>STAGED</span>}
