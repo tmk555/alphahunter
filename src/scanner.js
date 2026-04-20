@@ -20,6 +20,39 @@ const { calcEarningsDrift } = require('./signals/earningsDrift');
 const { calcBeta } = require('./risk/position-sizer');
 const { detectPatterns } = require('./signals/patterns');
 const { detectUnusualVolume, detectDarkPoolProxy, computeInstitutionalScore, calcInstitutionalAdjustment } = require('./signals/institutional');
+const { getDB } = require('./data/database');
+
+// Writes detected patterns to pattern_detections table for replay/backtest use.
+// One row per (symbol, date, pattern_type); upsert preserves today's latest confidence.
+let _patternUpsertStmt = null;
+function persistPatternDetections(symbol, patternData) {
+  if (!patternData || !patternData.patterns) return;
+  try {
+    const db = getDB();
+    if (!_patternUpsertStmt) {
+      _patternUpsertStmt = db.prepare(`
+        INSERT INTO pattern_detections (symbol, date, pattern_type, confidence, pivot_price, stop_price, details)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(symbol, date, pattern_type) DO UPDATE SET
+          confidence  = excluded.confidence,
+          pivot_price = excluded.pivot_price,
+          stop_price  = excluded.stop_price,
+          details     = excluded.details
+      `);
+    }
+    const today = marketDate();
+    for (const [type, p] of Object.entries(patternData.patterns)) {
+      if (!p || !p.detected) continue;
+      _patternUpsertStmt.run(
+        symbol, today, type,
+        p.confidence || 0,
+        p.pivotPrice || null,
+        p.stopPrice || null,
+        JSON.stringify(p)
+      );
+    }
+  } catch(_) { /* best-effort */ }
+}
 
 // ─── Core RS scan (shared, cached) ──────────────────────────────────────────
 async function runRSScan(UNIVERSE, SECTOR_MAP) {
@@ -111,6 +144,7 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
     let patternData = { patterns: {}, patternCount: 0, bestPattern: null };
     try {
       patternData = detectPatterns(barsMap[sym] || [], closes, ma50, ma150, ma200);
+      persistPatternDetections(sym, patternData);
     } catch(_) {}
 
     // Institutional flow proxy (v8)

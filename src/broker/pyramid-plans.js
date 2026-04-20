@@ -328,7 +328,10 @@ async function checkPyramidPlans({ currentPrices } = {}) {
                       : -1;
       if (trancheIdx < 0 || trancheIdx >= plan.tranches.length) continue;
       const tranche = plan.tranches[trancheIdx];
-      if (!tranche || tranche.status === 'filled') continue;
+      // Guard against re-submission: once a tranche is 'submitted' we wait for
+      // the broker fill handler to advance state. Without this, every scheduler
+      // tick re-fires the same tranche, stacking duplicate bracket orders.
+      if (!tranche || tranche.status === 'filled' || tranche.status === 'submitted') continue;
 
       // Has trigger been reached?
       if (price < tranche.trigger) continue;

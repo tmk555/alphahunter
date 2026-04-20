@@ -547,6 +547,36 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
     if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; }
 
     const isIntraday = chartData?.timeframe === '39min' || chartData?.meta?.timeframe === '39min';
+
+    // Lightweight Charts renders timestamps in UTC by default. We want the
+    // axis + crosshair to show the user's local computer time. `time` comes
+    // in as either a unix-seconds number (intraday bars) or a BusinessDay
+    // object `{year,month,day}` / "YYYY-MM-DD" string (daily bars).
+    const toLocalDate = (time) => {
+      if (typeof time === 'number') return new Date(time * 1000);
+      if (typeof time === 'string') return new Date(time + 'T00:00:00');
+      if (time && typeof time === 'object' && time.year != null) {
+        return new Date(time.year, (time.month || 1) - 1, time.day || 1);
+      }
+      return new Date(time);
+    };
+    const tickMarkFormatter = (time, tickMarkType) => {
+      const d = toLocalDate(time);
+      // tickMarkType: 0=Year 1=Month 2=DayOfMonth 3=Time 4=TimeWithSeconds
+      if (tickMarkType === 0) return d.getFullYear().toString();
+      if (tickMarkType === 1) return d.toLocaleString(undefined, { month: 'short' });
+      if (tickMarkType === 2) return d.toLocaleString(undefined, { month: 'short', day: 'numeric' });
+      if (tickMarkType === 3) return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+      if (tickMarkType === 4) return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+      return d.toLocaleString();
+    };
+    const timeFormatter = (time) => {
+      const d = toLocalDate(time);
+      return isIntraday
+        ? d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+        : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    };
+
     const chart = window.LightweightCharts.createChart(containerRef.current, {
       width: containerRef.current.clientWidth,
       height: height,
@@ -554,7 +584,8 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
       grid: { vertLines: { color: '#14142e' }, horzLines: { color: '#14142e' } },
       crosshair: { mode: 0 },
       rightPriceScale: { borderColor: '#14142e' },
-      timeScale: { borderColor: '#14142e', timeVisible: isIntraday, secondsVisible: false },
+      timeScale: { borderColor: '#14142e', timeVisible: isIntraday, secondsVisible: false, tickMarkFormatter },
+      localization: { timeFormatter },
     });
     chartRef.current = chart;
 
@@ -9722,12 +9753,12 @@ function ReplayTab() {
   const [replayError, setReplayError] = useState('');     // Replay section
   const [wfError, setWfError]         = useState('');     // Walk-Forward section
   const [mcError, setMcError]         = useState('');     // Monte Carlo section
-  const [form, setForm] = useState({ strategy:'rs_momentum', tradeMode:'', exitStrategy:'pyramid_auto', startDate:'', endDate:'', maxPositions:10, initialCapital:100000, params:'{}', strictRegime: true });
+  const [form, setForm] = useState({ strategy:'rs_momentum', tradeMode:'', exitStrategy:'pyramid_auto', startDate:'', endDate:'', maxPositions:10, initialCapital:100000, params:'{}', strictRegime: true, factorSignals: ['rs_strong','pattern'], factorMinRS: 85 });
   const [wfForm, setWfForm] = useState({ trainDays:120, testDays:60, optimizeMetric:'sharpeRatio', paramGrid:'{\n  "minRS": [70, 80, 90],\n  "minMomentum": [50, 60, 70]\n}' });
   const [mcForm, setMcForm] = useState({ iterations:1000, method:'permutation', positionFraction:0.10, selectedReplayId:null });
   const [mcHistory, setMcHistory] = useState([]);
   const [wfHistory, setWfHistory] = useState([]);
-  const [bfForm, setBfForm] = useState({ lookbackDays:365 });
+  const [bfForm, setBfForm] = useState({ lookbackDays:2500 });
   const [bfResult, setBfResult] = useState(null);
   const [bfLoading, setBfLoading] = useState(false);
   const datesInitialized = React.useRef(false);
@@ -9793,6 +9824,13 @@ function ReplayTab() {
       // Regime strictness: strict (default) uses dist-day-aware detection matching
       // live trading; unchecked uses simple SPY-vs-MA only (optimistic, legacy).
       params.strictRegime = form.strictRegime !== false;
+      // Factor-combo: inject the checkbox-selected signals + minRS when this
+      // strategy is active. The params-JSON textarea can still override either
+      // by declaring `signals` / `minRS` explicitly.
+      if (form.strategy === 'factor_combo') {
+        if (params.signals === undefined) params.signals = form.factorSignals || [];
+        if (params.minRS === undefined)   params.minRS   = form.factorMinRS || 85;
+      }
       const execution = {};
       if (form.nextDayEntry === false) execution.nextDayEntry = false;  // Default is true; only override when unchecked
       const r = await api('/api/replay/run', {
@@ -10072,6 +10110,47 @@ function ReplayTab() {
               : 'MA-only (optimistic). Legacy behavior — only checks SPY vs 50MA/200MA, ignores institutional selling.'}
           </span>
         </div>
+
+        {/* Factor-combo signal picker — shown only when strategy=factor_combo */}
+        {form.strategy === 'factor_combo' && (() => {
+          const SIGNAL_DEFS = [
+            { key:'rs_strong',   label:'RS Strong',   desc:`RS ≥ ${form.factorMinRS||85}` },
+            { key:'stage_2',     label:'Stage 2',     desc:'stock.stage === 2 (uptrend structure)' },
+            { key:'vcp_forming', label:'VCP',         desc:'Volatility-contraction pattern forming (base-building)' },
+            { key:'rs_line_nh',  label:'RS Line NH',  desc:'RS line at new high (relative-strength breakout)' },
+            { key:'pattern',     label:'Any Pattern', desc:'VCP OR RS-line NH — combined pattern gate' },
+            { key:'breadth_ok',  label:'Breadth OK',  desc:'Day-level: UPTREND regime OR composite ≥ 60' },
+            { key:'pattern_type:cupHandle',     label:'Cup & Handle',    desc:'Classical Cup & Handle detected for that date' },
+            { key:'pattern_type:ascendingBase', label:'Ascending Base',  desc:'Ascending Base detected for that date' },
+            { key:'pattern_type:powerPlay',     label:'Power Play',      desc:'Power Play / tight shelf detected for that date' },
+            { key:'pattern_type:highTightFlag', label:'High Tight Flag', desc:'High Tight Flag detected for that date' },
+          ];
+          const toggle = (k) => {
+            const next = new Set(form.factorSignals || []);
+            next.has(k) ? next.delete(k) : next.add(k);
+            setForm({...form, factorSignals: [...next]});
+          };
+          const sel = new Set(form.factorSignals || []);
+          return (
+            <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:10,padding:'8px 12px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,flexWrap:'wrap'}}>
+              <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)',letterSpacing:1,fontWeight:600}}>SIGNALS</span>
+              {SIGNAL_DEFS.map(s => (
+                <label key={s.key} title={s.desc}
+                  style={{display:'flex',alignItems:'center',gap:5,cursor:'pointer',fontSize:11,color:'var(--text2)',padding:'3px 8px',background:sel.has(s.key)?'rgba(91,192,235,0.12)':'transparent',border:`1px solid ${sel.has(s.key)?'var(--cyan)':'var(--border)'}`,borderRadius:3}}>
+                  <input type="checkbox" checked={sel.has(s.key)} onChange={()=>toggle(s.key)}/>
+                  <span style={{fontWeight:600}}>{s.label}</span>
+                </label>
+              ))}
+              <span style={{fontSize:10,color:'var(--text3)',marginLeft:4,display:'flex',alignItems:'center',gap:4}}>
+                minRS
+                <input type="number" value={form.factorMinRS} min={50} max={99} onChange={e=>setForm({...form,factorMinRS:+e.target.value})} style={{width:44,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 6px',color:'var(--text)',fontSize:10,fontFamily:'var(--font-mono)'}}/>
+              </span>
+              <span style={{fontSize:10,color:sel.size>=2?'var(--green)':'var(--amber)'}}>
+                {sel.size>=2 ? `${sel.size} signal${sel.size>1?'s':''} selected` : 'Select at least 2 signals'}
+              </span>
+            </div>
+          );
+        })()}
 
         {/* Strategy params override */}
         <textarea placeholder='Params override JSON (optional)' value={form.params} onChange={e=>setForm({...form,params:e.target.value})} rows={2} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 10px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)',marginBottom:10,resize:'vertical'}}/>

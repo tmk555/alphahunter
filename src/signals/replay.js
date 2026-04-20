@@ -78,6 +78,15 @@ const BUILT_IN_STRATEGIES = {
     description: 'Buy RS 65-79 with 4-week RS acceleration >= +5. Catches leaders early before they hit RS 80+. Regime-aware: no new longs in CAUTION/CORRECTION.',
     defaults: { minRS: 65, maxRS: 79, minAccel: 5, exitRS: 50, holdDays: 25 },
   },
+  factor_combo: {
+    name: 'Factor Combo',
+    description: 'Generic signal-combo filter. Requires ALL signals in params.signals[] to fire. Signals: rs_strong (RS≥minRS), stage_2, vcp_forming, rs_line_nh, pattern (VCP or RS-line NH), breadth_ok, pattern_type:<name> (cupHandle/ascendingBase/powerPlay/highTightFlag, pipe-separated for OR). Ranks by RS+momentum.',
+    defaults: {
+      signals: ['rs_strong', 'pattern'],
+      minRS: 85, holdDays: 20,
+      stopATR: 1.5, targetATR: 3.0,
+    },
+  },
   regime_adaptive: {
     name: 'Regime Adaptive',
     description: 'Switches sub-strategy daily based on SPY regime: BULL→rs_momentum, NEUTRAL→sepa_trend, CAUTION→cash, CORRECTION→cash. New entries blocked outside risk-on regimes; existing positions force-exit when regime turns risk-off.',
@@ -203,6 +212,22 @@ function loadScanData(startDate, endDate) {
   }));
 }
 
+// Load pattern_detections rows keyed by (date → symbol → Set<pattern_type>)
+// for the replay window. Used by factor_combo's pattern_type:<name> signal.
+function loadPatternDetections(startDate, endDate) {
+  const rows = db().prepare(`
+    SELECT date, symbol, pattern_type
+    FROM pattern_detections
+    WHERE date >= ? AND date <= ?
+  `).all(startDate, endDate);
+  const byDate = {};
+  for (const r of rows) {
+    (byDate[r.date] ||= {});
+    ((byDate[r.date][r.symbol] ||= new Set())).add(r.pattern_type);
+  }
+  return byDate;
+}
+
 function loadSnapshotData(startDate, endDate) {
   return db().prepare(`
     SELECT date, symbol, rs_rank, swing_momentum, sepa_score, stage, price,
@@ -248,6 +273,36 @@ function evaluateEntry(stock, strategy, params) {
       return stock.rs_rank <= params.maxRS &&
              (stock.sepa_score || 8) <= params.maxSEPA &&
              stock.stage === 4;
+
+    case 'factor_combo': {
+      // Every signal in params.signals[] must fire. Supported:
+      //   rs_strong          — rs_rank ≥ params.minRS (default 85)
+      //   stage_2            — stock.stage === 2
+      //   vcp_forming        — stock.vcp_forming
+      //   rs_line_nh         — stock.rs_line_new_high
+      //   pattern            — vcp_forming OR rs_line_new_high
+      //   breadth_ok         — day-level gate; see runReplay injection (stock._breadth_ok)
+      //   pattern_type:A|B   — classical-pattern segmenter from pattern_detections.
+      //                        Values: cupHandle, ascendingBase, powerPlay, highTightFlag.
+      //                        Pipe-separated for OR (e.g. pattern_type:cupHandle|powerPlay).
+      const sigs = Array.isArray(params.signals) ? params.signals : [];
+      if (!sigs.length) return false;
+      for (const sig of sigs) {
+        if (sig === 'rs_strong')        { if (!(stock.rs_rank >= (params.minRS || 85))) return false; }
+        else if (sig === 'stage_2')     { if (stock.stage !== 2) return false; }
+        else if (sig === 'vcp_forming') { if (!stock.vcp_forming) return false; }
+        else if (sig === 'rs_line_nh')  { if (!stock.rs_line_new_high) return false; }
+        else if (sig === 'pattern')     { if (!(stock.vcp_forming || stock.rs_line_new_high)) return false; }
+        else if (sig === 'breadth_ok')  { if (!stock._breadth_ok) return false; }
+        else if (sig.startsWith('pattern_type:')) {
+          const wanted = sig.slice('pattern_type:'.length).split('|').filter(Boolean);
+          const pats = stock._patterns;
+          if (!pats || !wanted.some(w => pats.has(w))) return false;
+        }
+        else return false;  // Unknown signal → conservative fail
+      }
+      return true;
+    }
 
     default:
       return false;
@@ -533,6 +588,28 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
   }
   const dates = Object.keys(byDate).sort();
 
+  // ─── factor_combo day-level lookups ─────────────────────────────────────
+  // Pre-compute breadth_ok (day-level) and pattern_detections (per symbol)
+  // so evaluateEntry reads them off the stock row via _breadth_ok / _patterns.
+  const combosNeedBreadth = strategy === 'factor_combo' &&
+    Array.isArray(params.signals) && params.signals.includes('breadth_ok');
+  const combosNeedPatterns = strategy === 'factor_combo' &&
+    Array.isArray(params.signals) && params.signals.some(s => typeof s === 'string' && s.startsWith('pattern_type:'));
+
+  const breadthOkByDate = {};
+  if (combosNeedBreadth) {
+    const rows = db().prepare(`
+      SELECT date, regime, composite_score
+      FROM breadth_snapshots
+      WHERE date >= ? AND date <= ?
+    `).all(startDate, endDate);
+    for (const r of rows) {
+      breadthOkByDate[r.date] = (r.regime === 'UPTREND') || ((r.composite_score || 0) >= 60);
+    }
+  }
+
+  const patternsByDate = combosNeedPatterns ? loadPatternDetections(startDate, endDate) : null;
+
   // ─── RS acceleration lookup (for emerging_leader strategy) ─────────────
   // Build per-symbol RS rank history so we can compute 4-week RS change.
   // rsHistory[symbol] = [{date, rs_rank}, ...] sorted by date
@@ -621,10 +698,14 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     const date = dates[i];
     const dayStocks = byDate[date];
     const stockMap = {};
+    const dayBreadthOk = combosNeedBreadth ? !!breadthOkByDate[date] : true;
+    const dayPatterns  = combosNeedPatterns ? (patternsByDate[date] || {}) : null;
     for (const s of dayStocks) {
       stockMap[s.symbol] = s;
       // Attach 4-week RS acceleration for emerging_leader strategy
       if (isEmerging) s._rs_accel_4w = computeRsAccel4w(s.symbol, date);
+      if (combosNeedBreadth)  s._breadth_ok = dayBreadthOk;
+      if (combosNeedPatterns) s._patterns   = dayPatterns[s.symbol] || null;
     }
 
     // ─── Daily accruals (Phase 2.6) ─────────────────────────────────────
@@ -910,6 +991,10 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       } else if (todayStrategy === 'rs_line_new_high') {
         // Strongest RS rank — RS line new high is already the entry gate
         candidates.sort((a, b) => (b.rs_rank || 0) - (a.rs_rank || 0));
+      } else if (todayStrategy === 'factor_combo') {
+        // RS + momentum composite — combo filter has already gated candidates.
+        candidates.sort((a, b) =>
+          ((b.rs_rank || 0) + (b.swing_momentum || 0)) - ((a.rs_rank || 0) + (a.swing_momentum || 0)));
       } else if (todayStrategy === 'conviction') {
         // Multi-factor composite matching calcConviction weights
         candidates.sort((a, b) => {
