@@ -11965,6 +11965,9 @@ function BreadthSection() {
                       <div style={{display:'flex',gap:16}}>
                         <div style={{fontSize:11,color:'var(--text2)',fontFamily:'var(--font-mono)'}}>
                           Summation: <span style={{color:summation>0?'var(--green)':'var(--red)',fontWeight:600}}>{summation}</span>
+                          {data.mcclellan.summationPct != null && (
+                            <span style={{fontSize:10,color:'var(--text3)',marginLeft:6}}>({data.mcclellan.summationPct}th pct 1y)</span>
+                          )}
                         </div>
                         <div style={{fontSize:11,color:'var(--text3)'}}>Previous: {prev}</div>
                       </div>
