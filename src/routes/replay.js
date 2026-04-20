@@ -22,6 +22,7 @@ const {
 } = require('../signals/replay');
 const { runBackfill } = require('../signals/backfill');
 const { runInstitutionalBackfill } = require('../signals/backfillInstitutional');
+const { runEarningsDriftBackfill } = require('../signals/backfillEarningsDrift');
 const { FULL_UNIVERSE } = require('../../universe');
 
 // ─── Available strategies ─────────────────────────────────────────────────
@@ -179,6 +180,33 @@ router.post('/replay/backfill-institutional', async (req, res) => {
       return res.status(400).json({ error: 'lookbackDays must be between 1 and 2500' });
     }
     const summary = await runInstitutionalBackfill({
+      symbols: useSymbols,
+      lookbackDays: +lookbackDays,
+      concurrency: +concurrency || 5,
+    });
+    res.json(summary);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── earnings_drift_snapshots backfill ────────────────────────────────────
+// Walks each universe symbol's bars, re-runs calcEarningsDrift for every
+// historical date (using the "biggest gap in last 30 bars" fallback since
+// historical earnings timestamps aren't captured), and persists the score.
+router.post('/replay/backfill-earnings-drift', async (req, res) => {
+  try {
+    const { lookbackDays = 252, symbols, concurrency = 5 } = req.body || {};
+    const useSymbols = Array.isArray(symbols) && symbols.length
+      ? symbols
+      : Object.keys(FULL_UNIVERSE);
+    if (!useSymbols.length) {
+      return res.status(400).json({ error: 'no symbols available — provide symbols[] or populate universe' });
+    }
+    if (lookbackDays < 1 || lookbackDays > 2500) {
+      return res.status(400).json({ error: 'lookbackDays must be between 1 and 2500' });
+    }
+    const summary = await runEarningsDriftBackfill({
       symbols: useSymbols,
       lookbackDays: +lookbackDays,
       concurrency: +concurrency || 5,

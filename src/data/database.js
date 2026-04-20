@@ -778,6 +778,32 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_inst_flow_date ON institutional_flow(date);
   `);
 
+  // ─── PEAD (Post-Earnings Announcement Drift) snapshots ───────────────────
+  // Stores per-(symbol, date) output of calcEarningsDrift so the replay
+  // engine and deep_scan backtests can re-read historical PEAD scores
+  // without replaying bar math. Backfill path uses detectEarningsReaction
+  // (biggest 3%+ gap in last 30 bars) since historical `daysToEarnings`
+  // isn't captured — `known_earnings` is therefore always 0 for backfilled
+  // rows and 1 only when the live scanner had a real earnings timestamp.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS earnings_drift_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      symbol TEXT NOT NULL,
+      date TEXT NOT NULL,
+      score INTEGER,
+      gap_pct REAL,
+      days_since_reaction INTEGER,
+      drift_pct REAL,
+      held_gains INTEGER,
+      known_earnings INTEGER,
+      strong INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(symbol, date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ed_snap_symbol ON earnings_drift_snapshots(symbol);
+    CREATE INDEX IF NOT EXISTS idx_ed_snap_date ON earnings_drift_snapshots(date);
+  `);
+
   // ─── v8: Multi-Strategy Framework ─────────────────────────────────────────
   db.exec(`
     CREATE TABLE IF NOT EXISTS strategies (
