@@ -118,7 +118,18 @@ module.exports = function(db) {
   router.get('/broker/orders', async (req, res) => {
     try {
       const { status = 'open', limit = 50 } = req.query;
-      const orders = await alpaca.getOrders({ status, limit: +limit });
+      // Alpaca's status=open filter excludes OCO bracket siblings whose status
+      // is 'held' (e.g. the stop leg sitting dormant alongside an active TP).
+      // Fetch all statuses and drop terminal ones server-side so the UI sees
+      // every live order attached to an open position.
+      let orders;
+      if (status === 'open') {
+        const raw = await alpaca.getOrders({ status: 'all', limit: 500 });
+        const terminal = new Set(['filled','canceled','cancelled','expired','rejected','done_for_day','replaced']);
+        orders = raw.filter(o => !terminal.has(o.status)).slice(0, +limit);
+      } else {
+        orders = await alpaca.getOrders({ status, limit: +limit });
+      }
 
       // ── Build enrichment map from staged_orders ──
       let enrichById = {};    // orderId → enrichment
