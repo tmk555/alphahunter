@@ -3653,20 +3653,11 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
     ).sort((a, b) => a.vsMA50 - b.vsMA50).slice(0, 15);
   }, [rsData, rsLoaded]);
 
-  useEffect(() => {
-    loadPicks();
-    // Auto-load cached deep scan results if none in memory (survives page refresh)
-    if (!results || !results.length) {
-      api('/api/trade-setups/cached?mode=' + mode).then(d => {
-        if (d.cached && d.results && d.results.length > 0) {
-          setResults(d.results);
-          if (d.regime) setRegime(d.regime);
-          setScanned(d.scannedCount || 0);
-          setSummary(`Cached scan from ${new Date(d.cachedAt + 'Z').toLocaleString()} (${d.ageMinutes} min ago)`);
-        }
-      }).catch(() => {});
-    }
-  }, []);
+  // Reload picks whenever the mode chip changes or RS data finally arrives.
+  // Before adding rsLoaded to the deps, switching to Pullback/Swing on a cold
+  // cache left the grid at "0 picks" because the fallback scan needs rsData
+  // and the effect only fired once at mount (rsLoaded still false then).
+  useEffect(() => { loadPicks(); }, [mode, rsLoaded]);
 
   // Toast-based staging (replaces alert/prompt)
   function showToast(title, body, isError) {
