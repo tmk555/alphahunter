@@ -76,7 +76,7 @@ const runScan = () => runRSScan(UNIVERSE, SECTOR_MAP);
 const scanRoutes          = require('./src/routes/scan')(UNIVERSE, SECTOR_MAP);
 const sectorRoutes        = require('./src/routes/sectors')(SECTOR_ETFS, INDUSTRY_ETFS, INDUSTRY_STOCKS, UNIVERSE, SECTOR_MAP);
 const macroRoutes         = require('./src/routes/macro');
-const tradeSetupsRoutes   = require('./src/routes/tradeSetups')(runScan, anthropic);
+const tradeSetupsRoutes   = require('./src/routes/tradeSetups')(runScan, anthropic, SECTOR_ETFS);
 const watchlistRoutes     = require('./src/routes/watchlist');
 const picksRoutes         = require('./src/routes/picks')(runScan, SECTOR_ETFS);
 const fundamentalsRoutes  = require('./src/routes/fundamentals');
@@ -136,7 +136,7 @@ const alpacaConfig = require('./src/broker/alpaca').getConfig();
 
 // ─── Job Scheduler (Tier 5) ─────────────────────────────────────────────────
 const { startScheduler }                = require('./src/scheduler/engine');
-const { setRunScan, seedDefaultJobs }   = require('./src/scheduler/jobs');
+const { setRunScan, setSectorEtfs, seedDefaultJobs } = require('./src/scheduler/jobs');
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
@@ -178,6 +178,7 @@ app.listen(PORT, () => {
 
   // Start job scheduler (Tier 5)
   setRunScan(runScan);
+  setSectorEtfs(SECTOR_ETFS);
   // Seed default cron jobs on first boot — idempotent, skips anything
   // already present in scheduled_jobs. Must run BEFORE startScheduler so
   // the newly-inserted rows get picked up and scheduled in one pass.

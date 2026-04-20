@@ -19,10 +19,10 @@ async function syncBrokerFills() {
   const orders = await alpaca.getOrders({ status: 'closed', limit: 100, after: since });
   const filled = orders.filter(o => o.status === 'filled' && o.side === 'buy');
 
+  // Dedupe strictly on alpaca_order_id — the old symbol:date guard blocked
+  // subsequent pyramid tranches on the same day from ever being synced.
   const existing     = db.prepare('SELECT alpaca_order_id FROM trades WHERE alpaca_order_id IS NOT NULL').all();
   const existingIds  = new Set(existing.map(t => t.alpaca_order_id));
-  const openTrades   = db.prepare('SELECT symbol, entry_date FROM trades WHERE exit_date IS NULL').all();
-  const openSymDates = new Set(openTrades.map(t => `${t.symbol}:${t.entry_date}`));
 
   // Backfill sector on older auto-synced trades that predated sector capture.
   const backfilled = db.prepare(`
@@ -44,7 +44,6 @@ async function syncBrokerFills() {
     if (existingIds.has(order.id)) continue;
     let fillDate = (order.filled_at || order.created_at).split('T')[0];
     if (fillDate > todayStr) fillDate = todayStr;          // clamp UTC-offset future dates
-    if (openSymDates.has(`${order.symbol}:${fillDate}`)) continue;
 
     const staged = db.prepare(
       'SELECT stop_price, target1_price, target2_price, source, conviction_score, strategy, exit_strategy, entry_price, created_at FROM staged_orders WHERE alpaca_order_id = ?'

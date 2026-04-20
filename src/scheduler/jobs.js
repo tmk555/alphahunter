@@ -280,6 +280,37 @@ registerJobType('universe_reconstitute', {
 // Both modes use the same handler; the scanner internally fetches live quotes
 // via the cascading provider manager when called without currentPrices.
 
+// ─── Deep Scan — auto-populate deep_scan_cache ─────────────────────────────
+// Runs a Deep Scan over the fresh RS universe and persists the results so the
+// Trade Setups tab (and Morning Brief) never show stale data. Pulls from the
+// in-memory rs:full cache when hot, falls back to runRSScanFn() otherwise.
+
+let _sectorEtfs = null;
+function setSectorEtfs(arr) { _sectorEtfs = arr; }
+
+registerJobType('deep_scan', {
+  description: 'Populate deep_scan_cache with ranked picks (conviction + sector rotation + ATR levels)',
+  defaultConfig: { mode: 'both' },
+  handler: async (config) => {
+    const { runDeepScan, persistDeepScan } = require('../signals/deep-scan');
+    const { cacheGet } = require('../data/cache');
+
+    let stocks = cacheGet('rs:full', 24 * 60 * 60 * 1000);
+    if (!stocks || !stocks.length) {
+      if (!_runScan) throw new Error('Scanner not initialized — call setRunScan() at startup');
+      stocks = await _runScan();
+    }
+
+    const mode = config.mode || 'both';
+    const scan = await runDeepScan({ stocks, mode, sectorEtfs: _sectorEtfs });
+    persistDeepScan({
+      mode, results: scan.results, regime: scan.regime,
+      scannedCount: scan.candidates, totalInput: scan.totalInput,
+    });
+    return { mode, picks: scan.results.length, candidates: scan.candidates, totalInput: scan.totalInput };
+  },
+});
+
 registerJobType('pullback_watch', {
   description: '3-state 50 SMA pullback detector — approaching/in_zone/kissing with live prices',
   defaultConfig: { marketHoursOnly: false },
@@ -813,6 +844,24 @@ const DEFAULT_JOBS = [
     config: {},
   },
 
+  // Deep Scan auto-refresh — pre-market warmup + every 30 min during market
+  // hours. Makes the Trade Setups tab and Morning Brief read fresh data on
+  // load. Free: no AI calls unless ANTHROPIC_API_KEY is set.
+  {
+    name: 'deep_scan_premarket',
+    description: 'Warm deep_scan_cache before the open so Morning Brief + Trade Setups show fresh picks',
+    job_type: 'deep_scan',
+    cron_expression: '30 8 * * 1-5',  // 8:30 AM server local, weekdays
+    config: { mode: 'both' },
+  },
+  {
+    name: 'deep_scan_intraday',
+    description: 'Refresh deep_scan_cache every 30 min during market hours',
+    job_type: 'deep_scan',
+    cron_expression: '*/30 9-16 * * 1-5',  // every 30 min, 9am-4pm weekdays
+    config: { mode: 'both' },
+  },
+
   // End-of-day equity snapshot for alpha tracking (TWR, Sharpe, SPY-relative).
   {
     name: 'equity_snapshot_eod',
@@ -1023,4 +1072,4 @@ function seedDefaultJobs() {
   return { seeded, skipped };
 }
 
-module.exports = { setRunScan, seedDefaultJobs, DEFAULT_JOBS };
+module.exports = { setRunScan, setSectorEtfs, seedDefaultJobs, DEFAULT_JOBS };
