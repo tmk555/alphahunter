@@ -5,7 +5,7 @@
       "name": "alphahunter",
       "runtimeExecutable": "/opt/homebrew/bin/node",
       "runtimeArgs": ["server.js"],
-      "env": { "PORT": "3099" },
+      "env": { "PORT": "3099", "ALPHAHUNTER_DB": "/Users/ManojKumarTella/Documents/Finance/alphahunter/data/alphahunter.db" },
       "port": 3099,
       "autoPort": true
     }

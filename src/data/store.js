@@ -33,16 +33,20 @@ function loadHistory(type) {
 }
 
 // Save RS snapshot to SQLite — scores is { symbol: rank, ... }
+// Upsert rs_rank only; never clobber columns written by the richer backfill path
+// (price, stage, vcp_forming, rs_line_new_high, pattern_type, atr_pct, etc.).
 function saveHistory(type, scores, dateStr) {
   const db = getDB();
-  const insert = db.prepare(
-    `INSERT OR REPLACE INTO rs_snapshots (date, symbol, type, rs_rank) VALUES (?, ?, ?, ?)`
-  );
+  const upsert = db.prepare(`
+    INSERT INTO rs_snapshots (date, symbol, type, rs_rank)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(date, symbol, type) DO UPDATE SET rs_rank = excluded.rs_rank
+  `);
   const txn = db.transaction(() => {
     for (const [key, rank] of Object.entries(scores)) {
       // Strip prefix for storage
       const symbol = key.replace(/^SEC_/, '').replace(/^IND_/, '');
-      insert.run(dateStr, symbol, type, rank);
+      upsert.run(dateStr, symbol, type, rank);
     }
   });
   txn();
