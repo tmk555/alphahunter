@@ -29,3 +29,9 @@ data/*.db-wal
 data/*.db-shm
 data/*.json
 backup/
+
+# Stray DB artifacts at repo root (created when a script is run from the
+# wrong cwd and sqlite3 initializes a new file in place)
+/alphahunter.db
+/alphahunter.db-wal
+/alphahunter.db-shm
