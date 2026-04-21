@@ -5270,8 +5270,12 @@ function MacroTab() {
               const m = META[s.series_id] || { label: s.series_id };
               const isSel = selected === s.series_id;
               return (
-                <tr key={s.series_id} style={isSel?{background:'rgba(0,212,255,0.05)'}:undefined}>
-                  <td className="td-ticker">{s.series_id}</td>
+                <tr key={s.series_id}
+                    onClick={() => setSelected(s.series_id)}
+                    style={{cursor:'pointer', ...(isSel?{background:'rgba(0,212,255,0.05)'}:{})}}>
+                  {/* Not a stock ticker — don't use .td-ticker or the global
+                      click handler will yank the user to the Scanner tab. */}
+                  <td style={{color:'var(--cyan)',fontWeight:600,fontFamily:'var(--font-mono)'}}>{s.series_id}</td>
                   <td style={{fontSize:11,color:'var(--text2)'}}>{m.label}</td>
                   <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:11}}>{s.observations?.toLocaleString() || '—'}</td>
                   <td style={{fontSize:11,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{s.earliest || '—'}</td>
