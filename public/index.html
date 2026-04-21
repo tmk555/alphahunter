@@ -1067,6 +1067,8 @@ function App() {
   // Share rsData globally so Sectors/Industries tabs can access stock list
   React.useEffect(() => { window._rsData = rsData; }, [rsData]);
   const [rsLoaded,  setRsLoaded]  = useState(false);
+  const [rsLoading, setRsLoading] = useState(false); // true while auto-load or REFRESH ALL in flight
+  const rsLoadInFlight = useRef(false); // dedupes concurrent loads across App + RSTab
   const [minRS,     setMinRS]     = useState(50);   // lifted — persists across tabs
   const [swingResults, setSwingResults] = useState([]);
   const [swingRegime,  setSwingRegime]  = useState(null);
@@ -1157,9 +1159,14 @@ function App() {
   }
 
   async function loadAll() {
-    // Refresh ticker bar + RS data in parallel
+    // Refresh ticker bar + RS data in parallel.
+    // rsLoadInFlight ref dedupes: if a child tab (e.g. RSTab mount) is already
+    // fetching, we don't want to re-hit the expensive scanner endpoint.
+    if (rsLoadInFlight.current) { await loadTicker(); return; }
+    rsLoadInFlight.current = true;
+    setRsLoading(true);
     try {
-      const [rsResult] = await Promise.all([
+      await Promise.all([
         api('/api/rs-scan').then(d => {
           setRsData((d.stocks || []).filter(s => s.ticker !== 'SPY'));
           setRsLoaded(true);
@@ -1168,7 +1175,15 @@ function App() {
         loadTicker(),
       ]);
     } catch(_) {}
+    setRsLoading(false);
+    rsLoadInFlight.current = false;
   }
+
+  // Auto-kick the first scan as soon as the app mounts so Trade Setups, Pipeline,
+  // Sectors etc. are ready without the user having to hunt for REFRESH ALL.
+  // The scan is ~30-60s but runs in the background — the ticker bar and static
+  // tabs render immediately; only the tabs that need rsData show a spinner.
+  useEffect(() => { loadAll(); /* eslint-disable-next-line */ }, []);
 
   const TABS = [
     { id:'pulse',     label:'⚡ Market Pulse' },
@@ -1240,7 +1255,17 @@ function App() {
             style={{padding:'7px 14px',background:guideOpen?'rgba(240,165,0,0.15)':'transparent',border:`1px solid ${guideOpen?'var(--amber)':'var(--border)'}`,borderRadius:4,color:guideOpen?'var(--amber)':'var(--text3)',cursor:'pointer',fontSize:12,fontFamily:'var(--font-sans)',fontWeight:600,letterSpacing:1,transition:'all 0.15s'}}>
             📖 {guideOpen?'▼':'▶'} GUIDE
           </button>
-          <button className="load-btn" onClick={loadAll}>↻ REFRESH ALL</button>
+          <button
+            className="load-btn"
+            onClick={loadAll}
+            disabled={rsLoading}
+            title={rsLoading
+              ? 'Scanner running — refreshes ~363 universe stocks (RS ranks, patterns, stage, volume, etc.) + macro ticker bar. ~30–60s.'
+              : rsLoaded
+                ? 'Re-run the RS scan over the full universe (~363 stocks) and refresh the macro ticker bar. Use when you want the latest quotes/patterns without waiting for the 60s auto-refresh. ~30–60s.'
+                : 'Initial scan — fetching ~363 universe stocks with RS ranks, patterns, stage, volume. Normally auto-runs on app load.'}>
+            {rsLoading ? '⟳ SCANNING...' : '↻ REFRESH ALL'}
+          </button>
           <button
             onClick={async()=>{await fetch('/api/auth/logout',{method:'POST',credentials:'same-origin'});window.location.href='/';}}
             style={{padding:'7px 12px',background:'transparent',border:'1px solid var(--border)',borderRadius:4,color:'var(--text3)',cursor:'pointer',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:600,letterSpacing:1}}
@@ -1270,8 +1295,8 @@ function App() {
         {tab==='macro'      && <MacroTab />}
         {tab==='sectors'    && <SectorsTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
         {tab==='industries' && <IndustriesTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
-        {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} sigFilters={rsSigFilters} setSigFilters={setRsSigFilters} quickFilter={rsQuickFilter} setQuickFilter={setRsQuickFilter} scannerTarget={scannerTarget} clearScannerTarget={() => setScannerTarget(null)}/>}
-        {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary} setupSigFilters={setupSigFilters} setSetupSigFilters={setSetupSigFilters} mode={setupMode} setMode={setSetupMode} sortBy={setupSortBy} setSortBy={setSetupSortBy} exitStrategy={setupExitStrategy} setExitStrategy={setSetupExitStrategy}/>}
+        {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} rsLoading={rsLoading} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} sigFilters={rsSigFilters} setSigFilters={setRsSigFilters} quickFilter={rsQuickFilter} setQuickFilter={setRsQuickFilter} scannerTarget={scannerTarget} clearScannerTarget={() => setScannerTarget(null)}/>}
+        {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} rsLoading={rsLoading} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary} setupSigFilters={setupSigFilters} setSetupSigFilters={setSetupSigFilters} mode={setupMode} setMode={setSetupMode} sortBy={setupSortBy} setSortBy={setSetupSortBy} exitStrategy={setupExitStrategy} setExitStrategy={setSetupExitStrategy}/>}
         {tab==='watchlist'  && <WatchlistTab rsData={rsData} />}
         {tab==='hedge'      && <HedgeTab />}
         {tab==='trading'    && <><PortfolioTab /><StrategiesSection /><ExecutionTab /></>}
@@ -2936,7 +2961,7 @@ function IndustriesTab({ selectedSectors, setSelectedSectors }) {
 }
 
 // ─── RS SCANNER TAB ───────────────────────────────────────────────────────────
-function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, selectedSectors, setSelectedSectors, sigFilters, setSigFilters, scannerTarget, clearScannerTarget }) {
+function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, setMinRS, selectedSectors, setSelectedSectors, sigFilters, setSigFilters, scannerTarget, clearScannerTarget }) {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   const [rsStaging, setRsStaging] = useState(null);
@@ -3168,7 +3193,10 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
     setLoading(false);
   }
 
-  useEffect(() => { if (!rsLoaded) load(); }, []);
+  // Only fire our own fetch if the parent isn't already loading — App auto-
+  // kicks a scan on mount, so most of the time rsLoading will be true here
+  // and we'll just wait for the parent's result via props.
+  useEffect(() => { if (!rsLoaded && !rsLoading) load(); }, []);
 
   // Base filter: min RS threshold (bypassed when sector focus active)
   const hasSectorFocus = selectedSectors && selectedSectors.size > 0;
@@ -3679,7 +3707,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
 }
 
 // ─── TRADE SETUPS (redesigned: unified card layout with filter chips, sort, and inline staging) ──
-function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegime, scanned, setScanned, summary, setSummary, setupSigFilters, setSetupSigFilters, mode, setMode, sortBy, setSortBy, exitStrategy, setExitStrategy }) {
+function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regime, setRegime, scanned, setScanned, summary, setSummary, setupSigFilters, setSetupSigFilters, mode, setMode, sortBy, setSortBy, exitStrategy, setExitStrategy }) {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   const [picks,   setPicks]   = useState(null);
@@ -3822,7 +3850,9 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
 
   async function runScan() {
     if (!rsLoaded || !rsData.length) {
-      setError('Load RS data first -- click REFRESH ALL in the header');
+      setError(rsLoading
+        ? 'Scanner still loading (~30–60s on first load). Try again in a moment.'
+        : 'Scanner data not loaded yet — click ↻ REFRESH ALL in the header to fetch universe quotes/patterns.');
       return;
     }
     setLoading(true); setError(''); setResults([]);
@@ -3879,6 +3909,15 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
 
   return (
     <div>
+      {/* ── SCANNER LOADING BANNER ── shown while App's auto-scan is in flight */}
+      {rsLoading && !rsLoaded && (
+        <div style={{padding:'10px 14px',background:'rgba(0,212,255,0.10)',border:'1px solid rgba(0,212,255,0.35)',borderRadius:5,marginBottom:12,display:'flex',alignItems:'center',gap:10}}>
+          <span style={{display:'inline-block',width:10,height:10,borderRadius:'50%',background:'var(--cyan)',animation:'pulse 1.5s ease-in-out infinite'}}/>
+          <span style={{fontSize:12,color:'var(--text2)'}}>
+            Scanner warming up — fetching quotes/patterns/stage/volume for the universe (~363 stocks, ~30–60s). Setups appear once it finishes.
+          </span>
+        </div>
+      )}
       {/* ── REGIME GATE ── */}
       {noLongs && (
         <div style={{padding:'16px 20px',background:'rgba(255,61,87,0.12)',border:'2px solid rgba(255,61,87,0.5)',borderRadius:6,marginBottom:14}}>
@@ -3898,8 +3937,10 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
           {picks && <span className="ts-header-count">{displayPicks.length}{totalPicks !== displayPicks.length ? ` of ${totalPicks}` : ''} picks</span>}
         </div>
         <div className="ts-header-actions">
-          <button className="btn btn-primary" onClick={runScan} disabled={loading}>
-            {loading ? 'Scanning...' : 'Deep Scan'}
+          <button className="btn btn-primary" onClick={runScan}
+            disabled={loading || (rsLoading && !rsLoaded)}
+            title={rsLoading && !rsLoaded ? 'Waiting for the universe scan to finish…' : 'Re-rank setups over the loaded universe'}>
+            {loading ? 'Scanning...' : (rsLoading && !rsLoaded) ? 'Waiting for scan…' : 'Deep Scan'}
           </button>
           <button className="btn btn-sm" onClick={loadPicks} disabled={picksLoad}>
             {picksLoad ? 'Refreshing...' : 'Refresh'}
