@@ -892,6 +892,28 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
     setDrawings(prev => prev.slice(0, -1));
   }
 
+  // ── Volume ratio vs 50-bar trailing average ────────────────────────────────
+  // For each bar, compute the avg volume of the PRIOR N bars (excludes the
+  // current bar itself so the ratio is a clean "unusual today" signal and
+  // not biased toward 1.0). Needs ≥MIN prior bars before we emit a ratio.
+  // Timeframe-aware: daily/weekly → 50 (standard "50-day avg volume"); 39-min
+  // → 50 bars ≈ 5 trading days of 39-min buckets (10 bars/day).
+  const avgVolByTime = useMemo(() => {
+    const vols = chartData?.volume || [];
+    const result = new Map();
+    const WINDOW = 50, MIN = 20;
+    let sum = 0;
+    for (let i = 0; i < vols.length; i++) {
+      const priorCount = Math.min(i, WINDOW);
+      if (priorCount >= MIN) {
+        result.set(vols[i].time, sum / priorCount);
+      }
+      sum += vols[i].value || 0;
+      if (i >= WINDOW) sum -= vols[i - WINDOW].value || 0;
+    }
+    return result;
+  }, [chartData?.volume]);
+
   if (loading) return <Loader msg={`Loading ${symbol} chart...`}/>;
   if (!chartData) return <div className="muted" style={{padding:12,fontSize:11}}>No chart data for {symbol}</div>;
 
@@ -912,6 +934,14 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
   };
   const change = displayBar ? (displayBar.close - displayBar.open) : 0;
   const changePct = displayBar && displayBar.open ? (change / displayBar.open * 100) : 0;
+  // Volume ratio: today's V vs 50-bar trailing avg (excludes current bar).
+  // Only shown once we have ≥20 prior bars. Green ≥1.5× (heavy), red ≤0.5× (light).
+  const avgV = displayBar ? avgVolByTime.get(displayBar.time) : null;
+  const volRatio = (avgV && avgV > 0 && displayBar?.volume) ? (displayBar.volume / avgV) : null;
+  const volRatioColor = volRatio == null ? 'var(--text3)'
+    : volRatio >= 1.5 ? 'var(--green)'
+    : volRatio <= 0.5 ? 'var(--red)'
+    : 'var(--text3)';
   return (
     <div className="chart-container">
       <div className="chart-toolbar">
@@ -977,7 +1007,15 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
             <span className="ohlc-pair"><span className="ohlc-k">L</span><span className="ohlc-v" style={{color:barColor}}>{fmtPrice(displayBar.low)}</span></span>
             <span className="ohlc-pair"><span className="ohlc-k">C</span><span className="ohlc-v" style={{color:barColor}}>{fmtPrice(displayBar.close)}</span></span>
             <span className="ohlc-pair" style={{color:barColor}}>{change >= 0 ? '+' : ''}{fmtPrice(change)} ({changePct >= 0 ? '+' : ''}{changePct.toFixed(2)}%)</span>
-            <span className="ohlc-pair"><span className="ohlc-k">V</span><span className="ohlc-v" style={{color:'#8888bb'}}>{fmtVol(displayBar.volume)}</span></span>
+            <span className="ohlc-pair" title={volRatio != null ? `Volume vs trailing 50-bar average (current bar excluded). ${volRatio.toFixed(2)}× = ${((volRatio-1)*100).toFixed(0)}% ${volRatio >= 1 ? 'above' : 'below'} avg. ≥1.5× heavy (green), ≤0.5× light (red).` : 'Volume (need ≥20 prior bars for ratio)'}>
+              <span className="ohlc-k">V</span>
+              <span className="ohlc-v" style={{color:'#8888bb'}}>{fmtVol(displayBar.volume)}</span>
+              {volRatio != null && (
+                <span style={{color:volRatioColor, marginLeft:4, fontWeight:volRatio >= 1.5 || volRatio <= 0.5 ? 700 : 500}}>
+                  ({volRatio.toFixed(2)}× avg)
+                </span>
+              )}
+            </span>
           </div>
         )}
         <div ref={containerRef} onClick={handleChartClick} style={{cursor: toolActive ? 'crosshair' : 'default'}}/>
