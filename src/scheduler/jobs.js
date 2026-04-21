@@ -2,7 +2,10 @@
 // Each job type has a handler function and default config
 const { registerJobType } = require('./engine');
 const { getDB }           = require('../data/database');
-const { yahooQuote }      = require('../data/providers/yahoo');
+// Route quotes through the provider manager so scheduler jobs survive a
+// single-provider outage — if Yahoo is 401'd or Alpaca is ECONNRESET'd,
+// the cascade continues through the remaining providers automatically.
+const { getQuotes }       = require('../data/providers/manager');
 const { cacheClear }      = require('../data/cache');
 
 function db() { return getDB(); }
@@ -130,7 +133,7 @@ registerJobType('watchlist_snapshot', {
 
     if (!symbols.length) return { message: 'No watchlist symbols found', count: 0 };
 
-    const quotes = await yahooQuote(symbols);
+    const quotes = await getQuotes(symbols);
     const prices = {};
     for (const q of quotes) {
       if (q.regularMarketPrice) prices[q.symbol] = q.regularMarketPrice;
@@ -208,7 +211,12 @@ registerJobType('universe_reconstitute', {
   handler: async (config) => {
     const { FULL_UNIVERSE }   = require('../../universe');
     const symbols = Object.keys(FULL_UNIVERSE).filter(s => FULL_UNIVERSE[s] !== 'Hedge');
-    const { yahooQuote } = require('../data/providers/yahoo');
+    // Universe reconstitute needs marketCap / averageDailyVolume3Month — these
+    // are Yahoo-specific quote fields. When the manager cascade falls through
+    // to Polygon/FMP/AV those fields land as null, which downstream code
+    // handles safely via `|| 0` (stocks just stay in the universe rather than
+    // being wrongly flagged for removal — the safe direction).
+    const { getQuotes } = require('../data/providers/manager');
 
     const removals = [];
     const retentions = [];
@@ -217,7 +225,7 @@ registerJobType('universe_reconstitute', {
     for (let i = 0; i < symbols.length; i += 20) {
       const batch = symbols.slice(i, i + 20);
       let quotes;
-      try { quotes = await yahooQuote(batch); } catch (_) { continue; }
+      try { quotes = await getQuotes(batch); } catch (_) { continue; }
       for (const q of quotes) {
         const mktCap = q.marketCap || 0;
         const avgVol = q.averageDailyVolume3Month || 0;
@@ -384,7 +392,7 @@ registerJobType('equity_snapshot', {
 
     // Get SPY close
     try {
-      const quotes = await yahooQuote(['SPY']);
+      const quotes = await getQuotes(['SPY']);
       spyClose = quotes[0]?.regularMarketPrice;
     } catch (_) {}
 
@@ -415,7 +423,7 @@ registerJobType('conditional_entry_check', {
       if (!pending.length) return { checked: 0, triggered: 0, expired: 0 };
 
       const symbols = pending.map(r => r.symbol);
-      const quotes = await yahooQuote(symbols);
+      const quotes = await getQuotes(symbols);
       const currentPrices = {};
       for (const q of quotes) {
         if (q.regularMarketPrice) currentPrices[q.symbol] = q.regularMarketPrice;
@@ -519,7 +527,7 @@ registerJobType('scale_in_check', {
       if (!plans.length) return { checked: 0, triggered: 0 };
 
       const symbols = plans.map(r => r.symbol);
-      const quotes = await yahooQuote(symbols);
+      const quotes = await getQuotes(symbols);
       const currentPrices = {};
       for (const q of quotes) {
         if (q.regularMarketPrice) currentPrices[q.symbol] = q.regularMarketPrice;

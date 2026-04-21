@@ -42,6 +42,42 @@ function resetAuth() {
   yhCookie = null;
 }
 
+// ─── Network-error retry wrapper ────────────────────────────────────────────
+// node-fetch throws (not returns a status) when the TCP connection is reset,
+// DNS resolution fails, or the socket hangs up — all transient failures that
+// used to bubble up as a hard error on a single blip. Retry up to 3 times
+// with jittered exponential backoff (400ms → 800ms → 1600ms) before giving
+// up. HTTP-level errors (401, 404, 500) still surface to the caller and are
+// handled there (e.g. resetAuth on 401 → manager cascades to next provider).
+const NETWORK_ERROR_CODES = new Set([
+  'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN',
+  'ECONNREFUSED', 'EPIPE', 'EHOSTUNREACH', 'ENETUNREACH',
+]);
+function _isNetworkError(e) {
+  if (!e) return false;
+  if (e.code && NETWORK_ERROR_CODES.has(e.code)) return true;
+  if (e.type === 'request-timeout' || e.type === 'system') return true;
+  const msg = String(e.message || '');
+  return /socket hang up|network timeout|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i.test(msg);
+}
+const _sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+async function fetchWithRetry(url, opts = {}, { retries = 3 } = {}) {
+  const optsWithTimeout = { timeout: 30000, ...opts };
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetch(url, optsWithTimeout);
+    } catch (e) {
+      lastErr = e;
+      if (!_isNetworkError(e) || attempt === retries) throw e;
+      const backoff = 400 * Math.pow(2, attempt);
+      await _sleep(backoff * (0.75 + Math.random() * 0.5));
+    }
+  }
+  throw lastErr;
+}
+
 async function yahooQuote(symbols) {
   const key = `q:${symbols.sort().join(',')}`;
   const cached = cacheGet(key, TTL_QUOTE);
@@ -52,7 +88,7 @@ async function yahooQuote(symbols) {
     'averageDailyVolume3Month,marketCap,forwardPE,shortName,sector,' +
     'earningsTimestamp,earningsTimestampStart,earningsTimestampEnd';
   const url = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols.join(','))}&fields=${encodeURIComponent(fields)}&crumb=${encodeURIComponent(crumb)}`;
-  const r = await fetch(url, {
+  const r = await fetchWithRetry(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 'Cookie': cookie, 'Accept': 'application/json' },
   });
   if (r.status === 401 || r.status === 403) { resetAuth(); throw new Error(`Yahoo auth expired (${r.status})`); }
@@ -68,7 +104,7 @@ async function yahooHistory(symbol) {
   if (cached) return cached;
   const { crumb, cookie } = await getYahooCrumb();
   const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=2y&interval=1d&crumb=${encodeURIComponent(crumb)}`;
-  const r = await fetch(url, {
+  const r = await fetchWithRetry(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 'Cookie': cookie },
   });
   const data   = await r.json();
@@ -92,7 +128,7 @@ async function yahooHistoryFull(symbol, { range = '10y' } = {}) {
   if (cached) return cached;
   const { crumb, cookie } = await getYahooCrumb();
   const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${encodeURIComponent(range)}&interval=1d&crumb=${encodeURIComponent(crumb)}`;
-  const r = await fetch(url, {
+  const r = await fetchWithRetry(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 'Cookie': cookie },
   });
   const data = await r.json();
@@ -129,7 +165,7 @@ async function getYahooFundamentals(symbol) {
     const { crumb, cookie } = await getYahooCrumb();
     const modules = 'financialData,defaultKeyStatistics,incomeStatementHistory,incomeStatementHistoryQuarterly,earningsTrend,earningsHistory';
     const url = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=${encodeURIComponent(modules)}&crumb=${encodeURIComponent(crumb)}`;
-    const r = await fetch(url, {
+    const r = await fetchWithRetry(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
         'Cookie': cookie,
@@ -359,7 +395,7 @@ async function yahooIntradayBars(symbol, timespan = 'minute', multiplier = 5, fr
   }
 
   const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${rangeParam}&interval=${interval}&crumb=${encodeURIComponent(crumb)}&includePrePost=false`;
-  const r = await fetch(url, {
+  const r = await fetchWithRetry(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 'Cookie': cookie },
   });
   if (r.status === 401 || r.status === 403) { resetAuth(); throw new Error(`Yahoo auth expired (${r.status})`); }

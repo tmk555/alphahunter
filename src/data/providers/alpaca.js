@@ -67,12 +67,31 @@ function releaseSlot() {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// ─── Request with 429/5xx retry + backoff ───────────────────────────────────
-// Retries up to 5 times on rate-limit or transient server errors, honoring
-// the Retry-After header when present. This is what keeps the manager-layer
-// circuit breaker from tripping on rate-limit pulses — a genuine outage
-// still surfaces (because after 5 retries the error bubbles up), but
-// "slow down, try again in 2s" no longer gets counted as a provider failure.
+// Network-level failures from node-fetch (TCP resets, DNS flakes, socket
+// hangups) throw from fetch() itself — they never surface as an r.status.
+// The HTTP-status retry path can't see them. Match them by Node error
+// code / message so we retry on the same exponential-backoff schedule as
+// 429/5xx, rather than letting one flaky packet blow up a whole scan.
+const NETWORK_ERROR_CODES = new Set([
+  'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN',
+  'ECONNREFUSED', 'EPIPE', 'EHOSTUNREACH', 'ENETUNREACH',
+]);
+function isNetworkError(e) {
+  if (!e) return false;
+  if (e.code && NETWORK_ERROR_CODES.has(e.code)) return true;
+  // node-fetch wraps some errors with a `type` field and no code
+  if (e.type === 'request-timeout' || e.type === 'system') return true;
+  const msg = String(e.message || '');
+  return /socket hang up|network timeout|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i.test(msg);
+}
+
+// ─── Request with 429/5xx/network retry + backoff ──────────────────────────
+// Retries up to 5 times on rate-limit, transient server errors, OR network
+// errors (ECONNRESET/ETIMEDOUT/socket hang up/etc.), honoring Retry-After
+// on HTTP responses. This is what keeps the manager-layer circuit breaker
+// from tripping on transient pulses — a genuine outage still surfaces
+// (after 5 retries the error bubbles up), but "the TCP connection died
+// halfway through" no longer gets counted as a provider failure.
 async function alpacaRequest(path, params = {}) {
   const { configured } = getConfig();
   if (!configured) throw new Error('Alpaca data provider: ALPACA_API_KEY and ALPACA_API_SECRET must be set');
@@ -86,7 +105,23 @@ async function alpacaRequest(path, params = {}) {
   await acquireSlot();
   try {
     while (true) {
-      const r    = await fetch(url, { headers: headers() });
+      let r;
+      try {
+        r = await fetch(url, { headers: headers(), timeout: 30000 });
+      } catch (netErr) {
+        // Network-level failure. Retry on the same backoff curve as HTTP
+        // 5xx/429 — these are almost always transient (connection reset,
+        // DNS blip, slow TCP handshake from a provider-side load balancer).
+        if (isNetworkError(netErr) && attempt < MAX_RETRIES) {
+          const backoff  = 500 * Math.pow(2, attempt);
+          const jittered = backoff * (0.75 + Math.random() * 0.5);
+          await sleep(jittered);
+          attempt++;
+          continue;
+        }
+        throw new Error(`Alpaca data ${path} → network: ${netErr.message}`);
+      }
+
       const text = await r.text();
       if (r.ok) return text ? JSON.parse(text) : null;
 

@@ -9,7 +9,10 @@
 // Data source: Yahoo Finance via existing provider.
 
 const { cacheGet, cacheSet } = require('../data/cache');
-const { yahooQuote, yahooHistoryFull } = require('../data/providers/yahoo');
+// Routed through the provider manager so a single-provider outage
+// (Yahoo 401, Alpaca ECONNRESET) doesn't take the Macro tab down — the
+// cascade + circuit breaker keeps the next provider in line serving data.
+const { getQuotes, getHistoryFull } = require('../data/providers/manager');
 
 const TTL_MACRO = 5 * 60 * 1000; // 5-minute cache
 
@@ -66,13 +69,13 @@ async function getMacroSignals() {
 
     const [quotes, spyBars, tltBars, gldBars, uupBars, usoBars, xliBarsFull] =
       await Promise.all([
-        yahooQuote(quoteSymbols).catch(() => []),
-        yahooHistoryFull('SPY').catch(() => null),
-        yahooHistoryFull('TLT').catch(() => null),
-        yahooHistoryFull('GLD').catch(() => null),
-        yahooHistoryFull('UUP').catch(() => null),
-        yahooHistoryFull('USO').catch(() => null),
-        yahooHistoryFull('XLI').catch(() => null),
+        getQuotes(quoteSymbols).catch(() => []),
+        getHistoryFull('SPY').catch(() => null),
+        getHistoryFull('TLT').catch(() => null),
+        getHistoryFull('GLD').catch(() => null),
+        getHistoryFull('UUP').catch(() => null),
+        getHistoryFull('USO').catch(() => null),
+        getHistoryFull('XLI').catch(() => null),
       ]);
 
     const q = (sym) => quotes.find(r => r.symbol === sym) || null;

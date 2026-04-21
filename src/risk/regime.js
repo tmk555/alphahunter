@@ -3,14 +3,19 @@
 // Enhanced regime: Distribution days, FTD, rally attempt (new)
 
 const { cacheGet, cacheSet, TTL_QUOTE } = require('../data/cache');
-const { yahooQuote, yahooHistoryFull } = require('../data/providers/yahoo');
+// Route through the provider manager — cascades Polygon → Yahoo → FMP → AV for
+// quotes (Alpaca is skipped for quotes — history-only) and Polygon → Alpaca →
+// Yahoo → FMP → AV for history. When a single provider is down (Yahoo 401,
+// Alpaca ECONNRESET), the cascade + circuit breaker keeps regime detection
+// alive instead of taking the whole tab down.
+const { getQuotes, getHistoryFull } = require('../data/providers/manager');
 
 // ─── Basic regime (existing behavior) ────────────────────────────────────────
 async function getMarketRegime() {
   const cached = cacheGet('regime', TTL_QUOTE);
   if (cached) return cached;
   try {
-    const quotes = await yahooQuote(['SPY', '^VIX', 'QQQ', 'IWM', 'TLT']);
+    const quotes = await getQuotes(['SPY', '^VIX', 'QQQ', 'IWM', 'TLT']);
     const spy = quotes.find(q => q.symbol === 'SPY');
     const vix = quotes.find(q => q.symbol === '^VIX');
     const qqq = quotes.find(q => q.symbol === 'QQQ');
@@ -424,9 +429,9 @@ async function autoDetectCycleState() {
   try {
     // ── Fetch BOTH indices in parallel (Phase 3.11) ─────────────────────
     const [spyBars, qqqBars, vixBars] = await Promise.all([
-      yahooHistoryFull('SPY'),
-      yahooHistoryFull('QQQ'),
-      yahooHistoryFull('^VIX'),
+      getHistoryFull('SPY'),
+      getHistoryFull('QQQ'),
+      getHistoryFull('^VIX'),
     ]);
 
     if (!spyBars || spyBars.length < 50) return null;
