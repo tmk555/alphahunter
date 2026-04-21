@@ -43,19 +43,74 @@ function headers() {
   };
 }
 
+// ─── Internal concurrency gate ──────────────────────────────────────────────
+// Alpaca's free tier is documented at 200 req/min. At 3 concurrent requests
+// averaging ~1s each we stay at ~180/min — comfortably under the ceiling even
+// with pagination amplification (a 9-year backfill for a symbol may need 2-3
+// paged requests). This cap lives inside the provider so upstream callers
+// (backfill, scanner, manager) can't accidentally exceed the budget when they
+// run in parallel.
+const MAX_CONCURRENT = Number(process.env.ALPACA_MAX_CONCURRENT || 3);
+let inflight = 0;
+const waitQueue = [];
+
+function acquireSlot() {
+  if (inflight < MAX_CONCURRENT) { inflight++; return Promise.resolve(); }
+  return new Promise(resolve => waitQueue.push(resolve));
+}
+
+function releaseSlot() {
+  const next = waitQueue.shift();
+  if (next) { next(); }  // inflight unchanged — handed the slot off directly
+  else      { inflight--; }
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ─── Request with 429/5xx retry + backoff ───────────────────────────────────
+// Retries up to 5 times on rate-limit or transient server errors, honoring
+// the Retry-After header when present. This is what keeps the manager-layer
+// circuit breaker from tripping on rate-limit pulses — a genuine outage
+// still surfaces (because after 5 retries the error bubbles up), but
+// "slow down, try again in 2s" no longer gets counted as a provider failure.
 async function alpacaRequest(path, params = {}) {
   const { configured } = getConfig();
   if (!configured) throw new Error('Alpaca data provider: ALPACA_API_KEY and ALPACA_API_SECRET must be set');
 
-  const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null)).toString();
+  const qs  = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null)).toString();
   const url = `${DATA_BASE}${path}${qs ? '?' + qs : ''}`;
-  const r = await fetch(url, { headers: headers() });
-  const text = await r.text();
-  if (!r.ok) {
-    let msg; try { msg = JSON.parse(text).message; } catch (_) { msg = text; }
-    throw new Error(`Alpaca data ${path} → ${r.status}: ${msg}`);
+
+  const MAX_RETRIES = 5;
+  let attempt = 0;
+
+  await acquireSlot();
+  try {
+    while (true) {
+      const r    = await fetch(url, { headers: headers() });
+      const text = await r.text();
+      if (r.ok) return text ? JSON.parse(text) : null;
+
+      // Retryable: 429 (rate limit) or 5xx (transient). Respect Retry-After
+      // when the server sets it; otherwise exponential backoff 500ms × 2^n.
+      const retryable = r.status === 429 || (r.status >= 500 && r.status < 600);
+      if (retryable && attempt < MAX_RETRIES) {
+        const retryAfter = Number(r.headers.get('retry-after'));
+        const backoff    = Number.isFinite(retryAfter) && retryAfter > 0
+          ? retryAfter * 1000
+          : 500 * Math.pow(2, attempt);
+        // Jitter ±25% so N parallel retriers don't re-stampede in lockstep.
+        const jittered = backoff * (0.75 + Math.random() * 0.5);
+        await sleep(jittered);
+        attempt++;
+        continue;
+      }
+
+      let msg; try { msg = JSON.parse(text).message; } catch (_) { msg = text; }
+      throw new Error(`Alpaca data ${path} → ${r.status}: ${msg}`);
+    }
+  } finally {
+    releaseSlot();
   }
-  return text ? JSON.parse(text) : null;
 }
 
 // ─── Historical bars (paginated) ────────────────────────────────────────────
