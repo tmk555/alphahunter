@@ -576,8 +576,13 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
   router.post('/edge/universe-sync', (req, res) => {
     try {
       const { syncUniverse } = require('../signals/universe-tracker');
-      const allSymbols = Object.keys(UNIVERSE).filter(s => UNIVERSE[s] !== 'Hedge');
-      const result = syncUniverse(allSymbols, UNIVERSE);
+      // UNIVERSE is an ARRAY of tickers and SECTOR_MAP is the ticker→sector
+      // lookup. A prior version of this handler used `Object.keys(UNIVERSE)`
+      // (which returns array INDICES like "0", "1", ...) and passed UNIVERSE
+      // as the sector map — that injected numeric "symbols" into
+      // universe_mgmt. The correct call mirrors the scanner's usage.
+      const allSymbols = UNIVERSE.filter(s => SECTOR_MAP[s] !== 'Hedge');
+      const result = syncUniverse(allSymbols, SECTOR_MAP);
       res.json(result);
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

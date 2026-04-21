@@ -56,9 +56,21 @@ const { getDB, migrateFromJSON } = require('./src/data/database');
 const db = getDB();
 migrateFromJSON();
 
-// Merge DB-managed universe additions (stocks added via UI)
+// Merge DB-managed universe additions (stocks added via UI).
+//
+// Bug-watch: there is NO `status` column on universe_mgmt — the schema uses
+// a null/non-null `removed_date` to flag active membership (see
+// src/data/database.js:110). The previous `WHERE status = 'active'` query
+// errored with "no such column", was swallowed by the catch, and EVERY
+// DB-managed symbol silently failed to merge on startup. That caused a
+// second-order bug: the scanner's post-scan syncUniverse() saw those
+// DB-tracked symbols missing from the live UNIVERSE and marked them
+// `auto_removed` — so any stock the user added via UI disappeared from
+// the Scanner and reappeared in Discovery after the next restart.
 try {
-  const dbAdded = db.prepare("SELECT symbol, sector FROM universe_mgmt WHERE status = 'active'").all();
+  const dbAdded = db.prepare(
+    "SELECT symbol, sector FROM universe_mgmt WHERE removed_date IS NULL"
+  ).all();
   let dbCount = 0;
   for (const { symbol, sector } of dbAdded) {
     if (!SECTOR_MAP[symbol]) {
