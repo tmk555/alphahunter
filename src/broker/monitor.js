@@ -23,7 +23,11 @@ const { checkAlerts, getActiveAlerts } = require('./alerts');
 const { expireStaleOrders, syncOrderStatus } = require('./staging');
 const { priceStream } = require('./stream');
 const { getDB } = require('../data/database');
-const { yahooQuote } = require('../data/providers/yahoo');
+// Route the cron-path "final fallback" quote through the manager cascade so a
+// Yahoo hiccup doesn't leave open-position scaling checks blind. The streaming
+// path (priceStream) still takes precedence — this only activates when the WS
+// stream hasn't provided a recent tick for a symbol.
+const { getQuotes } = require('../data/providers/manager');
 const { evaluateScalingAction, applyScalingAction } = require('../risk/scaling');
 const { runBreadthEarlyWarning } = require('../signals/breadth-warning');
 const { notifyTradeEvent } = require('../notifications/channels');
@@ -265,11 +269,11 @@ async function checkOpenTradeScaling() {
       } catch (_) {}
     }
 
-    // Final fallback: Yahoo quote
+    // Final fallback: manager quote cascade (Polygon → Yahoo → FMP → AV)
     const stillMissing = symbols.filter(s => !currentPrices[s]);
     if (stillMissing.length) {
       try {
-        const quotes = await yahooQuote(stillMissing);
+        const quotes = await getQuotes(stillMissing);
         for (const q of quotes) {
           if (q.regularMarketPrice) currentPrices[q.symbol] = q.regularMarketPrice;
         }
@@ -372,16 +376,16 @@ async function checkPositionsAgainstStops() {
       } catch (_) {}
     }
 
-    // Final fallback: Yahoo quotes for anything still missing
+    // Final fallback: manager quote cascade for anything still missing
     const stillMissing = symbols.filter(s => !currentPrices[s]);
     if (stillMissing.length) {
       try {
-        const quotes = await yahooQuote(stillMissing);
+        const quotes = await getQuotes(stillMissing);
         for (const q of quotes) {
           if (q.regularMarketPrice) currentPrices[q.symbol] = q.regularMarketPrice;
         }
       } catch (e) {
-        console.error(`  Monitor: Yahoo quote failed: ${e.message}`);
+        console.error(`  Monitor: quote cascade failed: ${e.message}`);
       }
     }
 

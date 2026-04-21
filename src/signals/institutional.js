@@ -5,7 +5,11 @@
 // All functions operate on OHLCV bar arrays from yahooHistoryFull():
 //   { date, open, high, low, close, volume }
 
-const { yahooQuote } = require('../data/providers/yahoo');
+// Route through the manager cascade. The options-flow fields below
+// (putVolume/callVolume) are Yahoo-specific and missing from Polygon/FMP —
+// but the function already returns null when they're absent, so using the
+// cascade just buys resilience without changing signal behavior.
+const { getQuotes } = require('../data/providers/manager');
 
 // ─── 1. detectUnusualVolume ─────────────────────────────────────────────────
 // Finds days where volume spikes on significant price moves — hallmarks of
@@ -207,7 +211,7 @@ async function analyzeOptionsFlow(symbol) {
   if (!symbol) return null;
 
   try {
-    const quotes = await yahooQuote([symbol]);
+    const quotes = await getQuotes([symbol]);
     const quote = quotes?.find(q => q.symbol === symbol);
     if (!quote) return null;
 

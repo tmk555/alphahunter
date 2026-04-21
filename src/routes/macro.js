@@ -13,7 +13,10 @@
 const express = require('express');
 const router  = express.Router();
 
-const { yahooQuote, yahooHistory } = require('../data/providers/yahoo');
+// Route through the manager cascade so the Dashboard macro strip survives a
+// single-provider outage. Polygon/FMP both populate the 52W / 50D MA / 200D MA
+// fields this route reads, so the shape is compatible with Yahoo fallthrough.
+const { getQuotes, getHistory } = require('../data/providers/manager');
 const { getMarketRegime, autoDetectCycleState } = require('../risk/regime');
 const macroFred = require('../signals/macro-fred');
 
@@ -38,7 +41,7 @@ router.get('/regime', async (req, res) => {
 // /api/macro
 router.get('/macro', async (req, res) => {
   try {
-    const quotes = await yahooQuote(MACRO_SYMBOLS.map(m => m.t));
+    const quotes = await getQuotes(MACRO_SYMBOLS.map(m => m.t));
 
     // Fetch up to 1 year (252 trading days) of history per symbol in parallel
     // Client slices down to 5D / 1M / 3M / 1Y as the user picks a period.
@@ -47,7 +50,7 @@ router.get('/macro', async (req, res) => {
     const histories = await Promise.all(
       allSymbols.map(async sym => {
         try {
-          const closes = await yahooHistory(sym);
+          const closes = await getHistory(sym);
           return { symbol: sym, history: (closes || []).slice(-252) };
         } catch (_) { return { symbol: sym, history: [] }; }
       })

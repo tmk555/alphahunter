@@ -289,11 +289,12 @@ module.exports = function(db) {
   router.get('/trades/scaling/pending', async (req, res) => {
     try {
       const { scanOpenPositionsForScaling } = require('../risk/scaling');
-      const { yahooQuote } = require('../data/providers/yahoo');
+      // Use the manager cascade so scaling preview survives a single-provider outage.
+      const { getQuotes } = require('../data/providers/manager');
       const trades = db.prepare('SELECT DISTINCT symbol FROM trades WHERE exit_date IS NULL').all();
       if (!trades.length) return res.json({ pending: [] });
       const symbols = trades.map(t => t.symbol);
-      const quotes = await yahooQuote(symbols);
+      const quotes = await getQuotes(symbols);
       const prices = {};
       for (const q of quotes) if (q.regularMarketPrice) prices[q.symbol] = q.regularMarketPrice;
       const pending = scanOpenPositionsForScaling(prices);

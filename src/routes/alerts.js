@@ -8,7 +8,9 @@ const {
   getActiveAlerts, deactivateAlert,
   checkAlerts, getRecentAlerts, acknowledgeAlert,
 } = require('../broker/alerts');
-const { yahooQuote } = require('../data/providers/yahoo');
+// Route quote fetches through the manager cascade so a single-provider outage
+// (Yahoo timeout, Polygon rate-limit) doesn't stop the alert checker.
+const { getQuotes } = require('../data/providers/manager');
 
 module.exports = function(db) {
   // ─── Fired alerts log ─────────────────────────────────────────────────────
@@ -62,7 +64,7 @@ module.exports = function(db) {
       if (!active.length) return res.json({ message: 'No active alert subscriptions', fired: [] });
 
       const symbols = [...new Set(active.map(a => a.symbol))];
-      const quotes = await yahooQuote(symbols);
+      const quotes = await getQuotes(symbols);
       const currentPrices = {};
       for (const q of quotes) {
         if (q.regularMarketPrice) currentPrices[q.symbol] = q.regularMarketPrice;
