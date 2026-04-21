@@ -29,3 +29,7 @@ data/*.db-wal
 data/*.db-shm
 data/*.json
 backup/
+
+# Local TLS cert (mkcert) — never commit private keys
+certs/
+

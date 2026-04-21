@@ -5,6 +5,8 @@ const express   = require('express');
 const cors      = require('cors');
 const Anthropic = require('@anthropic-ai/sdk');
 const path      = require('path');
+const fs        = require('fs');
+const https     = require('https');
 
 const { FULL_UNIVERSE, SECTOR_ETFS: UNI_SECTOR_ETFS, INDUSTRY_ETFS, INDUSTRY_STOCKS } = require('./universe');
 const { authRoutes, authGuard, cookieParser, isEnabled: authEnabled } = require('./src/auth');
@@ -138,6 +140,26 @@ const alpacaConfig = require('./src/broker/alpaca').getConfig();
 const { startScheduler }                = require('./src/scheduler/engine');
 const { setRunScan, setSectorEtfs, seedDefaultJobs } = require('./src/scheduler/jobs');
 
+// ─── TLS — optional HTTPS listener ──────────────────────────────────────────
+// We check for a local mkcert pair at ./certs/localhost{,-key}.pem. If both
+// exist we stand up a parallel HTTPS server on HTTPS_PORT (default 3443) so
+// the PWA / service-worker / secure-context APIs all work. Absence is silent
+// — plain HTTP still serves normally so CI and the preview tool keep working.
+const HTTPS_PORT = Number(process.env.HTTPS_PORT || 3443);
+const certPath   = path.join(__dirname, 'certs', 'localhost.pem');
+const keyPath    = path.join(__dirname, 'certs', 'localhost-key.pem');
+let httpsServer  = null;
+if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+  try {
+    httpsServer = https.createServer({
+      cert: fs.readFileSync(certPath),
+      key:  fs.readFileSync(keyPath),
+    }, app);
+  } catch (e) {
+    console.warn(`   TLS: cert load failed — ${e.message}`);
+  }
+}
+
 // ─── Start ───────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   const counts = Object.entries(SECTOR_MAP).reduce((a,[,s])=>{a[s]=(a[s]||0)+1;return a},{});
@@ -147,6 +169,13 @@ app.listen(PORT, () => {
   const availableProviders = providerStatus.filter(p => p.configured).map(p => p.name);
 
   console.log(`\n🎯 Alpha Hunter v8  →  http://localhost:${PORT}`);
+  if (httpsServer) {
+    httpsServer.listen(HTTPS_PORT, () => {
+      console.log(`                     →  https://localhost:${HTTPS_PORT} (mkcert)`);
+    });
+  } else {
+    console.log(`   TLS: no certs/ found — HTTPS disabled (run mkcert to enable)`);
+  }
   console.log(`   Universe: ${UNIVERSE.length} stocks`);
   console.log(`   RS model: REAL IBD (12-month daily closes)`);
   console.log(`   Database: SQLite (WAL mode)`);
