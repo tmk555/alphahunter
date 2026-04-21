@@ -35,3 +35,8 @@ backup/
 /alphahunter.db
 /alphahunter.db-wal
 /alphahunter.db-shm
+
+# Local TLS cert (mkcert) — never commit private keys
+certs/
+/localhost.pem
+/localhost-key.pem

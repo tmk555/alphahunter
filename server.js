@@ -142,13 +142,14 @@ const { setRunScan, setSectorEtfs, seedDefaultJobs } = require('./src/scheduler/
 
 // ─── TLS — optional HTTPS listener ──────────────────────────────────────────
 // Runs in parallel with the plain HTTP listener so the app is reachable on
-// both protocols. We look for mkcert-generated certs in ./certs/ first, then
-// fall back to the repo root (legacy location). Absence is silent — HTTP
-// still serves normally, so CI and preview tools keep working.
+// both protocols. We prefer mkcert-generated certs in ./certs/ (the canonical
+// location) and fall back to the repo root for legacy installs. Absence is
+// silent — HTTP still serves normally, so CI and the preview tool keep
+// working.
 const HTTPS_PORT = Number(process.env.HTTPS_PORT || 3443);
 const certCandidates = [
-  { cert: path.join(__dirname, 'certs', 'localhost.pem'),     key: path.join(__dirname, 'certs', 'localhost-key.pem') },
-  { cert: path.join(__dirname, 'localhost.pem'),              key: path.join(__dirname, 'localhost-key.pem') },
+  { cert: path.join(__dirname, 'certs', 'localhost.pem'), key: path.join(__dirname, 'certs', 'localhost-key.pem') },
+  { cert: path.join(__dirname, 'localhost.pem'),          key: path.join(__dirname, 'localhost-key.pem') },
 ];
 let httpsServer = null;
 for (const { cert, key } of certCandidates) {

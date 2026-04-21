@@ -190,15 +190,38 @@ function computeMcClellanOscillator(days = 60) {
 
   const latest = oscillator[oscillator.length - 1];
   const prev = oscillator[oscillator.length - 2];
+  const currentSummation = summationSeries[summationSeries.length - 1]?.summation || 0;
+
+  // Percentile rank against the last ~252 trading days (1y) of persisted history.
+  // Classical +500/+3000 Summation benchmarks don't apply here — this is a 60-day
+  // window on a ~350-stock universe, so the natural range is much tighter.
+  // Rank lets the UI caption the raw number against the system's own history.
+  const pct = computePercentileFromHistory(currentSummation, 'summation_index', 252);
+  const oscPct = computePercentileFromHistory(latest?.value || 0, 'mcclellan_osc', 252);
 
   return {
     current: latest?.value || 0,
     previous: prev?.value || 0,
     trend: latest && prev ? (latest.value > prev.value ? 'improving' : 'deteriorating') : 'unknown',
-    summationIndex: summationSeries[summationSeries.length - 1]?.summation || 0,
+    summationIndex: currentSummation,
+    summationPct: pct,              // e.g. 65 → "65th percentile over last ~1y"
+    oscillatorPct: oscPct,
     series: oscillator.slice(-30), // last 30 days
     summationSeries: summationSeries.slice(-30),
   };
+}
+
+// Percentile rank of `value` against the last N trading days in breadth_snapshots.
+// Returns null when there's not enough history to be meaningful (< ~20 samples).
+function computePercentileFromHistory(value, column, lookback) {
+  try {
+    const rows = db().prepare(
+      `SELECT ${column} AS v FROM breadth_snapshots WHERE ${column} IS NOT NULL ORDER BY date DESC LIMIT ?`
+    ).all(lookback);
+    if (!rows || rows.length < 20) return null;
+    const below = rows.filter(r => r.v < value).length;
+    return Math.round((below / rows.length) * 100);
+  } catch (_) { return null; }
 }
 
 function computeEMA(data, period) {
