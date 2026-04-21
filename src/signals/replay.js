@@ -88,6 +88,14 @@ const BUILT_IN_STRATEGIES = {
       minConviction: 0,           // Rank-based selection; 0 = keep all candidates for ranking
       holdDays: 20,
       stopATR: 1.5, targetATR: 3.0,
+      // Regime detection: use lenient MA-only rule, not strict distribution-day
+      // overlay. Reasoning: deep_scan is a 20-day-hold position strategy; the
+      // strict rule (3+ dist days in any rolling 25) flips to CAUTION routinely
+      // even in healthy bull markets, force-exiting every long. Backtest across
+      // 2016→2026 showed strict mode cost ~18% per bull window by whipsawing
+      // winners before they developed. Users who want the strict filter can
+      // still opt in via params: { strictRegime: true }.
+      strictRegime: false,
     },
   },
   factor_combo: {
