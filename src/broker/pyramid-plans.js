@@ -44,12 +44,20 @@ const DEFAULT_EXPIRY_DAYS     = 5;     // Plans auto-expire if pilot never fires
 // Returns { pivot, patternName, stop, confidence } or null if nothing found.
 // Tries patterns in order: VCP (tightest, most reliable), then chart patterns
 // by their confidence score.
+//
+// Prefers pre-computed pattern data on `stock` (from the scanner, which
+// persists fresh detections every scan). Only falls back to a fresh run when
+// the stock object lacks it — keeps this cheap and keeps detection rules
+// identical to what the client's PYR filter sees.
 function detectPivotForPyramid(stock, closes, highs, lows) {
-  if (!closes || closes.length < 30) return null;
-
   // 1) VCP — use the sharp final-contraction pivot if forming.
+  //    Prefer scanner-computed (matches what the UI's VCP chip shows);
+  //    recompute only if missing.
   try {
-    const vcp = calcVCP(closes);
+    let vcp = (stock && stock.vcpForming != null) ? stock : null;
+    if (!vcp && closes && closes.length >= 30) {
+      vcp = calcVCP(closes);
+    }
     if (vcp?.vcpForming && vcp.vcpPivot) {
       return {
         pivot: vcp.vcpPivot,
@@ -60,21 +68,43 @@ function detectPivotForPyramid(stock, closes, highs, lows) {
     }
   } catch (_) {}
 
-  // 2) Chart patterns (cup & handle, ascending base, power play, high tight flag)
+  // 2) Chart patterns (cup & handle, ascending base, power play, high tight flag).
+  //    patData.bestPattern is a STRING key into patData.patterns — the actual
+  //    pattern object (with pivotPrice/stopPrice/confidence/type) lives under
+  //    patData.patterns[bestPattern]. Old code dereferenced the string
+  //    directly as if it were the object, so the chart-pattern branch was
+  //    effectively dead code — only VCP ever matched server-side.
   try {
-    const bars = closes.map((c, i) => ({
-      close: c,
-      high:  highs?.[i] ?? c,
-      low:   lows?.[i]  ?? c,
-      volume: 0,
-    }));
-    const patData = detectPatterns(bars);
-    const best = patData?.bestPattern;
+    let patData = stock?.patternData || null;
+    if ((!patData || !patData.bestPattern) && closes && closes.length >= 30) {
+      const bars = closes.map((c, i) => ({
+        close: c,
+        high:  highs?.[i] ?? c,
+        low:   lows?.[i]  ?? c,
+        volume: 0,
+      }));
+      // Quick SMAs so power-play detection has its MA inputs. Other patterns
+      // don't need them but passing null would skip power-play entirely.
+      const sma = (n) => {
+        const out = [];
+        let sum = 0;
+        for (let i = 0; i < closes.length; i++) {
+          sum += closes[i];
+          if (i >= n) sum -= closes[i - n];
+          out.push(i >= n - 1 ? sum / n : null);
+        }
+        return out;
+      };
+      const ma50 = sma(50), ma150 = sma(150), ma200 = sma(200);
+      patData = detectPatterns(bars, closes, ma50, ma150, ma200);
+    }
+    const bestName = patData?.bestPattern;
+    const best = bestName ? patData.patterns?.[bestName] : null;
     if (best?.pivotPrice) {
       return {
         pivot: +best.pivotPrice.toFixed(2),
         stop:  best.stopPrice ? +best.stopPrice.toFixed(2) : null,
-        patternName: best.type || 'pattern',
+        patternName: bestName,
         confidence: best.confidence || 70,
       };
     }
@@ -115,6 +145,7 @@ function createPyramidPlan({
   symbol, totalQty, pivot: pivotOverride, stopPrice: stopOverride,
   target1_price: t1Override, target2_price: t2Override, atr: atrInput,
   closes, highs, lows,
+  stock = null,          // optional: scanner result row (carries vcpForming/patternData)
   source = 'manual', convictionScore = null,
   volumePaceMin = DEFAULT_VOLUME_PACE_MIN,
   notes = null,
@@ -129,7 +160,9 @@ function createPyramidPlan({
   let pivotSource = pivotOverride ? 'manual' : null;
   let patternName = null;
   if (!pivot) {
-    const detected = detectPivotForPyramid({ ticker: symbol }, closes, highs, lows);
+    // Pass the real stock object if provided so detectPivotForPyramid can
+    // use scanner-cached vcpForming/patternData instead of re-running.
+    const detected = detectPivotForPyramid(stock || { ticker: symbol }, closes, highs, lows);
     if (!detected) {
       throw new Error('No pattern detected — pyramid mode requires a defined pivot. Provide manual pivot or use full_in_scale_out.');
     }

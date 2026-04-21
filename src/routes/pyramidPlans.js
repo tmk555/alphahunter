@@ -138,6 +138,7 @@ module.exports = function(runScan) {
         target1_price, target2_price,
         atr: atr || stock.atr || (stock.price * 0.02),
         closes, highs, lows,
+        stock,   // pass scanner result so pattern detection reuses cached data
         source: 'manual', convictionScore: stock.convictionScore,
         volumePaceMin, notes, expiryDays,
       });
