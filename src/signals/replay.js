@@ -78,6 +78,18 @@ const BUILT_IN_STRATEGIES = {
     description: 'Buy RS 65-79 with 4-week RS acceleration >= +5. Catches leaders early before they hit RS 80+. Regime-aware: no new longs in CAUTION/CORRECTION.',
     defaults: { minRS: 65, maxRS: 79, minAccel: 5, exitRS: 50, holdDays: 25 },
   },
+  deep_scan: {
+    name: 'Deep Scan',
+    description: 'Unified swing/position candidate filter + calcConviction-style ranking. Mirrors the live Deep Scan pipeline: RS≥70 + rising RS + above 50MA + (nearHigh OR volSurge OR strongMom). Ranks by a composite of RS / momentum / SEPA / pattern / institutional flow / revision tier / earnings drift. Regime-aware: no new longs in CAUTION/CORRECTION.',
+    defaults: {
+      tradeMode: 'both',          // 'swing' | 'position' | 'both' (both = whichever filter passes)
+      minRS: 70,
+      minSwingMomentum: 50,
+      minConviction: 0,           // Rank-based selection; 0 = keep all candidates for ranking
+      holdDays: 20,
+      stopATR: 1.5, targetATR: 3.0,
+    },
+  },
   factor_combo: {
     name: 'Factor Combo',
     description: 'Generic signal-combo filter. Requires ALL signals in params.signals[] to fire. Signals: rs_strong (RS≥85), stage_2, pattern (VCP or RS-line NH), breadth_ok (day-level regime gate). Ranks by RS+momentum.',
@@ -217,11 +229,53 @@ function loadSnapshotData(startDate, endDate) {
     SELECT date, symbol, rs_rank, swing_momentum, sepa_score, stage, price,
            vs_ma50, vs_ma200, volume_ratio, vcp_forming, rs_line_new_high, atr_pct,
            rs_rank_weekly, rs_rank_monthly, rs_tf_alignment,
-           up_down_ratio_50, accumulation_50
+           up_down_ratio_50, accumulation_50,
+           pattern_type, pattern_confidence
     FROM rs_snapshots
     WHERE type = 'stock' AND date >= ? AND date <= ?
     ORDER BY date, rs_rank DESC
   `).all(startDate, endDate);
+}
+
+// ─── Deep Scan factor loader ───────────────────────────────────────────────
+// Pulls the three external factor tables that `calcConviction` consumes
+// (institutional_flow, earnings_drift_snapshots, revision_scores) and returns
+// lookup Maps keyed by `symbol|date`. Backfill coverage is sparse right now —
+// callers must treat every factor as optional. A missing row simply means the
+// bonus/penalty contribution for that factor is zero on that day.
+function loadDeepScanFactors(startDate, endDate) {
+  const inst = new Map();
+  const drift = new Map();
+  const rev = new Map();
+
+  try {
+    const rows = db().prepare(`
+      SELECT symbol, date, flow_score, power_days, accum_days_20, dist_days_20, dark_pool_score
+      FROM institutional_flow
+      WHERE date >= ? AND date <= ?
+    `).all(startDate, endDate);
+    for (const r of rows) inst.set(`${r.symbol}|${r.date}`, r);
+  } catch (_) { /* table may be missing on old DBs */ }
+
+  try {
+    const rows = db().prepare(`
+      SELECT symbol, date, score, gap_pct, drift_pct, held_gains, strong
+      FROM earnings_drift_snapshots
+      WHERE date >= ? AND date <= ?
+    `).all(startDate, endDate);
+    for (const r of rows) drift.set(`${r.symbol}|${r.date}`, r);
+  } catch (_) { /* table may be missing on old DBs */ }
+
+  try {
+    const rows = db().prepare(`
+      SELECT symbol, date, revision_score, direction, tier
+      FROM revision_scores
+      WHERE date >= ? AND date <= ?
+    `).all(startDate, endDate);
+    for (const r of rows) rev.set(`${r.symbol}|${r.date}`, r);
+  } catch (_) { /* table may be missing on old DBs */ }
+
+  return { inst, drift, rev };
 }
 
 // ─── Strategy Evaluators ───────────────────────────────────────────────────
@@ -257,6 +311,40 @@ function evaluateEntry(stock, strategy, params) {
       return stock.rs_rank <= params.maxRS &&
              (stock.sepa_score || 8) <= params.maxSEPA &&
              stock.stage === 4;
+
+    case 'deep_scan': {
+      // Mirrors src/signals/candidates.js isSwingCandidate / isPositionCandidate
+      // against stored snapshot fields. _rs_accel_4w stands in for rsTrend.vs1m
+      // (same 20-trading-day lookback), _distFromHigh is the 252-day rolling
+      // max derived in runReplay. When either is missing (early in the range
+      // or brand-new symbol) we fail-closed — matches the live filter.
+      const rsAccel = stock._rs_accel_4w || 0;
+      const rsRising = rsAccel > 3;
+      const distFromHigh = stock._distFromHigh;
+      if (stock.rs_rank < (params.minRS || 70)) return false;
+      if (!rsRising) return false;
+
+      const mode = params.tradeMode || 'both';
+      const passesSwing = () => {
+        if ((stock.swing_momentum || 0) < (params.minSwingMomentum || 50)) return false;
+        if ((stock.vs_ma50 || 0) <= 0) return false;
+        if (distFromHigh == null) return false;
+        const nearHigh = distFromHigh <= 0.12;
+        const volumeSurge = (stock.volume_ratio || 0) >= 1.1;
+        const strongMom = (stock.swing_momentum || 0) >= 65;
+        return nearHigh || volumeSurge || strongMom;
+      };
+      const passesPosition = () => {
+        if ((stock.vs_ma200 || 0) <= 0) return false;
+        if (stock.vs_ma50 == null || stock.vs_ma50 > 5 || stock.vs_ma50 <= -15) return false;
+        if (distFromHigh == null || distFromHigh > 0.30) return false;
+        return true;
+      };
+
+      if (mode === 'swing')    return passesSwing();
+      if (mode === 'position') return passesPosition();
+      return passesSwing() || passesPosition();
+    }
 
     case 'factor_combo': {
       // Every signal in params.signals[] must fire. Supported:
@@ -580,13 +668,34 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     }
   }
 
-  // ─── RS acceleration lookup (for emerging_leader strategy) ─────────────
+  // ─── RS acceleration lookup (for emerging_leader + deep_scan strategies) ─
   // Build per-symbol RS rank history so we can compute 4-week RS change.
-  // rsHistory[symbol] = [{date, rs_rank}, ...] sorted by date
+  // rsHistory[symbol] = [{date, rs_rank}, ...] sorted by date.
+  // We PRELOAD ~30 trading days before startDate so the first 20 simulation
+  // days have a valid 4-week accel reference — otherwise any short-range
+  // replay starts with `_rs_accel_4w=0` everywhere and rising-RS filters
+  // block every candidate for the first month.
   const isEmerging = strategy === 'emerging_leader' ||
     (strategy === 'regime_adaptive' && Object.values(mergedParams).includes('emerging_leader'));
+  const isDeepScan = strategy === 'deep_scan';
+  const needsRsAccel = isEmerging || isDeepScan;
   let rsHistory = {};
-  if (isEmerging) {
+  if (needsRsAccel) {
+    // Preload ~45 calendar days (~30 trading days) before startDate
+    const preloadStart = new Date(startDate + 'T00:00:00Z');
+    preloadStart.setUTCDate(preloadStart.getUTCDate() - 45);
+    const preloadStartIso = preloadStart.toISOString().split('T')[0];
+    const preloadRows = db().prepare(`
+      SELECT date, symbol, rs_rank
+      FROM rs_snapshots
+      WHERE type = 'stock' AND date >= ? AND date < ?
+      ORDER BY date
+    `).all(preloadStartIso, startDate);
+    for (const s of preloadRows) {
+      if (s.symbol === 'SPY') continue;
+      if (!rsHistory[s.symbol]) rsHistory[s.symbol] = [];
+      rsHistory[s.symbol].push({ date: s.date, rs: s.rs_rank });
+    }
     for (const s of snapshots) {
       if (s.symbol === 'SPY') continue;
       if (!rsHistory[s.symbol]) rsHistory[s.symbol] = [];
@@ -603,6 +712,129 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     const lookback = dateIdx - 20;
     if (lookback < 0) return 0;
     return hist[dateIdx].rs - hist[lookback].rs;
+  }
+
+  // ─── Deep-scan factor + distFromHigh lookups ───────────────────────────
+  // Deep scan needs: (a) the 3 external factor tables joined on (symbol,date),
+  // and (b) a 252-day rolling max so `_distFromHigh` mirrors the live scan's
+  // 52-week high proximity filter. Everything below is only built when the
+  // strategy actually needs it to keep the hot path fast for other strategies.
+  let deepFactors = { inst: new Map(), drift: new Map(), rev: new Map() };
+  const distFromHighByKey = new Map();  // `symbol|date` → fraction below 252d high
+  if (isDeepScan) {
+    deepFactors = loadDeepScanFactors(startDate, endDate);
+
+    // Preload ~400 calendar days of prices before startDate so the 252-day
+    // rolling max is honest from day 1 (otherwise early-window entries all
+    // look near-high and the distFromHigh filter is effectively disabled).
+    const preloadStart = new Date(startDate + 'T00:00:00Z');
+    preloadStart.setUTCDate(preloadStart.getUTCDate() - 400);
+    const preloadStartIso = preloadStart.toISOString().split('T')[0];
+    const pricePreload = db().prepare(`
+      SELECT date, symbol, price
+      FROM rs_snapshots
+      WHERE type = 'stock' AND date >= ? AND date < ? AND price > 0
+      ORDER BY date
+    `).all(preloadStartIso, startDate);
+
+    const priceHistory = {};
+    for (const r of pricePreload) {
+      if (r.symbol === 'SPY') continue;
+      if (!priceHistory[r.symbol]) priceHistory[r.symbol] = [];
+      priceHistory[r.symbol].push({ date: r.date, price: r.price });
+    }
+    for (const s of snapshots) {
+      if (!s.price || s.symbol === 'SPY') continue;
+      if (!priceHistory[s.symbol]) priceHistory[s.symbol] = [];
+      priceHistory[s.symbol].push({ date: s.date, price: s.price });
+    }
+
+    // Walk forward maintaining a rolling 252-day max per symbol. Stored
+    // under `symbol|date` so the daily loop just does one lookup per stock.
+    for (const [sym, series] of Object.entries(priceHistory)) {
+      for (let i = 0; i < series.length; i++) {
+        const windowStart = Math.max(0, i - 251);
+        let hi = 0;
+        for (let j = windowStart; j <= i; j++) {
+          if (series[j].price > hi) hi = series[j].price;
+        }
+        if (hi > 0) {
+          const distFromHigh = (hi - series[i].price) / hi;
+          distFromHighByKey.set(`${sym}|${series[i].date}`, distFromHigh);
+        }
+      }
+    }
+  }
+
+  // ─── Deep-scan composite ranker (approximates calcConviction) ──────────
+  // Stand-alone so it's cheap to reason about and easy to tweak without
+  // touching the daily loop. Returns a numeric score; callers sort desc.
+  function scoreDeepScan(s) {
+    let score = (s.rs_rank || 0) * 0.25
+              + (s.swing_momentum || 0) * 0.20
+              + (s.sepa_score || 0) * 2.5;
+    const accel = s._rs_accel_4w || 0;
+    score += Math.min(Math.max(accel, 0), 20) * 1.25;
+
+    if (s.rs_line_new_high) score += 8;
+    if (s.vcp_forming)      score += 6;
+    if ((s.volume_ratio || 0) >= 1.5) score += 5;
+
+    const tfAlign = s.rs_tf_alignment || 0;
+    if (tfAlign >= 3)      score += 8;
+    else if (tfAlign >= 2) score += 4;
+
+    // up/down volume profile (IBD accumulation) — stored as TEXT grade
+    if ((s.up_down_ratio_50 || 0) >= 1.5)      score += 9;   // grade A equivalent
+    else if ((s.up_down_ratio_50 || 0) >= 1.2) score += 6;   // grade B+
+    else if ((s.up_down_ratio_50 || 0) < 0.8)  score -= 8;   // distribution
+
+    // Pattern bonus (only fires when pattern backfill has populated the row)
+    if (s.pattern_type) {
+      if (s.pattern_type === 'highTightFlag')   score += 12;
+      else if (s.pattern_type === 'cupHandle')  score += 9;
+      else if (s.pattern_type === 'ascendingBase') score += 8;
+      else if (s.pattern_type === 'powerPlay')  score += 7;
+    }
+
+    // Institutional flow (from institutional_flow table, LEFT JOINed)
+    const inst = s._inst;
+    if (inst) {
+      const fs = inst.flow_score || 50;
+      if (fs >= 70)      score += 10;
+      else if (fs >= 60) score += 5;
+      else if (fs <= 30) score -= 5;
+      else if (fs <= 20) score -= 10;
+      if ((inst.power_days || 0) >= 2) score += 4;
+    }
+
+    // Revision tier
+    const rev = s._rev;
+    if (rev?.tier) {
+      if (rev.tier === 'strong_upgrade' && (s.rs_rank || 0) >= 80) score += 12;
+      else if (rev.tier === 'strong_upgrade')                       score += 8;
+      else if (rev.tier === 'upgrade' && (s.rs_rank || 0) >= 70)    score += 6;
+      else if (rev.tier === 'upgrade')                              score += 4;
+      else if (rev.tier === 'downgrade')                            score -= 8;
+      else if (rev.tier === 'strong_downgrade')                     score -= 15;
+    }
+
+    // Earnings drift (PEAD)
+    const drift = s._drift;
+    if (drift) {
+      score += (drift.score || 0) * 0.10;
+      if (drift.strong) score += 6;
+    }
+
+    // Stage penalties/bonuses
+    if (s.stage === 2)      score += 5;
+    else if (s.stage === 3) score -= 8;
+    else if (s.stage === 4) score -= 15;
+
+    // Far-from-high penalty (extended moves are risky)
+    if ((s._distFromHigh || 0) > 0.15) score -= 10;
+
+    return score;
   }
 
   // ─── Regime setup (ALL strategies) ──────────────────────────────────────
@@ -671,9 +903,16 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     const dayBreadthOk = combosNeedBreadth ? !!breadthOkByDate[date] : true;
     for (const s of dayStocks) {
       stockMap[s.symbol] = s;
-      // Attach 4-week RS acceleration for emerging_leader strategy
-      if (isEmerging) s._rs_accel_4w = computeRsAccel4w(s.symbol, date);
+      // 4-week RS acceleration — emerging_leader entry gate + deep_scan ranker
+      if (needsRsAccel) s._rs_accel_4w = computeRsAccel4w(s.symbol, date);
       if (combosNeedBreadth) s._breadth_ok = dayBreadthOk;
+      if (isDeepScan) {
+        const key = `${s.symbol}|${date}`;
+        s._inst         = deepFactors.inst.get(key)  || null;
+        s._drift        = deepFactors.drift.get(key) || null;
+        s._rev          = deepFactors.rev.get(key)   || null;
+        s._distFromHigh = distFromHighByKey.get(key);
+      }
     }
 
     // ─── Daily accruals (Phase 2.6) ─────────────────────────────────────
@@ -964,6 +1203,14 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
         // combo filter has already done the gating work. Keeps picks stable.
         candidates.sort((a, b) =>
           ((b.rs_rank || 0) + (b.swing_momentum || 0)) - ((a.rs_rank || 0) + (a.swing_momentum || 0)));
+      } else if (todayStrategy === 'deep_scan') {
+        // Composite conviction-style ranker. Filter by minConviction when set,
+        // then sort desc so the top N fills open slots. Precompute the score
+        // once per stock so the comparator is stable and cheap.
+        for (const c of candidates) c._deepScore = scoreDeepScan(c);
+        const minC = mergedParams.minConviction || 0;
+        candidates = candidates.filter(c => c._deepScore >= minC);
+        candidates.sort((a, b) => (b._deepScore || 0) - (a._deepScore || 0));
       } else if (todayStrategy === 'conviction') {
         // Multi-factor composite matching calcConviction weights
         candidates.sort((a, b) => {
