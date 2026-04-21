@@ -40,3 +40,7 @@ backup/
 certs/
 /localhost.pem
 /localhost-key.pem
+
+# Claude Code worktrees and agent scratch dirs (ephemeral, never commit)
+.claude/worktrees/
+.claude/todos/
