@@ -643,12 +643,36 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
     }
 
     // ── OHLC crosshair: update hoverBar as user moves the mouse over candles ──
+    //
+    // Volume lookup strategy: go directly to `param.seriesData.get(volSeries)`.
+    // A Map keyed on param.time is unreliable — Lightweight Charts can return
+    // `param.time` as either the original string ('YYYY-MM-DD'), a BusinessDay
+    // object ({year,month,day}), or a UTCTimestamp number depending on the
+    // data shape and version, so `map.get(param.time)` misses. Reading
+    // directly from the volume series always returns the correct bar.
+    //
+    // The volBySec map is kept as a last-resort fallback (e.g. if the user
+    // hovers a MA/VWAP line point that doesn't land on a candle).
     const volBySec = new Map((chartData.volume || []).map(v => [v.time, v.value || 0]));
+    const keyFromTime = t => {
+      // Normalize any of LC's time shapes back to the original key form.
+      if (t == null) return null;
+      if (typeof t === 'string') return t;
+      if (typeof t === 'number') return t;
+      if (typeof t === 'object' && t.year != null) {
+        return `${t.year}-${String(t.month).padStart(2,'0')}-${String(t.day).padStart(2,'0')}`;
+      }
+      return null;
+    };
     chart.subscribeCrosshairMove(param => {
       if (!param || !param.time || !param.seriesData) { setHoverBar(null); return; }
       const bar = param.seriesData.get(candleSeries);
       if (bar && typeof bar.close === 'number') {
-        setHoverBar({ time: param.time, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: volBySec.get(param.time) || 0 });
+        const volPt = param.seriesData.get(volSeries);
+        const vol = (volPt && typeof volPt.value === 'number')
+          ? volPt.value
+          : (volBySec.get(keyFromTime(param.time)) || 0);
+        setHoverBar({ time: param.time, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: vol });
       } else {
         setHoverBar(null);
       }

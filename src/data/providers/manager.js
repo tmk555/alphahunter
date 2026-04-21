@@ -67,9 +67,13 @@ function recordFailure(providerKey, error) {
 // ─── Fallback execution ────────────────────────────────────────────────────
 
 async function withFallback(operation, methodMap) {
+  return withFallbackOrdered(providers, operation, methodMap);
+}
+
+async function withFallbackOrdered(orderedProviders, operation, methodMap) {
   const errors = [];
 
-  for (const provider of providers) {
+  for (const provider of orderedProviders) {
     if (!isAvailable(provider.key)) continue;
 
     const mod = provider.module();
@@ -136,9 +140,25 @@ async function getHistory(symbol) {
 // For a 2017-forward backfill, first-success-wins would stop at Alpaca and
 // silently give us a shallow window; minBars forces the cascade to keep
 // looking until it finds a deeper source.
-async function getHistoryFull(symbol, { minBars } = {}) {
+//
+// `preferConsolidatedVolume` deprioritizes Alpaca's free-tier IEX feed
+// (~2% of consolidated volume). Price prints are fine — they match the
+// tape within 0.1% — but volume magnitudes are fractional. For CHARTS,
+// that's visually jarring: today's live bar (built from consolidated
+// intraday) would tower over historical IEX bars, producing phantom
+// volume "spikes." Turn this on for any consumer that displays volume
+// alongside a consolidated-source today bar. Backtests / RS / momentum
+// should leave it off — Alpaca's deeper history wins there.
+async function getHistoryFull(symbol, { minBars, preferConsolidatedVolume = false } = {}) {
+  // Reorder the cascade when the caller wants consolidated volume. Alpaca
+  // moves to the end (still a reachable fallback), Yahoo/Polygon/FMP/AV
+  // stay in their natural priority order.
+  const orderedProviders = preferConsolidatedVolume
+    ? [...providers.filter(p => p.key !== 'alpaca'), ...providers.filter(p => p.key === 'alpaca')]
+    : providers;
+
   if (!minBars) {
-    const { data } = await withFallback(`historyFull(${symbol})`, (mod, key) => {
+    const { data } = await withFallbackOrdered(orderedProviders, `historyFull(${symbol})`, (mod, key) => {
       if (key === 'polygon') return () => mod.polygonHistoryFull(symbol);
       if (key === 'alpaca')  return () => mod.alpacaHistoryFull(symbol);
       if (key === 'yahoo') return () => mod.yahooHistoryFull(symbol);
@@ -155,7 +175,7 @@ async function getHistoryFull(symbol, { minBars } = {}) {
   // throw if nothing returned enough bars AND nothing returned at all.
   let best = null;
   const errors = [];
-  for (const provider of providers) {
+  for (const provider of orderedProviders) {
     if (!isAvailable(provider.key)) continue;
     const mod = provider.module();
     if (provider.key !== 'yahoo' && provider.key !== 'polygon' && mod.isConfigured && !mod.isConfigured()) continue;

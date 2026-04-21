@@ -439,7 +439,15 @@ module.exports = function () {
       }
 
       // ── Fetch full history so MAs are seeded properly ──────────────────
-      const allBars = await getHistoryFull(symbol);
+      //
+      // preferConsolidatedVolume: on. Chart bars must have consistent volume
+      // magnitudes across history + today's live bar. Today's live bar comes
+      // from getIntradayBars (Polygon/Yahoo = consolidated). Without this
+      // flag, the manager might serve historical bars from Alpaca's free-tier
+      // IEX feed (~2% of consolidated volume), making today's bar LOOK like
+      // a 50× spike. This flag moves Alpaca to the end of the fallback chain
+      // so the chart prefers Yahoo/Polygon/FMP (all consolidated) first.
+      const allBars = await getHistoryFull(symbol, { preferConsolidatedVolume: true });
       if (!allBars || allBars.length === 0) {
         return res.status(404).json({ error: `No price data for ${symbol}` });
       }
