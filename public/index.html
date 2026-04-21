@@ -3643,8 +3643,25 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
     return true;
   }
 
+  // Pending pullback: strong stocks too extended for position entry
+  // (declared first so displayPicks can use it when mode === 'pullback')
+  const pendingPullback = useMemo(() => {
+    if (!rsLoaded || !rsData.length) return [];
+    return rsData.filter(s =>
+      s.rsRank >= 70 &&
+      (s.rsTrend?.vs1m > 0 || s.rsTrend?.vs4w > 0) &&
+      s.vsMA200 > 0 &&
+      s.vsMA50 > 5 && s.vsMA50 <= 20 &&
+      (s.sepaScore >= 4 || s.vcpForming || s.stage === 2)
+    ).sort((a, b) => a.vsMA50 - b.vsMA50).slice(0, 15);
+  }, [rsData, rsLoaded]);
+
   // Unified filtered + sorted picks
   const displayPicks = useMemo(() => {
+    // Pullback mode: client-side list of extended strong stocks waiting for a pullback.
+    if (mode === 'pullback') {
+      return pendingPullback.filter(passesChipFilters).slice(0, picksLimit);
+    }
     if (!picks || !picks.length) return [];
     let list = picks.filter(s => {
       // Mode filter
@@ -3661,19 +3678,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
     else if (sortBy === 'sector') list.sort((a, b) => (a.sector || '').localeCompare(b.sector || ''));
     else if (sortBy === 'sepa') list.sort((a, b) => (b.sepaScore || 0) - (a.sepaScore || 0));
     return list.slice(0, picksLimit);
-  }, [picks, setupSigFilters, picksLimit, mode, sortBy]);
-
-  // Pending pullback: strong stocks too extended for position entry
-  const pendingPullback = useMemo(() => {
-    if (!rsLoaded || !rsData.length) return [];
-    return rsData.filter(s =>
-      s.rsRank >= 70 &&
-      (s.rsTrend?.vs1m > 0 || s.rsTrend?.vs4w > 0) &&
-      s.vsMA200 > 0 &&
-      s.vsMA50 > 5 && s.vsMA50 <= 20 &&
-      (s.sepaScore >= 4 || s.vcpForming || s.stage === 2)
-    ).sort((a, b) => a.vsMA50 - b.vsMA50).slice(0, 15);
-  }, [rsData, rsLoaded]);
+  }, [picks, pendingPullback, setupSigFilters, picksLimit, mode, sortBy]);
 
   // Reload picks whenever the mode chip changes or RS data finally arrives.
   // Before adding rsLoaded to the deps, switching to Pullback/Swing on a cold
@@ -3705,11 +3710,15 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
   }
 
   async function loadPicks() {
+    // Pullback mode is client-side only (derived from rsData) — no API call needed.
+    if (mode === 'pullback') { setPicksLoad(false); return; }
     // Deep Scan is the single source. Prefer the scheduler-populated cache;
     // if nothing fresh is there, run a scan inline so the grid isn't empty.
     setPicksLoad(true);
     try {
-      const d = await api('/api/trade-setups/cached?mode=' + (mode || 'both'));
+      // Backend API still speaks the legacy 'both' key; 'all' is a UI-only alias.
+      const apiMode = (mode === 'all' || !mode) ? 'both' : mode;
+      const d = await api('/api/trade-setups/cached?mode=' + apiMode);
       if (d.cached && d.results?.length) {
         setPicks(d.results);
         setConvictionOverrides(d.results.filter(r => r.convictionOverride).slice(0, 10));
@@ -3719,7 +3728,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
       } else if (rsLoaded && rsData?.length) {
         const r = await api('/api/trade-setups/scan', {
           method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ stocks: rsData, mode: mode || 'both' }),
+          body: JSON.stringify({ stocks: rsData, mode: apiMode }),
         });
         setPicks(r.results || []);
         setConvictionOverrides(r.convictionOverrides || []);
@@ -3790,7 +3799,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
   const getSetup = (s) => {
     if (mode === 'position' && s.positionSetup) return { ...s.positionSetup, type: 'position' };
     if (mode === 'swing' && s.swingSetup) return { ...s.swingSetup, type: 'swing' };
-    // 'both' mode: prefer swing if available
+    // 'all' (or unknown) mode: prefer swing if available
     if (s.swingSetup) return { ...s.swingSetup, type: 'swing' };
     if (s.positionSetup) return { ...s.positionSetup, type: 'position' };
     return null;
@@ -3832,10 +3841,15 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
       <div className="ts-toolbar">
         <span className="ts-toolbar-label">Mode</span>
         <div className="ts-toolbar-group">
-          {['swing','position','both'].map(m => (
-            <button key={m} className={`mode-btn ${mode===m?'active':''}`} onClick={() => setMode(m)}
-              title={m==='swing'?'Act today — entry at/near current price, tight ATR stop':m==='position'?'Pullback trade — limit order waits at 50MA, fires when price pulls back':'Both swing and pullback candidates'}>
-              {m === 'swing' ? 'Swing' : m === 'position' ? 'Pullback' : 'Both'}
+          {[
+            { key:'swing',    label:'Swing',    title:'Active trade — above 50MA, near high or breakout. Hold 2-10 days.' },
+            { key:'position', label:'Position', title:'Pulled back to 50MA zone, ready to enter. Hold 3-8 weeks.' },
+            { key:'pullback', label:'Pullback', title:'Strong stocks too extended right now — watchlist waiting for a pullback to 50MA.' },
+            { key:'all',      label:'All',      title:'All qualifying setups (Swing + Position).' },
+          ].map(m => (
+            <button key={m.key} className={`mode-btn ${mode===m.key?'active':''}`} onClick={() => setMode(m.key)}
+              title={m.title}>
+              {m.label}
             </button>
           ))}
         </div>
@@ -3919,17 +3933,49 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                     <div className="ts-card-price">${s.price?.toFixed(2)}</div>
                   </div>
 
-                  {/* Signal tags */}
+                  {/* Signal tags — setup-type badge always shown, computed from metrics */}
                   <div className="ts-card-signals">
                     {(() => {
-                      const tt = s.tradeTypes || [];
-                      const isBoth  = tt.length >= 2;
-                      const isSwing = tt.includes('swing');
-                      const isPos   = tt.includes('position');
-                      if (isBoth) return <span className="ts-signal-tag" style={{background:'rgba(255,215,0,0.12)',color:'var(--gold)',border:'1px solid rgba(255,215,0,0.3)'}} title="Qualifies for BOTH swing (breakout/near-high) and position (pullback to 50MA) entries">BOTH</span>;
-                      if (isSwing) return <span className="ts-signal-tag" style={{background:'rgba(0,212,255,0.12)',color:'var(--cyan)',border:'1px solid rgba(0,212,255,0.3)'}} title="Swing entry only — RS≥70, above 50MA, momentum≥50, breakout/near-high/volume surge. Hold 2-10 days.">SWING</span>;
-                      if (isPos)   return <span className="ts-signal-tag" style={{background:'rgba(0,230,118,0.12)',color:'var(--green)',border:'1px solid rgba(0,230,118,0.3)'}} title="Position entry only — RS≥70, above 200MA, vs_MA50 between -15% and +5% (pulled back to 50MA zone). Hold 3-8 weeks.">POSITION</span>;
-                      return null;
+                      // Unconditional setup-type classifier. Uses only fields
+                      // present on every card (rsRank, swingMomentum, vsMA50,
+                      // vsMA200, distFromHigh, sepaScore, vcpForming, stage),
+                      // so every card always gets exactly one badge.
+                      const v50 = s.vsMA50;
+                      const rs  = s.rsRank || 0;
+                      const mom = s.swingMomentum || 0;
+                      const dfh = s.distFromHigh || 1;
+                      const strength = (s.sepaScore >= 4) || s.vcpForming || s.stage === 2;
+
+                      const isPullbackWait = rs >= 70 && v50 != null && v50 > 5 && v50 <= 20 && strength;
+                      const isPosition     = rs >= 70 && v50 != null && v50 <= 5 && v50 > -15 && (s.vsMA200 || 0) > 0 && dfh <= 0.30;
+                      const isSwing        = rs >= 70 && v50 != null && v50 > 0  && mom >= 50 && (dfh <= 0.12 || (s.volumeRatio || 0) >= 1.1 || mom >= 65);
+
+                      const bothQualify = isSwing && isPosition;
+                      let label, bg, fg, border, title;
+                      if (mode === 'pullback' || (isPullbackWait && !isSwing && !isPosition)) {
+                        label = 'PULLBACK'; fg = 'var(--amber)';
+                        bg = 'rgba(255,176,32,0.12)'; border = '1px solid rgba(255,176,32,0.35)';
+                        title = 'Pullback watch — strong RS but extended above 50MA. Waiting for pullback to enter.';
+                      } else if (bothQualify) {
+                        label = 'BOTH'; fg = 'var(--gold)';
+                        bg = 'rgba(255,215,0,0.12)'; border = '1px solid rgba(255,215,0,0.3)';
+                        title = 'Qualifies for BOTH swing (breakout/near-high) and position (pullback to 50MA) entries';
+                      } else if (isPosition) {
+                        label = 'POSITION'; fg = 'var(--green)';
+                        bg = 'rgba(0,230,118,0.12)'; border = '1px solid rgba(0,230,118,0.3)';
+                        title = 'Position entry — RS≥70, above 200MA, vs_MA50 between -15% and +5% (pulled back to 50MA zone). Hold 3-8 weeks.';
+                      } else if (isSwing) {
+                        label = 'SWING'; fg = 'var(--cyan)';
+                        bg = 'rgba(0,212,255,0.12)'; border = '1px solid rgba(0,212,255,0.3)';
+                        title = 'Swing entry — RS≥70, above 50MA, momentum≥50, breakout/near-high/volume surge. Hold 2-10 days.';
+                      } else {
+                        // Fallback — use the currently viewed mode so every card shows a tag
+                        const fb = mode === 'position' ? 'POSITION' : mode === 'swing' ? 'SWING' : 'SETUP';
+                        label = fb; fg = 'var(--text3)';
+                        bg = 'rgba(160,174,192,0.12)'; border = '1px solid rgba(160,174,192,0.25)';
+                        title = 'Setup candidate (matches current view mode).';
+                      }
+                      return <span className="ts-signal-tag" style={{background:bg,color:fg,border}} title={title}>{label}</span>;
                     })()}
                     {s.vcpForming && <span className="ts-signal-tag" style={{background:'rgba(196,77,255,0.1)',color:'var(--purple)',border:'1px solid rgba(196,77,255,0.3)'}}>VCP{s.vcpCount ? ` ${s.vcpCount}x`:''}</span>}
                     {s.rsLineNewHigh && <span className="ts-signal-tag" style={{background:'rgba(255,215,0,0.12)',color:'var(--gold)',border:'1px solid rgba(255,215,0,0.3)'}}>RS New High</span>}
@@ -3970,7 +4016,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                     <div className="ts-detail" onClick={e => e.stopPropagation()}>
                       <div className="ts-detail-grid">
                         {/* Swing levels */}
-                        {(mode === 'swing' || mode === 'both') && sw.entryZone && (
+                        {(mode === 'swing' || mode === 'all') && sw.entryZone && (
                           <div className="ts-detail-section">
                             <div className="ts-detail-title" style={{color:'var(--cyan)'}}>Swing Trade -- 2-10 Days</div>
                             <div className="ts-levels-grid">
@@ -3991,7 +4037,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                         )}
 
                         {/* Position levels */}
-                        {(mode === 'position' || mode === 'both') && pos.entryZone && (
+                        {(mode === 'position' || mode === 'all') && pos.entryZone && (
                           <div className="ts-detail-section">
                             <div className="ts-detail-title" style={{color:'var(--green)'}}>Position Trade -- 3-8 Weeks</div>
                             <div className="ts-levels-grid">
@@ -4168,8 +4214,8 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
         </div>
       )}
 
-      {/* ── PENDING PULLBACK WATCHLIST ── */}
-      {pendingPullback.length > 0 && (
+      {/* ── PENDING PULLBACK WATCHLIST ── (hidden in dedicated Pullback mode — shown in main grid instead) */}
+      {mode !== 'pullback' && pendingPullback.length > 0 && (
         <div style={{marginBottom:20}}>
           <div className="ts-section-header">
             <span className="ts-section-title" style={{color:'var(--amber)'}}>PULLBACK WATCHLIST</span>
