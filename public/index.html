@@ -1065,7 +1065,7 @@ function App() {
     try {
       const d = await api('/api/macro');
       const items = (d.macro || []).filter(m =>
-        ['SPY','QQQ','IWM','^VIX'].includes(m.symbol)
+        ['SPY','QQQ','IWM','ES=F','NQ=F','RTY=F','^VIX'].includes(m.symbol)
       );
       setTickerData(items);
       setIsLive(items.length > 0);

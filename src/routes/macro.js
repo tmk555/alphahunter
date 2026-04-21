@@ -19,6 +19,9 @@ const macroFred = require('../signals/macro-fred');
 
 const MACRO_SYMBOLS = [
   {t:'SPY',n:'S&P 500'},{t:'QQQ',n:'Nasdaq 100'},{t:'IWM',n:'Russell 2000'},
+  // Index futures — Yahoo's =F suffix convention. Useful as overnight/pre-open
+  // tape since futures trade ~23 hours vs cash indices' 6.5 hours.
+  {t:'ES=F',n:'S&P Fut'},{t:'NQ=F',n:'Nasdaq Fut'},{t:'RTY=F',n:'Russell Fut'},
   {t:'^VIX',n:'VIX'},{t:'TLT',n:'20yr Bond'},{t:'GLD',n:'Gold'},
   {t:'UUP',n:'US Dollar'},{t:'USO',n:'Crude Oil'},{t:'^TNX',n:'10Y Yield'},{t:'^IRX',n:'3M Yield'},
 ];
