@@ -270,6 +270,7 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .ts-card-price { font-family:var(--font-mono); font-size:16px; font-weight:600; color:var(--text); margin-left:auto; padding-left:12px; flex-shrink:0; }
 .ts-card-signals { display:flex; flex-wrap:wrap; gap:5px; padding:0 16px 10px; }
 .ts-signal-tag { font-size:9px; font-weight:700; font-family:var(--font-mono); padding:2px 7px; border-radius:3px; letter-spacing:.3px; }
+.ts-setup-badge { font-size:11px; font-weight:800; font-family:var(--font-mono); padding:3px 10px; border-radius:4px; letter-spacing:.6px; display:inline-block; }
 .ts-card-metrics { display:grid; grid-template-columns:repeat(5,1fr); gap:0; border-top:1px solid var(--border); border-bottom:1px solid var(--border); }
 .ts-metric { padding:8px 10px; text-align:center; border-right:1px solid var(--border); }
 .ts-metric:last-child { border-right:none; }
@@ -3975,7 +3976,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                         bg = 'rgba(160,174,192,0.12)'; border = '1px solid rgba(160,174,192,0.25)';
                         title = 'Setup candidate (matches current view mode).';
                       }
-                      return <span className="ts-signal-tag" style={{background:bg,color:fg,border}} title={title}>{label}</span>;
+                      return <span className="ts-setup-badge" style={{background:bg,color:fg,border}} title={title}>{label}</span>;
                     })()}
                     {s.vcpForming && <span className="ts-signal-tag" style={{background:'rgba(196,77,255,0.1)',color:'var(--purple)',border:'1px solid rgba(196,77,255,0.3)'}}>VCP{s.vcpCount ? ` ${s.vcpCount}x`:''}</span>}
                     {s.rsLineNewHigh && <span className="ts-signal-tag" style={{background:'rgba(255,215,0,0.12)',color:'var(--gold)',border:'1px solid rgba(255,215,0,0.3)'}}>RS New High</span>}
@@ -4216,7 +4217,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
 
       {/* ── PENDING PULLBACK WATCHLIST ── (hidden in dedicated Pullback mode — shown in main grid instead) */}
       {mode !== 'pullback' && pendingPullback.length > 0 && (
-        <div style={{marginBottom:20}}>
+        <div style={{marginTop:32,marginBottom:20,paddingTop:20,borderTop:'1px solid var(--border)'}}>
           <div className="ts-section-header">
             <span className="ts-section-title" style={{color:'var(--amber)'}}>PULLBACK WATCHLIST</span>
             <span className="ts-section-count">{pendingPullback.filter(passesChipFilters).length} stocks — strong RS but extended, waiting for pullback to 50MA</span>
