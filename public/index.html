@@ -1064,9 +1064,11 @@ function App() {
   async function loadTicker() {
     try {
       const d = await api('/api/macro');
-      const items = (d.macro || []).filter(m =>
-        ['SPY','QQQ','IWM','ES=F','NQ=F','RTY=F','^VIX'].includes(m.symbol)
-      );
+      // Pair each cash index with its matching future so the bar reads
+      // naturally: S&P (SPY / ES=F) → Nasdaq (QQQ / NQ=F) → Russell (IWM / RTY=F) → VIX.
+      const ORDER = ['SPY','ES=F','QQQ','NQ=F','IWM','RTY=F','^VIX'];
+      const bySym = Object.fromEntries((d.macro || []).map(m => [m.symbol, m]));
+      const items = ORDER.map(sym => bySym[sym]).filter(Boolean);
       setTickerData(items);
       setIsLive(items.length > 0);
     } catch(_) {}
