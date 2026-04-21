@@ -3644,8 +3644,9 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
     return true;
   }
 
-  // Pending pullback: strong stocks too extended for position entry
-  // (declared first so displayPicks can use it when mode === 'pullback')
+  // Pending pullback: strong stocks too extended for position entry.
+  // Rendered in its own section below the Deep Scan grid — not part of the
+  // Swing/Position modes, since these are "watch, don't trade yet" candidates.
   const pendingPullback = useMemo(() => {
     if (!rsLoaded || !rsData.length) return [];
     return rsData.filter(s =>
@@ -3657,12 +3658,9 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
     ).sort((a, b) => a.vsMA50 - b.vsMA50).slice(0, 15);
   }, [rsData, rsLoaded]);
 
-  // Unified filtered + sorted picks
+  // Unified filtered + sorted picks. Mode is always 'swing' or 'position' —
+  // pullback lives in its own section below Deep Scan, never in this grid.
   const displayPicks = useMemo(() => {
-    // Pullback mode: client-side list of extended strong stocks waiting for a pullback.
-    if (mode === 'pullback') {
-      return pendingPullback.filter(passesChipFilters).slice(0, picksLimit);
-    }
     if (!picks || !picks.length) return [];
     let list = picks.filter(s => {
       // Mode filter
@@ -3681,11 +3679,10 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
     return list.slice(0, picksLimit);
   }, [picks, pendingPullback, setupSigFilters, picksLimit, mode, sortBy]);
 
-  // Reload picks whenever the mode chip changes or RS data finally arrives.
-  // Before adding rsLoaded to the deps, switching to Pullback/Swing on a cold
-  // cache left the grid at "0 picks" because the fallback scan needs rsData
-  // and the effect only fired once at mount (rsLoaded still false then).
-  useEffect(() => { loadPicks(); }, [mode, rsLoaded]);
+  // Load picks once on mount, and again when RS data finally arrives (needed
+  // for the inline-scan fallback when the cache is cold). Mode switching is
+  // handled client-side by displayPicks — no refetch needed.
+  useEffect(() => { loadPicks(); }, [rsLoaded]);
 
   // Toast-based staging (replaces alert/prompt)
   function showToast(title, body, isError) {
@@ -3711,15 +3708,14 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
   }
 
   async function loadPicks() {
-    // Pullback mode is client-side only (derived from rsData) — no API call needed.
-    if (mode === 'pullback') { setPicksLoad(false); return; }
     // Deep Scan is the single source. Prefer the scheduler-populated cache;
     // if nothing fresh is there, run a scan inline so the grid isn't empty.
+    // Always fetch the 'both' (swing+position union) cache and filter
+    // client-side via displayPicks — one cache row serves both mode buttons,
+    // and switching modes doesn't trigger a refetch.
     setPicksLoad(true);
     try {
-      // Backend API still speaks the legacy 'both' key; 'all' is a UI-only alias.
-      const apiMode = (mode === 'all' || !mode) ? 'both' : mode;
-      const d = await api('/api/trade-setups/cached?mode=' + apiMode);
+      const d = await api('/api/trade-setups/cached?mode=both');
       if (d.cached && d.results?.length) {
         setPicks(d.results);
         setConvictionOverrides(d.results.filter(r => r.convictionOverride).slice(0, 10));
@@ -3729,7 +3725,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
       } else if (rsLoaded && rsData?.length) {
         const r = await api('/api/trade-setups/scan', {
           method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ stocks: rsData, mode: apiMode }),
+          body: JSON.stringify({ stocks: rsData, mode: 'both' }),
         });
         setPicks(r.results || []);
         setConvictionOverrides(r.convictionOverrides || []);
@@ -3845,8 +3841,6 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
           {[
             { key:'swing',    label:'Swing',    title:'Active trade — above 50MA, near high or breakout. Hold 2-10 days.' },
             { key:'position', label:'Position', title:'Pulled back to 50MA zone, ready to enter. Hold 3-8 weeks.' },
-            { key:'pullback', label:'Pullback', title:'Strong stocks too extended right now — watchlist waiting for a pullback to 50MA.' },
-            { key:'all',      label:'All',      title:'All qualifying setups (Swing + Position).' },
           ].map(m => (
             <button key={m.key} className={`mode-btn ${mode===m.key?'active':''}`} onClick={() => setMode(m.key)}
               title={m.title}>
@@ -3915,7 +3909,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
               const posEntry = pos.entryZone?.split(' – ')[0] || '—';
               const rankColor = rank===0?'var(--green)':rank<=2?'var(--amber)':'var(--text3)';
               const isExpanded = expandedCard === s.ticker;
-              const modeForStage = mode === 'position' ? 'position' : mode === 'swing' ? 'swing' : ((s.swingMomentum || 0) >= 55 ? 'swing' : 'position');
+              const modeForStage = mode;  // always 'swing' or 'position' now
 
               return (
                 <div key={s.ticker}
@@ -3954,7 +3948,9 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                       const bothQualify = isSwing && isPosition;
                       // Solid hex colors + BLACK text — high contrast, no CSS-var or rgba translucency.
                       let label, bg, title;
-                      if (mode === 'pullback' || (isPullbackWait && !isSwing && !isPosition)) {
+                      if (isPullbackWait && !isSwing && !isPosition) {
+                        // Extended leader that slipped into the Deep Scan grid —
+                        // real pullback candidates live in the watchlist below.
                         label = 'PULLBACK'; bg = '#f0a500';
                         title = 'Pullback watch — strong RS but extended above 50MA. Waiting for pullback to enter.';
                       } else if (bothQualify) {
@@ -3967,7 +3963,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                         label = 'SWING'; bg = '#00d4ff';
                         title = 'Swing entry — RS≥70, above 50MA, momentum≥50, breakout/near-high/volume surge. Hold 2-10 days.';
                       } else {
-                        const fb = mode === 'position' ? 'POSITION' : mode === 'swing' ? 'SWING' : 'SETUP';
+                        const fb = mode === 'position' ? 'POSITION' : 'SWING';
                         label = fb; bg = '#8888bb';
                         title = 'Setup candidate (matches current view mode).';
                       }
@@ -4012,7 +4008,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                     <div className="ts-detail" onClick={e => e.stopPropagation()}>
                       <div className="ts-detail-grid">
                         {/* Swing levels */}
-                        {(mode === 'swing' || mode === 'all') && sw.entryZone && (
+                        {mode === 'swing' && sw.entryZone && (
                           <div className="ts-detail-section">
                             <div className="ts-detail-title" style={{color:'var(--cyan)'}}>Swing Trade -- 2-10 Days</div>
                             <div className="ts-levels-grid">
@@ -4033,7 +4029,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                         )}
 
                         {/* Position levels */}
-                        {(mode === 'position' || mode === 'all') && pos.entryZone && (
+                        {mode === 'position' && pos.entryZone && (
                           <div className="ts-detail-section">
                             <div className="ts-detail-title" style={{color:'var(--green)'}}>Position Trade -- 3-8 Weeks</div>
                             <div className="ts-levels-grid">
@@ -4210,8 +4206,8 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
         </div>
       )}
 
-      {/* ── PENDING PULLBACK WATCHLIST ── (hidden in dedicated Pullback mode — shown in main grid instead) */}
-      {mode !== 'pullback' && pendingPullback.length > 0 && (
+      {/* ── PENDING PULLBACK WATCHLIST ── (always visible — separate lifecycle from Deep Scan) */}
+      {pendingPullback.length > 0 && (
         <div style={{marginTop:32,marginBottom:20,paddingTop:20,borderTop:'1px solid var(--border)'}}>
           <div className="ts-section-header">
             <span className="ts-section-title" style={{color:'var(--amber)'}}>PULLBACK WATCHLIST</span>
