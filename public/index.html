@@ -3110,6 +3110,11 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
     '★':   s => s.rsRank>=70 && (s.rsTrend?.vs4w||0)>0 && s.swingMomentum>=60,
     '⭐':   s => s.rsLineNewHigh,
     '↗':   s => s.rsTrend?.vs4w>5 && s.rsRank>=65 && s.rsRank<80,
+    // 🔺 Pyramid: has ANY pattern that resolves a pivot — mirrors the acceptance
+    // rule in src/broker/pyramid-plans.js detectPivotForPyramid(). If this
+    // chip matches, pyramid_auto will successfully build a plan. Superset of
+    // VCP/CUP/ASC/PWR/HTF — use this when you want "any pyramid-ready base."
+    'PYR': s => s.vcpForming || !!s.bestPattern,
     'VCP': s => s.vcpForming,
     'CUP': s => s.patternData?.patterns?.cupHandle?.detected,
     'ASC': s => s.patternData?.patterns?.ascendingBase?.detected,
@@ -3277,6 +3282,7 @@ function RSTab({ rsData, rsLoaded, setRsData, setRsLoaded, minRS, setMinRS, sele
             {key:'★',   label:'★ Triple',      title:'RS≥70 + Accel>0 + Mom≥60 (same as Triple filter, combinable with others)',col:'var(--green)'},
             {key:'⭐',   label:'⭐ RS Line High', title:'RS Line at 52wk high — stock outperforming SPY itself',col:'var(--gold)'},
             {key:'↗',   label:'↗ Emerging',     title:'RS 65-79 rising fast (Accel>+5) — catch leaders early',col:'var(--cyan)'},
+            {key:'PYR', label:'🔺 Pyramid-ready',title:'Has a pivot detectable by the pyramid engine (VCP or any chart pattern — cup/asc/power/HTF). pyramid_auto will build successfully on these.',col:'var(--cyan)'},
             {key:'VCP', label:'VCP',             title:'Volatility Contraction Pattern — coiling setup',col:'var(--purple)'},
             {key:'CUP', label:'CUP',             title:'Cup & Handle — U-shaped base with handle pullback',col:'var(--cyan)'},
             {key:'ASC', label:'ASC',             title:'Ascending Base — 3+ rising lows with tightening range',col:'var(--cyan)'},
