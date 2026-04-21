@@ -1021,14 +1021,7 @@ function App() {
   // Expose globally so all tab components can call it without prop drilling
   useEffect(() => { window.navigateToScanner = navigateToScanner; return () => { delete window.navigateToScanner; }; }, [navigateToScanner]);
 
-  // Delegated click: any .td-ticker span anywhere → navigate to Scanner.
-  //
-  // Two-step UX on expandable Trade-Setup cards: if the ticker element has
-  // data-card-expanded="false", the first click is allowed to bubble up to
-  // the card's onClick (which expands the tile). A second click — now with
-  // data-card-expanded="true" — falls through to the Scanner navigation
-  // here. Cards that don't carry the attribute (scout/discovery, RS table,
-  // etc.) behave like before: single-click navigates.
+  // Delegated click: any .td-ticker span anywhere → navigate to Scanner
   const tabRef = useRef(tab);
   tabRef.current = tab;
   useEffect(() => {
@@ -1037,9 +1030,6 @@ function App() {
       if (!el) return;
       // Don't navigate if already on Scanner tab (let native row-expand work)
       if (tabRef.current === 'rs') return;
-      // First click on a collapsed Trade-Setup card — step aside so the
-      // card's own onClick can expand it.
-      if (el.dataset.cardExpanded === 'false') return;
       const ticker = (el.textContent || '').trim().toUpperCase();
       if (ticker && /^[A-Z]{1,6}$/.test(ticker)) {
         e.preventDefault();
@@ -3938,9 +3928,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                       {rank+1}
                     </div>
                     <div className="ts-card-identity">
-                      <div className="ts-card-ticker td-ticker"
-                           data-card-expanded={isExpanded ? 'true' : 'false'}
-                           title={isExpanded ? 'Click again to open in Scanner' : 'Click to expand; click the ticker again to open Scanner'}>{s.ticker}</div>
+                      <div className="ts-card-ticker td-ticker">{s.ticker}</div>
                       <div className="ts-card-name">{s.name || '—'}</div>
                     </div>
                     <div className="ts-card-price">${s.price?.toFixed(2)}</div>
@@ -4181,9 +4169,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                       {ov.tier === 'elite' ? 'ELT' : 'STR'}
                     </div>
                     <div className="ts-card-identity">
-                      <div className="ts-card-ticker td-ticker"
-                           data-card-expanded={isExpanded ? 'true' : 'false'}
-                           title={isExpanded ? 'Click again to open in Scanner' : 'Click to expand; click the ticker again to open Scanner'}>{s.ticker}</div>
+                      <div className="ts-card-ticker td-ticker">{s.ticker}</div>
                       <div className="ts-card-name">{s.name || s.sector}</div>
                     </div>
                     <div className="ts-card-price">${s.price?.toFixed(2)}</div>
@@ -4243,9 +4229,7 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                   <div className="ts-card-top">
                     <div className="ts-card-rank" style={{background:'var(--amber)22',color:'var(--amber)'}}>{i+1}</div>
                     <div className="ts-card-identity">
-                      <div className="ts-card-ticker td-ticker"
-                           data-card-expanded={isExpanded ? 'true' : 'false'}
-                           title={isExpanded ? 'Click again to open in Scanner' : 'Click to expand; click the ticker again to open Scanner'}>{s.ticker}</div>
+                      <div className="ts-card-ticker td-ticker">{s.ticker}</div>
                       <div className="ts-card-name">vs 50MA: <span style={{color:'var(--amber)',fontWeight:700}}>{s.vsMA50?.toFixed(1)}%</span> extended</div>
                     </div>
                     <div className="ts-card-price">${s.price?.toFixed(2)}</div>
