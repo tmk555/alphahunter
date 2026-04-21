@@ -11292,8 +11292,15 @@ function UniverseTrackingSection() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [syncing, setSyncing] = useState(false);
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  // Default to last 30 days so "Load Changes" just works without the user
+  // having to pick dates. Previously both were '' and the button silently
+  // no-op'd when either was blank, which looked like a bug.
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const thirtyDaysAgoISO = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const [startDate, setStartDate] = useState(thirtyDaysAgoISO);
+  const [endDate, setEndDate] = useState(todayISO);
+  const [changesLoading, setChangesLoading] = useState(false);
+  const [changesHint, setChangesHint] = useState(''); // status message under the button
   // Active-universe management
   const [activeUniverse, setActiveUniverse] = useState(null); // { universeSize, bySector, sectors }
   const [expandedSector, setExpandedSector] = useState(null);
@@ -11364,13 +11371,52 @@ function UniverseTrackingSection() {
     setSyncing(false);
   }
 
-  async function loadChanges() {
-    if (!startDate || !endDate) return;
+  async function loadChanges(opts = {}) {
+    const s = opts.start ?? startDate;
+    const e = opts.end ?? endDate;
+    if (!s || !e) {
+      setChangesHint('Pick both a start and end date first.');
+      return;
+    }
+    if (s > e) {
+      setChangesHint('Start date must be on or before end date.');
+      return;
+    }
+    setChangesLoading(true);
+    setChangesHint('');
     try {
-      const d = await api(`/api/edge/universe-changes?start=${startDate}&end=${endDate}`);
+      const d = await api(`/api/edge/universe-changes?start=${s}&end=${e}`);
       setChanges(d);
-    } catch(e) { setError(e.message); }
+      const addN = (d?.additions || []).length;
+      const remN = (d?.removals || []).length;
+      if (addN === 0 && remN === 0) {
+        setChangesHint(`No universe changes between ${s} and ${e}.`);
+      } else {
+        setChangesHint(`Found ${addN} addition${addN===1?'':'s'} and ${remN} removal${remN===1?'':'s'}.`);
+      }
+    } catch(err) {
+      setError(err.message);
+      setChangesHint(`Load failed: ${err.message}`);
+    }
+    setChangesLoading(false);
   }
+
+  // Preset ranges — update dates AND fetch in one shot. Avoids the stale-state
+  // pitfall of calling setStartDate then loadChanges() (which would read the
+  // old state) by passing the dates as explicit args.
+  function applyRange(days) {
+    const end = new Date().toISOString().slice(0, 10);
+    const start = days === 'all'
+      ? '2020-01-01' // effectively "all"
+      : new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    setStartDate(start);
+    setEndDate(end);
+    loadChanges({ start, end });
+  }
+
+  // Auto-load changes on mount with the default 30-day range so the panel
+  // isn't empty on first view.
+  useEffect(() => { loadChanges({ start: thirtyDaysAgoISO, end: todayISO }); /* eslint-disable-next-line */ }, []);
 
   const sizeArr = Array.isArray(sizeData) ? sizeData : sizeData?.history || [];
 
@@ -11555,7 +11601,15 @@ function UniverseTrackingSection() {
       {/* Universe Changes */}
       <div className="panel">
         <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>UNIVERSE CHANGES</div>
-        <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap',marginBottom:12}}>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+          <span style={{fontSize:10,color:'var(--text3)',alignSelf:'center',marginRight:4,letterSpacing:1}}>QUICK:</span>
+          <button className="btn btn-sm" style={{padding:'4px 10px',fontSize:10}} onClick={() => applyRange(1)}>Today</button>
+          <button className="btn btn-sm" style={{padding:'4px 10px',fontSize:10}} onClick={() => applyRange(7)}>7d</button>
+          <button className="btn btn-sm" style={{padding:'4px 10px',fontSize:10}} onClick={() => applyRange(30)}>30d</button>
+          <button className="btn btn-sm" style={{padding:'4px 10px',fontSize:10}} onClick={() => applyRange(90)}>90d</button>
+          <button className="btn btn-sm" style={{padding:'4px 10px',fontSize:10}} onClick={() => applyRange('all')}>All</button>
+        </div>
+        <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap',marginBottom:8}}>
           <div>
             <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Start Date</label>
             <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)}
@@ -11566,8 +11620,15 @@ function UniverseTrackingSection() {
             <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)}
               style={{padding:'6px 8px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:12,fontFamily:'var(--font-mono)'}}/>
           </div>
-          <button className="btn btn-sm" onClick={loadChanges}>Load Changes</button>
+          <button className="btn btn-sm" onClick={() => loadChanges()} disabled={changesLoading}>
+            {changesLoading ? 'Loading...' : 'Load Changes'}
+          </button>
         </div>
+        {changesHint && (
+          <div style={{fontSize:10,color:'var(--text3)',marginBottom:10,fontFamily:'var(--font-mono)'}}>
+            {changesHint}
+          </div>
+        )}
 
         {changes && (
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
