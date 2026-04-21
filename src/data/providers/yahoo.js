@@ -70,13 +70,21 @@ async function yahooHistory(symbol) {
   return closes;
 }
 
-// Full OHLCV history (needed for cycle detection — distribution days require volume)
-async function yahooHistoryFull(symbol) {
-  const key = `hf:${symbol}`;
+// Full OHLCV history (needed for cycle detection — distribution days require
+// volume, backfill needs multi-year bars for point-in-time snapshots).
+//
+// Range default is 10y so replay/backfill can walk deep historical windows —
+// Alpaca free tier only serves bars back to ~mid-2020 (IEX retention), so
+// Yahoo is the only configured provider that reaches 2016+. Bars are daily,
+// so 10y ≈ 2500 bars; the 23h TTL means we pay this once per symbol per day.
+// Callers that only need recent history still benefit from the cache — they
+// just slice the tail. Override via { range } if you want a smaller window.
+async function yahooHistoryFull(symbol, { range = '10y' } = {}) {
+  const key = `hf:${symbol}:${range}`;
   const cached = cacheGet(key, TTL_HIST);
   if (cached) return cached;
   const { crumb, cookie } = await getYahooCrumb();
-  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=2y&interval=1d&crumb=${encodeURIComponent(crumb)}`;
+  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${encodeURIComponent(range)}&interval=1d&crumb=${encodeURIComponent(crumb)}`;
   const r = await fetch(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 'Cookie': cookie },
   });

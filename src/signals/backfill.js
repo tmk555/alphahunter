@@ -157,12 +157,17 @@ async function runBackfill({
 
   if (onProgress) onProgress({ stage: 'fetch', current: 0, total: allSymbols.length, message: `Fetching ${allSymbols.length} symbol histories` });
 
-  // Step 1: fetch full bars for every symbol (cached by provider layer)
+  // Step 1: fetch full bars for every symbol (cached by provider layer).
+  // We pass minBars = lookbackDays + 252 so the provider manager reaches past
+  // Alpaca's free-tier IEX retention (~1400 bars) when a deep backfill is
+  // requested. Without this, a 2500-day (10-year) request would silently cap
+  // at whatever Alpaca can serve and the extra years simply wouldn't land.
+  const minBars = Math.min(lookbackDays + 252, 2700);
   const barsBySymbol = {};
   let fetched = 0;
   await pLimit(allSymbols.map(sym => async () => {
     try {
-      const bars = await getHistoryFull(sym);
+      const bars = await getHistoryFull(sym, { minBars });
       if (bars && bars.length >= 63) barsBySymbol[sym] = bars;
       else errors.push({ symbol: sym, error: bars ? `only ${bars.length} bars` : 'no data' });
     } catch (e) {

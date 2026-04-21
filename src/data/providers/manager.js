@@ -125,16 +125,63 @@ async function getHistory(symbol) {
   return data;
 }
 
-async function getHistoryFull(symbol) {
-  const { data } = await withFallback(`historyFull(${symbol})`, (mod, key) => {
-    if (key === 'polygon') return () => mod.polygonHistoryFull(symbol);
-    if (key === 'alpaca')  return () => mod.alpacaHistoryFull(symbol);
-    if (key === 'yahoo') return () => mod.yahooHistoryFull(symbol);
-    if (key === 'fmp') return () => mod.fmpHistoryFull(symbol);
-    if (key === 'alphavantage') return () => mod.avHistoryFull(symbol);
-    return null;
-  });
-  return data;
+// `minBars` lets callers ask for deep history (e.g. a multi-year backfill).
+// Default behavior is unchanged — first successful provider wins, which keeps
+// the live scanner on Alpaca (higher-quality IEX prints). When minBars is set
+// and the first winner returns fewer bars than that, we probe subsequent
+// providers and return whichever response has the most bars.
+//
+// Why this matters: Alpaca's free IEX feed only retains ~5.5y of daily bars,
+// while Yahoo's /v8/finance/chart?range=10y returns ~2500 bars back to 2016.
+// For a 2017-forward backfill, first-success-wins would stop at Alpaca and
+// silently give us a shallow window; minBars forces the cascade to keep
+// looking until it finds a deeper source.
+async function getHistoryFull(symbol, { minBars } = {}) {
+  if (!minBars) {
+    const { data } = await withFallback(`historyFull(${symbol})`, (mod, key) => {
+      if (key === 'polygon') return () => mod.polygonHistoryFull(symbol);
+      if (key === 'alpaca')  return () => mod.alpacaHistoryFull(symbol);
+      if (key === 'yahoo') return () => mod.yahooHistoryFull(symbol);
+      if (key === 'fmp') return () => mod.fmpHistoryFull(symbol);
+      if (key === 'alphavantage') return () => mod.avHistoryFull(symbol);
+      return null;
+    });
+    return data;
+  }
+
+  // Deep-history path: collect from every available provider, keep the longest.
+  // We still record success/failure per provider so the circuit breaker stays
+  // calibrated. Errors on any one provider don't abort the sweep — we only
+  // throw if nothing returned enough bars AND nothing returned at all.
+  let best = null;
+  const errors = [];
+  for (const provider of providers) {
+    if (!isAvailable(provider.key)) continue;
+    const mod = provider.module();
+    if (provider.key !== 'yahoo' && provider.key !== 'polygon' && mod.isConfigured && !mod.isConfigured()) continue;
+    if (provider.key === 'polygon' && mod.isConfigured && !mod.isConfigured()) continue;
+
+    let method;
+    if (provider.key === 'polygon')          method = () => mod.polygonHistoryFull(symbol);
+    else if (provider.key === 'alpaca')      method = () => mod.alpacaHistoryFull(symbol);
+    else if (provider.key === 'yahoo')       method = () => mod.yahooHistoryFull(symbol);
+    else if (provider.key === 'fmp')         method = () => mod.fmpHistoryFull(symbol);
+    else if (provider.key === 'alphavantage')method = () => mod.avHistoryFull(symbol);
+    if (!method) continue;
+
+    try {
+      const result = await method();
+      recordSuccess(provider.key);
+      const n = Array.isArray(result) ? result.length : 0;
+      if (n > 0 && (!best || n > best.n)) best = { data: result, n, provider: provider.key };
+      if (best && best.n >= minBars) break;  // early-exit once we have enough
+    } catch (e) {
+      recordFailure(provider.key, e.message);
+      errors.push({ provider: provider.key, error: e.message });
+    }
+  }
+  if (!best) throw new Error(`All providers failed for historyFull(${symbol}): ${errors.map(e => `${e.provider}: ${e.error}`).join('; ')}`);
+  return best.data;
 }
 
 async function getFundamentals(symbol) {
