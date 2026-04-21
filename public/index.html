@@ -3899,6 +3899,16 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
 
                   {/* Signal tags */}
                   <div className="ts-card-signals">
+                    {(() => {
+                      const tt = s.tradeTypes || [];
+                      const isBoth  = tt.length >= 2;
+                      const isSwing = tt.includes('swing');
+                      const isPos   = tt.includes('position');
+                      if (isBoth) return <span className="ts-signal-tag" style={{background:'rgba(255,215,0,0.12)',color:'var(--gold)',border:'1px solid rgba(255,215,0,0.3)'}} title="Qualifies for BOTH swing (breakout/near-high) and position (pullback to 50MA) entries">BOTH</span>;
+                      if (isSwing) return <span className="ts-signal-tag" style={{background:'rgba(0,212,255,0.12)',color:'var(--cyan)',border:'1px solid rgba(0,212,255,0.3)'}} title="Swing entry only — RS≥70, above 50MA, momentum≥50, breakout/near-high/volume surge. Hold 2-10 days.">SWING</span>;
+                      if (isPos)   return <span className="ts-signal-tag" style={{background:'rgba(0,230,118,0.12)',color:'var(--green)',border:'1px solid rgba(0,230,118,0.3)'}} title="Position entry only — RS≥70, above 200MA, vs_MA50 between -15% and +5% (pulled back to 50MA zone). Hold 3-8 weeks.">POSITION</span>;
+                      return null;
+                    })()}
                     {s.vcpForming && <span className="ts-signal-tag" style={{background:'rgba(196,77,255,0.1)',color:'var(--purple)',border:'1px solid rgba(196,77,255,0.3)'}}>VCP{s.vcpCount ? ` ${s.vcpCount}x`:''}</span>}
                     {s.rsLineNewHigh && <span className="ts-signal-tag" style={{background:'rgba(255,215,0,0.12)',color:'var(--gold)',border:'1px solid rgba(255,215,0,0.3)'}}>RS New High</span>}
                     {s.stage === 2 && <span className="ts-signal-tag" style={{background:'rgba(0,230,118,0.1)',color:'var(--green)',border:'1px solid rgba(0,230,118,0.3)'}}>Stage 2</span>}

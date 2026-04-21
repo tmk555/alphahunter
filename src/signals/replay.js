@@ -657,9 +657,15 @@ function isInUniverse(symbol, universeFilter) {
 
 // Swing vs Position mode overrides — position trades hold longer, use wider stops,
 // and require pullback to 50MA. Swing trades are tighter, shorter hold.
+//
+// Position preset tuned from scripts/run-mode-comparison.js sweep on the
+// backfilled 10-year universe (2016-10→2026-04):
+//   Mode D (pyramid-in + scale-out ladder 3.5/7.0) posted 277% return /
+//   12.9% MDD / 1.05 Sharpe / +49% alpha on the Full window, winning 3 of
+//   4 regime windows vs the FULL→FULL and FULL→SCALE variants.
 const MODE_OVERRIDES = {
   swing:    { holdDays: 10, stopATR: 1.0, targetATR: 2.0, target1ATR: 1.5, target2ATR: 2.5 },
-  position: { holdDays: 40, stopATR: 2.0, targetATR: 4.0, target1ATR: 2.5, target2ATR: 4.0 },
+  position: { holdDays: 40, stopATR: 2.5, targetATR: 7.0, scaleOut: true, target1ATR: 3.5, target2ATR: 7.0, pyramidEntry: true },
 };
 
 function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPositions = 10, initialCapital = 100000, execution = {}, persistResult = true, indexName = 'SP500' }) {

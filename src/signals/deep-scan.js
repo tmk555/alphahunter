@@ -23,7 +23,18 @@ async function runDeepScan({ stocks, mode = 'both', sectorEtfs = null } = {}) {
   const filter = mode === 'swing' ? isSwingCandidate
                : mode === 'position' ? isPositionCandidate
                : (s) => isSwingCandidate(s) || isPositionCandidate(s);
-  const candidates = stocks.filter(filter).slice(0, 20);
+  // Tag each stock with which filter(s) it passed so the UI can render a
+  // SWING / POSITION / BOTH badge per card (and the scheduler brief can pick
+  // the right tradeType without re-evaluating the filters).
+  const tagged = stocks.map(s => {
+    const isSwing = isSwingCandidate(s);
+    const isPos   = isPositionCandidate(s);
+    const tradeTypes = [];
+    if (isSwing) tradeTypes.push('swing');
+    if (isPos)   tradeTypes.push('position');
+    return { ...s, tradeTypes };
+  });
+  const candidates = tagged.filter(filter).slice(0, 20);
   const regime = await getMarketRegime();
 
   // Sector rotation — absorbed from the legacy Top Picks engine so the
@@ -59,6 +70,7 @@ async function runDeepScan({ stocks, mode = 'both', sectorEtfs = null } = {}) {
       convictionScore,
       reasons,
       convictionOverride,
+      tradeTypes: s.tradeTypes || [],
       swingSetup:    computeTradeSetup(s, 'swing'),
       positionSetup: computeTradeSetup(s, 'position'),
       algoSetup:     computeTradeSetup(s, mode === 'both' ? 'swing' : mode),
@@ -93,6 +105,7 @@ function persistDeepScan({ mode, results, regime, scannedCount, totalInput }) {
     const slim = results.map(r => ({
       ticker: r.ticker, name: r.name, price: r.price, sector: r.sector,
       rsRank: r.rsRank, swingMomentum: r.swingMomentum,
+      tradeTypes: r.tradeTypes || [],
       sepaScore: r.sepaScore, stage: r.stage,
       vsMA50: r.vsMA50, vsMA200: r.vsMA200,
       atr: r.atr, atrPct: r.atrPct,
