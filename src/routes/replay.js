@@ -23,6 +23,7 @@ const {
 const { runBackfill } = require('../signals/backfill');
 const { runInstitutionalBackfill } = require('../signals/backfillInstitutional');
 const { runEarningsDriftBackfill } = require('../signals/backfillEarningsDrift');
+const { runRevisionsBackfill } = require('../signals/backfillRevisions');
 const { FULL_UNIVERSE } = require('../../universe');
 
 // ─── Available strategies ─────────────────────────────────────────────────
@@ -210,6 +211,30 @@ router.post('/replay/backfill-earnings-drift', async (req, res) => {
       symbols: useSymbols,
       lookbackDays: +lookbackDays,
       concurrency: +concurrency || 5,
+    });
+    res.json(summary);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── revision_scores backfill ────────────────────────────────────────────
+// Uses Yahoo's earningsTrend.epsTrend 5-anchor history (current/7/30/60/90d)
+// to reconstruct 4 real revision-score transitions per symbol. Expensive:
+// one Yahoo call per symbol, so prefer a trimmed top-RS list rather than the
+// full universe.
+router.post('/replay/backfill-revisions', async (req, res) => {
+  try {
+    const { symbols, concurrency = 3 } = req.body || {};
+    const useSymbols = Array.isArray(symbols) && symbols.length
+      ? symbols
+      : Object.keys(FULL_UNIVERSE);
+    if (!useSymbols.length) {
+      return res.status(400).json({ error: 'no symbols available — provide symbols[] or populate universe' });
+    }
+    const summary = await runRevisionsBackfill({
+      symbols: useSymbols,
+      concurrency: +concurrency || 3,
     });
     res.json(summary);
   } catch (e) {
