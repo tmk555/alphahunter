@@ -3952,31 +3952,26 @@ function TradeSetupsTab({ rsData, rsLoaded, results, setResults, regime, setRegi
                       const isSwing        = rs >= 70 && v50 != null && v50 > 0  && mom >= 50 && (dfh <= 0.12 || (s.volumeRatio || 0) >= 1.1 || mom >= 65);
 
                       const bothQualify = isSwing && isPosition;
-                      let label, bg, fg, border, title;
+                      // Solid hex colors + BLACK text — high contrast, no CSS-var or rgba translucency.
+                      let label, bg, title;
                       if (mode === 'pullback' || (isPullbackWait && !isSwing && !isPosition)) {
-                        label = 'PULLBACK'; fg = 'var(--amber)';
-                        bg = 'rgba(255,176,32,0.12)'; border = '1px solid rgba(255,176,32,0.35)';
+                        label = 'PULLBACK'; bg = '#f0a500';
                         title = 'Pullback watch — strong RS but extended above 50MA. Waiting for pullback to enter.';
                       } else if (bothQualify) {
-                        label = 'BOTH'; fg = 'var(--gold)';
-                        bg = 'rgba(255,215,0,0.12)'; border = '1px solid rgba(255,215,0,0.3)';
+                        label = 'BOTH'; bg = '#ffd700';
                         title = 'Qualifies for BOTH swing (breakout/near-high) and position (pullback to 50MA) entries';
                       } else if (isPosition) {
-                        label = 'POSITION'; fg = 'var(--green)';
-                        bg = 'rgba(0,230,118,0.12)'; border = '1px solid rgba(0,230,118,0.3)';
+                        label = 'POSITION'; bg = '#00e676';
                         title = 'Position entry — RS≥70, above 200MA, vs_MA50 between -15% and +5% (pulled back to 50MA zone). Hold 3-8 weeks.';
                       } else if (isSwing) {
-                        label = 'SWING'; fg = 'var(--cyan)';
-                        bg = 'rgba(0,212,255,0.12)'; border = '1px solid rgba(0,212,255,0.3)';
+                        label = 'SWING'; bg = '#00d4ff';
                         title = 'Swing entry — RS≥70, above 50MA, momentum≥50, breakout/near-high/volume surge. Hold 2-10 days.';
                       } else {
-                        // Fallback — use the currently viewed mode so every card shows a tag
                         const fb = mode === 'position' ? 'POSITION' : mode === 'swing' ? 'SWING' : 'SETUP';
-                        label = fb; fg = 'var(--text3)';
-                        bg = 'rgba(160,174,192,0.12)'; border = '1px solid rgba(160,174,192,0.25)';
+                        label = fb; bg = '#8888bb';
                         title = 'Setup candidate (matches current view mode).';
                       }
-                      return <span className="ts-setup-badge" style={{background:bg,color:fg,border}} title={title}>{label}</span>;
+                      return <span className="ts-setup-badge" style={{background:bg,color:'#000'}} title={title}>{label}</span>;
                     })()}
                     {s.vcpForming && <span className="ts-signal-tag" style={{background:'rgba(196,77,255,0.1)',color:'var(--purple)',border:'1px solid rgba(196,77,255,0.3)'}}>VCP{s.vcpCount ? ` ${s.vcpCount}x`:''}</span>}
                     {s.rsLineNewHigh && <span className="ts-signal-tag" style={{background:'rgba(255,215,0,0.12)',color:'var(--gold)',border:'1px solid rgba(255,215,0,0.3)'}}>RS New High</span>}
