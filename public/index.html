@@ -932,9 +932,16 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
             </div>
           )}
           {chartData?.meta?.timeframe !== '39min' && chartData?.meta?.todayLive && (
-            <div className="chart-legend-item" title={`Today's bar synthesized from ${chartData.meta.todayLiveBar?.barCount||0} intraday 5-min bars. Auto-refreshes every 60s during market hours.`}>
+            <div className="chart-legend-item" title={`Today's bar synthesized from ${chartData.meta.todayLiveBar?.barCount||0} regular-session 5-min bars (9:30–16:00 ET; pre/after-hours excluded). Auto-refreshes every 60s during market hours.`}>
               <div className="chart-legend-dot" style={{background:'#00e676',boxShadow:'0 0 6px #00e676',animation:'pulse 1.5s ease-in-out infinite'}}/>
-              <span style={{color:'#00e676',fontWeight:700,letterSpacing:0.5}}>LIVE ${chartData.meta.todayLiveBar?.close?.toFixed(2)}</span>
+              <span style={{color:'#00e676',fontWeight:700,letterSpacing:0.5}}>
+                LIVE ${chartData.meta.todayLiveBar?.close?.toFixed(2)}
+                {chartData.meta.todayLiveBar?.volume > 0 && (
+                  <span style={{color:'#8888bb',fontWeight:500,marginLeft:6}}>
+                    · V {fmtVol(chartData.meta.todayLiveBar.volume)}
+                  </span>
+                )}
+              </span>
             </div>
           )}
         </div>

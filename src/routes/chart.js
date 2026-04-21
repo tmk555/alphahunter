@@ -16,13 +16,43 @@ function isMarketOpenOrRecent() {
   return mins >= 9 * 60 + 30 && mins <= 16 * 60 + 30;
 }
 
+// ─── Regular-session ET filter ─────────────────────────────────────────────
+// Polygon's /v2/aggs minute endpoint returns bars for the full trading day
+// INCLUDING pre-market (04:00–09:30 ET) and after-hours (16:00–20:00 ET).
+// Without this filter, buildTodayLiveBar would sum extended-hours volume
+// into the daily bar, producing visually-wrong "volume spikes" on the chart
+// (today's bar ~20–40% higher than regular-session volume) and a corrupt
+// open (4 AM pre-market print) / close (8 PM after-hours print).
+//
+// Yahoo's intraday provider already passes includePrePost=false so Yahoo bars
+// rarely need filtering, but applying this universally is both safe and cheap.
+function barEtMinutes(b) {
+  // Every provider returns a bar.timestamp in ms epoch. Convert to ET minutes-of-day.
+  if (!b || typeof b.timestamp !== 'number') return null;
+  const d = new Date(b.timestamp);
+  const etString = d.toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+  const m = etString.match(/(\d+):(\d+):/);
+  if (!m) return null;
+  return (+m[1]) * 60 + (+m[2]);
+}
+function isRegularSessionBar(b) {
+  const mins = barEtMinutes(b);
+  if (mins == null) return true; // fail-open — never drop a bar we can't classify
+  // 9:30 ET (570) ≤ start < 16:00 ET (960). The last regular 5-min bar starts at 15:55.
+  return mins >= 570 && mins < 960;
+}
+
 // ─── Build today's "in-progress" daily bar from 5-min intraday bars ─────────
 // Returns null if market is closed / no intraday data available.
 async function buildTodayLiveBar(symbol) {
   try {
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-    const bars = await getIntradayBars(symbol, 'minute', 5, today, today);
-    if (!bars || bars.length === 0) return null;
+    const rawBars = await getIntradayBars(symbol, 'minute', 5, today, today);
+    if (!rawBars || rawBars.length === 0) return null;
+    // Filter to regular session (9:30–16:00 ET) so pre/after-hours don't
+    // contaminate the synthesized daily bar. See barEtMinutes note above.
+    const bars = rawBars.filter(isRegularSessionBar);
+    if (bars.length === 0) return null;
     const open  = bars[0].open;
     const close = bars[bars.length - 1].close;
     let high = -Infinity, low = Infinity, volume = 0;
@@ -32,7 +62,12 @@ async function buildTodayLiveBar(symbol) {
       volume += b.volume || 0;
     }
     if (!isFinite(high) || !isFinite(low)) return null;
-    return { date: today, open, high, low, close, volume, _live: true, barCount: bars.length };
+    return {
+      date: today, open, high, low, close, volume,
+      _live: true,
+      barCount: bars.length,
+      rawBarCount: rawBars.length,  // for debugging: how many bars got filtered
+    };
   } catch (_) {
     return null;
   }
