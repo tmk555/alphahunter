@@ -357,9 +357,21 @@ function setIfChanged(setter, refObj, key, newVal) {
 }
 
 async function api(path, opts = {}) {
-  const r = await fetch(path, opts);
-  if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || `HTTP ${r.status}`); }
-  return r.json();
+  // Default 45s timeout so a stuck backend (e.g. Yahoo crumb re-auth storm) can
+  // never produce an infinite UI spinner. Callers may pass opts.timeout to override.
+  const timeoutMs = opts.timeout || 45000;
+  const ctrl = new AbortController();
+  const tid = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(path, { ...opts, signal: ctrl.signal });
+    if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || `HTTP ${r.status}`); }
+    return r.json();
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error(`Request timeout after ${Math.round(timeoutMs/1000)}s — try again`);
+    throw e;
+  } finally {
+    clearTimeout(tid);
+  }
 }
 
 async function askClaude(prompt, systemPrompt = '', useWebSearch = false) {

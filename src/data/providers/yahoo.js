@@ -6,23 +6,30 @@ let yhCrumb = null, yhCookie = null;
 
 async function getYahooCrumb() {
   if (yhCrumb && yhCookie) return { crumb: yhCrumb, cookie: yhCookie };
+  // 15s hard cap on each Yahoo auth hop — if fc.yahoo.com or query2 is slow we
+  // used to hang the caller indefinitely (rs-scan / macro would spin until
+  // the browser timed out). Now we fail fast and the user sees a real error.
+  const TIMEOUT_MS = 15000;
   try {
     const r1 = await fetch('https://fc.yahoo.com', {
       headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' }, redirect: 'follow',
+      timeout: TIMEOUT_MS,
     });
     const m = (r1.headers.get('set-cookie') || '').match(/A3=[^;]+/);
     yhCookie = m ? m[0] : '';
   } catch (_) {
-    const r1 = await fetch('https://finance.yahoo.com', { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const r1 = await fetch('https://finance.yahoo.com', { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: TIMEOUT_MS });
     yhCookie = r1.headers.get('set-cookie') || '';
   }
   const r2 = await fetch('https://query2.finance.yahoo.com/v1/test/getcrumb', {
     headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 'Cookie': yhCookie },
+    timeout: TIMEOUT_MS,
   });
   yhCrumb = await r2.text();
   if (!yhCrumb || yhCrumb.includes('<') || yhCrumb.length > 20) {
     const r3 = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0)', 'Cookie': yhCookie },
+      timeout: TIMEOUT_MS,
     });
     yhCrumb = await r3.text();
   }
