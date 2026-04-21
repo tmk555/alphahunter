@@ -1110,13 +1110,21 @@ function App() {
       {/* TICKER BAR */}
       <div id="ticker-bar">
         {tickerData.length === 0 && <span className="muted" style={{fontSize:11}}>Click LOAD DATA to fetch live market data</span>}
-        {tickerData.map(t => (
-          <div className="ticker-item" key={t.symbol}>
-            <span className="ticker-sym">{t.name || t.symbol}</span>
-            <span className="ticker-price">{t.symbol==='^VIX'?fmt(t.price,1):`$${fmt(t.price,t.price>100?0:2)}`}</span>
-            <span className={fmtC(t.chg1d)}>{fmtP(t.chg1d)}</span>
-          </div>
-        ))}
+        {tickerData.map(t => {
+          // Yahoo serves ETFs in real-time but CME futures and CBOE VIX are
+          // exchange-delayed 10-15 min for non-subscribers. Mark the delayed
+          // rows so the tape doesn't silently lie about freshness.
+          const isDelayed = t.symbol === 'ES=F' || t.symbol === 'NQ=F' || t.symbol === 'RTY=F' || t.symbol === '^VIX';
+          return (
+            <div className="ticker-item" key={t.symbol}
+                 title={isDelayed ? 'Delayed ~10-15 min (Yahoo public feed — CME/CBOE policy for non-subscribers)' : 'Real-time quote'}>
+              <span className="ticker-sym">{t.name || t.symbol}</span>
+              <span className="ticker-price">{t.symbol==='^VIX'?fmt(t.price,1):`$${fmt(t.price,t.price>100?0:2)}`}</span>
+              <span className={fmtC(t.chg1d)}>{fmtP(t.chg1d)}</span>
+              {isDelayed && <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)',marginLeft:2}}>~10m</span>}
+            </div>
+          );
+        })}
         {isLive && <span style={{marginLeft:'auto',fontSize:10,color:'var(--green)',fontFamily:'var(--font-mono)'}}>
           <span className="status-dot status-live"/>{new Date().toLocaleTimeString()}
         </span>}
