@@ -105,6 +105,17 @@ async function withFallbackOrdered(orderedProviders, operation, methodMap) {
 // IEX-only (~2% of volume), which can slightly lag the consolidated tape on
 // less-liquid names. Yahoo's free quote is consolidated and sufficient for
 // scanner/dashboard use. Alpaca remains history-only for the 9-year bar depth.
+// Helper: does this provider accept this symbol? Providers that have
+// declared a `supportsSymbol` filter get consulted; ones without default to
+// "yes" (the legacy providers — e.g. Yahoo — that accept everything we throw
+// at them). Used to skip mismatched symbols BEFORE making an API call so
+// bogus 400s don't trip the circuit breaker.
+function providerAcceptsSymbol(mod, symbol) {
+  if (!symbol) return true;
+  if (typeof mod.supportsSymbol !== 'function') return true;
+  return mod.supportsSymbol(symbol);
+}
+
 async function getQuotes(symbols) {
   const { data } = await withFallback(`quote(${symbols.length} symbols)`, (mod, key) => {
     if (key === 'polygon') return () => mod.polygonQuote(symbols);
@@ -119,6 +130,11 @@ async function getQuotes(symbols) {
 
 async function getHistory(symbol) {
   const { data } = await withFallback(`history(${symbol})`, (mod, key) => {
+    // Skip providers whose symbol filter says they can't serve this ticker.
+    // Returning null here (not throwing) means the manager moves on without
+    // incrementing the circuit breaker — critical for symbols like ^VIX /
+    // NQ=F that only Yahoo handles.
+    if (!providerAcceptsSymbol(mod, symbol)) return null;
     if (key === 'polygon') return () => mod.polygonHistory(symbol);
     if (key === 'alpaca')  return () => mod.alpacaHistory(symbol);
     if (key === 'yahoo') return () => mod.yahooHistory(symbol);
@@ -159,6 +175,7 @@ async function getHistoryFull(symbol, { minBars, preferConsolidatedVolume = fals
 
   if (!minBars) {
     const { data } = await withFallbackOrdered(orderedProviders, `historyFull(${symbol})`, (mod, key) => {
+      if (!providerAcceptsSymbol(mod, symbol)) return null;  // don't trip CB on unsupported symbols
       if (key === 'polygon') return () => mod.polygonHistoryFull(symbol);
       if (key === 'alpaca')  return () => mod.alpacaHistoryFull(symbol);
       if (key === 'yahoo') return () => mod.yahooHistoryFull(symbol);
@@ -180,6 +197,7 @@ async function getHistoryFull(symbol, { minBars, preferConsolidatedVolume = fals
     const mod = provider.module();
     if (provider.key !== 'yahoo' && provider.key !== 'polygon' && mod.isConfigured && !mod.isConfigured()) continue;
     if (provider.key === 'polygon' && mod.isConfigured && !mod.isConfigured()) continue;
+    if (!providerAcceptsSymbol(mod, symbol)) continue;  // skip unsupported symbols, don't trip CB
 
     let method;
     if (provider.key === 'polygon')          method = () => mod.polygonHistoryFull(symbol);
@@ -218,6 +236,7 @@ async function getFundamentals(symbol) {
 // Polygon primary, Yahoo fallback (free)
 async function getIntradayBars(symbol, timespan = 'minute', multiplier = 5, from, to) {
   const { data } = await withFallback(`intraday(${symbol} ${multiplier}${timespan})`, (mod, key) => {
+    if (!providerAcceptsSymbol(mod, symbol)) return null;  // don't trip CB on unsupported symbols
     if (key === 'polygon' && mod.polygonIntradayBars) {
       return () => mod.polygonIntradayBars(symbol, timespan, multiplier, from, to);
     }

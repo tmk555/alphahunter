@@ -35,6 +35,25 @@ function getConfig() {
 
 function isConfigured() { return getConfig().configured; }
 
+// ─── Symbol support ────────────────────────────────────────────────────────
+// Alpaca's market-data endpoints only cover US equities. Yahoo-convention
+// symbols for indices (^VIX, ^TNX, ^IRX, ^SPX, ^GSPC), futures (ES=F, NQ=F,
+// RTY=F), and FX pairs (EURUSD=X) all return HTTP 400 "invalid symbol". If
+// those failures flow through to the manager, three in a row trip the
+// circuit breaker and disable Alpaca for 5 minutes — starving EVERY other
+// symbol (AVGO, COHR, …) of Alpaca as a data source.
+//
+// Exposing a fast negative check means the manager skips Alpaca for these
+// symbols WITHOUT recording a failure, keeping the circuit breaker calibrated
+// to real API health rather than symbol-format mismatches.
+function supportsSymbol(symbol) {
+  if (!symbol || typeof symbol !== 'string') return false;
+  if (symbol.startsWith('^')) return false;     // Yahoo index symbols
+  if (symbol.includes('='))   return false;     // Yahoo futures (=F) and FX (=X)
+  if (/-USD$|-USDT$/i.test(symbol)) return false; // crypto spot pairs
+  return true;
+}
+
 function headers() {
   const { key, secret } = getConfig();
   return {
@@ -272,6 +291,7 @@ async function alpacaQuote(symbols) {
 
 module.exports = {
   isConfigured,
+  supportsSymbol,
   alpacaQuote,
   alpacaHistory,
   alpacaHistoryFull,

@@ -479,6 +479,14 @@ module.exports = function () {
             close: +liveBar.close.toFixed(2),
             volume: liveBar.volume,
             barCount: liveBar.barCount,
+            // Exposed for verification: rawBarCount is how many 5-min bars
+            // the provider returned (may include pre-market / after-hours);
+            // barCount is what survived the regular-session filter. When
+            // barCount < rawBarCount, the filter is actively trimming
+            // extended-hours volume out of today's daily bar. Visible in
+            // the /api/chart/:symbol response so the frontend (or a DevTools
+            // peek) can confirm the fix is live.
+            rawBarCount: liveBar.rawBarCount,
           };
         }
       }

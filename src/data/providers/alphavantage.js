@@ -101,4 +101,15 @@ function isConfigured() {
   return !!API_KEY();
 }
 
-module.exports = { avQuote, avHistory, avHistoryFull, isConfigured };
+// Alpha Vantage's GLOBAL_QUOTE / TIME_SERIES_DAILY endpoints cover equities
+// and ETFs. Indices/futures/FX/crypto need different endpoints, which we
+// don't wire up — skip those symbols so they don't trip the circuit breaker.
+function supportsSymbol(symbol) {
+  if (!symbol || typeof symbol !== 'string') return false;
+  if (symbol.startsWith('^')) return false;
+  if (symbol.includes('='))   return false;
+  if (/-USD$|-USDT$/i.test(symbol)) return false;
+  return true;
+}
+
+module.exports = { avQuote, avHistory, avHistoryFull, isConfigured, supportsSymbol };

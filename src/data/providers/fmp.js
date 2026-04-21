@@ -89,4 +89,15 @@ function isConfigured() {
   return !!API_KEY();
 }
 
-module.exports = { fmpQuote, fmpHistory, fmpHistoryFull, isConfigured };
+// FMP serves US equities natively. Yahoo-style indices/futures/FX/crypto
+// symbols either don't resolve or take a different endpoint — skip them
+// upstream so bad symbols don't trip the manager's circuit breaker.
+function supportsSymbol(symbol) {
+  if (!symbol || typeof symbol !== 'string') return false;
+  if (symbol.startsWith('^')) return false;
+  if (symbol.includes('='))   return false;
+  if (/-USD$|-USDT$/i.test(symbol)) return false;
+  return true;
+}
+
+module.exports = { fmpQuote, fmpHistory, fmpHistoryFull, isConfigured, supportsSymbol };

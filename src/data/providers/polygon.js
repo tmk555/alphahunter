@@ -13,6 +13,19 @@ function ensureKey() {
   if (!API_KEY()) throw new Error('POLYGON_API_KEY not configured');
 }
 
+// Polygon uses prefix conventions: "I:SPX" for indices, "C:EURUSD" for FX,
+// and equity tickers bare. Yahoo-style "^VIX" / "NQ=F" won't resolve here,
+// so we skip them upstream rather than making API calls that 404 and trip
+// the manager's circuit breaker. Crypto pairs like "BTC-USD" also aren't
+// served by these equity/index endpoints.
+function supportsSymbol(symbol) {
+  if (!symbol || typeof symbol !== 'string') return false;
+  if (symbol.startsWith('^')) return false;     // Yahoo index syntax (use I:SPX upstream instead)
+  if (symbol.includes('='))   return false;     // Yahoo futures (=F) / FX (=X)
+  if (/-USD$|-USDT$/i.test(symbol)) return false; // crypto spot pairs
+  return true;
+}
+
 function dateStr(d) { return d.toISOString().slice(0, 10); }
 function twoYearsAgo() {
   const d = new Date(); d.setFullYear(d.getFullYear() - 2); return dateStr(d);
@@ -267,6 +280,7 @@ async function polygonFundamentals(symbol) {
 
 module.exports = {
   isConfigured,
+  supportsSymbol,
   polygonQuote,
   polygonHistory,
   polygonHistoryFull,
