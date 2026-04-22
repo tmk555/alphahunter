@@ -174,9 +174,13 @@ function createPyramidPlan({
   pivot = +(+pivot).toFixed(2);
 
   // ── Stop fallback ──
+  // Preference order: user override → pattern-structural stop → 2.5×ATR below
+  // pivot (matches stopATR 2.5 in MODE_OVERRIDES.position) → 5% floor.
   const stop = stopOverride != null
     ? +(+stopOverride).toFixed(2)
-    : +(pivot * 0.95).toFixed(2);  // 5% below pivot if no pattern stop
+    : atr
+      ? +Math.min(pivot * 0.95, pivot - 2.5 * atr).toFixed(2)
+      : +(pivot * 0.95).toFixed(2);
 
   if (stop >= pivot) {
     throw new Error(`Stop ($${stop}) must be below pivot ($${pivot})`);
@@ -185,18 +189,19 @@ function createPyramidPlan({
   // ── Add triggers ──
   const { add1, add2 } = computeAddTriggers(pivot, atr);
 
-  // ── Exit targets — ATR-based ladder (matches splitTranchesForScaleOut logic) ──
-  // Each tranche exits at a PROGRESSIVELY HIGHER target:
-  //   Pilot  exits at target1  = pivot + 2.5 × ATR  (or 2.5% floor) — ~2.5R
-  //   Add1   exits at target2  = pivot + 4.0 × ATR  (or 4% floor)   — ~4R
-  //   Add2   exits at runner   = pivot + 8.0 × ATR  (effectively unreachable —
-  //                               trailing stop takes the runner via scaling.js)
-  // Locking in profits incrementally = the whole point of "scale out". The
-  // runner's TP is deliberately far so the trailing stop is the real exit.
+  // ── Exit targets — aligned with MODE_OVERRIDES.position in replay.js ──
+  // Each tranche exits at a progressively higher target:
+  //   Pilot  exits at target1 = pivot + 3.5 × ATR   (or 3.5% floor) — ~3.5R
+  //   Add1   exits at target2 = pivot + 7.0 × ATR   (or 7%   floor) — ~7R
+  //   Add2   exits at runner  = pivot + 10.0 × ATR  (deliberately far —
+  //                             trailing stop takes the runner via scaling.js)
+  // Numbers match src/signals/replay.js MODE_OVERRIDES.position
+  // (target1ATR 3.5, target2ATR 7.0) so the backtest, the preview dialog,
+  // and the live plan all agree. If you change these, update both files.
   const effectiveAtr = atr || pivot * 0.02;
-  const target1 = t1Override || +Math.max(pivot * 1.025, pivot + 2.5 * effectiveAtr).toFixed(2);
-  const target2 = t2Override || +Math.max(pivot * 1.04,  pivot + 4.0 * effectiveAtr).toFixed(2);
-  const runnerTarget       = +Math.max(pivot * 1.08,  pivot + 8.0 * effectiveAtr).toFixed(2);
+  const target1 = t1Override || +Math.max(pivot * 1.035, pivot + 3.5  * effectiveAtr).toFixed(2);
+  const target2 = t2Override || +Math.max(pivot * 1.07,  pivot + 7.0  * effectiveAtr).toFixed(2);
+  const runnerTarget       = +Math.max(pivot * 1.10,  pivot + 10.0 * effectiveAtr).toFixed(2);
 
   // ── Split qty into 3 tranches. Runner gets remainder so rounding never
   //    loses shares. For qty < 3 we fall back to a single pilot (degenerate).

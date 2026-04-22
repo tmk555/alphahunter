@@ -2087,48 +2087,40 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
   const ma200 = s.ma200;
   const isCustomEntry = customEntryPrice != null && customEntryPrice > 0 && customEntryPrice !== s.price;
 
-  // ── STOP LOSS — structural support + volatility calibrated ──────────────────
+  // ── STOPS & TARGETS — aligned with MODE_OVERRIDES in src/signals/replay.js ──
   //
-  // SWING (tight — 2-10 days):
-  //   Stop = 50MA minus 0.5×ATR (just below the moving average, tight)
-  //   Rationale: swing trade requires fast exit if MA breaks. 0.5×ATR avoids
-  //   random intraday noise but exits quickly on a real breakdown.
+  // SWING (full-in / full-out, 10-day cadence):
+  //   Stop   = entry − 1.0×ATR
+  //   Target = entry + 1.5×ATR (T1) / 2.5×ATR (T2)
   //
-  // POSITION (wider — 3-8 weeks):
-  //   Stop = 50MA minus 1.5×ATR (further below MA, gives more room)
-  //   Rationale: position trade can handle a brief dip below 50MA. We want
-  //   to stay in if it's a shakeout. Exit only on a decisive breakdown.
+  // POSITION (pyramid ⅓-⅓-⅓ entry + scale-out ladder exit, 40-day cadence):
+  //   Stop   = entry − 2.5×ATR
+  //   Target = entry + 3.5×ATR (T1) / 7.0×ATR (T2)
   //
-  // Both use 50MA as the STRUCTURAL reference (not arbitrary % of price).
-  // 50MA is where institutions re-accumulate on pullbacks — it's the real floor.
-  // If 50MA is more than 15% below price (very extended), fall back to ATR only.
+  // 50MA is shown as a structural reference but NOT used as the stop anchor —
+  // that kept the UI preview disagreeing with the backtest / staged order. If
+  // you change these multipliers, also update computeTradeSetup() in
+  // src/signals/candidates.js and MODE_OVERRIDES in src/signals/replay.js.
 
-  const ma50Buffer  = ma50 && ma50 > price * 0.85 ? ma50 : null; // 50MA usable if < 15% away
-  const swingStop   = ma50Buffer
-    ? +(ma50Buffer - 0.5 * atr).toFixed(2)   // 50MA minus half ATR
-    : +(price - 1.5 * atr).toFixed(2);        // fallback: 1.5×ATR from price
-  const posStop     = ma50Buffer
-    ? +(ma50Buffer - 1.5 * atr).toFixed(2)   // 50MA minus 1.5 ATR (wider)
-    : +(price - 2.5 * atr).toFixed(2);        // fallback: 2.5×ATR from price
+  const swingStop   = +(price - 1.0 * atr).toFixed(2);
+  const posStop     = +(price - 2.5 * atr).toFixed(2);
 
-  // Swing is ALWAYS tighter than position (correct — swing exits fast, position holds)
   const isCustomStop = customStopPrice != null && customStopPrice > 0 && customStopPrice < price;
   const stop        = isCustomStop ? +customStopPrice : swingStop;
-  const stopReason  = isCustomStop
-    ? 'Custom stop (manual override)'
-    : ma50Buffer ? `50MA $${ma50?.toFixed(2)} - 0.5×ATR` : '1.5×ATR (50MA too far)';
-  const posStopRsn  = ma50Buffer ? `50MA $${ma50?.toFixed(2)} - 1.5×ATR` : '2.5×ATR (50MA too far)';
+  const stopReason  = isCustomStop ? 'Custom stop (manual override)' : '1.0×ATR below entry';
+  const posStopRsn  = '2.5×ATR below entry';
+  const ma50Note    = ma50 && ma50 > 0 ? `50MA $${ma50.toFixed(2)} (${((price-ma50)/price*100).toFixed(1)}% away)` : '';
 
-  const t1      = +(price + 2.5 * atr).toFixed(2);
-  const t2      = +(price + 4.0 * atr).toFixed(2);
+  const t1      = +(price + 1.5 * atr).toFixed(2);   // swing T1
+  const t2      = +(price + 2.5 * atr).toFixed(2);   // swing T2
   const risk    = price - stop;
   const rr      = risk > 0 ? +((t1 - price) / risk).toFixed(1) : 0;
   const stopPct = risk > 0 ? ((risk/price)*100).toFixed(1) : '?';
 
   const effectivePosStop = isCustomStop ? +customStopPrice : posStop;
   const posRisk    = price - effectivePosStop;
-  const posT1      = +(price + 3.0 * atr).toFixed(2);
-  const posT2      = +(price + 5.0 * atr).toFixed(2);
+  const posT1      = +(price + 3.5 * atr).toFixed(2); // position T1
+  const posT2      = +(price + 7.0 * atr).toFixed(2); // position T2
   const posRR      = posRisk > 0 ? +((posT1-price)/posRisk).toFixed(1) : 0;
   const posStopPct = posRisk > 0 ? ((posRisk/price)*100).toFixed(1) : '?';
 
@@ -2142,23 +2134,25 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
   return (
     <div>
       <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:8}}>
-        <div style={{fontSize:10,color:'var(--amber)',fontWeight:700,alignSelf:'center',minWidth:60}}>⚡ SWING</div>
-        <Cell label={isCustomEntry ? "Entry (custom)" : "Entry"}  val={`$${price?.toFixed(2)}`}         color={isCustomEntry ? "var(--cyan)" : "var(--cyan)"}/>
-        <Cell label={isCustomStop ? "Stop (custom)" : "Stop"}  val={`$${stop} (-${stopPct}%)`}       color="var(--red)"/>
-        <Cell label="Target 1" val={`$${t1}`}                      color="var(--green)"/>
-        <Cell label="Target 2" val={`$${t2}`}                      color="var(--green)"/>
+        <div style={{fontSize:10,color:'var(--amber)',fontWeight:700,alignSelf:'center',minWidth:60}} title="10-day cadence · full-in / full-out · stop 1.0×ATR · T1 1.5×ATR · T2 2.5×ATR">⚡ SWING</div>
+        <Cell label={isCustomEntry ? "Entry (custom)" : "Entry"}  val={`$${price?.toFixed(2)}`}         color="var(--cyan)"/>
+        <Cell label={isCustomStop ? "Stop (custom)" : `Stop: ${stopReason}`}  val={`$${stop} (-${stopPct}%)`}       color="var(--red)"/>
+        <Cell label="Target 1 (1.5×ATR)" val={`$${t1}`}                      color="var(--green)"/>
+        <Cell label="Target 2 (2.5×ATR)" val={`$${t2}`}                      color="var(--green)"/>
         <Cell label="R/R"    val={`${rr.toFixed(1)}:1`}            color={rr>=2?'var(--green)':'var(--amber)'}/>
         <Cell label="ATR"    val={`$${atr.toFixed(2)} (${s.atrPct}%)`} color="var(--text3)"/>
       </div>
       {s.vsMA200 > 0 && (
         <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:6}}>
-          <div style={{fontSize:10,color:'var(--green)',fontWeight:700,alignSelf:'center',minWidth:60}}>📈 POSITION</div>
+          <div style={{fontSize:10,color:'var(--green)',fontWeight:700,alignSelf:'center',minWidth:60}} title="40-day cadence · pyramid ⅓-⅓-⅓ entry · scale-out ladder · stop 2.5×ATR · T1 3.5×ATR · T2 7×ATR">📈 POSITION</div>
           <Cell label="Entry zone" val={`$${(price*0.995).toFixed(2)}–$${(price*1.01).toFixed(2)}`} color="var(--cyan)"/>
           <Cell label={isCustomStop ? 'Stop: custom' : `Stop: ${posStopRsn}`} val={`$${effectivePosStop} (-${posStopPct}%)`}                                  color="var(--red)"/>
-          <Cell label="Target 1"   val={`$${posT1}`}                                                  color="var(--green)"/>
+          <Cell label="Target 1 (3.5×ATR)" val={`$${posT1}`}                                                  color="var(--green)"/>
+          <Cell label="Target 2 (7×ATR)"   val={`$${posT2}`}                                                  color="var(--green)"/>
           <Cell label="R/R"        val={`${posRR}:1`}                                                 color={posRR>=2?'var(--green)':'var(--amber)'}/>
         </div>
       )}
+      {ma50Note && <div style={{fontSize:10,color:'var(--text3)',marginBottom:6}} title="Structural reference only — no longer used as the stop anchor. Stops are pure ATR-based to match the backtest preset.">{ma50Note}</div>}
       <div style={{fontSize:10,color:'var(--text3)'}}>
         IBD RS: <strong style={{color:'var(--text)'}}>{s.rsRank}</strong> ·
         SwingMom: <strong style={{color:'var(--text)'}}>{s.swingMomentum}</strong> ·
@@ -7605,7 +7599,7 @@ function AlphaPerformanceSection() {
           equity,
           cashFlow: 0,
           openPositions: openTrades.length,
-          heatPct: status?.heat?.heatPct || 0,
+          heatPct: status?.heat?.heatPct || 0,  // source of truth — matches src/risk/portfolio.js
         }),
       });
       load();
@@ -8031,17 +8025,21 @@ function PortfolioTab() {
 
           {/* Top Metrics Row */}
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12,marginBottom:14}}>
-            {/* Portfolio Heat */}
+            {/* Portfolio Heat — backend ships { heatPct, totalDollarRisk, positionCount, maxHeat }
+                 (see src/risk/portfolio.js:getPortfolioHeat). Earlier this block used
+                 totalHeatPct / positionsAtRisk — neither exists on the response, so both
+                 silently read undefined and displayed 0 / 0. */}
             <div className="panel" style={{padding:14}}>
               <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>PORTFOLIO HEAT</div>
-              <div style={{fontSize:36,fontWeight:800,color:heatColor(status.heat?.totalHeatPct||0),fontFamily:'var(--font-mono)'}}>
-                {fmt(status.heat?.totalHeatPct||0,1)}%
+              <div style={{fontSize:36,fontWeight:800,color:heatColor(status.heat?.heatPct||0),fontFamily:'var(--font-mono)'}}>
+                {fmt(status.heat?.heatPct||0,2)}%
               </div>
               <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
-                of {fmt(config?.maxPortfolioHeat||8,0)}% max · {status.heat?.positionsAtRisk||0} positions at risk
+                ${Number(status.heat?.totalDollarRisk||0).toLocaleString(undefined,{maximumFractionDigits:0})} at risk
+                · {status.heat?.positionCount||0} positions · max {fmt(config?.maxPortfolioHeat||8,0)}%
               </div>
               <div style={{marginTop:8,height:6,background:'var(--bg3)',borderRadius:3,overflow:'hidden'}}>
-                <div style={{height:'100%',width:`${Math.min((status.heat?.totalHeatPct||0)/(config?.maxPortfolioHeat||8)*100,100)}%`,background:heatColor(status.heat?.totalHeatPct||0),borderRadius:3,transition:'width 0.3s'}}/>
+                <div style={{height:'100%',width:`${Math.min((status.heat?.heatPct||0)/(config?.maxPortfolioHeat||8)*100,100)}%`,background:heatColor(status.heat?.heatPct||0),borderRadius:3,transition:'width 0.3s'}}/>
               </div>
             </div>
 

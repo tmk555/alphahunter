@@ -30,32 +30,49 @@ function isPositionCandidate(s) {
 }
 
 // Algorithmic trade setup (pure price math, no API)
+//
+// ATR multipliers below are the single source of truth for what the UI shows
+// AND what gets written to staged_orders (staging.js parses these strings back
+// into numeric prices). They match MODE_OVERRIDES in src/signals/replay.js so
+// the preview a trader sees is the same configuration the backtest validated.
+//
+//   Swing   : holdDays 10,  stop 1.0×ATR,  T1 1.5×ATR,  T2 2.5×ATR
+//             (full-in / full-out; short-term momentum cadence)
+//   Position: holdDays 40,  stop 2.5×ATR,  T1 3.5×ATR,  T2 7.0×ATR
+//             (pyramid entry ⅓-⅓-⅓ + scale-out ladder — tuned from the
+//              4-mode × 4-window sweep; see commit cce08aa)
+//
+// If you change a multiplier here, change MODE_OVERRIDES in replay.js too.
+const SWING_STOP_ATR = 1.0, SWING_T1_ATR = 1.5, SWING_T2_ATR = 2.5;
+const POS_STOP_ATR   = 2.5, POS_T1_ATR   = 3.5, POS_T2_ATR   = 7.0;
+
 function computeTradeSetup(stock, mode) {
   const price = stock.price;
   const atr   = stock.atr || (price * 0.02);
   const ma50  = stock.ma50;
 
-  let entryLow, entryHigh, stopLevel, target1, target2;
+  let entryLow, entryHigh, stopLevel, target1, target2, stopMult;
 
   if (mode === 'swing') {
-    // Swing: enter near current price, tight stop
+    // Swing: enter near current price, tight 1.0×ATR stop
     entryLow  = +(price * 0.998).toFixed(2);
     entryHigh = +(price * 1.005).toFixed(2);
-    stopLevel = +(entryLow - 1.5 * atr).toFixed(2);
-    target1   = +(entryLow + 2.5 * atr).toFixed(2);
-    target2   = +(entryLow + 4.0 * atr).toFixed(2);
+    stopMult  = SWING_STOP_ATR;
+    stopLevel = +(entryLow - SWING_STOP_ATR * atr).toFixed(2);
+    target1   = +(entryLow + SWING_T1_ATR   * atr).toFixed(2);
+    target2   = +(entryLow + SWING_T2_ATR   * atr).toFixed(2);
   } else {
-    // Position: entry on pullback to 50MA area, not at current price
-    // If price is already near 50MA (within 3%), use current price
-    // Otherwise, the ideal entry is a pullback to the 50MA zone
-    const nearMA50 = ma50 && Math.abs(price - ma50) / price < 0.03;
+    // Position: entry at pullback to 50MA zone (or current price if we're
+    // already within 3% of 50MA). Stop is 2.5×ATR below entry — wider to
+    // survive normal trend-following retracements on a 40-day cadence.
+    const nearMA50   = ma50 && Math.abs(price - ma50) / price < 0.03;
     const pivotEntry = nearMA50 ? price : (ma50 ? +(ma50 * 1.002).toFixed(2) : price);
     entryLow  = +(pivotEntry * 0.995).toFixed(2);
     entryHigh = +(pivotEntry * 1.010).toFixed(2);
-    stopLevel = ma50 ? +Math.max(ma50 * 0.975, entryLow - 2 * atr).toFixed(2)
-                     : +(entryLow - 2 * atr).toFixed(2);
-    target1   = +(entryLow + 3.0 * atr).toFixed(2);
-    target2   = +(entryLow + 5.0 * atr).toFixed(2);
+    stopMult  = POS_STOP_ATR;
+    stopLevel = +(entryLow - POS_STOP_ATR * atr).toFixed(2);
+    target1   = +(entryLow + POS_T1_ATR   * atr).toFixed(2);
+    target2   = +(entryLow + POS_T2_ATR   * atr).toFixed(2);
   }
 
   const risk   = entryLow - stopLevel;
@@ -64,7 +81,7 @@ function computeTradeSetup(stock, mode) {
 
   return {
     entryZone:  `$${entryLow} – $${entryHigh}`,
-    stopLevel:  `$${stopLevel} (${mode === 'swing' ? '1.5' : '2'}× ATR below entry)`,
+    stopLevel:  `$${stopLevel} (${stopMult}× ATR below entry)`,
     target1:    `$${target1}`,
     target2:    `$${target2}`,
     riskReward: `${rr}:1`,

@@ -74,9 +74,10 @@ module.exports = function(runScan) {
       const pace = await getVolumePace(ticker.toUpperCase());
 
       // ATR-based exit targets — mirror createPyramidPlan logic
-      const target1 = +Math.max(pivot * 1.025, pivot + 2.5 * atr).toFixed(2);
-      const target2 = +Math.max(pivot * 1.04,  pivot + 4.0 * atr).toFixed(2);
-      const runner  = +Math.max(pivot * 1.08,  pivot + 8.0 * atr).toFixed(2);
+      // Position preset: T1 3.5×ATR, T2 7×ATR, runner 10×ATR (trailing stop handles)
+      const target1 = +Math.max(pivot * 1.035, pivot + 3.5  * atr).toFixed(2);
+      const target2 = +Math.max(pivot * 1.07,  pivot + 7.0  * atr).toFixed(2);
+      const runner  = +Math.max(pivot * 1.10,  pivot + 10.0 * atr).toFixed(2);
       const riskDist = pivot - stop;
       const t1R = riskDist > 0 ? +((target1 - pivot) / riskDist).toFixed(2) : 0;
       const t2R = riskDist > 0 ? +((target2 - pivot) / riskDist).toFixed(2) : 0;
