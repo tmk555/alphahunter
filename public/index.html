@@ -1089,8 +1089,27 @@ function App() {
     setScannerTarget(ticker);
     setTab('rs');
   }, []);
+  const navigateToTrading = useCallback(() => setTab('trading'), []);
   // Expose globally so all tab components can call it without prop drilling
-  useEffect(() => { window.navigateToScanner = navigateToScanner; return () => { delete window.navigateToScanner; }; }, [navigateToScanner]);
+  useEffect(() => {
+    window.navigateToScanner  = navigateToScanner;
+    window.navigateToTrading  = navigateToTrading;
+    return () => { delete window.navigateToScanner; delete window.navigateToTrading; };
+  }, [navigateToScanner, navigateToTrading]);
+
+  // Global toast — replaces alert() across all tabs. Supports an optional
+  // action button (e.g. "Open Trading →") for flows that want to nudge the
+  // user forward. Back-compat: 3rd arg can be a boolean (isError) or an
+  // options object ({ isError, action: { label, onClick } }).
+  const [toast, setToast] = useState(null);
+  const showToast = useCallback((title, body, optsOrIsError) => {
+    const opts = typeof optsOrIsError === 'boolean' ? { isError: optsOrIsError } : (optsOrIsError || {});
+    const { isError = false, action = null } = opts;
+    const duration = action ? 9000 : 5000;
+    setToast({ title, body, isError, action });
+    setTimeout(() => setToast(cur => (cur && cur.title === title ? null : cur)), duration);
+  }, []);
+  useEffect(() => { window.showToast = showToast; return () => { delete window.showToast; }; }, [showToast]);
 
   // Delegated click: any .td-ticker span anywhere → navigate to Scanner + auto-expand.
   // Works across all tabs AND within the RS tab's own sub-tables (RS history,
@@ -1304,6 +1323,22 @@ function App() {
         {tab==='telemetry'  && <TelemetryTab />}
         {tab==='settings'   && <SettingsTab />}
       </div>
+
+      {/* Global toast — visible on every tab, used by all staging flows */}
+      {toast && (
+        <div className={`ts-toast${toast.isError?' ts-toast-error':''}`} style={{zIndex:10000}}>
+          <button className="ts-toast-close" onClick={() => setToast(null)}>x</button>
+          <div className="ts-toast-title" style={{color:toast.isError?'var(--red)':'var(--green)'}}>{toast.title}</div>
+          <div className="ts-toast-body" style={{whiteSpace:'pre-line'}}>{toast.body}</div>
+          {toast.action && (
+            <button
+              style={{marginTop:10,padding:'5px 12px',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:0.8,background:'var(--cyan)',color:'#000',border:'none',borderRadius:3,cursor:'pointer'}}
+              onClick={() => { toast.action.onClick?.(); setToast(null); }}>
+              {toast.action.label} →
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -3105,11 +3140,16 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
         const totalQty = Math.max(3, Math.floor((riskPerTrade * 3) / pilotRisk));
 
         const pace = preview.volumePaceNow?.pace != null ? ` (live pace ${preview.volumePaceNow.pace}x)` : '';
-        const patternDesc = preview.pattern ? `${preview.pattern.name} (conf ${preview.pattern.confidence}%)` : 'manual pivot';
+        const conf = preview.pattern?.confidence;
+        const confQuality = c => c == null ? '' : c >= 75 ? ' — STRONG' : c >= 60 ? ' — moderate' : ' — WEAK, consider manual pivot';
+        const patternDesc = preview.pattern
+          ? `${preview.pattern.name} (conf ${conf}%${confQuality(conf)})`
+          : 'manual pivot';
         const t = preview.targets || {};
         const confirm = window.confirm(
           `🔺 PYRAMID PLAN — ${ticker}\n\n` +
-          `Pattern: ${patternDesc}\n\n` +
+          `Pattern: ${patternDesc}\n` +
+          `Confidence score: higher = more trustworthy (≥75 strong, 60–74 ok, <60 weak).\n\n` +
           `ENTRIES\n` +
           `  Pilot trigger:  $${preview.triggers.pilot}  (+${preview.pilotDistPct}% from current $${preview.price})\n` +
           `  Add 1 trigger:  $${preview.triggers.add1}\n` +
@@ -3131,7 +3171,11 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({ ticker, totalQty, pivot: customEntry || undefined, stopPrice: customStop || undefined }),
         });
-        alert(`🔺 Pyramid plan #${r.id} created for ${r.symbol}.\n\nPilot waits at $${preview.triggers.pilot}.\nWatch Trading tab for fire notifications.`);
+        window.showToast?.(
+          `🔺 PYRAMID PLAN #${r.id} — ${r.symbol}`,
+          `Pattern: ${patternDesc}\nPilot waits at $${preview.triggers.pilot}. Watch Trading tab for fire notifications.`,
+          { action: { label: 'Open Trading', onClick: () => window.navigateToTrading?.() } }
+        );
         if (customEntry) setCustomEntryPrices(prev => { const n = {...prev}; delete n[ticker]; return n; });
         if (customStop)  setCustomStopPrices(prev => { const n = {...prev}; delete n[ticker]; return n; });
         setRsStaging(null);
@@ -3716,7 +3760,6 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
   const [scoutLoading, setScoutLoading] = useState(false);
   const [expandedCard, setExpandedCard] = useState(null);
   const [picksLimit, setPicksLimit] = useState(12);
-  const [toast, setToast] = useState(null);
   const [addModal, setAddModal] = useState(null);
   const [addSector, setAddSector] = useState('Technology');
 
@@ -3785,24 +3828,89 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
   // handled client-side by displayPicks — no refetch needed.
   useEffect(() => { loadPicks(); }, [rsLoaded]);
 
-  // Toast-based staging (replaces alert/prompt)
-  function showToast(title, body, isError) {
-    setToast({ title, body, isError });
-    setTimeout(() => setToast(null), 5000);
+  // Thin wrapper around the App-level toast — defined globally so other tabs
+  // can show it from any flow. Back-compat: 3rd arg can be isError boolean or
+  // an options object { isError, action: { label, onClick } }.
+  const showToast = (title, body, opts) => window.showToast?.(title, body, opts);
+
+  // Confidence-quality hint — higher = more trustworthy pattern detection.
+  // Thresholds match scanner's pattern-scoring scale: 75+ very strong,
+  // 60–74 moderate (acceptable), <60 weak (consider manual pivot).
+  function confQuality(conf) {
+    if (conf == null) return '';
+    if (conf >= 75) return ' — STRONG';
+    if (conf >= 60) return ' — moderate';
+    return ' — WEAK, consider manual pivot';
   }
 
   async function stageFromSetup(ticker, stageMode, e) {
     if (e) e.stopPropagation();
     setStaging(ticker);
     try {
+      // ── Pyramid path: preview + confirm + create plan. Mirrors Scanner and
+      // Pipeline behavior so that selecting "🔺 Pyramid Auto" in the Trade
+      // Setups dropdown actually produces a pyramid plan (not a single bracket
+      // labeled pyramid_auto). Blocks staging when no chart pattern is detected.
+      if (exitStrategy === 'pyramid_auto') {
+        const preview = await api('/api/pyramid-plans/preview', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ ticker }),
+        });
+        if (!preview.ok) {
+          showToast(
+            `CANNOT PYRAMID: ${ticker}`,
+            `${preview.error}\n\nPyramid entries need a detected chart pattern (VCP, cup, ascending base, power play, HTF). Switch Entry/Exit Mode to "Full / Scale Out" — or stage from the Scanner with a manual pivot.`,
+            true
+          );
+          setStaging(null); return;
+        }
+        const riskPerTrade = 1000;
+        const pilotRisk = preview.triggers.pilot - preview.stop;
+        const totalQty = Math.max(3, Math.floor((riskPerTrade * 3) / pilotRisk));
+        const conf = preview.pattern?.confidence;
+        const patternDesc = preview.pattern
+          ? `${preview.pattern.name} (conf ${conf}%${confQuality(conf)})`
+          : 'manual pivot';
+        const t = preview.targets || {};
+        const confirm = window.confirm(
+          `🔺 PYRAMID PLAN — ${ticker}\n\n` +
+          `Pattern: ${patternDesc}\n` +
+          `Confidence score: higher = more trustworthy (≥75 strong, 60–74 ok, <60 weak).\n\n` +
+          `ENTRIES\n` +
+          `  Pilot: $${preview.triggers.pilot}  (+${preview.pilotDistPct}% from $${preview.price})\n` +
+          `  Add 1: $${preview.triggers.add1}\n` +
+          `  Add 2: $${preview.triggers.add2}\n\n` +
+          `EXITS\n` +
+          `  Pilot → T1: $${t.pilotTp||'—'} (~${t.t1R||0}R)\n` +
+          `  Add 1 → T2: $${t.add1Tp||'—'} (~${t.t2R||0}R)\n` +
+          `  Add 2 → Runner: $${t.add2Tp||'—'} (trailing)\n` +
+          `  Stop: $${preview.stop} (-${preview.stopDistPct}%)\n\n` +
+          `Total qty: ${totalQty} shares (⅓ each tranche).\n\n` +
+          `Confirm create pyramid plan?`
+        );
+        if (!confirm) { setStaging(null); return; }
+        const r = await api('/api/pyramid-plans', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ ticker, totalQty }),
+        });
+        showToast(
+          `🔺 PYRAMID PLAN #${r.id} — ${r.symbol}`,
+          `Pattern: ${patternDesc}\nPilot waits at $${preview.triggers.pilot}. Watch Trading tab for fire notifications.`,
+          { action: { label: 'Open Trading', onClick: () => window.navigateToTrading?.() } }
+        );
+        setStaging(null); return;
+      }
+
+      // ── Standard staging path (full_in_scale_out / full_in_full_out) ────
       const r = await api('/api/staging/from-setup', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ ticker, mode: stageMode || mode, exitStrategy }),
       });
-      const label = exitStrategy.includes('scale_in') ? 'pilot' : 'full';
+      const label = exitStrategy === 'full_in_scale_out' ? 'Full → Scale' : 'Full → Full';
       showToast(
         `STAGED: ${r.staged?.symbol}`,
-        `${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk (${label}). Go to Trading tab to submit.`
+        `${r.sizing?.shares} shares, $${r.sizing?.dollarRisk?.toFixed(0)} risk (${label}).`,
+        { action: { label: 'Open Trading', onClick: () => window.navigateToTrading?.() } }
       );
     } catch(e) { showToast('Stage failed', e.message, true); }
     setStaging(null);
@@ -3965,7 +4073,7 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
 
         <div className="ts-toolbar-sep" />
 
-        <span className="ts-toolbar-label">Exit</span>
+        <span className="ts-toolbar-label" title="How positions are entered and exited. Pyramid = staggered ⅓-⅓-⅓ entries with per-tranche exits. Full→Scale = single entry, 3-way exit. Full→Full = single entry, single exit.">Entry/Exit Mode</span>
         <select className="ts-exit-select" value={exitStrategy} onChange={e => setExitStrategy(e.target.value)}>
           <option value="pyramid_auto">🔺 Pyramid Auto (default)</option>
           <option value="full_in_scale_out">Full / Scale Out</option>
@@ -4447,13 +4555,8 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
       <PicksHistoryPanel />
 
       {/* ── TOAST (replaces alert) ── */}
-      {toast && (
-        <div className={`ts-toast${toast.isError?' ts-toast-error':''}`}>
-          <button className="ts-toast-close" onClick={() => setToast(null)}>x</button>
-          <div className="ts-toast-title" style={{color:toast.isError?'var(--red)':'var(--green)'}}>{toast.title}</div>
-          <div className="ts-toast-body">{toast.body}</div>
-        </div>
-      )}
+      {/* (Toast rendered globally at App level — supports cross-tab visibility
+           and an optional action button like "Open Trading →".) */}
 
       {/* ── ADD TO UNIVERSE MODAL (replaces prompt) ── */}
       {addModal && (
@@ -5485,11 +5588,16 @@ function WatchlistTab({ rsData }) {
         const riskPerTrade = 1000;
         const pilotRisk = preview.triggers.pilot - preview.stop;
         const totalQty = Math.max(3, Math.floor((riskPerTrade * 3) / pilotRisk));
-        const patternDesc = preview.pattern ? `${preview.pattern.name} (conf ${preview.pattern.confidence}%)` : 'manual pivot';
+        const conf = preview.pattern?.confidence;
+        const confQuality = c => c == null ? '' : c >= 75 ? ' — STRONG' : c >= 60 ? ' — moderate' : ' — WEAK, consider manual pivot';
+        const patternDesc = preview.pattern
+          ? `${preview.pattern.name} (conf ${conf}%${confQuality(conf)})`
+          : 'manual pivot';
         const t = preview.targets || {};
         const confirm = window.confirm(
           `🔺 PYRAMID PLAN — ${ticker}\n\n` +
-          `Pattern: ${patternDesc}\n\n` +
+          `Pattern: ${patternDesc}\n` +
+          `Confidence score: higher = more trustworthy (≥75 strong, 60–74 ok, <60 weak).\n\n` +
           `ENTRIES\n` +
           `  Pilot trigger:  $${preview.triggers.pilot}  (+${preview.pilotDistPct}% from $${preview.price})\n` +
           `  Add 1 trigger:  $${preview.triggers.add1}\n` +
@@ -5507,7 +5615,11 @@ function WatchlistTab({ rsData }) {
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({ ticker, totalQty }),
         });
-        alert(`🔺 Pyramid plan #${r.id} created for ${r.symbol}.\nPilot waits at $${preview.triggers.pilot}.`);
+        window.showToast?.(
+          `🔺 PYRAMID PLAN #${r.id} — ${r.symbol}`,
+          `Pattern: ${patternDesc}\nPilot waits at $${preview.triggers.pilot}.`,
+          { action: { label: 'Open Trading', onClick: () => window.navigateToTrading?.() } }
+        );
         setStaging(null);
         return;
       }
