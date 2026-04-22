@@ -1092,15 +1092,13 @@ function App() {
   // Expose globally so all tab components can call it without prop drilling
   useEffect(() => { window.navigateToScanner = navigateToScanner; return () => { delete window.navigateToScanner; }; }, [navigateToScanner]);
 
-  // Delegated click: any .td-ticker span anywhere → navigate to Scanner
-  const tabRef = useRef(tab);
-  tabRef.current = tab;
+  // Delegated click: any .td-ticker span anywhere → navigate to Scanner + auto-expand.
+  // Works across all tabs AND within the RS tab's own sub-tables (RS history,
+  // sector/industry history) so the main scanner row is always the destination.
   useEffect(() => {
     function handleTickerClick(e) {
       const el = e.target.closest('.td-ticker');
       if (!el) return;
-      // Don't navigate if already on Scanner tab (let native row-expand work)
-      if (tabRef.current === 'rs') return;
       const ticker = (el.textContent || '').trim().toUpperCase();
       if (ticker && /^[A-Z]{1,6}$/.test(ticker)) {
         e.preventDefault();
