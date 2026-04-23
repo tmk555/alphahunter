@@ -7,7 +7,7 @@ const { isSwingCandidate, isPositionCandidate, computeTradeSetup } = require('./
 const { calcConviction, evaluateConvictionOverride } = require('./conviction');
 const { getRSTrend } = require('./rs');
 const { loadHistory, RS_HISTORY, SEC_HISTORY } = require('../data/store');
-const { computeRotation } = require('./rotation');
+const { computeRotation, computeIndustryRotation, getIndustryTilt } = require('./rotation');
 const { getMarketRegime } = require('../risk/regime');
 const { getDB } = require('../data/database');
 
@@ -15,7 +15,12 @@ const { getDB } = require('../data/database');
 // (shape returned by src/scanner.runRSScan) — conviction needs the raw rows.
 // `sectorEtfs` is optional — when provided, sector rotation is folded into
 // convictionScore (matches the legacy Top Picks engine).
-async function runDeepScan({ stocks, mode = 'both', sectorEtfs = null } = {}) {
+// `industryEtfs` is the array from universe.INDUSTRY_ETFS (`{t,n,sec}` shape).
+// When provided, industry rotation is computed as a secondary tilt on top
+// of sector rotation — a stock in a leading industry within a leading
+// sector gets both boosts stacked ("leading industry in a leading sector"
+// is IBD's classic alpha signal).
+async function runDeepScan({ stocks, mode = 'both', sectorEtfs = null, industryEtfs = null } = {}) {
   if (!Array.isArray(stocks) || !stocks.length) {
     return { results: [], regime: null, candidates: 0, totalInput: 0, convictionOverrides: [] };
   }
@@ -23,10 +28,24 @@ async function runDeepScan({ stocks, mode = 'both', sectorEtfs = null } = {}) {
   const filter = mode === 'swing' ? isSwingCandidate
                : mode === 'position' ? isPositionCandidate
                : (s) => isSwingCandidate(s) || isPositionCandidate(s);
+
+  // Attach rsTrend BEFORE filtering. The scanner (runRSScan) does NOT put
+  // rsTrend on its output rows — it's only added inside scan_results
+  // persistence and ETF scans. Without this step here, every filter call
+  // sees `s.rsTrend === undefined` and the `rsRising` / `rsRisingMonth`
+  // checks collapse to false, returning 0 candidates for every mode.
+  // This was the root cause of "Deep Scan shows 0 results in Position mode".
+  let rsHistory = null;
+  try { rsHistory = loadHistory(RS_HISTORY); } catch (_) {}
+  const withTrend = stocks.map(s => ({
+    ...s,
+    rsTrend: s.rsTrend || (rsHistory ? getRSTrend(s.ticker, rsHistory) : null),
+  }));
+
   // Tag each stock with which filter(s) it passed so the UI can render a
   // SWING / POSITION / BOTH badge per card (and the scheduler brief can pick
   // the right tradeType without re-evaluating the filters).
-  const tagged = stocks.map(s => {
+  const tagged = withTrend.map(s => {
     const isSwing = isSwingCandidate(s);
     const isPos   = isPositionCandidate(s);
     const tradeTypes = [];
@@ -40,6 +59,7 @@ async function runDeepScan({ stocks, mode = 'both', sectorEtfs = null } = {}) {
   // Sector rotation — absorbed from the legacy Top Picks engine so the
   // unified scan factors industry leadership into convictionScore.
   let rotationModel = null;
+  let industryRotationModel = null;
   try {
     if (sectorEtfs) {
       const { runETFScan } = require('../scanner');
@@ -48,8 +68,23 @@ async function runDeepScan({ stocks, mode = 'both', sectorEtfs = null } = {}) {
     }
   } catch (_) { /* rotation is additive; carry on without it */ }
 
-  let rsHistory = null;
-  try { rsHistory = loadHistory(RS_HISTORY); } catch (_) {}
+  // Industry rotation — secondary signal on top of sector rotation.
+  // Ranks the 27 industry ETFs (SMH, IGV, ITA, GRID, JETS, IYT, XHB, etc.)
+  // and boosts stocks whose industry ETF is leading within a leading sector.
+  // Smaller magnitude than sector tilt (±8% vs ±15%) because industry is
+  // a narrower cut — we don't want a noisy industry rank overriding a
+  // clean sector signal.
+  try {
+    if (industryEtfs && industryEtfs.length) {
+      const { runETFScan } = require('../scanner');
+      // Reuse the sector ETF history store — runETFScan just needs a writable
+      // history slot, and industry ETFs don't collide with sector tickers.
+      const industryData = await runETFScan(industryEtfs, SEC_HISTORY, 'IND_');
+      industryRotationModel = computeIndustryRotation(industryEtfs, industryData);
+    }
+  } catch (_) { /* industry rotation is additive; carry on without it */ }
+
+  // rsHistory already loaded above (used for the pre-filter rsTrend attach).
 
   const results = candidates.map(s => {
     let rsTrend = s.rsTrend || null;
@@ -58,18 +93,20 @@ async function runDeepScan({ stocks, mode = 'both', sectorEtfs = null } = {}) {
     if (rsHistory) {
       try {
         rsTrend = rsTrend || getRSTrend(s.ticker, rsHistory);
-        const r = calcConviction(s, rsTrend, rotationModel);
+        const r = calcConviction(s, rsTrend, rotationModel, industryRotationModel);
         if (r.convictionScore != null) convictionScore = r.convictionScore;
         if (r.reasons) reasons = r.reasons;
       } catch (_) { /* fall back to whatever was on the stock */ }
     }
     const convictionOverride = evaluateConvictionOverride(s, convictionScore, regime);
+    const industryTilt = getIndustryTilt(s.sector, industryRotationModel);
     return {
       ...s,
       rsTrend,
       convictionScore,
       reasons,
       convictionOverride,
+      industryTilt,   // multiplier (0.92 | 1.0 | 1.08) — for UI badges / sizing
       tradeTypes: s.tradeTypes || [],
       swingSetup:    computeTradeSetup(s, 'swing'),
       positionSetup: computeTradeSetup(s, 'position'),
@@ -95,6 +132,8 @@ async function runDeepScan({ stocks, mode = 'both', sectorEtfs = null } = {}) {
     candidates: candidates.length,
     totalInput: stocks.length,
     convictionOverrides,
+    rotationModel,         // sector rotation (11 ETFs)
+    industryRotationModel, // industry rotation (27 ETFs, sub-sector tilt)
   };
 }
 
@@ -115,6 +154,7 @@ function persistDeepScan({ mode, results, regime, scannedCount, totalInput }) {
       ma50: r.ma50, ma200: r.ma200, ma150: r.ma150,
       convictionScore: r.convictionScore,
       convictionOverride: r.convictionOverride,
+      industryTilt: r.industryTilt,
       rsTrend: r.rsTrend,
       swingSetup: r.swingSetup,
       positionSetup: r.positionSetup,

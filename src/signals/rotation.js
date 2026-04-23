@@ -128,6 +128,120 @@ function getSectorTilt(sector, rotationModel) {
   return match?.sizeBoost || 1.0;
 }
 
+// ─── Industry Rotation ─────────────────────────────────────────────────────
+// Separate from sector rotation because the 27 industry ETFs (SMH, IGV, ITA,
+// GRID, JETS, IYT, XHB, etc.) would otherwise dilute the 11-sector ranking
+// ("top 3" becomes noisy when 35+ ETFs compete). Industry rotation is a
+// *secondary* signal: a stock in a leading SECTOR gets the primary boost;
+// a stock whose INDUSTRY ETF is ALSO leading within that sector gets an
+// additional boost (true "leading industry within a leading sector" = IBD's
+// classic bias).
+//
+// Input: array of { t, n, sec } from universe.INDUSTRY_ETFS + scan results
+// for those tickers from runETFScan.
+//
+// Output: { asOf, industries: [...] } where each industry entry knows its
+// parent sector so conviction scoring can check "same sector AND leading".
+
+function computeIndustryRotation(industryEtfDefs, industryScanResults) {
+  if (!industryEtfDefs?.length || !industryScanResults?.length) return null;
+
+  // Map industry ticker → definition (for parentSector lookup)
+  const defMap = {};
+  for (const d of industryEtfDefs) defMap[d.t] = d;
+
+  // Build ranked list from scan results that match our industry universe
+  const industries = industryScanResults
+    .filter(s => defMap[s.symbol])
+    .map(s => ({
+      etf:          s.symbol,
+      industry:     defMap[s.symbol].n,
+      parentSector: defMap[s.symbol].sec,
+      rsRank:       s.rsRank || 0,
+      chg1m:        s.chg1m || 0,
+      chg3m:        s.chg3m || 0,
+      stage:        s.stage || null,
+      vsMA50:       s.vsMA50 || 0,
+    }));
+
+  if (industries.length < 3) return null;
+
+  // Rank by 1m + 3m momentum (same weighting as sector rotation)
+  const sortedBy1m = [...industries].sort((a, b) => b.chg1m - a.chg1m);
+  const sortedBy3m = [...industries].sort((a, b) => b.chg3m - a.chg3m);
+  const rank1m = {}, rank3m = {};
+  for (let i = 0; i < sortedBy1m.length; i++) {
+    rank1m[sortedBy1m[i].etf] = ((sortedBy1m.length - i) / sortedBy1m.length) * 99;
+  }
+  for (let i = 0; i < sortedBy3m.length; i++) {
+    rank3m[sortedBy3m[i].etf] = ((sortedBy3m.length - i) / sortedBy3m.length) * 99;
+  }
+
+  for (const s of industries) {
+    s.compositeScore = +(
+      s.rsRank * 0.50 +
+      (rank1m[s.etf] || 50) * 0.30 +
+      (rank3m[s.etf] || 50) * 0.20
+    ).toFixed(1);
+  }
+  industries.sort((a, b) => b.compositeScore - a.compositeScore);
+
+  // Tier assignment — top 25% leading, bottom 25% lagging. Smaller boost
+  // than sector rotation because industry is a secondary signal.
+  const n = industries.length;
+  const leadingCount = Math.max(3, Math.floor(n / 4));
+  const laggingCount = Math.max(3, Math.floor(n / 4));
+  for (let i = 0; i < industries.length; i++) {
+    industries[i].rank = i + 1;
+    if (i < leadingCount) {
+      industries[i].tilt = 'leading';
+      industries[i].sizeBoost = 1.08;  // +8% (vs sector's +15%)
+    } else if (i >= n - laggingCount) {
+      industries[i].tilt = 'lagging';
+      industries[i].sizeBoost = 0.92;  // -8%
+    } else {
+      industries[i].tilt = 'neutral';
+      industries[i].sizeBoost = 1.0;
+    }
+  }
+
+  return {
+    asOf: new Date().toISOString().split('T')[0],
+    industries: industries.map(s => ({
+      etf:            s.etf,
+      industry:       s.industry,
+      parentSector:   s.parentSector,
+      rank:           s.rank,
+      rsRank:         s.rsRank,
+      chg1m:          s.chg1m,
+      chg3m:          s.chg3m,
+      compositeScore: s.compositeScore,
+      tilt:           s.tilt,
+      sizeBoost:      s.sizeBoost,
+      stage:          s.stage,
+      vsMA50:         s.vsMA50,
+    })),
+  };
+}
+
+// Lookup a stock's industry ETF tilt. Input: stock's sector (to constrain
+// which industries count — a GRID lead should boost Industrials stocks,
+// not Tech stocks). Returns the sizeBoost multiplier (1.0 if no match).
+//
+// Design note: a stock doesn't directly know its industry ETF; we infer
+// by parentSector match. This over-boosts (every Industrials stock gets
+// the GRID boost if GRID is leading), but it's a reasonable proxy until
+// universe.js gains explicit stock→industry mapping.
+function getIndustryTilt(sector, industryRotationModel) {
+  if (!industryRotationModel?.industries || !sector) return 1.0;
+  // Take the single best-tilted industry within the parent sector
+  const matches = industryRotationModel.industries.filter(i => i.parentSector === sector);
+  if (!matches.length) return 1.0;
+  // Return the best boost if at least one industry in this sector is leading
+  const best = matches.reduce((a, b) => a.sizeBoost > b.sizeBoost ? a : b);
+  return best.sizeBoost;
+}
+
 // ─── Historical sector rotation from rs_snapshots ───────────────────────────
 // Returns the last N days of sector ETF rankings for trend analysis.
 
@@ -163,4 +277,5 @@ function getSectorRotationHistory(days = 30) {
 module.exports = {
   SECTOR_ETF_MAP, SECTOR_TO_ETF,
   computeRotation, getSectorTilt, getSectorRotationHistory,
+  computeIndustryRotation, getIndustryTilt,
 };

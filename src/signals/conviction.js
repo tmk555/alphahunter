@@ -1,7 +1,7 @@
 // ─── Daily Picks conviction score formula ────────────────────────────────────
 // Ranks candidates by combined signal strength for automated daily picks
 
-function calcConviction(stock, rsTrend, rotationModel) {
+function calcConviction(stock, rsTrend, rotationModel, industryRotationModel = null) {
   const accel = rsTrend?.vs4w || 0;
   const sepa  = stock.sepaScore || 0;
   const sectorRs = stock.sectorRsRank || 50;
@@ -84,6 +84,22 @@ function calcConviction(stock, rsTrend, rotationModel) {
     }
   }
 
+  // Industry rotation tilt: secondary signal on top of sector rotation.
+  // Smaller magnitude (±3 vs sector's ±5/4) — we only boost the best industry
+  // within the stock's parent sector, so a stock in a leading INDUSTRY within
+  // a leading SECTOR stacks both bonuses (+5 sector + +3 industry = +8).
+  // This is IBD's "leading stock in a leading industry in a leading sector".
+  // (Reason is pushed later, after `reasons` is declared.)
+  let bestIndustryMatch = null;
+  if (industryRotationModel?.industries && stock.sector) {
+    const matches = industryRotationModel.industries.filter(i => i.parentSector === stock.sector);
+    if (matches.length) {
+      bestIndustryMatch = matches.reduce((a, b) => a.sizeBoost > b.sizeBoost ? a : b);
+      if (bestIndustryMatch.tilt === 'leading')      score += 3;
+      else if (bestIndustryMatch.tilt === 'lagging') score -= 2;
+    }
+  }
+
   // ─── Weinstein Stage scoring ────────────────────────────────────────────────
   // Stage 2 is THE buy stage — confirmed uptrend above rising 150MA. Every
   // other stage is worse. Stage 1 (basing) is neutral: the base could break
@@ -130,6 +146,11 @@ function calcConviction(stock, rsTrend, rotationModel) {
   else if (stg === 2) reasons.push('Stage 2 uptrend ✓');
   if (stg === 3) reasons.push('⚠ Stage 3 topping — 150MA flattening');
   if (stg === 4) reasons.push('⚠ Stage 4 downtrend — avoid longs');
+
+  // Industry leader reason (see industry rotation tilt block above)
+  if (bestIndustryMatch?.tilt === 'leading') {
+    reasons.push(`Leading industry: ${bestIndustryMatch.industry} (rank ${bestIndustryMatch.rank})`);
+  }
 
   return { convictionScore: +score.toFixed(1), reasons };
 }

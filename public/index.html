@@ -3108,17 +3108,70 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     return { label:'NEUTRAL', color:'var(--amber)' };
   }
 
-  // Auto-expand ticker when navigated from another tab
+  // Auto-expand ticker when navigated from another tab.
+  //
+  // Why this is more than a one-liner scrollIntoView:
+  //   The scanner table is filtered by minRS, sector focus, search, signal
+  //   chips, strategy filter, and universe-as-of. If the user clicks a
+  //   ticker from (say) the Alerts tab whose RS is 45 while minRS=50, the
+  //   row won't render at all — querySelector returns null and nothing
+  //   scrolls. We used to fail silently here. Now we:
+  //     1. Locate the target in rsData
+  //     2. Relax every filter that would exclude it (but only relax — don't
+  //        clobber unrelated filter state if the target already passes).
+  //     3. Expand the detail panel for that row.
+  //     4. Retry scrollIntoView with polling, because the filter relaxation
+  //        triggers a React re-render and the row DOM node appears on the
+  //        *next* tick, not synchronously.
+  //     5. Briefly flash the row so the user can see WHAT got selected,
+  //        especially when the landing position requires page-scroll.
   useEffect(() => {
-    if (scannerTarget) {
-      setExpandedTicker(scannerTarget);
-      clearScannerTarget();
-      // Scroll to the expanded row after render
-      setTimeout(() => {
-        const el = document.querySelector(`[data-ticker="${scannerTarget}"]`);
-        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }, 200);
+    if (!scannerTarget) return;
+    const targetUpper = String(scannerTarget).toUpperCase();
+
+    // Relax filters only if the target would otherwise be hidden.
+    const target = (rsData || []).find(s => (s.ticker || '').toUpperCase() === targetUpper);
+    if (target) {
+      if ((target.rsRank || 0) < minRS) setMinRS(0);
+      if (selectedSectors && selectedSectors.size > 0 && !selectedSectors.has(target.sector)) {
+        setSelectedSectors(new Set());
+      }
     }
+    // These filters we clear regardless — they're orthogonal to "show me this stock now."
+    if (searchQuery) setSearchQuery('');
+    if (sigFilters && sigFilters.length) setSigFilters([]);
+    if (asOfDate) setAsOfDate('');
+    if (strategyFilter) setStrategyFilter('');
+
+    setExpandedTicker(scannerTarget);
+
+    // Retry up to ~1.6s because filter relaxation → re-render happens async.
+    // Bails on first successful scroll OR after the cap. No flicker on success.
+    let attempts = 0;
+    const interval = setInterval(() => {
+      attempts++;
+      const el = document.querySelector(`[data-ticker="${targetUpper}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Flash a yellow-tint highlight for ~2s so the selected row stands
+        // out — matters especially when the user wasn't expecting the jump.
+        const prevBg = el.style.backgroundColor;
+        const prevTransition = el.style.transition;
+        el.style.transition = 'background-color 0.4s';
+        el.style.backgroundColor = 'rgba(255, 221, 51, 0.22)';
+        setTimeout(() => {
+          el.style.backgroundColor = prevBg;
+          el.style.transition = prevTransition;
+        }, 1800);
+        clearInterval(interval);
+        clearScannerTarget();
+      } else if (attempts >= 8) {
+        clearInterval(interval);
+        clearScannerTarget();
+      }
+    }, 200);
+
+    return () => clearInterval(interval);
   }, [scannerTarget]);
 
   // Strategy entry criteria (matches replay engine evaluateEntry)
@@ -8760,6 +8813,55 @@ function TradeJournalTab() {
 }
 
 // ─── SCHEDULER TAB (Tier 5 — Job Scheduler) ────────────────────────────────
+// ─── Scheduler job grouping ──────────────────────────────────────────────
+// Flat list of 20+ cron jobs is unreadable. These groups let the UI section
+// them into clear functional categories so a trader can see at a glance
+// which data-refresh / risk-check / cleanup jobs are wired up, and fire a
+// whole category with one click (e.g. "Run all data collection now" after
+// a provider outage recovery).
+// Any job_type NOT listed here falls into "Other" — that's intentional so
+// adding a new job type doesn't silently vanish; it shows up under Other
+// until we categorize it.
+const JOB_GROUPS = [
+  {
+    name: 'Data Collection',
+    color: 'var(--cyan)',
+    desc: 'Refresh prices, universe membership, broker fills',
+    types: ['rs_scan', 'watchlist_snapshot', 'broker_fills_sync', 'revision_scan'],
+  },
+  {
+    name: 'Analysis',
+    color: 'var(--green)',
+    desc: 'Deep scan, rotation, edge outcomes',
+    types: ['deep_scan', 'universe_reconstitute', 'edge_close_outcomes', 'vwap_gate_check', 'morning_brief', 'weekly_digest'],
+  },
+  {
+    name: 'Position Monitoring',
+    color: 'var(--amber)',
+    desc: 'Stops, pullbacks, pyramid + scale-in fills, conditional entries',
+    types: ['stop_monitor', 'pullback_watch', 'rotation_watch', 'pyramid_watch', 'conditional_entry_check', 'correlation_drift', 'scale_in_check'],
+  },
+  {
+    name: 'Risk & Reconcile',
+    color: 'var(--red)',
+    desc: 'Gap guard, journal vs broker reconcile, equity snapshot',
+    types: ['gap_guard', 'equity_snapshot', 'portfolio_reconcile'],
+  },
+  {
+    name: 'Cleanup',
+    color: 'var(--text3)',
+    desc: 'Expire stale orders, prune history tables',
+    types: ['expire_stale_orders', 'rs_history_cleanup', 'job_history_cleanup'],
+  },
+];
+// Reverse index for O(1) lookup of "which group does this type belong to?"
+const _JOB_TYPE_TO_GROUP = (() => {
+  const m = {};
+  for (const g of JOB_GROUPS) for (const t of g.types) m[t] = g.name;
+  return m;
+})();
+function groupForJobType(t) { return _JOB_TYPE_TO_GROUP[t] || 'Other'; }
+
 function SchedulerTab() {
   const [jobs, setJobs]         = useState([]);
   const [types, setTypes]       = useState({});
@@ -8771,6 +8873,14 @@ function SchedulerTab() {
   const [selectedJob, setSelectedJob] = useState(null);
   const [jobHistory, setJobHistory]   = useState([]);
   const [form, setForm] = useState({ name:'', description:'', job_type:'', cron_expression:'', config:'{}', enabled:true });
+  // Track which groups are currently running a bulk "Run All" so we can
+  // disable that group's button (prevents double-fire) and the group name
+  // above each section shows a spinner.
+  const [runningGroups, setRunningGroups] = useState(new Set());
+  // Collapse state per group. Defaults: everything expanded — but letting
+  // a user collapse "Cleanup" when they don't care is a big win on a screen
+  // with 20+ jobs.
+  const [collapsedGroups, setCollapsedGroups] = useState(new Set());
 
   async function loadAll() {
     setLoading(true); setError('');
@@ -8827,6 +8937,43 @@ function SchedulerTab() {
       loadAll();
       if (selectedJob === id) loadJobHistory(id);
     } catch(e) { setError(e.message); }
+  }
+
+  // Fire every ENABLED job in a group sequentially. We go serial (not parallel)
+  // because some handlers — rs_scan, deep_scan — take 1-3 min and share the
+  // provider quota; kicking them off simultaneously risks rate-limit 429s
+  // against Yahoo/FMP/Finnhub. One-at-a-time keeps the cascade well-behaved
+  // and makes the per-job error clearly attributable if any leg fails.
+  async function runGroup(groupName) {
+    const targets = jobs.filter(j => groupForJobType(j.job_type) === groupName && j.enabled);
+    if (!targets.length) {
+      setError(`No enabled jobs in "${groupName}" to run.`);
+      return;
+    }
+    setError('');
+    setRunningGroups(prev => { const n = new Set(prev); n.add(groupName); return n; });
+    const failures = [];
+    for (const j of targets) {
+      try {
+        const r = await api(`/api/scheduler/jobs/${j.id}/run`, { method: 'POST' });
+        if (r && r.error) failures.push(`${j.name}: ${r.error}`);
+      } catch (e) {
+        failures.push(`${j.name}: ${e.message}`);
+      }
+    }
+    setRunningGroups(prev => { const n = new Set(prev); n.delete(groupName); return n; });
+    if (failures.length) {
+      setError(`Ran ${targets.length - failures.length}/${targets.length} in "${groupName}". Failures:\n• ${failures.join('\n• ')}`);
+    }
+    loadAll();
+  }
+
+  function toggleGroupCollapsed(groupName) {
+    setCollapsedGroups(prev => {
+      const n = new Set(prev);
+      if (n.has(groupName)) n.delete(groupName); else n.add(groupName);
+      return n;
+    });
   }
 
   async function deleteJobById(id) {
@@ -8941,14 +9088,36 @@ function SchedulerTab() {
         </div>
       )}
 
-      {/* Jobs Table */}
+      {/* Jobs Table — grouped by functional category for scannability + bulk run */}
       <div className="panel">
         <div className="section-label">SCHEDULED JOBS</div>
         {jobs.length === 0 ? (
           <div style={{textAlign:'center',padding:30,color:'var(--text3)',fontSize:13}}>
             No jobs configured. Click <strong>SEED DEFAULTS</strong> to create recommended jobs.
           </div>
-        ) : (
+        ) : (() => {
+          // Bucket jobs by group. "Other" captures any job_type not in JOB_GROUPS
+          // so new handlers added later don't silently disappear from the UI.
+          const buckets = new Map();
+          for (const g of JOB_GROUPS) buckets.set(g.name, []);
+          buckets.set('Other', []);
+          for (const j of jobs) {
+            const grp = groupForJobType(j.job_type);
+            if (!buckets.has(grp)) buckets.set(grp, []);
+            buckets.get(grp).push(j);
+          }
+          // Sort groups: JOB_GROUPS order first, then Other last. Drop empties.
+          const orderedGroups = [
+            ...JOB_GROUPS.filter(g => buckets.get(g.name)?.length).map(g => ({ ...g, jobs: buckets.get(g.name) })),
+          ];
+          if ((buckets.get('Other') || []).length) {
+            orderedGroups.push({
+              name: 'Other', color: 'var(--text3)',
+              desc: 'Ungrouped job types — add to JOB_GROUPS in index.html to categorize',
+              jobs: buckets.get('Other'),
+            });
+          }
+          return (
           <table className="data-table">
             <thead>
               <tr>
@@ -8963,7 +9132,49 @@ function SchedulerTab() {
               </tr>
             </thead>
             <tbody>
-              {jobs.map(j => (
+              {orderedGroups.flatMap(group => {
+                const isCollapsed = collapsedGroups.has(group.name);
+                const isRunning = runningGroups.has(group.name);
+                const enabledCount = group.jobs.filter(j => j.enabled).length;
+                const header = (
+                  <tr key={`grp-${group.name}`} style={{background:'var(--bg2)'}}>
+                    <td colSpan={8} style={{padding:'8px 10px'}}>
+                      <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+                        <span onClick={() => toggleGroupCollapsed(group.name)}
+                              style={{cursor:'pointer',userSelect:'none',color:'var(--text3)',fontFamily:'var(--font-mono)',fontSize:11,minWidth:14}}>
+                          {isCollapsed ? '▸' : '▾'}
+                        </span>
+                        <span onClick={() => toggleGroupCollapsed(group.name)}
+                              style={{cursor:'pointer',userSelect:'none',color:group.color,fontWeight:700,fontSize:12,letterSpacing:1,fontFamily:'var(--font-mono)'}}>
+                          {group.name.toUpperCase()}
+                        </span>
+                        <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>
+                          ({enabledCount}/{group.jobs.length} enabled)
+                        </span>
+                        <span style={{fontSize:10,color:'var(--text3)',flex:1,fontFamily:'var(--font-sans)'}}>
+                          {group.desc}
+                        </span>
+                        <button
+                          onClick={() => runGroup(group.name)}
+                          disabled={isRunning || enabledCount === 0}
+                          title={enabledCount === 0 ? 'No enabled jobs in this group' : `Run all ${enabledCount} enabled job(s) sequentially`}
+                          style={{
+                            padding:'4px 12px',
+                            background: isRunning ? 'rgba(240,165,0,0.08)' : `rgba(240,165,0,${enabledCount === 0 ? 0.04 : 0.15})`,
+                            border: `1px solid ${enabledCount === 0 ? 'var(--border)' : 'var(--amber)'}`,
+                            borderRadius:3,
+                            color: enabledCount === 0 ? 'var(--text3)' : 'var(--amber)',
+                            cursor: isRunning || enabledCount === 0 ? 'not-allowed' : 'pointer',
+                            fontSize:10, fontWeight:700, fontFamily:'var(--font-mono)',
+                          }}>
+                          {isRunning ? 'RUNNING…' : `RUN ALL (${enabledCount})`}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+                if (isCollapsed) return [header];
+                return [header, ...group.jobs.map(j => (
                 <tr key={j.id} style={{cursor:'pointer',background:selectedJob===j.id?'var(--bg3)':'transparent'}}
                     onClick={()=>loadJobHistory(j.id)}>
                   <td>
@@ -9004,10 +9215,12 @@ function SchedulerTab() {
                     </div>
                   </td>
                 </tr>
-              ))}
+              ))];
+              })}
             </tbody>
           </table>
-        )}
+          );
+        })()}
       </div>
 
       {/* Job History Detail */}
@@ -11974,9 +12187,14 @@ function UniverseTrackingSection() {
                           borderRadius:3,fontSize:11,fontFamily:'var(--font-mono)',
                           opacity: removing === t ? 0.4 : 1,
                         }}>
-                          <span style={{color:'var(--text)'}}>{t}</span>
+                          {/* td-ticker class lets the app-wide delegated click
+                              handler (App → document.addEventListener) navigate
+                              to the Scanner tab and scroll to this row. Plain
+                              <span> here would swallow the click — we need the
+                              class for the global handler to match. */}
+                          <span className="td-ticker" title={`Open ${t} in Scanner`}>{t}</span>
                           <button
-                            onClick={() => removeSymbol(t, sector)}
+                            onClick={(e) => { e.stopPropagation(); removeSymbol(t, sector); }}
                             disabled={removing === t}
                             title={`Remove ${t} from universe`}
                             style={{

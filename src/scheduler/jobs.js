@@ -45,14 +45,32 @@ registerJobType('rs_scan', {
         )
         VALUES (?, ?, 'stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
+      // Backfill NULL columns on existing rows. The previous guard
+      // `WHERE ... AND price IS NULL` was too narrow — if a prior run wrote
+      // `price` but left `vs_ma50` / `vs_ma200` / `volume_ratio` NULL (as
+      // happened on 2026-04-23 when the scan's quote-cascade returned quotes
+      // without OHLCV-derived MAs), every subsequent run skipped the update
+      // and the null MA columns stayed sticky forever. That starved the
+      // Deep Scan's swing + position filters, which reject any row with
+      // NULL vsMA fields, and the UI silently showed "0 picks" in Position
+      // mode. Widening to "update when EITHER price OR vs_ma50 is still
+      // NULL" lets later runs heal the row as more data becomes available.
+      // COALESCE still preserves any non-null value a prior pass wrote.
       const updateNull = db().prepare(`
         UPDATE rs_snapshots
-        SET price = ?, rs_rank = COALESCE(rs_rank, ?), swing_momentum = COALESCE(swing_momentum, ?),
-            sepa_score = COALESCE(sepa_score, ?), stage = COALESCE(stage, ?),
-            vs_ma50 = COALESCE(vs_ma50, ?), vs_ma200 = COALESCE(vs_ma200, ?),
-            volume_ratio = COALESCE(volume_ratio, ?), vcp_forming = COALESCE(vcp_forming, ?),
-            rs_line_new_high = COALESCE(rs_line_new_high, ?), atr_pct = COALESCE(atr_pct, ?)
-        WHERE date = ? AND symbol = ? AND type = 'stock' AND price IS NULL
+        SET price            = COALESCE(price, ?),
+            rs_rank          = COALESCE(rs_rank, ?),
+            swing_momentum   = COALESCE(swing_momentum, ?),
+            sepa_score       = COALESCE(sepa_score, ?),
+            stage            = COALESCE(stage, ?),
+            vs_ma50          = COALESCE(vs_ma50, ?),
+            vs_ma200         = COALESCE(vs_ma200, ?),
+            volume_ratio     = COALESCE(volume_ratio, ?),
+            vcp_forming      = COALESCE(vcp_forming, ?),
+            rs_line_new_high = COALESCE(rs_line_new_high, ?),
+            atr_pct          = COALESCE(atr_pct, ?)
+        WHERE date = ? AND symbol = ? AND type = 'stock'
+          AND (price IS NULL OR vs_ma50 IS NULL OR vs_ma200 IS NULL OR volume_ratio IS NULL)
       `);
       const txn = db().transaction(() => {
         let count = 0;
@@ -62,15 +80,17 @@ registerJobType('rs_scan', {
             r.vcpForming ? 1 : 0, r.rsLineNewHigh ? 1 : 0, r.atrPct ?? null,
             r.rsRankWeekly ?? null, r.rsRankMonthly ?? null, r.rsTimeframeAlignment ?? null,
             r.volumeProfile?.upDownRatio50 ?? null, r.volumeProfile?.accumulation50 ?? null);
-          // Fill NULL prices on existing rows (from partial/crashed prior runs)
-          if (r.price != null) {
-            updateNull.run(r.price, r.rsRank ?? null, r.swingMomentum ?? null,
-              r.sepaScore ?? null, r.stage ?? null,
-              r.vsMA50 ?? null, r.vsMA200 ?? null,
-              r.volumeRatio ?? null, r.vcpForming ? 1 : 0,
-              r.rsLineNewHigh ? 1 : 0, r.atrPct ?? null,
-              date, r.ticker);
-          }
+          // Run the backfill update whenever the scan produced ANY new field
+          // worth merging — not just price. The broadened WHERE clause above
+          // means this is a no-op on already-complete rows.
+          updateNull.run(
+            r.price ?? null, r.rsRank ?? null, r.swingMomentum ?? null,
+            r.sepaScore ?? null, r.stage ?? null,
+            r.vsMA50 ?? null, r.vsMA200 ?? null,
+            r.volumeRatio ?? null, r.vcpForming ? 1 : 0,
+            r.rsLineNewHigh ? 1 : 0, r.atrPct ?? null,
+            date, r.ticker,
+          );
           count++;
         }
         return count;
@@ -294,10 +314,12 @@ registerJobType('universe_reconstitute', {
 // in-memory rs:full cache when hot, falls back to runRSScanFn() otherwise.
 
 let _sectorEtfs = null;
+let _industryEtfs = null;
 function setSectorEtfs(arr) { _sectorEtfs = arr; }
+function setIndustryEtfs(arr) { _industryEtfs = arr; }
 
 registerJobType('deep_scan', {
-  description: 'Populate deep_scan_cache with ranked picks (conviction + sector rotation + ATR levels)',
+  description: 'Populate deep_scan_cache with ranked picks (conviction + sector + industry rotation + ATR levels)',
   defaultConfig: { mode: 'both' },
   handler: async (config) => {
     const { runDeepScan, persistDeepScan } = require('../signals/deep-scan');
@@ -310,7 +332,11 @@ registerJobType('deep_scan', {
     }
 
     const mode = config.mode || 'both';
-    const scan = await runDeepScan({ stocks, mode, sectorEtfs: _sectorEtfs });
+    const scan = await runDeepScan({
+      stocks, mode,
+      sectorEtfs:   _sectorEtfs,
+      industryEtfs: _industryEtfs,
+    });
     persistDeepScan({
       mode, results: scan.results, regime: scan.regime,
       scannedCount: scan.candidates, totalInput: scan.totalInput,
@@ -1114,4 +1140,4 @@ function seedDefaultJobs() {
   return { seeded, skipped };
 }
 
-module.exports = { setRunScan, setSectorEtfs, seedDefaultJobs, DEFAULT_JOBS };
+module.exports = { setRunScan, setSectorEtfs, setIndustryEtfs, seedDefaultJobs, DEFAULT_JOBS };

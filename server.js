@@ -150,7 +150,7 @@ const alpacaConfig = require('./src/broker/alpaca').getConfig();
 
 // ─── Job Scheduler (Tier 5) ─────────────────────────────────────────────────
 const { startScheduler }                = require('./src/scheduler/engine');
-const { setRunScan, setSectorEtfs, seedDefaultJobs } = require('./src/scheduler/jobs');
+const { setRunScan, setSectorEtfs, setIndustryEtfs, seedDefaultJobs } = require('./src/scheduler/jobs');
 
 // ─── TLS — optional HTTPS listener ──────────────────────────────────────────
 // Runs in parallel with the plain HTTP listener so the app is reachable on
@@ -226,6 +226,7 @@ app.listen(PORT, () => {
   // Start job scheduler (Tier 5)
   setRunScan(runScan);
   setSectorEtfs(SECTOR_ETFS);
+  setIndustryEtfs(INDUSTRY_ETFS);
   // Seed default cron jobs on first boot — idempotent, skips anything
   // already present in scheduled_jobs. Must run BEFORE startScheduler so
   // the newly-inserted rows get picked up and scheduled in one pass.
