@@ -869,6 +869,22 @@ function initSchema() {
   safeAddColumn('trades', 'trail_tightened_at', 'TEXT');
   safeAddColumn('trades', 'trail_tightened_reason', 'TEXT');
 
+  // Pending-close tracking: when the user submits a LIMIT sell via the
+  // Exit button, the position ISN'T closed yet — the limit may or may not
+  // fill. These columns record the pending broker order id so fills-sync
+  // can reconcile the close when it fills, and so the UI can show
+  // "pending close" instead of pretending the trade is already closed.
+  // See src/routes/broker.js `/broker/close-position`.
+  safeAddColumn('trades', 'pending_close_order_id',    'TEXT');
+  safeAddColumn('trades', 'pending_close_submitted_at', 'TEXT');
+
+  // Idempotency key for the fills-sync sells loop. Without this, the same
+  // filled sell order in the 7-day window kept being re-applied to whatever
+  // orphan-reconciled row existed — producing dozens of ghost "closed" rows
+  // per real sell (DELL had 6 before this was added). Populated by
+  // src/broker/fills-sync.js when it closes a trade via auto_sync.
+  safeAddColumn('trades', 'exit_order_id', 'TEXT');
+
   // ─── Pyramid Plans ────────────────────────────────────────────────────────
   // True pyramiding entry — pilot fires at pivot, tranche 2 fires only after
   // pilot is filled AND price advances to confirmation trigger, tranche 3
@@ -969,6 +985,57 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_sigout_status ON signal_outcomes(status);
     CREATE INDEX IF NOT EXISTS idx_sigout_strategy ON signal_outcomes(strategy);
   `);
+
+  // ─── Stop-Move Audit Trail ──────────────────────────────────────────────
+  //
+  // Every broker-side stop adjustment is recorded here BEFORE the UI sees it.
+  // Previously `replaceStopsForSymbol` failures were caught and logged only
+  // to stderr — the user had no way to know the trailing stop never made it
+  // to the broker. This table makes the failure mode visible.
+  //
+  // status: 'success' when every listed stop leg was patched.
+  //         'partial' when some legs patched, others failed.
+  //         'no_op'   when isConfigured=false, or broker returned 0 stop legs.
+  //         'error'   when the whole call threw (network, auth, etc.).
+  //
+  // The diagnostic route /api/broker/stops/:symbol reads this + live broker
+  // state so the user can confirm DB desired stop == broker live stop.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS stop_moves (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      attempted_at TEXT NOT NULL DEFAULT (datetime('now')),
+      symbol TEXT NOT NULL,
+      trade_id INTEGER,
+      old_stop REAL,
+      new_stop REAL,
+      trigger_price REAL,
+      reason TEXT,
+      level TEXT,
+      legs_targeted INTEGER DEFAULT 0,
+      legs_patched INTEGER DEFAULT 0,
+      status TEXT NOT NULL,
+      error_message TEXT,
+      broker_response JSON
+    );
+    CREATE INDEX IF NOT EXISTS idx_stop_moves_symbol ON stop_moves(symbol, attempted_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_stop_moves_status ON stop_moves(status, attempted_at DESC);
+  `);
+
+  // ─── 39-min VWAP submission gate ──────────────────────────────────────────
+  // Staged orders opt-in to a VWAP-reclaim + gap-bounds gate. The gate watcher
+  // cron reads `submission_gate` JSON and only flips a row from pending_trigger
+  // → staged (ready to submit) when the first 39-minute candle closes above
+  // VWAP and the overnight gap is inside configured bounds.
+  safeAddColumn('staged_orders', 'submission_gate', 'JSON');
+
+  // ─── VWAP gate for pyramid pilot fires ────────────────────────────────────
+  // Same primitive as staged_orders.submission_gate but evaluated in the
+  // pyramid watcher at pilot-fire time. Pilot-only (adds are confirmation-
+  // driven and don't need a regime check). When non-null, the pilot stays
+  // armed until the 39-min candle has closed above VWAP. Soft fail: a failed
+  // tick just delays — the pilot retries on the next tick and fires as soon
+  // as the gate passes.
+  safeAddColumn('pyramid_plans', 'vwap_gate', 'JSON');
 }
 
 // One-time migration from legacy JSON files into SQLite

@@ -182,6 +182,92 @@ module.exports = function(db) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ─── Diagnostic: per-symbol stop reconciliation ────────────────────────
+  // Shows three things side-by-side so the user can confirm the trailing
+  // stop actually made it to the broker:
+  //   1. DB desired stops (from open `trades` rows for this symbol)
+  //   2. Live broker stop legs (filtered from listOrders)
+  //   3. Recent stop_moves audit rows for the symbol
+  //
+  // Flags mismatch when the broker's stop_price differs from the DB's
+  // stop_price by more than 1¢. This is the canonical endpoint to answer
+  // "did my stop move to breakeven after T1?"
+  router.get('/broker/stops/:symbol', async (req, res) => {
+    try {
+      const symbol = req.params.symbol.toUpperCase();
+      const tradeRows = db.prepare(
+        'SELECT id, stop_price, entry_price, target1, target2, remaining_shares, partial_exits FROM trades WHERE exit_date IS NULL AND symbol = ?'
+      ).all(symbol);
+
+      // Canonical desired stop = the scale-out row with populated stop_price.
+      // Other tranche rows may have NULL stops (data hygiene gap).
+      const desiredRow = tradeRows.find(r => r.stop_price != null) || null;
+      const desiredStop = desiredRow?.stop_price ?? null;
+
+      let liveLegs = [];
+      let brokerError = null;
+      try {
+        const open = await alpaca.listOrders({ status: 'open', symbol });
+        liveLegs = open
+          .filter(o => o.type === 'stop' || o.type === 'stop_limit')
+          .map(o => ({
+            id: o.id, symbol: o.symbol, type: o.type,
+            stop_price: +o.stop_price || null,
+            qty: +o.qty || 0, status: o.status,
+            submitted_at: o.submitted_at, updated_at: o.updated_at,
+          }));
+      } catch (e) {
+        brokerError = e.message;
+      }
+
+      const recentMoves = db.prepare(
+        'SELECT * FROM stop_moves WHERE symbol = ? ORDER BY attempted_at DESC LIMIT 20'
+      ).all(symbol);
+
+      // Reconciliation verdict
+      const driftCents = 1;
+      let verdict = 'unknown';
+      let mismatches = [];
+      if (brokerError) {
+        verdict = 'broker_error';
+      } else if (desiredStop == null) {
+        verdict = 'no_desired_stop';
+      } else if (!liveLegs.length) {
+        verdict = 'no_live_stop_legs';
+      } else {
+        mismatches = liveLegs.filter(
+          l => Math.abs((l.stop_price ?? 0) - desiredStop) * 100 > driftCents
+        );
+        verdict = mismatches.length === 0 ? 'in_sync' : 'out_of_sync';
+      }
+
+      res.json({
+        symbol,
+        verdict,
+        desiredStop,
+        desiredRow,
+        liveLegs,
+        liveLegCount: liveLegs.length,
+        mismatches,
+        brokerError,
+        recentMoves,
+        tradeRows,
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Stop-move audit log (unfiltered tail) ────────────────────────────
+  router.get('/broker/stop-moves', (req, res) => {
+    try {
+      const limit = Math.min(+req.query.limit || 50, 500);
+      const status = req.query.status || null;
+      const rows = status
+        ? db.prepare('SELECT * FROM stop_moves WHERE status = ? ORDER BY attempted_at DESC LIMIT ?').all(status, limit)
+        : db.prepare('SELECT * FROM stop_moves ORDER BY attempted_at DESC LIMIT ?').all(limit);
+      res.json({ rows, count: rows.length });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   router.post('/broker/orders', async (req, res) => {
     try {
       const { symbol, qty, side, type, time_in_force, limit_price, stop_price,
@@ -280,25 +366,43 @@ module.exports = function(db) {
   });
 
   // ─── Manual Close Position ─────────────────────────────────────────────────
+  // Two paths with very different correctness characteristics:
+  //
+  //   MARKET (no exitPrice)      — alpaca.closePosition() fills instantly on
+  //                                Alpaca's side. Safe to mark journal closed.
+  //   LIMIT  (exitPrice provided) — alpaca.submitOrder(..., type:'limit').
+  //                                Order MAY OR MAY NOT FILL. We MUST NOT
+  //                                mark journal closed until fills-sync sees
+  //                                the fill. The prior version of this route
+  //                                marked closed on submission — that's why
+  //                                "Exit" was leaving stuck positions when
+  //                                the limit didn't cross the spread.
+  //
+  // Contract: a broker submission failure is surfaced as HTTP 502, and the
+  // journal row is NOT touched. The UI must trust the response. Only a
+  // successful MARKET close mutates the trade row here.
   router.post('/broker/close-position', async (req, res) => {
     try {
       const { tradeId, symbol, shares, exitPrice, exitType = 'manual' } = req.body;
       if (!symbol) return res.status(400).json({ error: 'symbol is required' });
 
-      let brokerOrder = null;
-
       // 1. Cancel any open orders for this symbol (OCO/bracket legs, stops, etc.)
+      //    Best-effort — if this fails the close-submit still runs and Alpaca
+      //    will reject if quantities overlap, which we'd then surface.
       try {
         const openOrders = await alpaca.getOrders({ status: 'open', limit: 200 });
         const related = openOrders.filter(o => o.symbol === symbol.toUpperCase());
         for (const o of related) {
           try { await alpaca.cancelOrder(o.id); } catch (_) { /* already filled/cancelled */ }
         }
-      } catch (_) { /* no open orders or broker unavailable */ }
+      } catch (_) { /* no open orders or broker unavailable — proceed */ }
 
-      // 2. Submit sell order via Alpaca
+      // 2. Submit sell order. Errors are NOT swallowed — they bubble up so
+      //    the UI/journal don't go out of sync with the broker.
+      let brokerOrder = null;
+      const isLimit = !!exitPrice;
       try {
-        if (exitPrice) {
+        if (isLimit) {
           brokerOrder = await alpaca.submitOrder({
             symbol: symbol.toUpperCase(),
             qty: shares || undefined,
@@ -311,40 +415,98 @@ module.exports = function(db) {
           brokerOrder = await alpaca.closePosition(symbol.toUpperCase());
         }
       } catch (e) {
-        console.warn(`Broker close-position warning for ${symbol}: ${e.message}`);
+        console.error(`Broker close-position FAILED for ${symbol}: ${e.message}`);
+        return res.status(502).json({
+          ok: false,
+          error: `Broker rejected close: ${e.message}`,
+          brokerSubmitted: false,
+        });
+      }
+      if (!brokerOrder) {
+        return res.status(502).json({
+          ok: false,
+          error: 'Broker returned no order object — submission state is unknown',
+          brokerSubmitted: false,
+        });
       }
 
-      // 3. Update trade record in database
+      // 3. Locate the local trade row(s).
+      //
+      //    MARKET close (alpaca.closePosition): flattens ALL shares for the
+      //    symbol on the broker side. We must therefore close ALL open
+      //    journal rows for the symbol — otherwise a multi-tranche position
+      //    (e.g. DAL 3 tranches) ends up with broker=0/journal=still-open
+      //    ghost rows that poison P&L and heat calcs.
+      //
+      //    LIMIT close: user supplied a specific qty. Target the single
+      //    most-recent row (or the explicit tradeId) and stash the pending
+      //    order id so fills-sync reconciles the exact lot when the limit
+      //    fills.
+      const openTradeRows = tradeId
+        ? [db.prepare('SELECT * FROM trades WHERE id = ?').get(tradeId)].filter(Boolean)
+        : db.prepare('SELECT * FROM trades WHERE symbol = ? AND exit_date IS NULL ORDER BY id DESC')
+            .all(symbol.toUpperCase());
+
+      // For the LIMIT branch we still operate on just one row (user qty is
+      // partial by construction). Otherwise we touch every open row.
+      const findTrade = openTradeRows[0] || null;
+
       let updatedTrade = null;
-      const findTrade = tradeId
-        ? db.prepare('SELECT * FROM trades WHERE id = ?').get(tradeId)
-        : db.prepare('SELECT * FROM trades WHERE symbol = ? AND exit_date IS NULL ORDER BY id DESC LIMIT 1')
-            .get(symbol.toUpperCase());
+      let journalState = 'untouched';
+      let rowsClosed = 0;
 
-      if (findTrade) {
-        const usedExitPrice = exitPrice || findTrade.entry_price;
-        const pnlDollars = findTrade.side === 'long'
-          ? (usedExitPrice - findTrade.entry_price) * (findTrade.shares || 0)
-          : (findTrade.entry_price - usedExitPrice) * (findTrade.shares || 0);
-        const pnlPercent = findTrade.entry_price
-          ? ((usedExitPrice - findTrade.entry_price) / findTrade.entry_price) * 100
-              * (findTrade.side === 'long' ? 1 : -1)
-          : 0;
-        const rMultiple = findTrade.stop_price && findTrade.entry_price !== findTrade.stop_price
-          ? (usedExitPrice - findTrade.entry_price) / (findTrade.entry_price - findTrade.stop_price)
-          : null;
+      if (openTradeRows.length) {
+        if (isLimit) {
+          // Record the pending close order id so the UI can show "pending
+          // close submitted" and so reconcile can match the fill later.
+          db.prepare(`
+            UPDATE trades
+            SET pending_close_order_id = ?, pending_close_submitted_at = datetime('now')
+            WHERE id = ? AND exit_date IS NULL
+          `).run(brokerOrder.id, findTrade.id);
+          journalState = 'pending_limit_fill';
+          updatedTrade = db.prepare('SELECT * FROM trades WHERE id = ?').get(findTrade.id);
+        } else {
+          // Market close — alpaca.closePosition flattens ALL shares. Close
+          // every open row for this symbol, each priced at the single fill
+          // price (alpaca.closePosition returns one aggregate fill).
+          const fillPrice = +brokerOrder.filled_avg_price
+                         || +brokerOrder.filledAvgPrice
+                         || openTradeRows[0].entry_price;
 
-        db.prepare(`
-          UPDATE trades
-          SET exit_date = datetime('now'), exit_price = ?, exit_reason = ?,
-              pnl_dollars = ?, pnl_percent = ?, r_multiple = ?
-          WHERE id = ? AND exit_date IS NULL
-        `).run(usedExitPrice, exitType, pnlDollars, pnlPercent, rMultiple, findTrade.id);
+          const updateStmt = db.prepare(`
+            UPDATE trades
+            SET exit_date = datetime('now'), exit_price = ?, exit_reason = ?,
+                pnl_dollars = ?, pnl_percent = ?, r_multiple = ?
+            WHERE id = ? AND exit_date IS NULL
+          `);
 
-        updatedTrade = db.prepare('SELECT * FROM trades WHERE id = ?').get(findTrade.id);
+          const closeAll = db.transaction((rows) => {
+            for (const r of rows) {
+              const pnlDollars = r.side === 'long'
+                ? (fillPrice - r.entry_price) * (r.shares || 0)
+                : (r.entry_price - fillPrice) * (r.shares || 0);
+              const pnlPercent = r.entry_price
+                ? ((fillPrice - r.entry_price) / r.entry_price) * 100 * (r.side === 'long' ? 1 : -1)
+                : 0;
+              const rMultiple = r.stop_price && r.entry_price !== r.stop_price
+                ? (fillPrice - r.entry_price) / (r.entry_price - r.stop_price)
+                : null;
+              const info = updateStmt.run(fillPrice, exitType, pnlDollars, pnlPercent, rMultiple, r.id);
+              rowsClosed += info.changes;
+            }
+          });
+          closeAll(openTradeRows);
+
+          journalState = 'closed_market';
+          // Return the primary row (what existing callers expect); caller gets
+          // rowsClosed separately so the UI can say "closed 3 tranches."
+          updatedTrade = db.prepare('SELECT * FROM trades WHERE id = ?').get(findTrade.id);
+        }
       }
 
-      // 4. Fire notification
+      // 5. Fire notification. Different message for market vs pending-limit
+      //    so the user knows whether the position is actually gone.
       try {
         const { notifyTradeEvent } = require('../notifications/channels');
         await notifyTradeEvent({
@@ -356,7 +518,9 @@ module.exports = function(db) {
             pnl: updatedTrade?.pnl_dollars,
             pnl_pct: updatedTrade?.pnl_percent,
             reason: 'Manual exit via UI',
-            message: brokerOrder ? `Broker order submitted (${brokerOrder.id})` : 'Journal updated (no broker order)',
+            message: isLimit
+              ? `Limit sell submitted @ $${exitPrice} — will close when filled (order ${brokerOrder.id})`
+              : `Market close submitted (order ${brokerOrder.id})`,
           },
         });
       } catch (e) {
@@ -366,7 +530,11 @@ module.exports = function(db) {
       res.json({
         ok: true,
         trade: updatedTrade,
-        brokerOrder: brokerOrder ? { id: brokerOrder.id, status: brokerOrder.status, type: brokerOrder.type } : null,
+        journalState,                // 'closed_market' | 'pending_limit_fill' | 'untouched'
+        pending: isLimit,            // tells UI to show "pending" instead of "closed"
+        orderType: isLimit ? 'limit' : 'market',
+        rowsClosed,                  // # of tranches closed (market) — 1 for limit
+        brokerOrder: { id: brokerOrder.id, status: brokerOrder.status, type: brokerOrder.type },
         cancelledOrders: true,
       });
     } catch (e) { res.status(500).json({ error: e.message }); }

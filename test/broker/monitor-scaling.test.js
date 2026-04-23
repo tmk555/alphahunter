@@ -126,6 +126,15 @@ test('checkOpenTradeScaling: target1 hit → scale_out + adjustment notification
     unrealized_pl: 30 * 12,
   });
 
+  // Give the broker a real stop leg so replaceStopsForSymbol has something
+  // to patch. Without this the new adjustment_failed path (from the stop_moves
+  // audit refactor) fires instead of `adjustment`, because zero-leg patches
+  // are treated as "bracket is missing — warn the user."
+  await broker.submitBracketOrder({
+    symbol: 'AAPL', qty: 30, side: 'buy', entryType: 'market',
+    stopPrice: 95, takeProfitLimitPrice: 110,
+  });
+
   await monitor.checkOpenTradeScaling();
 
   // Expect at least one scale_out + one adjustment

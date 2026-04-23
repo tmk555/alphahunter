@@ -168,85 +168,110 @@ function getStagedOrders({ status, symbol } = {}) {
 // ─── Submit through broker adapter ──────────────────────────────────────────
 
 async function submitStagedOrder(stagedId, overrides = {}) {
-  const staged = getStagedOrder(stagedId);
-  if (!staged) throw new Error(`Staged order #${stagedId} not found`);
-  if (staged.status !== 'staged') throw new Error(`Order #${stagedId} is ${staged.status}, not staged`);
-
-  // Run pre-trade check as final gate.
-  const openPositions = db().prepare('SELECT * FROM trades WHERE exit_date IS NULL').all();
-  const regime = await getMarketRegime();
-  const candidate = {
-    symbol: staged.symbol,
-    sector: null,
-    entryPrice: staged.entry_price,
-    stopPrice: staged.stop_price,
-    shares: staged.qty,
-    // Phase 2.10: pass through overrides (e.g. allowWashSale: true)
-    ...overrides,
-  };
-  const riskCheck = preTradeCheck(candidate, openPositions, regime);
-  db().prepare('UPDATE staged_orders SET risk_check = ? WHERE id = ?')
-    .run(JSON.stringify(riskCheck), stagedId);
-  if (!riskCheck.approved) {
-    const failedRules = riskCheck.checks.filter(c => !c.pass).map(c => c.rule).join(', ');
-    // Throw a structured error: the route handler catches e.message, but we
-    // also attach the full riskCheck so the route can forward it to the UI.
-    const err = new Error(`Pre-trade check failed: ${failedRules}`);
-    err.riskCheck = riskCheck;
-    throw err;
+  // Claim the row atomically FIRST. Two concurrent submits (rapid double-
+  // click, retry on slow broker) would otherwise both pass the status check
+  // below and both submit to the broker. This UPDATE is the real mutual-
+  // exclusion gate — it matches only if the row is currently 'staged', and
+  // the atomicity is provided by SQLite's single-writer lock.
+  //
+  // If changes=0 another caller already claimed it. We look up current
+  // status to build a useful error message.
+  const claimed = db().prepare(
+    "UPDATE staged_orders SET status = 'submitting' WHERE id = ? AND status = 'staged'"
+  ).run(stagedId);
+  if (claimed.changes === 0) {
+    const cur = getStagedOrder(stagedId);
+    if (!cur) throw new Error(`Staged order #${stagedId} not found`);
+    throw new Error(`Order #${stagedId} is ${cur.status}, not staged (race or already submitted)`);
   }
 
-  const broker = getBroker();
-  const exitStrategy = staged.exit_strategy || 'full_in_scale_out';
-  const timeInForce  = staged.time_in_force || 'gtc';
-  const entryLimit   = staged.order_type === 'limit' ? staged.entry_price : undefined;
+  // Any error beyond this point must roll the row back to 'staged' so the
+  // user can retry. Helper closure captures stagedId.
+  const releaseClaim = () => {
+    try {
+      db().prepare("UPDATE staged_orders SET status = 'staged' WHERE id = ? AND status = 'submitting'")
+        .run(stagedId);
+    } catch (_) { /* releasing a non-claimed row is fine */ }
+  };
 
-  // ── Dispatch: multi-tranche vs single bracket ─────────────────────────
-  // Scale-out strategies split qty across N brackets so the BROKER natively
-  // closes each tranche at its own target. Everything else uses a single
-  // bracket at target1 (full_in_full_out and legacy full_size aliases).
-  let submission;       // broker response
-  let primaryOrderId;   // id we store in alpaca_order_id for legacy compat
-  let tranchesMeta;     // null for single-bracket; array for multi-tranche
+  const staged = getStagedOrder(stagedId);
 
-  if (isScaleOutStrategy(exitStrategy) && staged.target1_price) {
-    const tranches = splitTranchesForScaleOut({
-      qty:     staged.qty,
-      entry:   staged.entry_price,
-      stop:    staged.stop_price,
-      target1: staged.target1_price,
-      target2: staged.target2_price,
-    });
-    submission = await broker.submitMultiTrancheBracket({
-      symbol:          staged.symbol,
-      side:            staged.side,
-      entryType:       staged.order_type,
-      entryLimitPrice: entryLimit,
-      stopPrice:       staged.stop_price,
-      timeInForce,
-      tranches,
-    });
-    primaryOrderId = submission.tranches[0].order.id;
-    tranchesMeta = submission.tranches.map(({ label, order }) => ({
-      label,
-      qty:         order.qty,
-      orderId:     order.id,
-      tp:          order.legs?.find(l => l.type === 'limit')?.limitPrice ?? null,
-      stopOrderId: order.legs?.find(l => l.type === 'stop' || l.type === 'stop_limit')?.id ?? null,
-    }));
-  } else {
-    submission = await broker.submitBracketOrder({
-      symbol:               staged.symbol,
-      qty:                  staged.qty,
-      side:                 staged.side,
-      entryType:            staged.order_type,
-      entryLimitPrice:      entryLimit,
-      stopPrice:            staged.stop_price,
-      takeProfitLimitPrice: staged.target1_price || staged.target2_price,
-      timeInForce,
-    });
-    primaryOrderId = submission.id;
-    tranchesMeta = null;
+  let submission;
+  let primaryOrderId;
+  let tranchesMeta;
+  let riskCheck;
+
+  try {
+    // Run pre-trade check as final gate.
+    const openPositions = db().prepare('SELECT * FROM trades WHERE exit_date IS NULL').all();
+    const regime = await getMarketRegime();
+    const candidate = {
+      symbol: staged.symbol,
+      sector: null,
+      entryPrice: staged.entry_price,
+      stopPrice: staged.stop_price,
+      shares: staged.qty,
+      // Phase 2.10: pass through overrides (e.g. allowWashSale: true)
+      ...overrides,
+    };
+    riskCheck = preTradeCheck(candidate, openPositions, regime);
+    db().prepare('UPDATE staged_orders SET risk_check = ? WHERE id = ?')
+      .run(JSON.stringify(riskCheck), stagedId);
+    if (!riskCheck.approved) {
+      const failedRules = riskCheck.checks.filter(c => !c.pass).map(c => c.rule).join(', ');
+      const err = new Error(`Pre-trade check failed: ${failedRules}`);
+      err.riskCheck = riskCheck;
+      throw err;
+    }
+
+    const broker = getBroker();
+    const exitStrategy = staged.exit_strategy || 'full_in_scale_out';
+    const timeInForce  = staged.time_in_force || 'gtc';
+    const entryLimit   = staged.order_type === 'limit' ? staged.entry_price : undefined;
+
+    // ── Dispatch: multi-tranche vs single bracket ─────────────────────────
+    if (isScaleOutStrategy(exitStrategy) && staged.target1_price) {
+      const tranches = splitTranchesForScaleOut({
+        qty:     staged.qty,
+        entry:   staged.entry_price,
+        stop:    staged.stop_price,
+        target1: staged.target1_price,
+        target2: staged.target2_price,
+      });
+      submission = await broker.submitMultiTrancheBracket({
+        symbol:          staged.symbol,
+        side:            staged.side,
+        entryType:       staged.order_type,
+        entryLimitPrice: entryLimit,
+        stopPrice:       staged.stop_price,
+        timeInForce,
+        tranches,
+      });
+      primaryOrderId = submission.tranches[0].order.id;
+      tranchesMeta = submission.tranches.map(({ label, order }) => ({
+        label,
+        qty:         order.qty,
+        orderId:     order.id,
+        tp:          order.legs?.find(l => l.type === 'limit')?.limitPrice ?? null,
+        stopOrderId: order.legs?.find(l => l.type === 'stop' || l.type === 'stop_limit')?.id ?? null,
+      }));
+    } else {
+      submission = await broker.submitBracketOrder({
+        symbol:               staged.symbol,
+        qty:                  staged.qty,
+        side:                 staged.side,
+        entryType:            staged.order_type,
+        entryLimitPrice:      entryLimit,
+        stopPrice:            staged.stop_price,
+        takeProfitLimitPrice: staged.target1_price || staged.target2_price,
+        timeInForce,
+      });
+      primaryOrderId = submission.id;
+      tranchesMeta = null;
+    }
+  } catch (err) {
+    releaseClaim();
+    throw err;
   }
 
   const now = new Date().toISOString();

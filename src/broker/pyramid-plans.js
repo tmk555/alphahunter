@@ -27,6 +27,7 @@ const { notifyTradeEvent } = require('../notifications/channels');
 const { getVolumePace } = require('../signals/volume-pace');
 const { calcVCP } = require('../signals/vcp');
 const { detectPatterns } = require('../signals/patterns');
+const { evaluateGate } = require('./vwap-gate');
 
 function db() { return getDB(); }
 
@@ -38,6 +39,21 @@ const GAP_ABORT_PCT           = 0.07;  // 7% above pivot → cancel plan
 // retest and firing into a failed base is exactly the trap pros avoid.
 const GAP_DOWN_INVALIDATE_PCT = 0.03;
 const DEFAULT_EXPIRY_DAYS     = 5;     // Plans auto-expire if pilot never fires
+// ── Marketable-limit cap (intraday slippage guard, Fix #1) ──
+// Submitting a market order into a fast-moving breakout can slip several
+// percent between submission and fill (see ANET 2026-04-22: $169.86 trigger →
+// $175.67 avg fill, 3.4% slippage in 58s). We submit a LIMIT instead, capped
+// to the max of (trigger × 1 + GAP_WARN_PCT) or (detected price × 1.005).
+// Normal fires get the generous trigger-based ceiling (fills easily);
+// gap-warn fires (already past 3% above pivot) get a tight +0.5% price-based
+// ceiling — if the stock runs past that before the broker matches, we'd
+// rather miss the entry than chase at +5%.
+const INTRABAR_SLIPPAGE_CAP   = 0.005; // 0.5% above detected price (gap-warn case)
+// ── Post-fill slippage cancellation (Fix #3) ──
+// If the pilot fills more than this far above its own trigger, the adds
+// (priced +0.5×ATR and +1.0×ATR above the same trigger) are now below the
+// real cost basis — averaging DOWN into a chase. Cancel them instead.
+const POST_FILL_SLIPPAGE_CANCEL_PCT = 0.02; // 2% slippage → cancel adds
 
 // ─── Pivot detection ────────────────────────────────────────────────────────
 //
@@ -150,6 +166,11 @@ function createPyramidPlan({
   volumePaceMin = DEFAULT_VOLUME_PACE_MIN,
   notes = null,
   expiryDays = DEFAULT_EXPIRY_DAYS,
+  // Opt-in VWAP gate on pilot fire. Pass a gate config (same shape as
+  // staged_orders.submission_gate) or leave null for default pyramid behavior.
+  // Example: { minutes: 39, requireAboveVWAP: true, earliestAfterOpenMin: 39,
+  //            gapUpLimitPct: 0.02, gapDownLimitPct: 0.02 }
+  vwapGate = null,
 }) {
   // Use ATR from input or estimate 2% of pivot as fallback
   const atr = atrInput || null;
@@ -228,15 +249,20 @@ function createPyramidPlan({
 
   const expires_at = new Date(Date.now() + expiryDays * 86400000).toISOString();
 
+  const vwapGateJson = vwapGate && typeof vwapGate === 'object'
+    ? JSON.stringify(vwapGate)
+    : null;
+
   const result = db().prepare(`
     INSERT INTO pyramid_plans
       (symbol, side, status, total_qty, stop_price, target1_price, target2_price,
-       tranches_json, source, conviction_score, expires_at, notes)
-    VALUES (?, 'buy', 'armed_pilot', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       tranches_json, source, conviction_score, expires_at, notes, vwap_gate)
+    VALUES (?, 'buy', 'armed_pilot', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     symbol.toUpperCase(), totalQty, stop, target1, target2,
     JSON.stringify(tranches), source, convictionScore, expires_at,
     notes || (patternName ? `Pivot from ${patternName} detector` : 'Manual pivot'),
+    vwapGateJson,
   );
 
   return {
@@ -269,7 +295,11 @@ function parsePlan(row) {
   if (!row) return null;
   let tranches = [];
   try { tranches = JSON.parse(row.tranches_json || '[]'); } catch (_) {}
-  return { ...row, tranches };
+  let vwapGate = null;
+  if (row.vwap_gate) {
+    try { vwapGate = JSON.parse(row.vwap_gate); } catch (_) {}
+  }
+  return { ...row, tranches, vwapGate };
 }
 
 // ─── The live checker — runs every ~30s during market hours ────────────────
@@ -369,7 +399,19 @@ async function checkPyramidPlans({ currentPrices } = {}) {
       // Guard against re-submission: once a tranche is 'submitted' we wait for
       // the broker fill handler to advance state. Without this, every scheduler
       // tick re-fires the same tranche, stacking duplicate bracket orders.
-      if (!tranche || tranche.status === 'filled' || tranche.status === 'submitted') continue;
+      //
+      // HISTORICAL BUG (MKSI, 2026-04-20, 13 submissions in 31 min): this
+      // guard originally only skipped `filled`/`submitted`. When the cron
+      // poller flipped a cancelled broker order to `tranche.status='cancelled'`
+      // (monitor.js ~613), the next tick saw a not-filled-not-submitted
+      // tranche and re-fired the same bracket. TIF=day kept expiring, poller
+      // kept marking cancelled, checker kept re-firing — infinite minute loop.
+      // Fix: cancelled/rejected/expired tranches are TERMINAL. If the active
+      // tranche hits a terminal state, the poller also flips plan.status so
+      // the whole plan exits this loop for good (see monitor.js).
+      if (!tranche) continue;
+      const TRANCHE_TERMINAL = ['filled', 'submitted', 'cancelled', 'canceled', 'rejected', 'expired'];
+      if (TRANCHE_TERMINAL.includes(tranche.status)) continue;
 
       // Has trigger been reached?
       if (price < tranche.trigger) continue;
@@ -402,6 +444,38 @@ async function checkPyramidPlans({ currentPrices } = {}) {
         continue;
       }
 
+      // ── VWAP 39-min gate (pilot only, opt-in via plan.vwap_gate) ──
+      // Same primitive as the staged-order submission gate, applied here at
+      // pilot-fire time. Pilot-only because adds are already confirmation-
+      // driven (pilot filled → structure proven). When the gate fails, we
+      // SOFT-fail: leave pilot armed, try again next tick. This means:
+      //   • Pre-09:30 + 39 min  → 'too_early', pilot waits
+      //   • 39-min close < VWAP → pilot waits; once the gate rejects, it
+      //                            keeps rejecting for the rest of the day
+      //                            (the first 39-min candle doesn't change)
+      //   • 39-min close ≥ VWAP + trigger crossed → fires this tick
+      if (trancheIdx === 0 && plan.vwapGate) {
+        let verdict;
+        try {
+          verdict = await evaluateGate(
+            {
+              symbol:      plan.symbol,
+              id:          plan.id,
+              side:        'buy',
+              entry_price: tranche.trigger,
+            },
+            plan.vwapGate,
+          );
+        } catch (e) {
+          console.warn(`  pyramid ${plan.symbol}: VWAP gate threw — ${e.message}, skipping tick`);
+          continue;
+        }
+        if (!verdict.pass) {
+          console.log(`  pyramid ${plan.symbol} pilot: VWAP gate blocks fire — ${verdict.reasons.join(', ')}`);
+          continue;
+        }
+      }
+
       // ── Fire the tranche as a bracket order ──
       const broker = getBroker();
       const regime = await getMarketRegime();
@@ -417,11 +491,25 @@ async function checkPyramidPlans({ currentPrices } = {}) {
       }
 
       const tpPrice = tranche.tp || plan.target2_price || plan.target1_price || +(price * 1.10).toFixed(2);
+
+      // ── Marketable-limit entry (Fix #1) ──
+      // Historically this was a market order ("past the pivot — use market
+      // for certain fill"). That exposes us to unbounded intraday slippage
+      // in fast breakouts. We now submit a LIMIT with a hard ceiling:
+      //   max(trigger × (1 + GAP_WARN_PCT), price × (1 + INTRABAR_SLIPPAGE_CAP))
+      // The first term gives normal fires a generous ceiling that'll fill
+      // at the NBBO; the second term covers the gap-warn case where
+      // current price is already past the trigger-based cap.
+      const triggerCap   = tranche.trigger * (1 + GAP_WARN_PCT);
+      const detectedCap  = price * (1 + INTRABAR_SLIPPAGE_CAP);
+      const entryLimit   = +Math.max(triggerCap, detectedCap).toFixed(2);
+
       const submission = await broker.submitBracketOrder({
         symbol:               plan.symbol,
         qty,
         side:                 'buy',
-        entryType:            'market',  // we're past the pivot — use market for certain fill
+        entryType:            'limit',
+        entryLimitPrice:      entryLimit,
         stopPrice:            plan.stop_price,
         takeProfitLimitPrice: tpPrice,
         timeInForce:          'day',
@@ -432,6 +520,7 @@ async function checkPyramidPlans({ currentPrices } = {}) {
       tranche.status = 'submitted';
       tranche.submittedAt = new Date().toISOString();
       tranche.actualQty = qty;
+      tranche.entryLimit = entryLimit;  // record ceiling for post-hoc analysis
 
       db().prepare(`
         UPDATE pyramid_plans SET tranches_json = ?, updated_at = datetime('now') WHERE id = ?
@@ -445,7 +534,7 @@ async function checkPyramidPlans({ currentPrices } = {}) {
         details: {
           shares: qty,
           price,
-          message: `🔺 Pyramid ${tranche.label.toUpperCase()} fired: ${qty} sh @ ~$${price.toFixed(2)} (plan #${plan.id})`,
+          message: `🔺 Pyramid ${tranche.label.toUpperCase()} fired: ${qty} sh @ ~$${price.toFixed(2)} (limit ≤ $${entryLimit}, plan #${plan.id})`,
         },
       }).catch(e => console.error(`  pyramid notify error: ${e.message}`));
 
@@ -461,8 +550,17 @@ async function checkPyramidPlans({ currentPrices } = {}) {
 //
 // Tranche lifecycle: submitted → (broker fill) → filled → arms next tranche.
 // We advance plan state and flip the next tranche to 'armed'.
+//
+// `fillInfo` is optional and carries the broker's actual execution data:
+//   { avgFillPrice, filledQty }
+// When provided, we:
+//   1. Persist avgFillPrice + actualQty on the tranche (so the UI can show
+//      the real cost basis, not just the trigger).
+//   2. Run the post-fill slippage guard (Fix #3): if the pilot filled more
+//      than POST_FILL_SLIPPAGE_CANCEL_PCT above its trigger, cancel the
+//      remaining armed/waiting adds rather than averaging down into them.
 
-function handleTrancheFill(orderId) {
+async function handleTrancheFill(orderId, fillInfo = null) {
   const row = db().prepare(
     "SELECT * FROM pyramid_plans WHERE tranches_json LIKE ? AND status NOT IN ('complete','cancelled','expired','failed')"
   ).get(`%"${orderId}"%`);
@@ -471,6 +569,9 @@ function handleTrancheFill(orderId) {
   const plan = parsePlan(row);
   let advanced = false;
   let newStatus = plan.status;
+  let filledIdx = -1;
+  let filledTranche = null;
+  let slippageCancel = null;
 
   for (let i = 0; i < plan.tranches.length; i++) {
     const t = plan.tranches[i];
@@ -478,7 +579,33 @@ function handleTrancheFill(orderId) {
       t.status = 'filled';
       t.filledAt = new Date().toISOString();
 
-      // Advance plan status + arm next tranche
+      // Record actual fill data when the poller passed it through.
+      if (fillInfo?.avgFillPrice != null && Number.isFinite(fillInfo.avgFillPrice)) {
+        t.fillPrice = +Number(fillInfo.avgFillPrice).toFixed(2);
+      }
+      if (fillInfo?.filledQty != null && Number.isFinite(fillInfo.filledQty)) {
+        t.actualQty = Number(fillInfo.filledQty);
+      }
+
+      // Fallback: if the poller didn't carry fill data (race with
+      // fills-sync, or the broker response was partial), look up the
+      // trades row by alpaca_order_id. trades.entry_price is the avg
+      // fill as recorded by fills-sync when the parent order settles.
+      if (t.fillPrice == null) {
+        try {
+          const trow = db().prepare(
+            'SELECT entry_price, shares FROM trades WHERE alpaca_order_id = ? LIMIT 1'
+          ).get(orderId);
+          if (trow?.entry_price) t.fillPrice = +Number(trow.entry_price).toFixed(2);
+          if (trow?.shares && t.actualQty == null) t.actualQty = Number(trow.shares);
+        } catch (_) { /* best-effort */ }
+      }
+
+      filledIdx = i;
+      filledTranche = t;
+
+      // Advance plan status + arm next tranche (will be overridden below if
+      // the slippage guard cancels the remaining adds).
       if (i === 0) {
         newStatus = 'pilot_filled';
         if (plan.tranches[1]) plan.tranches[1].status = 'armed';
@@ -495,19 +622,67 @@ function handleTrancheFill(orderId) {
 
   if (!advanced) return null;
 
+  // ── Post-fill slippage guard (Fix #3) ──
+  // Only meaningful when we actually have a fill price AND there are
+  // downstream tranches still in play (add1 for pilot fill, add2 for
+  // add1 fill). If slippage exceeds the cancel threshold, flip the
+  // remaining tranches to 'cancelled' and mark the plan 'complete' so
+  // the watcher stops firing new adds. We don't need to touch the
+  // broker here — the adds never got submitted, they're plan-side only.
+  if (filledTranche && filledTranche.fillPrice && filledTranche.trigger && filledIdx < 2) {
+    const slippagePct = (filledTranche.fillPrice - filledTranche.trigger) / filledTranche.trigger;
+    if (slippagePct > POST_FILL_SLIPPAGE_CANCEL_PCT) {
+      const cancelledLabels = [];
+      for (let j = filledIdx + 1; j < plan.tranches.length; j++) {
+        const next = plan.tranches[j];
+        if (next && next.status !== 'filled' && next.status !== 'cancelled') {
+          next.status = 'cancelled';
+          next.cancelReason = `pilot_slippage_${(slippagePct * 100).toFixed(1)}pct`;
+          cancelledLabels.push(next.label);
+        }
+      }
+      if (cancelledLabels.length) {
+        newStatus = 'complete'; // No further tranches will fire; treat plan as done.
+        slippageCancel = {
+          slippagePct,
+          fillPrice: filledTranche.fillPrice,
+          trigger: filledTranche.trigger,
+          cancelled: cancelledLabels,
+        };
+      }
+    }
+  }
+
   db().prepare(`
     UPDATE pyramid_plans SET status = ?, tranches_json = ?, updated_at = datetime('now') WHERE id = ?
   `).run(newStatus, JSON.stringify(plan.tranches), plan.id);
 
+  // Fill notification — includes real avg fill price when we have it.
+  const priceLabel = filledTranche?.fillPrice
+    ? `avg $${filledTranche.fillPrice} (trigger $${filledTranche.trigger})`
+    : `trigger $${filledTranche?.trigger ?? '?'}`;
   notifyTradeEvent({
     event: 'pyramid_tranche_filled',
     symbol: plan.symbol,
     details: {
-      message: `✅ Pyramid tranche ${orderId.slice(0,8)} filled — plan #${plan.id} status: ${newStatus}`,
+      price: filledTranche?.fillPrice,
+      message: `✅ Pyramid ${filledTranche?.label?.toUpperCase() || 'tranche'} filled — ${priceLabel}, plan #${plan.id} → ${newStatus}`,
     },
   }).catch(() => {});
 
-  return { planId: plan.id, newStatus };
+  // Slippage cancel alert — separate phone ping so you know adds were killed.
+  if (slippageCancel) {
+    notifyTradeEvent({
+      event: 'pyramid_slippage_cancel',
+      symbol: plan.symbol,
+      details: {
+        price: slippageCancel.fillPrice,
+        message: `⚠️ Pyramid #${plan.id} ${filledTranche.label.toUpperCase()} slipped +${(slippageCancel.slippagePct * 100).toFixed(1)}% (trigger $${slippageCancel.trigger} → fill $${slippageCancel.fillPrice}). Cancelled remaining tranches: ${slippageCancel.cancelled.join(', ')}.`,
+      },
+    }).catch(() => {});
+  }
+
+  return { planId: plan.id, newStatus, slippageCancel };
 }
 
 // ─── Cancel a plan ──────────────────────────────────────────────────────────

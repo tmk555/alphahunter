@@ -193,32 +193,108 @@ async function _checkScalingForSymbol(symbol, price) {
     // Move every open stop leg on the broker to the new stop price. This
     // is the ONLY broker write the observer issues on scale events — the
     // partial sell itself is the broker's job, done via the bracket's TP.
-    if (action.moveStopTo != null && broker.isConfigured()) {
-      try {
-        const patched = await broker.replaceStopsForSymbol({
-          symbol: t.symbol,
-          newStopPrice: action.moveStopTo,
-        });
-        console.log(`  ✓ Raised ${patched.length} stop leg(s) on ${t.symbol} to ${action.moveStopTo}`);
+    //
+    // Every outcome (success, partial, no_op, error) is recorded in the
+    // stop_moves audit table so the user can confirm from the UI that the
+    // trailing stop actually made it to the broker. Previously failures
+    // were caught and logged only to stderr — there was no way to know.
+    if (action.moveStopTo != null) {
+      const auditRow = {
+        symbol: t.symbol,
+        trade_id: t.id,
+        old_stop: t.stop_price ?? null,
+        new_stop: action.moveStopTo,
+        trigger_price: price,
+        reason: action.reason,
+        level: action.level,
+      };
 
-        // Phase 1.3: fire an `adjustment` notification so the user knows
-        // their trailing stop moved. Previously this was silent — the only
-        // signal was reading the log or inspecting the DB.
-        notifyTradeEvent({
-          event: 'adjustment',
-          symbol: t.symbol,
-          details: {
-            price,
-            stop: action.moveStopTo,
-            shares: patched.length,   // repurposed: # of stop legs patched
-            reason: `Stop moved to ${action.moveStopTo} (${action.reason})`,
-            level: action.level,
-          },
-        }).catch(e => console.error('Adjustment notify error:', e.message));
-      } catch (e) {
-        console.error(`  Stop-move failed for ${t.symbol}: ${e.message}`);
+      if (!broker.isConfigured()) {
+        _recordStopMove({ ...auditRow, status: 'no_op',
+          error_message: 'broker not configured', legs_targeted: 0, legs_patched: 0 });
+      } else {
+        try {
+          const patched = await broker.replaceStopsForSymbol({
+            symbol: t.symbol,
+            newStopPrice: action.moveStopTo,
+          });
+          const patchedCount = Array.isArray(patched) ? patched.length : 0;
+          const status = patchedCount === 0 ? 'no_op' : 'success';
+          _recordStopMove({ ...auditRow, status,
+            legs_targeted: patchedCount, legs_patched: patchedCount,
+            broker_response: patched });
+
+          if (patchedCount === 0) {
+            console.warn(`  ⚠ Stop-move no-op for ${t.symbol}: broker returned 0 stop legs to patch`);
+            // Fire a visible alert so the trader investigates — a zero-leg
+            // no-op usually means the bracket's stop leg was already filled
+            // or cancelled, leaving the position unprotected.
+            notifyTradeEvent({
+              event: 'adjustment_failed',
+              symbol: t.symbol,
+              details: {
+                price,
+                stop: action.moveStopTo,
+                reason: `Stop-move no-op — broker found 0 open stop legs for ${t.symbol}. Check position has a bracket attached.`,
+                level: action.level,
+              },
+            }).catch(e => console.error('Adjustment-failed notify error:', e.message));
+          } else {
+            console.log(`  ✓ Raised ${patchedCount} stop leg(s) on ${t.symbol} to ${action.moveStopTo}`);
+            // Phase 1.3: fire an `adjustment` notification so the user knows
+            // their trailing stop moved.
+            notifyTradeEvent({
+              event: 'adjustment',
+              symbol: t.symbol,
+              details: {
+                price,
+                stop: action.moveStopTo,
+                shares: patchedCount,   // repurposed: # of stop legs patched
+                reason: `Stop moved to ${action.moveStopTo} (${action.reason})`,
+                level: action.level,
+              },
+            }).catch(e => console.error('Adjustment notify error:', e.message));
+          }
+        } catch (e) {
+          _recordStopMove({ ...auditRow, status: 'error',
+            error_message: e.message, legs_targeted: 0, legs_patched: 0 });
+          console.error(`  ✗ Stop-move FAILED for ${t.symbol}: ${e.message}`);
+          // Phone alert on failure — previously silent.
+          notifyTradeEvent({
+            event: 'adjustment_failed',
+            symbol: t.symbol,
+            details: {
+              price,
+              stop: action.moveStopTo,
+              reason: `Stop-move failed: ${e.message}. Broker stops MAY BE STALE — check /api/broker/stops/${t.symbol}`,
+              level: action.level,
+            },
+          }).catch(err => console.error('Adjustment-failed notify error:', err.message));
+        }
       }
     }
+  }
+}
+
+// Persist a stop-move attempt. Never throws — audit failure must not block
+// the calling path.
+function _recordStopMove(row) {
+  try {
+    db().prepare(`
+      INSERT INTO stop_moves
+        (symbol, trade_id, old_stop, new_stop, trigger_price, reason, level,
+         legs_targeted, legs_patched, status, error_message, broker_response)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      row.symbol, row.trade_id ?? null,
+      row.old_stop ?? null, row.new_stop ?? null,
+      row.trigger_price ?? null, row.reason ?? null, row.level ?? null,
+      row.legs_targeted ?? 0, row.legs_patched ?? 0,
+      row.status, row.error_message ?? null,
+      row.broker_response != null ? JSON.stringify(row.broker_response) : null,
+    );
+  } catch (e) {
+    console.error(`  _recordStopMove: ${e.message}`);
   }
 }
 
@@ -441,6 +517,78 @@ async function reconcilePositions() {
   };
 }
 
+// ─── Pyramid tranche fill poll ──────────────────────────────────────────────
+//
+// Iterate pyramid plans with active statuses; check each 'submitted' tranche's
+// broker order status, and:
+//   • on transition to `filled` → call handleTrancheFill() so the NEXT
+//     tranche gets armed for the live checker to fire.
+//   • on transition to canceled/cancelled/expired/rejected → mark the tranche
+//     terminal in tranches_json AND, if the tranche is the currently-active
+//     one for the plan, kill the plan (status='cancelled').
+//
+// The plan-kill step is the fix for the MKSI 2026-04-20 infinite retry loop:
+// without it, the live checker saw tranche.status='cancelled' on the old
+// guard — which only skipped filled/submitted — and re-submitted a new
+// bracket every minute. Killing the plan here stops the loop at the source.
+//
+// Extracted from the inline cron scheduler so unit tests can exercise the
+// logic against a stubbed alpaca module without spinning up real cron.
+
+async function pollPyramidTrancheStatus() {
+  try {
+    const { handleTrancheFill } = require('./pyramid-plans');
+    const pyramidRows = db().prepare(
+      "SELECT id, tranches_json FROM pyramid_plans WHERE status IN ('armed_pilot','pilot_filled','add1_filled')"
+    ).all();
+    // Plan-status map so we can identify which tranche idx is "active" per
+    // plan (the one the live checker would try to fire).
+    const ACTIVE_IDX_BY_STATUS = { armed_pilot: 0, pilot_filled: 1, add1_filled: 2 };
+
+    for (const pRow of pyramidRows) {
+      let tranches; try { tranches = JSON.parse(pRow.tranches_json); } catch (_) { continue; }
+      let planDead = false;
+
+      const planRow = db().prepare('SELECT status FROM pyramid_plans WHERE id = ?').get(pRow.id);
+      const activeIdx = ACTIVE_IDX_BY_STATUS[planRow?.status];
+
+      for (let i = 0; i < tranches.length; i++) {
+        const t = tranches[i];
+        if (t.status !== 'submitted' || !t.orderId) continue;
+        try {
+          const ord = await alpaca.getOrder(t.orderId);
+          if (ord?.status === 'filled') {
+            // Pass the broker's actual fill data so the plan can record
+            // the real avg cost and run the post-fill slippage guard.
+            await handleTrancheFill(t.orderId, {
+              avgFillPrice: ord.filledAvgPrice,
+              filledQty:    ord.filledQty,
+            });
+          } else if (['canceled','cancelled','expired','rejected'].includes(ord?.status)) {
+            // Tranche killed before fill. Mark terminal so live checker's
+            // guard skips it. If this tranche was ACTIVE, kill the plan so
+            // the live checker doesn't re-fire it next tick.
+            t.status = ord.status === 'rejected' ? 'rejected' : 'cancelled';
+            t.cancelReason = `broker_${ord.status}`;
+            if (i === activeIdx) planDead = true;
+            db().prepare('UPDATE pyramid_plans SET tranches_json = ?, updated_at = datetime(\'now\') WHERE id = ?')
+              .run(JSON.stringify(tranches), pRow.id);
+          }
+        } catch (e) {
+          console.error(`  Pyramid tranche poll ${t.orderId}: ${e.message}`);
+        }
+      }
+
+      if (planDead) {
+        db().prepare("UPDATE pyramid_plans SET status = 'cancelled', updated_at = datetime('now'), notes = COALESCE(notes,'') || ' [active tranche cancelled by broker — plan killed to prevent retry loop]' WHERE id = ?").run(pRow.id);
+        console.warn(`  pyramid plan #${pRow.id}: active tranche was cancelled by broker — plan marked cancelled to stop retry loop`);
+      }
+    }
+  } catch (e) {
+    console.error(`  Pyramid poll error: ${e.message}`);
+  }
+}
+
 // ─── Scheduler ──────────────────────────────────────────────────────────────
 
 async function startStopMonitor() {
@@ -512,37 +660,7 @@ async function startStopMonitor() {
         }
       }
 
-      // ── Pyramid tranche fill poll ──
-      // Iterate pyramid plans with 'submitted' tranches; check each tranche's
-      // broker order status, and call handleTrancheFill() on transition to
-      // filled so the NEXT tranche gets armed for the live checker to fire.
-      try {
-        const { handleTrancheFill } = require('./pyramid-plans');
-        const pyramidRows = db().prepare(
-          "SELECT id, tranches_json FROM pyramid_plans WHERE status IN ('armed_pilot','pilot_filled','add1_filled')"
-        ).all();
-        for (const pRow of pyramidRows) {
-          let tranches; try { tranches = JSON.parse(pRow.tranches_json); } catch (_) { continue; }
-          for (const t of tranches) {
-            if (t.status !== 'submitted' || !t.orderId) continue;
-            try {
-              const ord = await alpaca.getOrder(t.orderId);
-              if (ord?.status === 'filled') {
-                handleTrancheFill(t.orderId);
-              } else if (['canceled','cancelled','expired','rejected'].includes(ord?.status)) {
-                // Tranche killed before fill — mark failed so it doesn't block the chain
-                t.status = ord.status === 'rejected' ? 'rejected' : 'cancelled';
-                db().prepare('UPDATE pyramid_plans SET tranches_json = ?, updated_at = datetime(\'now\') WHERE id = ?')
-                  .run(JSON.stringify(tranches), pRow.id);
-              }
-            } catch (e) {
-              console.error(`  Pyramid tranche poll ${t.orderId}: ${e.message}`);
-            }
-          }
-        }
-      } catch (e) {
-        console.error(`  Pyramid poll error: ${e.message}`);
-      }
+      await pollPyramidTrancheStatus();
     }, { scheduled: true });
 
     console.log('   Cron Backup: ✓ Running (every 5 min, market hours)');
@@ -863,6 +981,7 @@ module.exports = {
   checkPositionsAgainstStops, checkStrategyExits, checkBreadthEarlyWarning,
   checkConditionalAndScaleIn,
   checkOpenTradeScaling,
+  pollPyramidTrancheStatus,
   reconcilePositions,
   priceStream, // Export for routes to expose status
 };

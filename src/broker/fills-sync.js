@@ -143,13 +143,51 @@ async function syncBrokerFills() {
   }
 
   // Sells → auto-exit journal entries.
+  //
+  // Match priority:
+  //   1. Exact match on trades.pending_close_order_id — when the user submitted
+  //      a LIMIT sell via /broker/close-position, that column pins the fill to
+  //      the specific lot. Matters for multi-tranche positions where several
+  //      open trade rows share a symbol and the "most recent" heuristic would
+  //      close the wrong one.
+  //   2. Fallback: most-recent-entry open long row for the symbol (legacy path
+  //      for sells that originated outside this app — e.g. bracket TP legs,
+  //      or manual Alpaca-UI sells).
+  //
+  // After a pending-close fill is reconciled we null out the pending_close_*
+  // columns so the row no longer renders the PENDING CLOSE pill, and the exit
+  // reason is tagged 'manual_exit_fill' instead of the generic 'auto_sync'.
   const sells  = orders.filter(o => o.status === 'filled' && o.side === 'sell');
   const exited = [];
+
+  // Pre-load the set of sell order ids already reconciled into the journal.
+  // THIS IS THE IDEMPOTENCY KEY. Without it, every call re-applied every sell
+  // in the 7-day window, and since orphan-reconcile kept creating fresh open
+  // rows for lingering Alpaca positions, the same real sell kept "closing"
+  // new ghost rows each pass (DELL had 6 ghosts before this was added).
+  const seenExitIds = new Set(
+    db.prepare('SELECT exit_order_id FROM trades WHERE exit_order_id IS NOT NULL').all()
+      .map(r => r.exit_order_id)
+  );
+
   for (const sell of sells) {
-    const trade = db.prepare(
+    // 0. Hard idempotency: this sell already closed a row in a prior sync.
+    if (seenExitIds.has(sell.id)) continue;
+
+    // 1. Prefer the row that explicitly submitted this sell (pending_close
+    //    path — user clicked Exit with a limit price). Pins to the exact lot.
+    const pendingTrade = db.prepare(
+      'SELECT * FROM trades WHERE pending_close_order_id = ? AND exit_date IS NULL LIMIT 1'
+    ).get(sell.id);
+
+    // 2. Fallback: most-recent open long row for the symbol. Covers sells that
+    //    originated outside this app (bracket TP legs, manual Alpaca-UI sells).
+    const trade = pendingTrade || db.prepare(
       'SELECT * FROM trades WHERE symbol = ? AND exit_date IS NULL AND side = ? ORDER BY entry_date DESC LIMIT 1'
     ).get(sell.symbol, 'long');
     if (!trade) continue;
+
+    const fromPendingClose = !!pendingTrade;
 
     let exitDate = (sell.filled_at || sell.created_at).split('T')[0];
     if (exitDate > todayStr) exitDate = todayStr;
@@ -159,12 +197,23 @@ async function syncBrokerFills() {
     const risk        = trade.entry_price - (trade.stop_price || trade.entry_price * 0.95);
     const r_multiple  = risk > 0 ? +((exitPrice - trade.entry_price) / risk).toFixed(2) : 0;
 
+    const exitReason = fromPendingClose ? 'manual_exit_fill' : 'auto_sync';
+    const noteSuffix = fromPendingClose
+      ? `\n[PENDING-CLOSE FILLED] Limit sell order ${sell.id} filled at $${exitPrice.toFixed(2)}.`
+      : `\n[AUTO-EXIT] Sold at $${exitPrice.toFixed(2)}. Update exit reason and review.`;
+
     db.prepare(`
-      UPDATE trades SET exit_date=?, exit_price=?, exit_reason='auto_sync',
+      UPDATE trades SET exit_date=?, exit_price=?, exit_reason=?,
         pnl_dollars=?, pnl_percent=?, r_multiple=?, needs_review=1,
+        exit_order_id=?,
+        pending_close_order_id=NULL, pending_close_submitted_at=NULL,
         notes=COALESCE(notes,'') || ? WHERE id=?
-    `).run(exitDate, exitPrice, pnl_dollars, pnl_percent, r_multiple,
-      `\n[AUTO-EXIT] Sold at $${exitPrice.toFixed(2)}. Update exit reason and review.`, trade.id);
+    `).run(exitDate, exitPrice, exitReason, pnl_dollars, pnl_percent, r_multiple,
+      sell.id, noteSuffix, trade.id);
+
+    // Mark in-memory so the same sell can't close two rows within this run
+    // (defensive — no known trigger today, but belts + suspenders).
+    seenExitIds.add(sell.id);
 
     try {
       sellTaxLots({
@@ -191,10 +240,147 @@ async function syncBrokerFills() {
       });
     } catch (_) {}
 
-    exited.push({ symbol: sell.symbol, exitPrice, pnl_percent });
+    exited.push({ symbol: sell.symbol, exitPrice, pnl_percent, source: fromPendingClose ? 'pending_close_fill' : 'auto_sync' });
   }
 
-  return { synced, exited, backfilled };
+  // ── Position-centric reconcile ──
+  // The order-centric sync above only sees filled BUY orders in the last 7d.
+  // Positions that predate that window — or positions whose originating order
+  // was placed via the broker's own UI before this app existed — never get a
+  // trades row, so they show up as "N position(s) not in journal" and their
+  // risk is invisible to preTradeCheck. Run a position sweep to backfill them.
+  const reconciled = await reconcileOrphanPositions({ lookbackDays: 90 });
+
+  return { synced, exited, backfilled, reconciled };
 }
 
-module.exports = { syncBrokerFills };
+// ─── Position-centric reconcile ─────────────────────────────────────────────
+//
+// For every open Alpaca position without a matching open trades row, create
+// one. Best-effort enrichment:
+//   • entry_price  ← Alpaca avg_entry_price (source of truth)
+//   • shares       ← Alpaca qty
+//   • stop_price   ← live broker stop-loss leg (queried from open orders)
+//   • entry_date   ← most-recent filled buy for this symbol within lookback,
+//                    else today (flagged in notes for manual review)
+//   • alpaca_order_id ← that originating buy order when discoverable, else null
+// All reconciled rows are created with needs_review=1 and a clear notes prefix
+// so the journal UI flags them for human follow-up.
+
+async function reconcileOrphanPositions({ lookbackDays = 90, recentCloseWindowMin = 15 } = {}) {
+  const db = getDB();
+
+  let positions = [];
+  try { positions = await alpaca.getPositions(); }
+  catch (e) { return { reconciled: [], stillOrphan: [], error: `getPositions failed: ${e.message}` }; }
+  if (!positions.length) return { reconciled: [], stillOrphan: [] };
+
+  const openTrades = db.prepare('SELECT symbol FROM trades WHERE exit_date IS NULL').all();
+  const tracked = new Set(openTrades.map(t => t.symbol));
+
+  // Cooldown guard: symbols that had a trade closed within the last
+  // `recentCloseWindowMin` minutes are NOT eligible for orphan-reconcile.
+  //
+  // Why: the sells loop above runs before reconcile in the same call. If a
+  // broker sell just filled and closed the open row for SYMBOL, Alpaca's
+  // position endpoint still reports that position briefly (settlement +
+  // 1-tick staleness in Alpaca's positions cache). Without this cooldown,
+  // reconcile creates a fresh orphan row → next sync the same 7-day-window
+  // sell closes it again → ghost loop (DELL produced 6 duplicates before
+  // this cooldown was added). 15 min is generous vs. Alpaca's ~1-minute
+  // settlement and gives the broker cache plenty of time to catch up.
+  const recentlyClosed = new Set(
+    db.prepare(
+      `SELECT DISTINCT symbol FROM trades
+        WHERE exit_date IS NOT NULL
+          AND datetime(exit_date) > datetime('now', ?)`
+    ).all(`-${recentCloseWindowMin} minutes`).map(r => r.symbol)
+  );
+
+  const orphans = positions.filter(p => !tracked.has(p.symbol) && !recentlyClosed.has(p.symbol));
+  if (!orphans.length) return { reconciled: [], stillOrphan: [] };
+
+  // Extended order history — find the originating buy when possible. 500 cap
+  // covers ~3 months of typical activity; widen if your flow is heavier.
+  const since = new Date(Date.now() - lookbackDays * 86400000).toISOString();
+  let allOrders = [];
+  try { allOrders = await alpaca.getOrders({ status: 'all', limit: 500, after: since }); } catch (_) {}
+  const buysBySymbol = {};
+  for (const o of allOrders) {
+    if (o.status !== 'filled' || o.side !== 'buy') continue;
+    (buysBySymbol[o.symbol] ||= []).push(o);
+  }
+
+  // Open stop-loss orders (including bracket-parent legs) → populate stop_price.
+  let openOrders = [];
+  try { openOrders = await alpaca.getOrders({ status: 'open', limit: 500 }); } catch (_) {}
+  const stopBySymbol = {};
+  const harvestStop = (o) => {
+    if ((o.type === 'stop' || o.type === 'stop_limit') && o.side === 'sell' && o.stop_price) {
+      stopBySymbol[o.symbol] = +o.stop_price;
+    }
+  };
+  for (const o of openOrders) {
+    harvestStop(o);
+    if (Array.isArray(o.legs)) o.legs.forEach(harvestStop);
+  }
+
+  // Sector lookup for universe-known symbols (mirrors order-centric path).
+  const sectorLookup = db.prepare('SELECT sector FROM universe_mgmt WHERE symbol = ?');
+
+  const stmt = db.prepare(`
+    INSERT INTO trades (symbol, side, entry_date, entry_price, shares, sector,
+                        stop_price, alpaca_order_id, needs_review, notes, was_system_signal)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0)
+  `);
+
+  const reconciled = [];
+  const stillOrphan = [];
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  for (const pos of orphans) {
+    try {
+      const sym      = pos.symbol;
+      const qty      = Math.abs(+pos.qty);
+      const avgEntry = +pos.avg_entry_price;
+      if (!(qty > 0) || !(avgEntry > 0)) {
+        stillOrphan.push({ symbol: sym, reason: 'invalid_qty_or_price' });
+        continue;
+      }
+
+      // Pick the most-recent buy as the originating order (best heuristic in
+      // the absence of explicit linkage). This is only used for metadata
+      // (entry_date, alpaca_order_id); the authoritative qty/price come from
+      // the position itself.
+      const candidates = (buysBySymbol[sym] || []).slice().sort((a, b) =>
+        (b.filled_at || b.created_at || '').localeCompare(a.filled_at || a.created_at || '')
+      );
+      const originating = candidates[0];
+      const orderId     = originating?.id || null;
+      const entryDate   = originating
+        ? (originating.filled_at || originating.created_at).split('T')[0]
+        : todayStr;
+
+      const brokerStop = stopBySymbol[sym] || null;
+      const sector     = sectorLookup.get(sym)?.sector || null;
+
+      const note = originating
+        ? `[RECONCILED-FROM-BROKER] ${qty}sh @ $${avgEntry.toFixed(2)} — linked to filled order ${orderId.slice(0,8)}... Review thesis + exit plan, then clear needs_review.`
+        : `[RECONCILED-FROM-BROKER] ${qty}sh @ $${avgEntry.toFixed(2)} — no originating buy order found within last ${lookbackDays}d (older than window, or submitted outside this app). Set entry_date / strategy manually if needed.`;
+
+      stmt.run(sym, 'long', entryDate, avgEntry, qty, sector, brokerStop, orderId, note);
+
+      reconciled.push({
+        symbol: sym, qty, avgEntry, stopPrice: brokerStop,
+        linkedOrderId: orderId, entryDate,
+        source: originating ? 'linked_order' : 'position_only',
+      });
+    } catch (e) {
+      stillOrphan.push({ symbol: pos.symbol, reason: e.message });
+    }
+  }
+
+  return { reconciled, stillOrphan };
+}
+
+module.exports = { syncBrokerFills, reconcileOrphanPositions };
