@@ -278,6 +278,40 @@ async function runPullbackScan(options = {}) {
           message: `${label}: ${symbol} @ $${livePrice.toFixed(2)} (MA50 $${ma50.toFixed(2)}, ${distPct >= 0 ? '+' : ''}${distPct}%) — RS ${snap.rs_rank}, SEPA ${snap.sepa_score || 0}/8`,
         },
       }).catch(e => console.error(`  Pullback notify error for ${symbol}: ${e.message}`));
+
+      // Layer 1 telemetry: record the pullback state transition as an emitted
+      // signal so the nightly closer can compute 5/10/20d forward returns and
+      // answer "do IN_ZONE alerts actually bounce?" vs "do KISSING alerts
+      // bottom and rally?" — the calibration machinery needs this data to
+      // separate confidence:high pullbacks from noise. Only in_zone/kissing
+      // qualify as signals; 'approaching' is too early to be actionable.
+      try {
+        const { logSignal } = require('./edge-telemetry');
+        // Reference stop at MA50 − 1×ATR (typical pullback stop), target1 at
+        // MA50 + 3.5×ATR (position-mode scale). These are reference levels
+        // for outcome measurement, not trade instructions.
+        const stopRef   = +(ma50 - atr).toFixed(2);
+        const target1Ref = +(ma50 + 3.5 * atr).toFixed(2);
+        logSignal({
+          source: 'pullback_alert',
+          symbol,
+          strategy: 'pullback_50ma',
+          setup_type: newState,                        // 'in_zone' or 'kissing'
+          side: 'long',
+          confidence: newState === 'kissing' ? 'medium' : 'high',
+          conviction_score: snap.sepa_score ?? null,
+          entry_price: +livePrice.toFixed(2),
+          stop_price: stopRef,
+          target1_price: target1Ref,
+          rs_rank: snap.rs_rank ?? null,
+          swing_momentum: snap.swing_momentum ?? null,
+          sepa_score: snap.sepa_score ?? null,
+          stage: snap.stage ?? null,
+          atr_pct: ma50 > 0 ? +((atr / ma50) * 100).toFixed(2) : null,
+          horizon_days: 20,
+          meta: { state: newState, previousState: lastState, ma50, atr, distPct, vcpForming: !!snap.vcp_forming },
+        });
+      } catch (_) { /* telemetry never blocks */ }
     }
 
     fired.push({
