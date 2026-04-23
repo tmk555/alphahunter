@@ -114,7 +114,7 @@ module.exports = function(runScan) {
   router.post('/pyramid-plans', async (req, res) => {
     try {
       const { ticker, totalQty, pivot, stopPrice, target1_price, target2_price,
-              atr, volumePaceMin, notes, expiryDays } = req.body;
+              atr, volumePaceMin, notes, expiryDays, vwapGate } = req.body;
       if (!ticker) return res.status(400).json({ error: 'ticker required' });
       if (!(totalQty > 0)) return res.status(400).json({ error: 'totalQty must be > 0' });
 
@@ -134,6 +134,13 @@ module.exports = function(runScan) {
         }
       } catch (_) {}
 
+      // Accept `vwapGate: true` as a shortcut for the standard 39-min config.
+      // Clients can also pass a full object for custom params.
+      const normalizedVwapGate = vwapGate === true
+        ? { minutes: 39, requireAboveVWAP: true, earliestAfterOpenMin: 39,
+            gapUpLimitPct: 0.02, gapDownLimitPct: 0.02 }
+        : (vwapGate && typeof vwapGate === 'object' ? vwapGate : null);
+
       const plan = createPyramidPlan({
         symbol: ticker, totalQty: +totalQty, pivot, stopPrice,
         target1_price, target2_price,
@@ -142,6 +149,7 @@ module.exports = function(runScan) {
         stock,   // pass scanner result so pattern detection reuses cached data
         source: 'manual', convictionScore: stock.convictionScore,
         volumePaceMin, notes, expiryDays,
+        vwapGate: normalizedVwapGate,
       });
 
       res.json(plan);
@@ -155,6 +163,37 @@ module.exports = function(runScan) {
     try {
       const plan = await cancelPyramidPlan(+req.params.id);
       res.json(plan);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Arm / disarm VWAP gate on an existing plan ─────────────────────────
+  // Useful for toggling the gate after a plan is already created — e.g., you
+  // staged without VWAP, then regime softens and you want the extra filter.
+  router.post('/pyramid-plans/:id/arm-vwap', async (req, res) => {
+    try {
+      const { getDB } = require('../data/database');
+      const db = getDB();
+      const row = db.prepare('SELECT id, status FROM pyramid_plans WHERE id = ?').get(+req.params.id);
+      if (!row) return res.status(404).json({ error: 'plan not found' });
+      if (row.status !== 'armed_pilot') {
+        return res.status(400).json({ error: `VWAP gate only applies pre-pilot-fill (status=${row.status})` });
+      }
+      const gate = req.body && Object.keys(req.body).length
+        ? req.body
+        : { minutes: 39, requireAboveVWAP: true, earliestAfterOpenMin: 39,
+            gapUpLimitPct: 0.02, gapDownLimitPct: 0.02 };
+      db.prepare('UPDATE pyramid_plans SET vwap_gate = ?, updated_at = datetime(\'now\') WHERE id = ?')
+        .run(JSON.stringify(gate), +req.params.id);
+      res.json({ id: +req.params.id, vwapGate: gate });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.post('/pyramid-plans/:id/disarm-vwap', async (req, res) => {
+    try {
+      const { getDB } = require('../data/database');
+      getDB().prepare('UPDATE pyramid_plans SET vwap_gate = NULL, updated_at = datetime(\'now\') WHERE id = ?')
+        .run(+req.params.id);
+      res.json({ id: +req.params.id, vwapGate: null });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

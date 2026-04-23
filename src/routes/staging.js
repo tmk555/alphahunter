@@ -189,6 +189,81 @@ module.exports = function(db, runScan) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ─── Arm VWAP + gap gate on a staged order ───────────────────────────────
+  // Flips status 'staged' → 'pending_trigger' and writes the gate config JSON.
+  // The vwap_gate_check cron then promotes the row back to 'staged' and
+  // submits it once the first 39-min candle closes above VWAP and the gap is
+  // within bounds.
+  //
+  // Body: {
+  //   minutes?: 39,             // candle duration (default 39)
+  //   gapUpLimitPct?: 0.02,      // reject gap up > this (default 2%)
+  //   gapDownLimitPct?: 0.02,    // reject gap down > this (default 2%)
+  //   requireAboveVWAP?: true,   // long side default
+  //   earliestAfterOpenMin?: 39, // min minutes post-open before evaluating
+  //   cancelOnFail?: false,      // if true, fail → cancel; else leaves pending
+  //   expiresAt?: 'YYYY-MM-DD',  // optional auto-cancel date
+  // }
+  router.post('/staging/:id/arm-gate', (req, res) => {
+    try {
+      const id = +req.params.id;
+      const existing = getStagedOrder(id);
+      if (!existing) return res.status(404).json({ error: 'Staged order not found' });
+      if (existing.status !== 'staged' && existing.status !== 'pending_trigger') {
+        return res.status(400).json({ error: `Cannot arm gate: order is ${existing.status}, must be staged or pending_trigger` });
+      }
+
+      const body = req.body || {};
+      const gate = {
+        minutes:              body.minutes ?? 39,
+        gapUpLimitPct:        body.gapUpLimitPct ?? 0.02,
+        gapDownLimitPct:      body.gapDownLimitPct ?? 0.02,
+        requireAboveVWAP:     body.requireAboveVWAP ?? true,
+        earliestAfterOpenMin: body.earliestAfterOpenMin ?? (body.minutes ?? 39),
+        cancelOnFail:         !!body.cancelOnFail,
+        expiresAt:            body.expiresAt || null,
+      };
+      db.prepare(
+        "UPDATE staged_orders SET status = 'pending_trigger', submission_gate = ? WHERE id = ?"
+      ).run(JSON.stringify(gate), id);
+      res.json({ id, gate, status: 'pending_trigger' });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Disarm gate — revert to plain staged ────────────────────────────────
+  router.post('/staging/:id/disarm-gate', (req, res) => {
+    try {
+      const id = +req.params.id;
+      const existing = getStagedOrder(id);
+      if (!existing) return res.status(404).json({ error: 'Staged order not found' });
+      if (existing.status !== 'pending_trigger') {
+        return res.status(400).json({ error: `Cannot disarm: order is ${existing.status}` });
+      }
+      db.prepare(
+        "UPDATE staged_orders SET status = 'staged', submission_gate = NULL WHERE id = ?"
+      ).run(id);
+      res.json({ id, status: 'staged' });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Preview gate evaluation without submitting ──────────────────────────
+  router.get('/staging/:id/gate-status', async (req, res) => {
+    try {
+      const id = +req.params.id;
+      const row = getStagedOrder(id);
+      if (!row) return res.status(404).json({ error: 'Staged order not found' });
+      if (!row.submission_gate) return res.json({ id, hasGate: false });
+
+      const { evaluateGate } = require('../broker/vwap-gate');
+      let gateCfg;
+      try { gateCfg = JSON.parse(row.submission_gate); }
+      catch (_) { return res.status(500).json({ error: 'Invalid submission_gate JSON on row' }); }
+
+      const verdict = await evaluateGate(row, gateCfg);
+      res.json({ id, hasGate: true, status: row.status, gateConfig: gateCfg, verdict });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // ─── Modify entry price on staged or submitted order ──────────────────────
   // Body: { newEntryPrice: number }
   // For submitted multi-tranche brackets, patches all tranche parents at Alpaca.

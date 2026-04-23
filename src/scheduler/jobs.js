@@ -767,6 +767,29 @@ registerJobType('weekly_digest', {
   },
 });
 
+// ─── VWAP + Gap Submission Gate ─────────────────────────────────────────────
+// Holds staged_orders in 'pending_trigger' status until the first N-minute
+// candle (default 39) closes above VWAP AND the overnight gap is within
+// configured bounds. Runs every 5 min during market hours — each tick walks
+// pending_trigger rows and promotes any whose gate has passed.
+
+registerJobType('vwap_gate_check', {
+  description: 'Check pending_trigger staged orders against VWAP reclaim + gap bounds',
+  defaultConfig: {},
+  handler: async () => {
+    const { runVwapGateTick } = require('../broker/vwap-gate');
+    const result = await runVwapGateTick();
+    return {
+      checked: result.checked,
+      passed: result.passed.length,
+      failed: result.failed.length,
+      skipped: result.skipped.length,
+      passedSymbols: result.passed.map(p => p.symbol),
+      failedSymbols: result.failed.map(f => ({ symbol: f.symbol, reason: f.reason })),
+    };
+  },
+});
+
 // ─── Edge Telemetry — Nightly Outcome Closer (Layer 1) ─────────────────────
 // Walks every open row in signal_outcomes older than 5 trading days, fetches
 // forward OHLCV bars for each symbol (once per symbol), and resolves 5/10/20d
@@ -1010,6 +1033,17 @@ const DEFAULT_JOBS = [
     description: 'Pre-market morning brief — regime, positions, staged orders, top picks',
     job_type: 'morning_brief',
     cron_expression: '45 8 * * 1-5',  // 8:45 AM server local, weekdays
+    config: {},
+  },
+
+  // ─── VWAP + gap submission gate — every 5 min during RTH ──────────────
+  // Walks pending_trigger staged orders, promotes any whose 39-min VWAP
+  // reclaim + gap bounds have passed. Cheap when no rows are pending.
+  {
+    name: 'vwap_gate_check_intraday',
+    description: 'Check pending_trigger staged orders against 39-min VWAP reclaim + gap bounds',
+    job_type: 'vwap_gate_check',
+    cron_expression: '*/5 9-16 * * 1-5',
     config: {},
   },
 
