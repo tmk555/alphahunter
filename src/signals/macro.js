@@ -313,11 +313,25 @@ function computeCommodities(q, usoBars, gldBars) {
   const commoditiesRising = avgRoc > 3 || dbaRising;
 
   // Score: -1 (inflation rising fast), 0 (stable), +1 (disinflation)
+  //
+  // Fix #4 (2026-04): the old scorer AND-gated on `yieldsRising`, which
+  // masked oil shocks when the bond market was flat. A +18% oil move with
+  // stable yields is still inflationary (supply-side shock, cost-push, not
+  // demand-pull). Score it on its own merits.
   let score = 0;
   let signal = 'stable';
 
-  if (commoditiesRising && yieldsRising && avgRoc > 5) {
+  if (oilRoc != null && oilRoc > 15) {
+    // Standalone oil shock — most direct inflation pressure on earnings,
+    // regardless of what yields are doing.
+    score = -1; signal = 'oil_shock';
+  } else if (commoditiesRising && yieldsRising && avgRoc > 5) {
+    // Classic reflation — commodities + yields both accelerating.
     score = -1; signal = 'inflation_rising';
+  } else if (commoditiesRising && avgRoc > 7) {
+    // Commodities surging without yield confirmation — still cost pressure,
+    // typically a headwind for margins.
+    score = -1; signal = 'commodities_rising';
   } else if (!commoditiesRising && !yieldsRising && avgRoc < -3) {
     score = 1; signal = 'disinflation';
   } else {
@@ -329,9 +343,10 @@ function computeCommodities(q, usoBars, gldBars) {
     signal,
     oilRoc20: oilRoc != null ? +oilRoc.toFixed(2) : null,
     goldRoc20: goldRoc != null ? +goldRoc.toFixed(2) : null,
+    avgRoc20: +avgRoc.toFixed(2),
     dbaRising,
     yieldsRising,
-    details: `Oil 20d: ${oilRoc?.toFixed(1) ?? 'n/a'}%, Gold 20d: ${goldRoc?.toFixed(1) ?? 'n/a'}%`,
+    details: `Oil 20d: ${oilRoc?.toFixed(1) ?? 'n/a'}%, Gold 20d: ${goldRoc?.toFixed(1) ?? 'n/a'}%${yieldsRising ? ', yields rising' : ''}`,
   };
 }
 
@@ -365,7 +380,13 @@ function computeISMProxy(q, xliBars, spyBars) {
     }
   }
 
-  // Score: -1 (contraction), 0 (neutral), +1 (expansion)
+  // Score: -1 (contraction), 0 (neutral/rotation), +1 (expansion)
+  //
+  // Fix #5 (2026-04): the old scorer labelled any relativeRoc<-2 as
+  // "contraction" — even when XLI was still absolutely rising. That's
+  // not contraction, that's leadership rotation (tech/discretionary
+  // outperforming industrials in a bull tape). Genuine contraction
+  // requires XLI to be falling on an absolute basis, not just lagging.
   let score = 0;
   let signal = 'neutral';
 
@@ -375,7 +396,13 @@ function computeISMProxy(q, xliBars, spyBars) {
     if (relativeRoc > 2) {
       score = 1; signal = 'expansion';
     } else if (relativeRoc < -2) {
-      score = -1; signal = 'contraction';
+      if (xliRoc20 != null && xliRoc20 > 1) {
+        // XLI still rising in absolute terms — just lagging SPY.
+        // That's rotation, not economic weakness. Neutral score.
+        score = 0; signal = 'defensive_rotation';
+      } else {
+        score = -1; signal = 'contraction';
+      }
     }
   } else if (ratioTrend != null) {
     if (ratioTrend > 1) {
@@ -390,15 +417,29 @@ function computeISMProxy(q, xliBars, spyBars) {
     signal,
     xliSpyRatio: +currentRatio.toFixed(4),
     ratioVs50d: ratioTrend != null ? +ratioTrend.toFixed(2) : null,
+    xliRoc20: xliRoc20 != null ? +xliRoc20.toFixed(2) : null,
+    spyRoc20: spyRoc20 != null ? +spyRoc20.toFixed(2) : null,
     relativeRoc20: relativeRoc != null ? +relativeRoc.toFixed(2) : null,
-    details: `XLI/SPY: ${currentRatio.toFixed(3)}, rel RoC: ${relativeRoc?.toFixed(1) ?? 'n/a'}%`,
+    details: `XLI/SPY: ${currentRatio.toFixed(3)}, rel RoC: ${relativeRoc?.toFixed(1) ?? 'n/a'}%${signal === 'defensive_rotation' ? ' (XLI still ↑)' : ''}`,
   };
 }
 
 // ─── Intermarket Momentum ───────────────────────────────────────────────────
 // 20-day rate of change for SPY, TLT, GLD, UUP, USO.
-// Risk-on: SPY up, TLT down, GLD down.
-// Risk-off: SPY down, TLT up, GLD up.
+// Risk-on: SPY up, TLT down, GLD down, UUP down (weak dollar tailwind).
+// Risk-off: SPY down, TLT up, GLD up, UUP up (strong dollar headwind), or
+// an oil shock (USO surging) that threatens earnings via input costs.
+//
+// Design notes (2026-04 revision):
+//   • Pre-revision bug: UUP and USO were fetched and returned but never
+//     contributed to the score. SPY alone could drive "strong_risk_on" on a
+//     single-market rally with no confirmation from credit/FX/commodities.
+//   • Fix #1 (confirmation cap): SPY +5% alone caps at +1. Reaching +2
+//     ("strong_risk_on") now requires non-SPY confirmation — TLT down, GLD
+//     down, or UUP down. Symmetrical on the downside.
+//   • Fix #2 (gold gradient): gold's safe-haven signal degrades gradually
+//     (+2%→-0.5, +5%→-1, +10%→-2) instead of cliffing at +5%.
+//   • Fix #3 (USO/UUP wiring): dollar and oil now contribute directly.
 function computeIntermarketMomentum(spyBars, tltBars, gldBars, uupBars, usoBars) {
   const period = 20;
 
@@ -413,38 +454,70 @@ function computeIntermarketMomentum(spyBars, tltBars, gldBars, uupBars, usoBars)
     return { score: 0, signal: 'insufficient_data', details: 'Need SPY, TLT, GLD history' };
   }
 
-  // Risk-on score: SPY positive, TLT negative (money leaving bonds), GLD negative
-  let score = 0;
+  // Track each market's contribution separately so we can enforce a
+  // "SPY alone isn't enough for +2" confirmation rule at the end.
+  let spyContrib = 0, tltContrib = 0, gldContrib = 0, uupContrib = 0, usoContrib = 0;
 
-  // SPY momentum (biggest weight)
+  // SPY momentum (headline signal)
   if (spyRoc != null) {
-    if (spyRoc > 5)       score += 2;
-    else if (spyRoc > 2)  score += 1;
-    else if (spyRoc < -5) score -= 2;
-    else if (spyRoc < -2) score -= 1;
+    if (spyRoc > 5)       spyContrib = 2;
+    else if (spyRoc > 2)  spyContrib = 1;
+    else if (spyRoc < -5) spyContrib = -2;
+    else if (spyRoc < -2) spyContrib = -1;
   }
 
   // TLT: inverse relationship with risk appetite
   if (tltRoc != null) {
-    if (tltRoc < -3)      score += 1;  // bonds selling = risk-on
-    else if (tltRoc > 5)  score -= 1;  // bonds rallying = risk-off
+    if (tltRoc < -3)      tltContrib = 1;   // bonds selling = risk-on
+    else if (tltRoc > 5)  tltContrib = -1;  // bonds rallying = risk-off
   }
 
-  // GLD: safe haven demand
+  // GLD: safe-haven demand — gradient rather than a cliff
   if (gldRoc != null) {
-    if (gldRoc > 5)       score -= 1;  // gold surging = fear
-    else if (gldRoc < -2) score += 1;  // gold selling = risk-on
+    if (gldRoc > 10)       gldContrib = -2;    // strong fear
+    else if (gldRoc > 5)   gldContrib = -1;    // moderate fear
+    else if (gldRoc > 2)   gldContrib = -0.5;  // mild safe-haven bid
+    else if (gldRoc < -2)  gldContrib = 1;     // gold selling = risk-on
+  }
+
+  // UUP: dollar strength — headwind for multinationals and risk assets
+  if (uupRoc != null) {
+    if (uupRoc > 2)       uupContrib = -1;  // dollar rally = risk-off
+    else if (uupRoc < -2) uupContrib = 1;   // weak dollar = risk-on tailwind
+  }
+
+  // USO: oil shock asymmetric — surges hurt equities via input costs,
+  // crashes are ambiguous (growth scare vs. supply glut), so we only
+  // penalize big surges here.
+  if (usoRoc != null) {
+    if (usoRoc > 15)      usoContrib = -1;     // inflationary shock
+    else if (usoRoc > 10) usoContrib = -0.5;   // elevated cost pressure
+  }
+
+  let score = spyContrib + tltContrib + gldContrib + uupContrib + usoContrib;
+
+  // Confirmation gating: a +2 reading must have non-SPY tailwind (TLT/GLD/UUP
+  // down, etc.). Otherwise the market is running alone and the regime hasn't
+  // flipped — cap at +1. Symmetric on the risk-off side.
+  const nonSpyContrib = tltContrib + gldContrib + uupContrib + usoContrib;
+  if (spyContrib >= 2 && nonSpyContrib <= 0) {
+    score = Math.min(score, 1);
+  } else if (spyContrib <= -2 && nonSpyContrib >= 0) {
+    score = Math.max(score, -1);
   }
 
   // Clamp to -2..+2
   score = Math.max(-2, Math.min(2, score));
 
   let signal;
-  if (score >= 2)      signal = 'strong_risk_on';
-  else if (score >= 1) signal = 'risk_on';
+  if (score >= 2)       signal = 'strong_risk_on';
+  else if (score >= 1)  signal = 'risk_on';
   else if (score <= -2) signal = 'strong_risk_off';
   else if (score <= -1) signal = 'risk_off';
   else                  signal = 'neutral';
+
+  // Round to 1 decimal — half-steps from the gold gradient matter for the UI.
+  score = +score.toFixed(1);
 
   return {
     score,
@@ -454,7 +527,14 @@ function computeIntermarketMomentum(spyBars, tltBars, gldBars, uupBars, usoBars)
     gldRoc20: gldRoc != null ? +gldRoc.toFixed(2) : null,
     uupRoc20: uupRoc != null ? +uupRoc.toFixed(2) : null,
     usoRoc20: usoRoc != null ? +usoRoc.toFixed(2) : null,
-    details: `SPY: ${spyRoc?.toFixed(1) ?? '-'}%, TLT: ${tltRoc?.toFixed(1) ?? '-'}%, GLD: ${gldRoc?.toFixed(1) ?? '-'}%`,
+    contributions: {
+      spy: +spyContrib.toFixed(1),
+      tlt: +tltContrib.toFixed(1),
+      gld: +gldContrib.toFixed(1),
+      uup: +uupContrib.toFixed(1),
+      uso: +usoContrib.toFixed(1),
+    },
+    details: `SPY:${spyRoc?.toFixed(1) ?? '-'}% TLT:${tltRoc?.toFixed(1) ?? '-'}% GLD:${gldRoc?.toFixed(1) ?? '-'}% UUP:${uupRoc?.toFixed(1) ?? '-'}% USO:${usoRoc?.toFixed(1) ?? '-'}%`,
   };
 }
 

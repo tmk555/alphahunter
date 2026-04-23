@@ -4718,16 +4718,32 @@ function MarketPulseTab() {
   const [bwApplying, setBwApplying] = useState(false);
   const [sparkRange, setSparkRange] = useState('1M');
 
-  // Sparkline period ranges — map to trading-day slice length
+  // Sparkline period ranges — map to trading-day slice length.
+  // Backend /api/macro serves up to 252 trading days (~1Y) per symbol, so
+  // any range up to 1Y is a cheap client-side slice. YTD is resolved by
+  // counting trading days from Jan 1 of the current calendar year.
   const SPARK_RANGES = [
     { k:'5D',  bars:5   },
     { k:'1M',  bars:22  },
     { k:'3M',  bars:66  },
+    { k:'6M',  bars:126 },
+    { k:'YTD', bars:'YTD' },
     { k:'1Y',  bars:252 },
   ];
   const sliceHist = (arr) => {
     if (!arr || arr.length < 2) return arr || [];
-    const bars = (SPARK_RANGES.find(r => r.k === sparkRange) || SPARK_RANGES[1]).bars;
+    const cfg = SPARK_RANGES.find(r => r.k === sparkRange) || SPARK_RANGES[1];
+    let bars;
+    if (cfg.bars === 'YTD') {
+      // Trading days elapsed in the current calendar year (~252 × fraction).
+      // Using 252/365 ≈ 0.69 keeps this simple and consistent across the tiles.
+      const now = new Date();
+      const jan1 = new Date(now.getFullYear(), 0, 1);
+      const daysElapsed = Math.max(1, Math.round((now - jan1) / (86400 * 1000)));
+      bars = Math.max(5, Math.round(daysElapsed * 252 / 365));
+    } else {
+      bars = cfg.bars;
+    }
     return arr.slice(-bars);
   };
 
@@ -5392,7 +5408,18 @@ function MacroTab() {
   // reads like a conventional macro dashboard (rates → curve → vol → credit → prices).
   const HEADLINE = ['DGS10','DGS2','T10Y2Y','VIXCLS','BAMLH0A0HYM2','CPIAUCSL','UNRATE'];
 
+  // Extended range palette — matches TradingView / Bloomberg conventions.
+  // Short ranges (1M–YTD) are only meaningful for daily series (yields, VIX,
+  // HY OAS); monthly series (CPI, UNRATE, INDPRO) will degrade gracefully
+  // with sparse data — we don't hide them, the chart just shows fewer points.
+  //
+  // `days:'YTD'` is handled specially in the range-resolution block below
+  // (start = Jan 1 of current year, regardless of today's date).
   const RANGES = [
+    { k:'1M',  days:30 },
+    { k:'3M',  days:90 },
+    { k:'6M',  days:180 },
+    { k:'YTD', days:'YTD' },
     { k:'1Y',  days:365 },
     { k:'3Y',  days:365*3 },
     { k:'5Y',  days:365*5 },
@@ -5423,9 +5450,12 @@ function MacroTab() {
       setLoading(true); setError('');
       try {
         const today = new Date().toISOString().slice(0,10);
-        const r = RANGES.find(x => x.k === range) || RANGES[1];
+        const r = RANGES.find(x => x.k === range) || RANGES.find(x => x.k === '1Y');
         let qs = `?end=${today}`;
-        if (r.days != null) {
+        if (r.days === 'YTD') {
+          const y = new Date().getFullYear();
+          qs += `&start=${y}-01-01`;
+        } else if (r.days != null) {
           const start = new Date(); start.setDate(start.getDate() - r.days);
           qs += `&start=${start.toISOString().slice(0,10)}`;
         } else {
@@ -5584,16 +5614,28 @@ function MacroTab() {
                 const lastY = toY(lastV);
                 return <circle cx={lastX} cy={lastY} r="3" fill="var(--cyan)" stroke="var(--bg)" strokeWidth="1.5"/>;
               })()}
-              {/* X-axis date labels */}
-              {tickIdx.map((i,k) => {
-                const x = padL + i*stepX;
-                const date = points[i]?.date || '';
-                return (
-                  <text key={k} x={x} y={chartH-6} fill="var(--text3)" fontSize="9" textAnchor="middle" fontFamily="var(--font-mono)">
-                    {date.slice(0,7)}
-                  </text>
-                );
-              })}
+              {/* X-axis date labels — format adapts to the selected range.
+                  Short spans show MM-DD (readable day-level), mid spans show
+                  YYYY-MM, and multi-year spans show YYYY only. */}
+              {(() => {
+                const first = points[0]?.date, last = points[points.length-1]?.date;
+                let spanDays = 0;
+                if (first && last) {
+                  spanDays = Math.max(1, Math.round((new Date(last) - new Date(first)) / (86400*1000)));
+                }
+                const fmt = spanDays <= 180 ? d => d.slice(5)       // MM-DD
+                          : spanDays <= 365*2 ? d => d.slice(0,7)   // YYYY-MM
+                          : d => d.slice(0,4);                      // YYYY
+                return tickIdx.map((i,k) => {
+                  const x = padL + i*stepX;
+                  const date = points[i]?.date || '';
+                  return (
+                    <text key={k} x={x} y={chartH-6} fill="var(--text3)" fontSize="9" textAnchor="middle" fontFamily="var(--font-mono)">
+                      {fmt(date)}
+                    </text>
+                  );
+                });
+              })()}
             </svg>
           );
         })()}
