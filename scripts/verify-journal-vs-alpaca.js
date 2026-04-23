@@ -29,6 +29,11 @@
 //   Reads ALPACA_KEY / ALPACA_SECRET via src/broker/alpaca. If Alpaca is
 //   unconfigured the script prints only the journal side and exits 1.
 
+// Load .env so ALPACA_API_KEY / ALPACA_API_SECRET are available when this
+// script is invoked directly (app.js loads dotenv for the server path, but
+// standalone scripts don't go through that entry point).
+try { require('dotenv').config(); } catch (_) { /* dotenv optional */ }
+
 const path = require('path');
 
 async function main() {
