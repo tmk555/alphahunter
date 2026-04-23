@@ -542,6 +542,7 @@ const TRADE_EVENT_EMOJIS = {
   pyramid_tranche_filled: '✅',  // Pyramid tranche bracket parent filled
   pyramid_gap_abort:      '⚠️',   // Pyramid plan cancelled — gap too wide
   pyramid_stopped:        '🛑',  // Pyramid pilot stopped out — remaining tranches cancelled
+  pyramid_slippage_cancel:'⚠️',   // Pyramid tranche filled well above trigger — adds cancelled
   pyramid_expired:        '⏰',  // Pyramid plan expired — pilot never fired
   pyramid_cancelled:      '🚫',  // Pyramid plan manually cancelled
   // Broker lifecycle terminal transitions — fired by the order-status
