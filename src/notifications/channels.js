@@ -263,6 +263,15 @@ const NOTIFICATION_PRIORITY_MAP = {
   // Scheduled digests — normal priority (should ping but not urgent)
   morning_brief:       0,
   weekly_digest:       0,
+
+  // Reconcile drift events.
+  //   drift_detected: priority 1 — manual review required (journal shows open
+  //                   rows that Alpaca doesn't back). The DAL 2026-04-23 case
+  //                   would have fired this and saved 3+ hours of confusion.
+  //   drift_resolved: priority 0 — we fixed it automatically; user should know
+  //                   but doesn't need a siren.
+  drift_detected:      1,
+  drift_resolved:      0,
 };
 
 // Backwards-compat alias — external callers (routes, older tests) may import
@@ -307,6 +316,8 @@ const PUSHOVER_SOUND_MAP = {
   conditional_triggered: 'magic',
   morning_brief:       'pushover',     // gentle default — informational
   weekly_digest:       'pushover',     // gentle default — informational
+  drift_detected:      'falling',      // manual intervention required
+  drift_resolved:      'pushover',     // informational — self-healed
 };
 
 function lookupSound(type, fallback = 'pushover') {
@@ -548,6 +559,11 @@ const TRADE_EVENT_EMOJIS = {
   // Broker lifecycle terminal transitions — fired by the order-status
   // poller in broker/monitor.js + direct hooks in broker/staging.js.
   cancelled: '🚫', expired: '⏰', rejected: '⛔',
+  // Reconcile drift — fired by broker/monitor.js reconcilePositions when it
+  // detects or auto-resolves a mismatch between the journal and Alpaca's
+  // ground-truth positions (canceled-with-partial-fill orders, share count
+  // drift, etc). drift_resolved = we fixed it; drift_detected = manual needed.
+  drift_resolved: '🔄', drift_detected: '⚠️',
 };
 
 async function notifyTradeEvent({ event, symbol, details = {} }) {

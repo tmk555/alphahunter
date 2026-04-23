@@ -78,11 +78,15 @@ function ensureBracketFields(db, alpacaOrderId, symbol, opts = {}) {
   ).run(row.id);
 }
 
-async function syncBrokerFills() {
+async function syncBrokerFills({ lookbackDays = 7, limit = 100 } = {}) {
   const db = getDB();
 
-  const since  = new Date(Date.now() - 7 * 86400000).toISOString();
-  const orders = await alpaca.getOrders({ status: 'closed', limit: 100, after: since });
+  // Widen this window when called from reconcilePositions in drift-resolve mode:
+  // the canceled-with-partial-fill that created DAL's drift had already aged
+  // past the normal 7-day intraday window by the time reconcile noticed. Drift
+  // resolver passes lookbackDays=30 so we can actually find the orphan sell.
+  const since  = new Date(Date.now() - lookbackDays * 86400000).toISOString();
+  const orders = await alpaca.getOrders({ status: 'closed', limit, after: since });
   const filled = orders.filter(o => o.status === 'filled' && o.side === 'buy');
 
   // Dedupe strictly on alpaca_order_id — the old symbol:date guard blocked
@@ -238,7 +242,15 @@ async function syncBrokerFills() {
   // After a pending-close fill is reconciled we null out the pending_close_*
   // columns so the row no longer renders the PENDING CLOSE pill, and the exit
   // reason is tagged 'manual_exit_fill' instead of the generic 'auto_sync'.
-  const sells  = orders.filter(o => o.status === 'filled' && o.side === 'sell');
+  // Filter on filled_qty, NOT status === 'filled'. A canceled market order can
+  // still leave real shares behind: if Alpaca fills 81 of 88 and then cancels
+  // the remainder (partial liquidity), the order status is 'canceled' but the
+  // 81-share fill already hit the account and needs reconciling. Before this
+  // fix, such orders were silently skipped — symptom was DAL 2026-04-23 where
+  // an 88sh market sell got status=canceled with 81sh filled and the journal
+  // never recorded the exit (rows #5/#8/#10 stayed "open" while Alpaca showed
+  // position=0, triggering phantom stop alerts on the still-active bracket).
+  const sells  = orders.filter(o => o.side === 'sell' && +o.filled_qty > 0);
   const exited = [];
 
   // Pre-load the set of sell order ids already reconciled into the journal.

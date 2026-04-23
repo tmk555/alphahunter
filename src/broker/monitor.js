@@ -489,31 +489,182 @@ async function checkPositionsAgainstStops() {
 }
 
 // ─── Reconcile local trades with broker positions ───────────────────────────
+//
+// This function was report-only until 2026-04-23 — it returned a JSON diff
+// that only surfaced in /api/scheduler responses. When DAL had a
+// canceled-with-partial-fill market sell on 2026-04-23 (order 9f946d4e: 88sh
+// requested, 81sh filled, 7sh canceled), the intraday fills-sync skipped it
+// (filter required status='filled') and 81sh silently disappeared from the
+// journal while the broker was flat. Reconcile detected the drift but did
+// nothing about it, so the bracket stop on a 0-share position kept firing
+// phantom alerts.
+//
+// Post-refactor:
+//   1. Drift DETECTION — three classes:
+//        a. zeroBrokerDrift   — broker flat, journal has open rows (DAL case)
+//        b. shareCountDrift   — both sides have the symbol but sum(remaining)
+//                               ≠ broker qty (partial bracket leg reconciled)
+//        c. inBrokerOnly      — broker has shares, journal is flat
+//                               (handled by reconcileOrphanPositions in
+//                               fills-sync; mirrored here for the report)
+//
+//   2. Drift RESOLUTION (autoResolve=true, default):
+//        a. When (a) is detected, call syncBrokerFills with a wider 30-day
+//           lookback. That window is enough to catch any orphan sell the
+//           normal 7d intraday sync missed. Idempotent: seenExitIds dedupes
+//           anything already reconciled.
+//        b. Re-query after resolution. Any remainder is true drift and fires
+//           a drift_detected notification for human review.
+//        c. (b) fires drift_detected but does NOT auto-resolve — a share
+//           mismatch could be a mid-flight partial bracket fill.
+//
+//   3. Drift NOTIFICATION — when (a) is actually closed by fills-sync this
+//      call, emits drift_resolved so the user sees "auto-closed 3 DAL rows
+//      from orphan sell" on their phone rather than discovering it the next
+//      day via a phantom stop alert.
 
-async function reconcilePositions() {
+async function reconcilePositions({ autoResolve = true } = {}) {
   const { configured } = alpaca.getConfig();
   if (!configured) return { error: 'Alpaca not configured' };
 
+  // Pull broker + journal state in parallel.
   const [alpacaPositions, localTrades] = await Promise.all([
     alpaca.getPositions(),
-    Promise.resolve(db().prepare('SELECT * FROM trades WHERE exit_date IS NULL').all()),
+    Promise.resolve(db().prepare(
+      'SELECT id, symbol, shares, remaining_shares, entry_price, entry_date FROM trades WHERE exit_date IS NULL'
+    ).all()),
   ]);
 
-  const alpacaSymbols = new Set(alpacaPositions.map(p => p.symbol));
-  const localSymbols  = new Set(localTrades.map(t => t.symbol));
+  // Broker: qty per symbol (always positive for long positions).
+  const brokerQty = new Map();
+  for (const p of alpacaPositions) brokerQty.set(p.symbol, +p.qty);
 
-  const inBrokerOnly = alpacaPositions.filter(p => !localSymbols.has(p.symbol)).map(p => ({
-    symbol: p.symbol, qty: +p.qty, market_value: +p.market_value, unrealized_pl: +p.unrealized_pl,
-  }));
-  const inLocalOnly  = localTrades.filter(t => !alpacaSymbols.has(t.symbol)).map(t => ({
-    symbol: t.symbol, shares: t.shares, entry_price: t.entry_price, entry_date: t.entry_date,
-  }));
+  // Journal: sum(remaining_shares || shares) per symbol.
+  const localQtyBySymbol = new Map();
+  const localRowsBySymbol = new Map();
+  for (const t of localTrades) {
+    const rem = t.remaining_shares != null ? t.remaining_shares : (t.shares || 0);
+    localQtyBySymbol.set(t.symbol, (localQtyBySymbol.get(t.symbol) || 0) + rem);
+    if (!localRowsBySymbol.has(t.symbol)) localRowsBySymbol.set(t.symbol, []);
+    localRowsBySymbol.get(t.symbol).push(t);
+  }
+
+  // ─── Classify drift ──────────────────────────────────────────────────────
+  const zeroBrokerDrift = [];   // broker flat, journal open
+  const shareCountDrift = [];   // both sides present, qty mismatch
+  for (const [sym, localQty] of localQtyBySymbol.entries()) {
+    const bq = brokerQty.get(sym) || 0;
+    if (bq === 0) {
+      zeroBrokerDrift.push({ symbol: sym, localQty, rows: localRowsBySymbol.get(sym).length });
+    } else if (bq !== localQty) {
+      shareCountDrift.push({ symbol: sym, localQty, brokerQty: bq, delta: localQty - bq });
+    }
+  }
+  const inBrokerOnly = alpacaPositions
+    .filter(p => !localQtyBySymbol.has(p.symbol))
+    .map(p => ({ symbol: p.symbol, qty: +p.qty, market_value: +p.market_value, unrealized_pl: +p.unrealized_pl }));
+
+  // ─── Resolve: fire a widened fills-sync when zeroBrokerDrift exists ─────
+  let resolved = [];
+  let stillDrifting = [];
+  if (autoResolve && zeroBrokerDrift.length) {
+    let syncResult = null;
+    try {
+      const { syncBrokerFills } = require('./fills-sync');
+      syncResult = await syncBrokerFills({ lookbackDays: 30 });
+    } catch (e) {
+      console.error(`  reconcile: widened fills-sync failed: ${e.message}`);
+    }
+
+    // Re-query journal state after the sync to see which symbols actually
+    // closed. Anything still open with broker=0 is true drift.
+    const afterRows = db().prepare(
+      'SELECT symbol FROM trades WHERE exit_date IS NULL'
+    ).all();
+    const stillOpen = new Set(afterRows.map(r => r.symbol));
+
+    for (const item of zeroBrokerDrift) {
+      if (!stillOpen.has(item.symbol)) {
+        resolved.push(item);
+      } else {
+        stillDrifting.push(item);
+      }
+    }
+
+    // Notifications
+    try {
+      const { notifyTradeEvent } = require('../notifications/channels');
+      for (const r of resolved) {
+        await notifyTradeEvent({
+          event: 'drift_resolved',
+          symbol: r.symbol,
+          details: {
+            rows: r.rows,
+            shares: r.localQty,
+            message: `Auto-reconciled ${r.rows} journal row(s) covering ${r.localQty}sh against broker flat position (widened 30d fills-sync).`,
+          },
+        });
+      }
+      for (const d of stillDrifting) {
+        await notifyTradeEvent({
+          event: 'drift_detected',
+          symbol: d.symbol,
+          details: {
+            shares: d.localQty,
+            reason: 'broker_flat_journal_open',
+            message: `Broker shows 0 shares but journal still has ${d.rows} open row(s) (${d.localQty}sh) after widened fills-sync. Manual review required.`,
+          },
+        });
+      }
+      for (const m of shareCountDrift) {
+        await notifyTradeEvent({
+          event: 'drift_detected',
+          symbol: m.symbol,
+          details: {
+            reason: 'share_count_mismatch',
+            message: `Journal open=${m.localQty}sh vs broker=${m.brokerQty}sh (Δ ${m.delta > 0 ? '+' : ''}${m.delta}). Could be a partial bracket leg filling; confirm.`,
+          },
+        });
+      }
+    } catch (_) { /* notification best-effort */ }
+
+    return {
+      synced: alpacaPositions.filter(p => localQtyBySymbol.has(p.symbol)).length,
+      zeroBrokerDrift,
+      shareCountDrift,
+      inBrokerOnly,
+      resolved,
+      stillDrifting,
+      autoResolveSync: syncResult ? { exited: syncResult.exited?.length || 0, synced: syncResult.synced?.length || 0 } : null,
+      discrepancies: stillDrifting.length + shareCountDrift.length + inBrokerOnly.length,
+    };
+  }
+
+  // ─── Report-only mode (autoResolve=false) or no drift ───────────────────
+  if (shareCountDrift.length) {
+    try {
+      const { notifyTradeEvent } = require('../notifications/channels');
+      for (const m of shareCountDrift) {
+        await notifyTradeEvent({
+          event: 'drift_detected',
+          symbol: m.symbol,
+          details: {
+            reason: 'share_count_mismatch',
+            message: `Journal open=${m.localQty}sh vs broker=${m.brokerQty}sh (Δ ${m.delta > 0 ? '+' : ''}${m.delta}).`,
+          },
+        });
+      }
+    } catch (_) {}
+  }
 
   return {
-    synced: alpacaPositions.filter(p => localSymbols.has(p.symbol)).length,
+    synced: alpacaPositions.filter(p => localQtyBySymbol.has(p.symbol)).length,
+    zeroBrokerDrift,
+    shareCountDrift,
     inBrokerOnly,
-    inLocalOnly,
-    discrepancies: inBrokerOnly.length + inLocalOnly.length,
+    resolved: [],
+    stillDrifting: zeroBrokerDrift,
+    discrepancies: zeroBrokerDrift.length + shareCountDrift.length + inBrokerOnly.length,
   };
 }
 

@@ -928,11 +928,40 @@ const DEFAULT_JOBS = [
     config: {},
   },
 
-  // Daily portfolio reconcile with broker — catches any drift between local
-  // trades table and Alpaca positions.
+  // Portfolio reconcile with broker — catches any drift between the local
+  // trades table and Alpaca positions. Runs three times:
+  //
+  //   1. 9:32 AM — catches drift from after-hours/overnight fills before the
+  //      day's activity can compound it. The DAL 2026-04-23 incident showed
+  //      that a single day of drift is enough to cause phantom stop alerts
+  //      on positions the user already exited.
+  //   2. 4:05 PM — catches close-auction fills before the 5:00 PM sweep.
+  //      Without this, any drift at the close goes undetected for ~60
+  //      minutes — long enough for a phantom bracket alert to fire
+  //      post-close.
+  //   3. 5:00 PM — final EOD sweep. Belt-and-suspenders after fills-sync
+  //      EOD at 5:10 PM runs.
+  //
+  // All three fire with autoResolve=true: they actively close drifting
+  // journal rows by calling a widened 30-day fills-sync, and emit
+  // drift_resolved / drift_detected notifications to Pushover.
+  {
+    name: 'portfolio_reconcile_open',
+    description: 'Reconcile journal vs broker at market open (catches overnight drift)',
+    job_type: 'portfolio_reconcile',
+    cron_expression: '32 9 * * 1-5',  // 9:32 AM — 2 min after open
+    config: {},
+  },
+  {
+    name: 'portfolio_reconcile_post_close',
+    description: 'Reconcile journal vs broker 5 min after close (catches auction drift)',
+    job_type: 'portfolio_reconcile',
+    cron_expression: '5 16 * * 1-5',  // 4:05 PM server local, weekdays
+    config: {},
+  },
   {
     name: 'portfolio_reconcile_daily',
-    description: 'Reconcile local trade journal with broker positions',
+    description: 'Reconcile local trade journal with broker positions (EOD)',
     job_type: 'portfolio_reconcile',
     cron_expression: '0 17 * * 1-5',  // 5:00 PM server local, weekdays
     config: {},

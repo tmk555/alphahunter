@@ -512,6 +512,11 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
+  // DOM overlay that holds the TradingView-style events strip (earnings /
+  // ex-div tags along the bottom of the chart). Positioned absolutely inside
+  // the same parent as containerRef; children are repositioned on every
+  // pan/zoom via the timeScale visible-range subscription.
+  const eventsOverlayRef = useRef(null);
   const [chartData, setChartData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [timeframe, setTimeframe] = useState('daily'); // 'daily' | 'weekly' | '39m'
@@ -642,38 +647,106 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
       }
     }
 
-    // ── Event markers: next earnings + next ex-dividend ─────────────────
-    // Rendered as arrow-shape markers anchored at the event date on the
-    // candle series (Lightweight Charts doesn't expose a vertical-line
-    // primitive, but setMarkers is the canonical way to annotate dates).
-    // Amber = earnings, Cyan = ex-div. Skipped on intraday — the markers
-    // would land outside the visible range.
-    if (chartData.events && !isIntraday) {
-      const evMarkers = [];
-      const { earningsDate, exDividendDate } = chartData.events;
-      if (earningsDate) {
-        evMarkers.push({
-          time:     earningsDate,
-          position: 'aboveBar',
-          color:    '#f0a500',
-          shape:    'arrowDown',
-          text:     `E ${earningsDate.slice(5)}`,  // MM-DD
-        });
+    // ── Bottom-strip event markers (TradingView-style) ──────────────────
+    // A horizontal lane just above the time axis carries tags for every
+    // earnings print (past 4 quarters + next upcoming) and the next
+    // ex-dividend. Past earnings are dim amber tiles; the next earnings
+    // is a solid amber tile; ex-div is cyan. Each tag has a tooltip with
+    // EPS actual vs estimate and surprise %.
+    //
+    // Implementation: DOM overlay positioned absolutely inside the chart
+    // container, with children placed by `timeScale().timeToCoordinate()`.
+    // Repositions on every pan/zoom via the visible-range subscription,
+    // so tags track the chart as the user scrolls.
+    //
+    // Skipped on intraday — 39-min bars cover ~1 session, all event dates
+    // fall outside the visible range.
+    const overlayEl = eventsOverlayRef.current;
+    let unsubscribeEvents = null;
+    if (overlayEl) overlayEl.innerHTML = '';
+    if (overlayEl && chartData.events && !isIntraday) {
+      const { earningsDate, exDividendDate, earningsHistory = [] } = chartData.events;
+      const todayISO = new Date().toISOString().slice(0, 10);
+      const allEvents = [];
+      for (const h of earningsHistory) {
+        if (h && h.date) allEvents.push({ kind: 'earnings_past', date: h.date, data: h });
+      }
+      // Upcoming earnings — only add if distinct from the most recent
+      // historical entry (Yahoo sometimes has overlap between the two).
+      if (earningsDate && earningsDate >= todayISO) {
+        const lastHist = earningsHistory[earningsHistory.length - 1];
+        if (!lastHist || lastHist.date !== earningsDate) {
+          allEvents.push({ kind: 'earnings_next', date: earningsDate, data: null });
+        }
       }
       if (exDividendDate) {
-        evMarkers.push({
-          time:     exDividendDate,
-          position: 'belowBar',
-          color:    '#00d4ff',
-          shape:    'arrowUp',
-          text:     `X ${exDividendDate.slice(5)}`,
-        });
+        allEvents.push({ kind: 'exdiv_next', date: exDividendDate, data: null });
       }
-      // setMarkers REPLACES, so sort by time (required by Lightweight Charts).
-      if (evMarkers.length) {
-        evMarkers.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
-        candleSeries.setMarkers(evMarkers);
-      }
+
+      const renderMarkers = () => {
+        if (!overlayEl || !chartRef.current) return;
+        overlayEl.innerHTML = '';
+        const ts = chartRef.current.timeScale();
+        for (const ev of allEvents) {
+          const x = ts.timeToCoordinate(ev.date);
+          if (x == null) continue;  // date outside visible range
+          const marker = document.createElement('div');
+          marker.style.cssText = [
+            'position:absolute',
+            `left:${x}px`,
+            'top:0',
+            'transform:translateX(-50%)',
+            'pointer-events:auto',
+            'cursor:help',
+          ].join(';');
+          // Style per event kind
+          let label, bg, border, fg, tickColor, tip;
+          if (ev.kind === 'earnings_past') {
+            label = 'E';
+            bg = 'rgba(240,165,0,0.12)';
+            border = '1px solid rgba(240,165,0,0.4)';
+            fg = '#f0a500';
+            tickColor = 'rgba(240,165,0,0.35)';
+            const d = ev.data || {};
+            const parts = [`Earnings ${ev.date}`];
+            if (d.epsActual != null)   parts.push(`EPS $${d.epsActual.toFixed(2)}`);
+            if (d.epsEstimate != null) parts.push(`(est $${d.epsEstimate.toFixed(2)})`);
+            if (d.surprisePct != null) {
+              parts.push(`${d.surprisePct > 0 ? '+' : ''}${d.surprisePct.toFixed(1)}% vs est`);
+            }
+            tip = parts.join(' · ');
+          } else if (ev.kind === 'earnings_next') {
+            label = 'E';
+            bg = 'rgba(240,165,0,0.85)';
+            border = '1px solid #f0a500';
+            fg = '#000';
+            tickColor = '#f0a500';
+            tip = `Next earnings: ${ev.date}`;
+          } else { // exdiv_next
+            label = 'D';
+            bg = 'rgba(0,212,255,0.8)';
+            border = '1px solid #00d4ff';
+            fg = '#000';
+            tickColor = '#00d4ff';
+            tip = `Ex-dividend: ${ev.date}`;
+          }
+          marker.title = tip;
+          marker.innerHTML = `
+            <div style="width:18px;height:14px;background:${bg};border:${border};color:${fg};font:700 9px/14px 'IBM Plex Mono',monospace;text-align:center;border-radius:2px;">${label}</div>
+            <div style="width:1px;height:5px;margin:0 auto;background:${tickColor};"></div>
+          `;
+          overlayEl.appendChild(marker);
+        }
+      };
+      renderMarkers();
+      // Reposition on pan/zoom. The handler ignores its arg — we always
+      // pull fresh coordinates from the timeScale.
+      const onRange = () => renderMarkers();
+      chart.timeScale().subscribeVisibleTimeRangeChange(onRange);
+      unsubscribeEvents = () => {
+        try { chart.timeScale().unsubscribeVisibleTimeRangeChange(onRange); } catch (_) {}
+        if (overlayEl) overlayEl.innerHTML = '';
+      };
     }
 
     // ── OHLC crosshair: update hoverBar as user moves the mouse over candles ──
@@ -715,7 +788,11 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
     chart.timeScale().fitContent();
     const handleResize = () => chart.applyOptions({ width: containerRef.current?.clientWidth || 600 });
     window.addEventListener('resize', handleResize);
-    return () => { window.removeEventListener('resize', handleResize); if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; } };
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      if (unsubscribeEvents) unsubscribeEvents();
+      if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; }
+    };
   }, [chartData, height, loading]);
 
   // ── Drawing tool: convert click → price/time coordinate ──
@@ -1052,7 +1129,21 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
             </span>
           </div>
         )}
-        <div ref={containerRef} onClick={handleChartClick} style={{cursor: toolActive ? 'crosshair' : 'default'}}/>
+        <div style={{position:'relative'}}>
+          <div ref={containerRef} onClick={handleChartClick} style={{cursor: toolActive ? 'crosshair' : 'default'}}/>
+          {/* Events strip — positioned above the time axis (~26px default).
+              pointerEvents:none on the lane so drawing-tool clicks pass
+              through; individual markers re-enable pointerEvents:auto for
+              their tooltip hover. */}
+          <div ref={eventsOverlayRef} style={{
+            position:'absolute',
+            left:0, right:0,
+            bottom:'28px',
+            height:'20px',
+            pointerEvents:'none',
+            zIndex:5,
+          }}/>
+        </div>
       </div>
     </div>
   );
@@ -5000,9 +5091,48 @@ function MarketPulseTab() {
                 { label: 'DOLLAR',         data: regime.macroOverlay.dollar,       key: 'score', hist: overlayHistory.dollar,       hasZero: false, tip: 'UUP (US Dollar ETF), 30d' },
                 { label: 'COMMODITIES',    data: regime.macroOverlay.commodities,  key: 'score', hist: overlayHistory.commodities,  hasZero: false, tip: 'USO+GLD avg (oil + gold), 30d' },
                 { label: 'ISM PROXY',      data: regime.macroOverlay.ismProxy,     key: 'score', hist: overlayHistory.ismProxy,     hasZero: false, tip: 'XLI/SPY ratio (industrials rel strength), 30d' },
-                { label: 'INTERMARKET',    data: regime.macroOverlay.intermarket,  key: 'score', hist: overlayHistory.intermarket,  hasZero: false, tip: 'SPY (risk-on proxy), 30d' },
+                {
+                  label: 'INTERMARKET',
+                  data: regime.macroOverlay.intermarket,
+                  key: 'score',
+                  hist: overlayHistory.intermarket,
+                  hasZero: false,
+                  tip: (() => {
+                    // Build a per-asset contribution breakdown from the 20-day RoC.
+                    // Surfaces exactly how the score was assembled: SPY momentum,
+                    // TLT/GLD/UUP/USO confirmations, and whether the "SPY alone
+                    // can't hit ±2" confirmation cap kicked in.
+                    const d = regime.macroOverlay.intermarket || {};
+                    const c = d.contributions || {};
+                    const fmtRoc = v => (v == null ? 'n/a' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%');
+                    const fmtContrib = v => {
+                      if (v == null || v === 0) return '0';
+                      return (v > 0 ? '+' : '') + v.toFixed(1);
+                    };
+                    const lines = [
+                      '20-day rate of change across 5 markets → scored individually, then summed.',
+                      '',
+                      `SPY  RoC ${fmtRoc(d.spyRoc20)}  → contrib ${fmtContrib(c.spy)}   (>+5%=+2, >+2%=+1, <-5%=-2, <-2%=-1)`,
+                      `TLT  RoC ${fmtRoc(d.tltRoc20)}  → contrib ${fmtContrib(c.tlt)}   (<-3%=+1 risk-on, >+5%=-1 risk-off)`,
+                      `GLD  RoC ${fmtRoc(d.gldRoc20)}  → contrib ${fmtContrib(c.gld)}   (gradient: +2%→-0.5, +5%→-1, +10%→-2, <-2%→+1)`,
+                      `UUP  RoC ${fmtRoc(d.uupRoc20)}  → contrib ${fmtContrib(c.uup)}   (>+2%=-1 dollar rally, <-2%=+1 weak dollar)`,
+                      `USO  RoC ${fmtRoc(d.usoRoc20)}  → contrib ${fmtContrib(c.uso)}   (asymmetric: >+15%=-1, >+10%=-0.5 oil shock)`,
+                      '',
+                    ];
+                    const nonSpy = (c.tlt || 0) + (c.gld || 0) + (c.uup || 0) + (c.uso || 0);
+                    const raw = (c.spy || 0) + nonSpy;
+                    lines.push(`Raw sum: ${fmtContrib(raw)}   (SPY ${fmtContrib(c.spy)} + non-SPY ${fmtContrib(nonSpy)})`);
+                    if ((c.spy || 0) >= 2 && nonSpy <= 0) {
+                      lines.push('⚠ Confirmation cap: SPY alone at +2 with no non-SPY tailwind → capped at +1.');
+                    } else if ((c.spy || 0) <= -2 && nonSpy >= 0) {
+                      lines.push('⚠ Confirmation cap: SPY alone at -2 with no non-SPY confirmation → capped at -1.');
+                    }
+                    lines.push(`Final score: ${d.score != null ? fmtContrib(d.score) : '—'}   signal: ${d.signal || '—'}`);
+                    return lines.join('\n');
+                  })(),
+                },
               ].map(ind => (
-                <div className="macro-ind-card" key={ind.label} title={ind.tip}>
+                <div className="macro-ind-card" key={ind.label} title={ind.tip} style={{cursor:'help'}}>
                   <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',fontWeight:600}}>{ind.label}</div>
                   <div style={{fontSize:18,fontWeight:800,fontFamily:'var(--font-mono)',color: (ind.data?.[ind.key]||0)>0?'var(--green)':(ind.data?.[ind.key]||0)<0?'var(--red)':'var(--text2)',marginTop:4}}>
                     {ind.data?.[ind.key] != null ? ((ind.data[ind.key]>0?'+':'')+ind.data[ind.key].toFixed(1)) : '—'}
@@ -5385,6 +5515,11 @@ function MacroTab() {
   const [snapshot,  setSnapshot]  = useState(null);
   const [loading,   setLoading]   = useState(false);
   const [error,     setError]     = useState('');
+  // VIX term structure (^VIX / ^VIX3M / ^VIX6M) sourced from the live Yahoo
+  // feed via /api/macro — not FRED. Fetched alongside the FRED snapshot so
+  // the Macro tab's top strip has both the historical (FRED) and live
+  // (term-structure) vol context.
+  const [vixTermStructure, setVixTermStructure] = useState(null);
 
   // Series presentation metadata. Every series in RELEASE_LAG_DAYS should
   // appear here so the UI can give it a sensible axis format and label.
@@ -5427,17 +5562,33 @@ function MacroTab() {
     { k:'MAX', days:null },
   ];
 
-  // Load available series + snapshot on mount.
+  // Load available series + snapshot + VIX term structure on mount.
   useEffect(() => {
     (async () => {
       setLoading(true); setError('');
       try {
-        const [av, snap] = await Promise.all([
+        const [av, snap, liveMacro] = await Promise.all([
           api('/api/macro/fred/available'),
           api(`/api/macro/fred/snapshot?date=${new Date().toISOString().slice(0,10)}`),
+          api('/api/macro').catch(() => null),  // optional — VIX term structure lives here
         ]);
         setAvailable(av.series || []);
         setSnapshot(snap || null);
+        if (liveMacro?.macro) {
+          const vix   = liveMacro.macro.find(r => r.symbol === '^VIX');
+          const vix3m = liveMacro.macro.find(r => r.symbol === '^VIX3M');
+          const vix6m = liveMacro.macro.find(r => r.symbol === '^VIX6M');
+          if (vix?.price != null) {
+            setVixTermStructure({
+              vix: vix.price, vix_chg: vix.chg1d,
+              vix3m: vix3m?.price ?? null, vix3m_chg: vix3m?.chg1d,
+              vix6m: vix6m?.price ?? null, vix6m_chg: vix6m?.chg1d,
+              vix_history:   vix.history || [],
+              vix3m_history: vix3m?.history || [],
+              vix6m_history: vix6m?.history || [],
+            });
+          }
+        }
       } catch(e) { setError(e.message); }
       setLoading(false);
     })();
@@ -5497,8 +5648,105 @@ function MacroTab() {
   const showZeroLine = selected === 'T10Y2Y' && chart && chart.yMin < 0 && chart.yMax > 0;
 
   // ── Render ──
+
+  // VIX term structure interpretation
+  //   contango (VIX < VIX3M < VIX6M):   normal regime, vol expected to mean-revert
+  //                                      higher → markets pricing future stress
+  //   flat    (near parallel):          transition / indecision
+  //   backwardation (VIX > VIX3M):      panic regime — spot fear > expected
+  //                                      future fear. Historically clusters with
+  //                                      5-10% equity drawdowns in progress.
+  const termStructureRegime = (() => {
+    const t = vixTermStructure;
+    if (!t || t.vix == null || t.vix3m == null) return null;
+    const spot3m = t.vix - t.vix3m;
+    const m3_6m  = t.vix6m != null ? t.vix3m - t.vix6m : null;
+    let regime, color, interpretation;
+    if (spot3m > 0) {
+      regime = 'BACKWARDATION';
+      color = 'var(--red)';
+      interpretation = `Spot VIX ${t.vix.toFixed(1)} > 3M ${t.vix3m.toFixed(1)} — market prices current fear above expected future fear. Historically coincides with 5-10% equity drawdowns in progress.`;
+    } else if (spot3m < -3) {
+      regime = 'STEEP CONTANGO';
+      color = 'var(--green)';
+      interpretation = `Spot ${t.vix.toFixed(1)} well below 3M ${t.vix3m.toFixed(1)} (Δ ${spot3m.toFixed(1)}). Complacent regime — vol premium seeking mean-reversion upward.`;
+    } else {
+      regime = 'FLAT / NORMAL';
+      color = 'var(--amber)';
+      interpretation = `Spot ${t.vix.toFixed(1)} ≈ 3M ${t.vix3m.toFixed(1)} (Δ ${spot3m.toFixed(1)}). Transitional — neither clearly calm nor clearly panicked.`;
+    }
+    return { regime, color, interpretation, spot3m, m3_6m };
+  })();
+
   return (
     <div>
+      {/* VIX Term Structure — live (Yahoo) */}
+      {vixTermStructure && (
+        <div className="panel" style={{marginBottom:14, borderColor: termStructureRegime?.color || 'var(--border)'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10,flexWrap:'wrap',gap:8}}>
+            <div>
+              <div className="panel-title">VIX Term Structure <span>(live)</span></div>
+              <div className="panel-sub">Spot VIX → 3-month → 6-month constant-maturity volatility. Slope from spot to 3M is the primary short-term panic-vs-complacency gauge.</div>
+            </div>
+            {termStructureRegime && (
+              <div style={{fontFamily:'var(--font-mono)',fontSize:11,letterSpacing:1.5,color:termStructureRegime.color,fontWeight:800,background:`${termStructureRegime.color}0D`,padding:'6px 12px',borderRadius:3,border:`1px solid ${termStructureRegime.color}40`}}>
+                {termStructureRegime.regime}
+              </div>
+            )}
+          </div>
+
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))',gap:10,marginBottom:12}}>
+            {[
+              { l:'SPOT VIX',  v:vixTermStructure.vix,    c:vixTermStructure.vix_chg,   h:vixTermStructure.vix_history,   sym:'^VIX' },
+              { l:'VIX 3M',    v:vixTermStructure.vix3m,  c:vixTermStructure.vix3m_chg, h:vixTermStructure.vix3m_history, sym:'^VIX3M' },
+              { l:'VIX 6M',    v:vixTermStructure.vix6m,  c:vixTermStructure.vix6m_chg, h:vixTermStructure.vix6m_history, sym:'^VIX6M' },
+            ].map(t => {
+              const col = t.v == null ? 'var(--text3)' : t.v >= 30 ? 'var(--red)' : t.v >= 20 ? 'var(--amber)' : 'var(--green)';
+              return (
+                <div key={t.l} title={t.sym} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:5,padding:12}}>
+                  <div style={{fontSize:8,color:'var(--text3)',letterSpacing:2,marginBottom:5}}>{t.l}</div>
+                  <div style={{fontFamily:'var(--font-mono)',fontSize:18,color:col,fontWeight:700}}>
+                    {t.v != null ? t.v.toFixed(2) : '—'}
+                  </div>
+                  <div style={{fontSize:10,color:t.c>=0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)',marginTop:3,marginBottom:4}}>
+                    {t.c != null ? `${t.c>=0?'+':''}${t.c.toFixed(2)}%` : ''}
+                  </div>
+                  {t.h && t.h.length > 1 && <Sparkline data={t.h.slice(-60)} color="auto" height={24} hasZero={false}/>}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Slope table + interpretation */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:10}}>
+            <div style={{background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,padding:'8px 12px'}}>
+              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,marginBottom:4}}>SPOT → 3M SLOPE</div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:700,color: (termStructureRegime?.spot3m ?? 0) > 0 ? 'var(--red)' : 'var(--green)'}}>
+                {termStructureRegime?.spot3m != null ? `${termStructureRegime.spot3m>=0?'+':''}${termStructureRegime.spot3m.toFixed(2)}` : '—'}
+              </div>
+              <div style={{fontSize:9,color:'var(--text3)',marginTop:3}}>
+                {(termStructureRegime?.spot3m ?? 0) > 0 ? 'Inverted — fear pulled forward' : 'Upward — calm now, future premium'}
+              </div>
+            </div>
+            <div style={{background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,padding:'8px 12px'}}>
+              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,marginBottom:4}}>3M → 6M SLOPE</div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:700,color: (termStructureRegime?.m3_6m ?? 0) > 0 ? 'var(--amber)' : 'var(--text)'}}>
+                {termStructureRegime?.m3_6m != null ? `${termStructureRegime.m3_6m>=0?'+':''}${termStructureRegime.m3_6m.toFixed(2)}` : '—'}
+              </div>
+              <div style={{fontSize:9,color:'var(--text3)',marginTop:3}}>
+                {termStructureRegime?.m3_6m == null ? 'Data incomplete' : (termStructureRegime.m3_6m > 0 ? 'Mid-curve also elevated' : 'Long end still calm')}
+              </div>
+            </div>
+            {termStructureRegime && (
+              <div style={{background:'var(--bg)',border:`1px solid ${termStructureRegime.color}40`,borderRadius:4,padding:'8px 12px',gridColumn:'1 / -1'}}>
+                <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,marginBottom:4}}>INTERPRETATION</div>
+                <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.5}}>{termStructureRegime.interpretation}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Snapshot bar — macro landscape at a glance */}
       <div className="panel" style={{marginBottom:14}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10,flexWrap:'wrap',gap:8}}>

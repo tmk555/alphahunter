@@ -439,7 +439,19 @@ async function pLimit(tasks, limit = 5) {
 // price pane with vertical markers so the user can spot upcoming volatility
 // events at a glance.
 //
-// Returns { earningsDate: 'YYYY-MM-DD' | null, exDividendDate: 'YYYY-MM-DD' | null }.
+// Returns:
+//   {
+//     earningsDate:    'YYYY-MM-DD' | null,   // next upcoming earnings
+//     exDividendDate:  'YYYY-MM-DD' | null,   // next upcoming ex-div
+//     earningsHistory: [                      // last 4 quarters (oldest→newest)
+//       { date: 'YYYY-MM-DD',
+//         epsActual:   number | null,
+//         epsEstimate: number | null,
+//         surprisePct: number | null,         // (actual-est)/|est| × 100
+//       }, …
+//     ],
+//   }
+//
 // Always returns a shape (never null) so callers don't need null-checks.
 // Cached for 6h — these dates rarely change mid-day.
 const TTL_EVENTS = 6 * 60 * 60 * 1000; // 6 hours
@@ -448,10 +460,12 @@ async function yahooChartEvents(symbol) {
   const cached = cacheGet(key, TTL_EVENTS);
   if (cached) return cached;
 
-  const empty = { earningsDate: null, exDividendDate: null };
+  const empty = { earningsDate: null, exDividendDate: null, earningsHistory: [] };
   try {
     const { crumb, cookie } = await getYahooCrumb();
-    const modules = 'calendarEvents,summaryDetail';
+    // earningsHistory returns last 4 quarters with EPS actual / estimate /
+    // surprise — everything we need for a TradingView-style bottom strip.
+    const modules = 'calendarEvents,summaryDetail,earningsHistory';
     const url = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=${encodeURIComponent(modules)}&crumb=${encodeURIComponent(crumb)}`;
     const r = await fetchWithRetry(url, {
       headers: {
@@ -485,9 +499,37 @@ async function yahooChartEvents(symbol) {
       return et; // en-CA gives 'YYYY-MM-DD'
     };
 
+    // Historical earnings — last 4 quarters. Yahoo's `earningsHistory.history`
+    // is ordered most-recent-first; reverse so oldest comes first (natural
+    // left-to-right on a chart). Each item has `quarter` (timestamp of the
+    // fiscal quarter end — NOT the report date, but close enough for a
+    // bottom-strip marker) plus `epsActual`, `epsEstimate`.
+    const rawHist = result.earningsHistory?.history || [];
+    const earningsHistory = rawHist
+      .map(h => {
+        const ts       = raw(h.quarter);
+        const date     = toISO(ts);
+        const actual   = raw(h.epsActual);
+        const estimate = raw(h.epsEstimate);
+        if (!date) return null;
+        let surprisePct = null;
+        if (actual != null && estimate != null && estimate !== 0) {
+          surprisePct = +(((actual - estimate) / Math.abs(estimate)) * 100).toFixed(1);
+        }
+        return {
+          date,
+          epsActual:   actual != null ? +actual.toFixed(2) : null,
+          epsEstimate: estimate != null ? +estimate.toFixed(2) : null,
+          surprisePct,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => (a.date < b.date ? -1 : 1));
+
     const events = {
-      earningsDate:   toISO(earningsTs),
-      exDividendDate: toISO(exDivTs),
+      earningsDate:    toISO(earningsTs),
+      exDividendDate:  toISO(exDivTs),
+      earningsHistory,
     };
     cacheSet(key, events);
     return events;

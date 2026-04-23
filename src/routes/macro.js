@@ -25,7 +25,15 @@ const MACRO_SYMBOLS = [
   // Index futures — Yahoo's =F suffix convention. Useful as overnight/pre-open
   // tape since futures trade ~23 hours vs cash indices' 6.5 hours.
   {t:'ES=F',n:'S&P Fut'},{t:'NQ=F',n:'Nasdaq Fut'},{t:'RTY=F',n:'Russell Fut'},
-  {t:'^VIX',n:'VIX'},{t:'TLT',n:'20yr Bond'},{t:'GLD',n:'Gold'},
+  {t:'^VIX',n:'VIX'},
+  // VIX term structure — 3M and 6M constant-maturity vol indexes. The slope
+  // from spot VIX to VIX3M to VIX6M is the single best short-term
+  // panic-vs-complacency gauge: normal = upward-sloping (VIX < VIX3M < VIX6M,
+  // "contango"), crisis = inverted (VIX > VIX3M, "backwardation"). Backwards
+  // term structure persistently above 1.0 has historically coincided with
+  // bear-market swoons within 1-3 months.
+  {t:'^VIX3M',n:'VIX 3M'},{t:'^VIX6M',n:'VIX 6M'},
+  {t:'TLT',n:'20yr Bond'},{t:'GLD',n:'Gold'},
   {t:'UUP',n:'US Dollar'},{t:'USO',n:'Crude Oil'},{t:'^TNX',n:'10Y Yield'},{t:'^IRX',n:'3M Yield'},
 ];
 
