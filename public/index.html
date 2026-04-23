@@ -4729,6 +4729,32 @@ function MarketPulseTab() {
             {regime.exposureRamp.ftdConfirmed && ' · FTD confirmed'}
             {regime.exposureRamp.distDays > 0 && ` · ${regime.exposureRamp.distDays} dist days`}
           </span>
+          {/* Why-explainer: named reason the tier landed where it did.
+              Especially important for REDUCED, which otherwise reads as
+              "something's wrong" without saying what. Mirrors the decision
+              tree in src/risk/regime.js:104-118. */}
+          {(() => {
+            const r = regime.exposureRamp;
+            const reasons = [];
+            if (r.exposureLevel === 'REDUCED') {
+              if (r.distDays > 2) reasons.push(`${r.distDays} distribution days (>2 blocks FULL)`);
+              if (regime.above50 === false)  reasons.push('SPY below 50MA');
+              if (regime.above200 === false) reasons.push('SPY below 200MA');
+              if (!reasons.length) reasons.push('rally age / FTD combo excludes higher tiers');
+            } else if (r.exposureLevel === 'PILOT') {
+              reasons.push(r.ftdConfirmed ? `rally day ${r.rallyDay} (≤3 keeps PILOT)` : 'FTD not yet confirmed');
+            }
+            if (!reasons.length) return null;
+            const color = r.exposureLevel === 'REDUCED' ? 'var(--red)'
+                        : r.exposureLevel === 'PILOT'   ? 'var(--amber)'
+                        : 'var(--text3)';
+            return (
+              <span style={{fontSize:10,color,fontFamily:'var(--font-mono)',paddingLeft:8,borderLeft:'1px solid var(--border)',marginLeft:2}}
+                    title={`Decision tree: src/risk/regime.js:104-118`}>
+                why {r.exposureLevel}: {reasons.join(' · ')}
+              </span>
+            );
+          })()}
         </div>
       )}
 
@@ -4990,7 +5016,21 @@ function MarketPulseTab() {
             </div>
           </div>
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:10}}>
-            <div style={{background:'var(--bg)',borderRadius:4,padding:12,textAlign:'center',border:'1px solid var(--border)'}}>
+            <div title={(() => {
+              const dd = cycle.distributionDays || {};
+              const lines = [
+                `Active (after O'Neil filters): ${dd.count ?? 0}`,
+                `Raw 25-session count: ${dd.rawCount25 ?? dd.count ?? 0}`,
+                `Scrubbed by +5% recovery: ${dd.scrubbedCount ?? 0}`,
+                `In last 10 sessions: ${dd.recent10Count ?? 0}`,
+                '',
+                "O'Neil rules applied:",
+                '• 25-session hard window (older days age out)',
+                '• Dist day invalidated when index closes ≥+5% above that close',
+                '  (market absorbed the selling — signal is stale)',
+              ];
+              return lines.join('\n');
+            })()} style={{background:'var(--bg)',borderRadius:4,padding:12,textAlign:'center',border:'1px solid var(--border)',cursor:'help'}}>
               <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:4}}>DISTRIBUTION DAYS (25-SESSION)</div>
               <div style={{fontSize:28,fontWeight:800,color:cycle.distributionDays?.count>=5?'var(--red)':cycle.distributionDays?.count>=4?'var(--red)':cycle.distributionDays?.count>=3?'var(--amber)':'var(--green)',fontFamily:'var(--font-mono)'}}>{cycle.distributionDays?.count ?? '—'}</div>
               <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>
@@ -5002,6 +5042,19 @@ function MarketPulseTab() {
                 <div style={{display:'flex',justifyContent:'center',gap:12,marginTop:6,fontSize:10,color:'var(--text3)'}}>
                   <span>SPY: {cycle.distributionDays.spy?.count ?? 0}</span>
                   <span>QQQ: {cycle.distributionDays.qqq?.count ?? 0}</span>
+                </div>
+              )}
+              {/* Recency-split chips — lets the user see at a glance whether
+                  the market is actively distributing or whether the count is
+                  old dist days still inside the 25-session window. */}
+              {(cycle.distributionDays?.scrubbedCount > 0 || cycle.distributionDays?.recent10Count != null) && (
+                <div style={{display:'flex',justifyContent:'center',gap:10,marginTop:6,fontSize:9,color:'var(--text3)'}}>
+                  <span style={{color:cycle.distributionDays?.recent10Count>=2?'var(--amber)':'var(--text3)'}}>
+                    {cycle.distributionDays?.recent10Count ?? 0} in last 10
+                  </span>
+                  {cycle.distributionDays?.scrubbedCount > 0 && (
+                    <span style={{color:'var(--green)'}}>{cycle.distributionDays.scrubbedCount} scrubbed +5%</span>
+                  )}
                 </div>
               )}
               {cycle.distributionDays?.dates?.length > 0 && (
@@ -7217,23 +7270,55 @@ function ExecutionTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {firedAlerts.map(a => (
+                  {firedAlerts.map(a => {
+                    // Identify alerts whose correct user action is "close the
+                    // position" — strategy-driven exits (RS-drop / regime /
+                    // stage distribution) AND any stop-violation where the
+                    // broker bracket didn't auto-close. Show a Close Now
+                    // button so the user doesn't have to switch tabs.
+                    const isCloseable = a.type === 'strategy_exit' || a.type === 'stop_violation';
+                    // The alert log stores symbol and (for trades) trade_id.
+                    // We use the symbol as the primary key for finding the
+                    // matching open position in the /broker/close-position
+                    // endpoint (tradeId is a fallback).
+                    return (
                     <tr key={a.id} style={{borderBottom:'1px solid var(--border)',opacity:a.acknowledged?0.5:1}}>
                       <td style={{padding:'8px 6px'}}>
-                        <span style={{fontSize:14}}>{a.type==='stop_violation'?'🛑':a.type==='price_above'?'📈':'📉'}</span>
+                        <span style={{fontSize:14}}>{a.type==='stop_violation'?'🛑':a.type==='strategy_exit'?'🚪':a.type==='price_above'?'📈':'📉'}</span>
                         <span style={{fontSize:10,color:'var(--text3)',marginLeft:6}}>{a.type}</span>
                       </td>
                       <td className="td-ticker" style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{a.symbol}</td>
                       <td style={{padding:'8px 6px',color:'var(--text2)',fontSize:11}}>{a.message}</td>
                       <td style={{padding:'8px 6px',color:'var(--text3)',fontSize:10,fontFamily:'var(--font-mono)'}}>{a.created_at}</td>
-                      <td style={{padding:'8px 6px'}}>
+                      <td style={{padding:'8px 6px',display:'flex',gap:6,alignItems:'center'}}>
+                        {isCloseable && !a.acknowledged && (() => {
+                          // Resolve the live broker position for this symbol
+                          // so the modal opens pre-populated with qty/avgEntry.
+                          // Fallback: minimal shape if no live position match
+                          // (position may have already been closed externally).
+                          const livePos = status?.brokerPositions?.find(p => p.symbol === a.symbol);
+                          const pseudoTarget = livePos || { symbol: a.symbol, qty: null, avgEntryPrice: null, currentPrice: a.trigger_price || null, localTradeId: a.trade_id || null };
+                          return (
+                            <button onClick={() => {
+                              setExitTarget(pseudoTarget);
+                              setExitPrice('');           // default MARKET — same lesson we just learned on Live Positions
+                              setExitResult(null);
+                              // Keep the alert row as-is; ack happens after close succeeds
+                            }}
+                              title="Close this position at market via Alpaca (one click)"
+                              style={{padding:'2px 8px',background:'rgba(255,61,87,0.12)',border:'1px solid var(--red)',borderRadius:3,color:'var(--red)',fontSize:9,cursor:'pointer',fontWeight:700,fontFamily:'var(--font-mono)'}}>
+                              CLOSE NOW
+                            </button>
+                          );
+                        })()}
                         {!a.acknowledged && (
                           <button onClick={()=>acknowledgeAlert(a.id)}
                             style={{padding:'2px 8px',background:'rgba(240,165,0,0.12)',border:'1px solid rgba(240,165,0,0.3)',borderRadius:3,color:'var(--amber)',fontSize:9,cursor:'pointer',fontWeight:700}}>ACK</button>
                         )}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -7459,9 +7544,28 @@ function ExecutionTab() {
                       if (!t) return <span style={{color:'var(--text3)'}}>—</span>;
                       const statusColor = t.status==='filled'?'var(--green)':t.status==='submitted'?'var(--cyan)':t.status==='armed'?'var(--amber)':t.status==='rejected'||t.status==='cancelled'?'var(--red)':'var(--text3)';
                       const icon = t.status==='filled' ? '✅' : t.status==='submitted' ? '⏳' : t.status==='armed' ? '🎯' : t.status==='rejected' || t.status==='cancelled' ? '✕' : '⏸';
+                      // When filled, show the ACTUAL avg fill price (not the trigger).
+                      // The trigger is still useful context — shown in smaller text
+                      // alongside so slippage is visible at a glance.
+                      const hasFill = t.status === 'filled' && t.fillPrice != null;
+                      const slippagePct = hasFill && t.trigger
+                        ? ((t.fillPrice - t.trigger) / t.trigger * 100)
+                        : null;
+                      const slipColor = slippagePct == null ? 'var(--text3)'
+                                        : slippagePct >= 2 ? 'var(--red)'
+                                        : slippagePct >= 1 ? 'var(--amber)'
+                                        : 'var(--text3)';
                       return (
-                        <div style={{display:'flex',flexDirection:'column',gap:1}}>
-                          <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--text)'}}>{icon} ${fmt(t.trigger)}</span>
+                        <div style={{display:'flex',flexDirection:'column',gap:1}}
+                             title={hasFill ? `Fill $${t.fillPrice} · Trigger $${t.trigger} · Slippage ${slippagePct>=0?'+':''}${slippagePct.toFixed(2)}%` : `Trigger $${t.trigger}`}>
+                          <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--text)'}}>
+                            {icon} ${fmt(hasFill ? t.fillPrice : t.trigger)}
+                          </span>
+                          {hasFill && slippagePct != null && (
+                            <span style={{fontSize:9,color:slipColor,letterSpacing:0.5,fontFamily:'var(--font-mono)'}}>
+                              trig ${fmt(t.trigger)} ({slippagePct>=0?'+':''}{slippagePct.toFixed(1)}%)
+                            </span>
+                          )}
                           <span style={{fontSize:9,color:statusColor,letterSpacing:0.5,fontFamily:'var(--font-mono)'}}>{t.status.toUpperCase()} · {t.actualQty || t.qty}sh</span>
                         </div>
                       );
@@ -7890,8 +7994,24 @@ function PortfolioTab() {
           exitType: 'manual',
         }),
       });
-      setExitResult({ ok:true, trade: r.trade });
-      setTimeout(() => { setExitTarget(null); setExitResult(null); loadStatus(); }, 2000);
+      // The response now distinguishes market (closed) from limit (pending).
+      // Pending limits stay visible to the user for longer so they read the
+      // warning that the position isn't closed yet.
+      setExitResult({
+        ok: true,
+        trade: r.trade,
+        pending: r.pending === true,
+        brokerOrderId: r.brokerOrder?.id,
+      });
+      // Auto-dismiss ONLY for successful market closes. Pending limits stay
+      // open so the user reads the "will close when limit fills" message.
+      if (!r.pending) {
+        setTimeout(() => { setExitTarget(null); setExitResult(null); loadStatus(); }, 2000);
+      } else {
+        // Refresh status in background so LIVE POSITIONS reflects any cancel
+        // of prior bracket legs, but leave the modal up.
+        loadStatus();
+      }
     } catch(e) {
       setExitResult({ ok:false, error: e.message });
     }
@@ -8023,6 +8143,37 @@ function PortfolioTab() {
             </div>
           )}
 
+          {/* Pyramid-first nudge banner. Surfaced when backend flags
+              pyramidSuggestion.shouldPyramid = true (heat utilization below
+              50% AND at least one open position up ≥1R). The alternative
+              reading is: you have room under the cap but opening a new
+              position would dilute a working book. Nudge, don't block —
+              trader can still stage new, they just see the recommendation. */}
+          {status.pyramidSuggestion?.shouldPyramid && (
+            <div className="panel" style={{padding:12,marginBottom:14,border:'1px solid var(--cyan)',background:'rgba(0,212,255,0.06)'}}>
+              <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+                <span style={{fontSize:18}}>🔺</span>
+                <div style={{flex:1,minWidth:260}}>
+                  <div style={{fontSize:11,color:'var(--cyan)',letterSpacing:1.5,fontFamily:'var(--font-mono)',fontWeight:700}}>
+                    PYRAMID-FIRST RECOMMENDATION
+                  </div>
+                  <div style={{fontSize:12,color:'var(--text1)',marginTop:3}}>
+                    Heat at <strong>{Math.round((status.pyramidSuggestion.heatUtilization||0)*100)}%</strong> of cap
+                    {' with '}<strong>{status.pyramidSuggestion.candidates?.length || 0} winner(s)</strong>{' at ≥1R unrealized.'}
+                    {' Concentrate into winners before opening a new name.'}
+                  </div>
+                </div>
+                {status.pyramidSuggestion.topWinner && (
+                  <div style={{fontSize:11,fontFamily:'var(--font-mono)',padding:'6px 10px',background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)'}}>
+                    <span style={{color:'var(--text3)'}}>Best:</span>{' '}
+                    <strong style={{color:'var(--green)'}}>{status.pyramidSuggestion.topWinner.symbol}</strong>{' '}
+                    <span style={{color:'var(--green)'}}>+{fmt(status.pyramidSuggestion.topWinner.unrealizedR,2)}R</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Top Metrics Row */}
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12,marginBottom:14}}>
             {/* Portfolio Heat — backend ships { heatPct, totalDollarRisk, positionCount, maxHeat }
@@ -8065,14 +8216,81 @@ function PortfolioTab() {
               </div>
             </div>
 
-            {/* Open Positions — show broker count if available */}
+            {/* Open Positions — show broker count if available.
+                 positionCount (from backend) is authoritative for the cap —
+                 distinct symbols (multi-tranche = 1 logical position) and
+                 tier-aware (FTD ramp level scales the cap). At-cap turns the
+                 count red to flag "close a laggard before staging a new name". */}
             <div className="panel" style={{padding:14}}>
               <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>OPEN POSITIONS</div>
-              <div style={{fontSize:36,fontWeight:800,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>
-                {status.brokerPositions?.length || status.openPositions || 0}
+              <div style={{fontSize:36,fontWeight:800,color:status.positionCount?.atCap?'var(--red)':'var(--cyan)',fontFamily:'var(--font-mono)'}}>
+                {status.positionCount?.current ?? (status.brokerPositions?.length || status.openPositions || 0)}
+                <span style={{fontSize:18,color:'var(--text3)',fontWeight:400}}>
+                  {' / '}{status.positionCount?.cap ?? (config?.maxOpenPositions || 6)}
+                </span>
               </div>
               <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
                 {status.broker ? `Equity: $${Number(status.broker.equity).toLocaleString(undefined,{maximumFractionDigits:0})}` : `Account: $${(config?.accountSize||100000).toLocaleString()}`}
+                {status.positionCount?.tierOverride && (() => {
+                  const ramp = status.regime?.exposureRamp;
+                  const tier = status.positionCount.tier;
+                  const a50 = status.regime?.above50;
+                  const a200 = status.regime?.above200;
+                  // Why-explainer: mirror the decision tree in
+                  // src/risk/regime.js:104-118 and name the specific reason.
+                  const reasons = [];
+                  if (ramp) {
+                    if (tier === 'REDUCED') {
+                      if (ramp.distDays > 2) reasons.push(`${ramp.distDays} distribution days (>2 blocks FULL)`);
+                      if (a50 === false)  reasons.push('SPY below 50MA');
+                      if (a200 === false) reasons.push('SPY below 200MA');
+                      if (!reasons.length) reasons.push('rally age / FTD combo excludes higher tiers');
+                    } else if (tier === 'PILOT') {
+                      if (!ramp.ftdConfirmed) reasons.push('FTD not yet confirmed');
+                      else if (ramp.rallyDay <= 3) reasons.push(`rally day ${ramp.rallyDay} (≤3 keeps PILOT)`);
+                    } else if (tier === 'HALF') {
+                      reasons.push(`rally day ${ramp.rallyDay}, ${ramp.distDays} dist days`);
+                    } else if (tier === 'THREE_QUARTER') {
+                      reasons.push(`rally day ${ramp.rallyDay}, ${ramp.distDays} dist days, SPY above 50MA`);
+                    } else if (tier === 'FULL') {
+                      reasons.push(`rally day ${ramp.rallyDay}, ${ramp.distDays} dist days, SPY above 50/200MA`);
+                    }
+                  }
+                  const reasonText = reasons.join(' · ');
+                  // Recency-split line: shows how many of the dist days are
+                  // actually recent vs. old-but-still-in-25-window. A high
+                  // total count with 0 in last 10 + several scrubbed means
+                  // the REDUCED label is being dragged by stale signal and
+                  // will age out soon.
+                  const recentLine = ramp && (ramp.distDaysRecent10 != null || ramp.distDaysScrubbed != null)
+                    ? `\nRecent split: ${ramp.distDaysRecent10 ?? 0} in last 10 sessions · ${ramp.distDaysScrubbed ?? 0} scrubbed by +5% recovery`
+                    : '';
+                  const tooltip = ramp
+                    ? `Tier: ${tier} (max heat ${ramp.maxHeatPct}%)\n` +
+                      `Rally day: ${ramp.rallyDay}${ramp.ftdConfirmed?' · FTD confirmed':' · FTD not confirmed'}\n` +
+                      `Distribution days: ${ramp.distDays}${ramp.distDays>2?' (>2 = REDUCED trigger)':''}` +
+                      recentLine + `\n` +
+                      `SPY above 50MA: ${a50===true?'yes':a50===false?'no':'?'} · above 200MA: ${a200===true?'yes':a200===false?'no':'?'}\n` +
+                      (reasonText ? `\nWhy ${tier}: ${reasonText}` : '') +
+                      `\n\nDecision tree: src/risk/regime.js:104-118`
+                    : `Tier: ${tier}`;
+                  return (
+                    <span title={tooltip} style={{marginLeft:6,padding:'1px 6px',borderRadius:3,
+                      background:tier==='REDUCED'?'rgba(255,61,87,0.15)':'rgba(0,212,255,0.12)',
+                      color:tier==='REDUCED'?'var(--red)':'var(--cyan)',
+                      fontSize:9,fontFamily:'var(--font-mono)',cursor:'help'}}>
+                      tier: {tier}{reasonText ? ` — ${reasons[0]}` : ''}
+                    </span>
+                  );
+                })()}
+              </div>
+              <div style={{marginTop:8,height:6,background:'var(--bg3)',borderRadius:3,overflow:'hidden'}}>
+                <div style={{
+                  height:'100%',
+                  width:`${Math.min(((status.positionCount?.current||0)/(status.positionCount?.cap||1))*100,100)}%`,
+                  background:status.positionCount?.atCap?'var(--red)':'var(--cyan)',
+                  borderRadius:3,transition:'width 0.3s',
+                }}/>
               </div>
               {status.brokerPositions && status.openPositions !== status.brokerPositions.length && (
                 <div style={{fontSize:10,color:'var(--amber)',marginTop:4}}>
@@ -8118,10 +8336,28 @@ function PortfolioTab() {
                           ? <span style={{color:'var(--green)',fontSize:10}}>Yes</span>
                           : <span style={{color:'var(--amber)',fontSize:10,fontWeight:700}}>MISSING</span>}
                       </td>
-                      <td style={{padding:'6px 5px'}}>
-                        <button onClick={()=>{setExitTarget(p);setExitPrice(p.currentPrice?.toFixed(2)||'');setExitResult(null);}}
+                      <td style={{padding:'6px 5px',display:'flex',gap:6,alignItems:'center'}}>
+                        {/* PENDING CLOSE pill: when a limit sell has been
+                            submitted via /broker/close-position but hasn't
+                            filled yet, the trades row has pending_close_order_id
+                            set. Show an amber pill so the trader KNOWS a
+                            close order is in flight — prevents double-submits
+                            and explains why the row is still visible. */}
+                        {p.pendingCloseOrderId && (
+                          <span
+                            title={`Limit sell order ${p.pendingCloseOrderId} submitted ${p.pendingCloseSubmittedAt||''} — position closes when fill lands.`}
+                            style={{padding:'2px 6px',background:'rgba(240,165,0,0.12)',border:'1px solid var(--amber)',borderRadius:3,color:'var(--amber)',fontSize:9,fontWeight:700,fontFamily:'var(--font-mono)',letterSpacing:0.5}}>
+                            ⏳ PENDING CLOSE
+                          </span>
+                        )}
+                        {/* Default to MARKET (blank exitPrice). A pre-filled
+                            limit at currentPrice frequently DOES NOT fill —
+                            that's what was causing "clicked Exit, position
+                            still shows up." Force the user to type a limit
+                            only when they explicitly want one. */}
+                        <button onClick={()=>{setExitTarget(p);setExitPrice('');setExitResult(null);}}
                           style={{background:'transparent',border:'1px solid var(--red)',color:'var(--red)',borderRadius:3,padding:'3px 8px',fontSize:10,fontWeight:700,cursor:'pointer',fontFamily:'var(--font-mono)'}}>
-                          Exit
+                          {p.pendingCloseOrderId ? 'Force Exit' : 'Exit'}
                         </button>
                       </td>
                     </tr>
@@ -8141,10 +8377,10 @@ function PortfolioTab() {
                 <div style={{fontSize:12,color:'var(--text2)',marginBottom:16}}>{exitTarget.qty} shares @ ${fmt(exitTarget.avgEntryPrice)} avg</div>
 
                 <div style={{marginBottom:12}}>
-                  <label style={{fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)',display:'block',marginBottom:4}}>EXIT PRICE (leave blank for market order)</label>
+                  <label style={{fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)',display:'block',marginBottom:4}}>EXIT PRICE (leave blank for MARKET order — recommended)</label>
                   <input type="number" step="0.01" value={exitPrice} onChange={e=>setExitPrice(e.target.value)}
                     style={{width:'100%',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',padding:'8px 10px',fontSize:14,fontFamily:'var(--font-mono)',fontWeight:600,boxSizing:'border-box'}}
-                    placeholder="Market price"/>
+                    placeholder="blank = market (recommended)"/>
                 </div>
 
                 {exitPrice && exitTarget.avgEntryPrice && (
@@ -8154,16 +8390,25 @@ function PortfolioTab() {
                   </div>
                 )}
 
-                <div style={{fontSize:11,color:'var(--text3)',marginBottom:16,lineHeight:1.5}}>
-                  This will cancel all open orders for {exitTarget.symbol} and {exitPrice ? `submit a limit sell at $${exitPrice}` : 'close at market price'}.
+                {/* Route explainer: user needs to see the DIFFERENCE between
+                    market (instant close) and limit (may not fill). Previous
+                    wording hid this distinction and users assumed limit ≈ market. */}
+                <div style={{fontSize:11,color:exitPrice?'var(--amber)':'var(--text3)',marginBottom:16,lineHeight:1.5,padding:exitPrice?'8px 10px':0,border:exitPrice?'1px solid rgba(240,165,0,0.3)':'none',borderRadius:4,background:exitPrice?'rgba(240,165,0,0.08)':'none'}}>
+                  {exitPrice
+                    ? <>⚠ LIMIT order at ${exitPrice}. <strong>May not fill</strong> if price moves away — position stays OPEN until the limit fills or the day closes. Journal will show <em>"pending close"</em> until Alpaca reports the fill.</>
+                    : <>This will cancel all open orders for {exitTarget.symbol} and close at <strong>market price</strong> (fills instantly).</>}
                 </div>
 
                 {exitResult && (
                   <div style={{padding:'8px 12px',borderRadius:4,marginBottom:12,fontSize:12,fontWeight:600,
-                    background: exitResult.ok ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
-                    color: exitResult.ok ? 'var(--green)' : 'var(--red)',
-                    border: `1px solid ${exitResult.ok ? 'var(--green)' : 'var(--red)'}`}}>
-                    {exitResult.ok ? `✓ Position closed. P&L: $${fmt(exitResult.trade?.pnl_dollars||0,0)}` : `✕ ${exitResult.error}`}
+                    background: !exitResult.ok ? 'rgba(239,68,68,0.15)' : exitResult.pending ? 'rgba(240,165,0,0.15)' : 'rgba(16,185,129,0.15)',
+                    color:      !exitResult.ok ? 'var(--red)' : exitResult.pending ? 'var(--amber)' : 'var(--green)',
+                    border:    `1px solid ${!exitResult.ok ? 'var(--red)' : exitResult.pending ? 'var(--amber)' : 'var(--green)'}`}}>
+                    {!exitResult.ok
+                      ? `✕ ${exitResult.error}`
+                      : exitResult.pending
+                        ? `⏳ Limit order submitted — position stays open until it fills. Order #${exitResult.brokerOrderId||''}`
+                        : `✓ Position closed at market. P&L: $${fmt(exitResult.trade?.pnl_dollars||0,0)}`}
                   </div>
                 )}
 
@@ -12171,6 +12416,11 @@ function BreadthSection() {
   const [breadthRange, setBreadthRange] = useState('3M');
   const [mcRange, setMcRange] = useState('3M');
   const [historyData, setHistoryData] = useState([]);
+  // Per-range McClellan snapshot — the landing-page /api/breadth call
+  // hardcodes a 60-day window, so changing the timeframe chips has to
+  // re-fetch via /api/breadth/mcclellan?days=X to refresh
+  // current/previous/trend/summationPct for the selected range.
+  const [mcclellanOverride, setMcclellanOverride] = useState(null);
 
   const BREADTH_RANGES = [
     { k:'1M', days:30 },
@@ -12197,6 +12447,16 @@ function BreadthSection() {
     } catch(e) { console.warn('Breadth history:', e.message); }
   }
 
+  // Re-compute the McClellan oscillator for the selected window. The
+  // server's computeMcClellanOscillator(days) returns current/previous/
+  // summationIndex/trend/summationPct computed over that horizon.
+  async function loadMcclellan(days) {
+    try {
+      const m = await api(`/api/breadth/mcclellan?days=${days}`);
+      setMcclellanOverride(m || null);
+    } catch(e) { console.warn('McClellan:', e.message); }
+  }
+
   // Load history whenever either range changes (use the larger of the two)
   useEffect(() => {
     const br = BREADTH_RANGES.find(r=>r.k===breadthRange) || BREADTH_RANGES[1];
@@ -12204,6 +12464,13 @@ function BreadthSection() {
     const maxDays = Math.max(br.days, mr.days);
     loadHistory(maxDays);
   }, [breadthRange, mcRange]);
+
+  // Re-fetch the McClellan snapshot whenever the McClellan range chip
+  // changes. Don't re-fetch on breadthRange (that's a different panel).
+  useEffect(() => {
+    const mr = BREADTH_RANGES.find(r=>r.k===mcRange) || BREADTH_RANGES[1];
+    loadMcclellan(mr.days);
+  }, [mcRange]);
 
   async function backfillHistory() {
     setBackfilling(true);
@@ -12422,11 +12689,14 @@ function BreadthSection() {
             const rangeDays = (BREADTH_RANGES.find(r=>r.k===mcRange)||BREADTH_RANGES[1]).days;
             const hist = (historyData.length > 1 ? historyData : data.history || []).slice(-rangeDays);
 
-            // Current values display
-            const currentVal = data.mcclellan.current;
-            const summation = data.mcclellan.summationIndex;
-            const trend = data.mcclellan.trend;
-            const prev = data.mcclellan.previous;
+            // Current values display. Prefer the range-specific override from
+            // /api/breadth/mcclellan?days=X so 1M/3M/6M/1Y/ALL actually change
+            // the oscillator + trend labels, not just the chart window.
+            const mcSrc = mcclellanOverride || data.mcclellan;
+            const currentVal = mcSrc.current;
+            const summation = mcSrc.summationIndex;
+            const trend = mcSrc.trend;
+            const prev = mcSrc.previous;
 
             // Build oscillator chart data
             const oscPoints = hist.filter(h => h.mcclellan_osc != null).map(h => ({ date: h.date, value: h.mcclellan_osc }));
@@ -12455,8 +12725,8 @@ function BreadthSection() {
                       <div style={{display:'flex',gap:16}}>
                         <div style={{fontSize:11,color:'var(--text2)',fontFamily:'var(--font-mono)'}}>
                           Summation: <span style={{color:summation>0?'var(--green)':'var(--red)',fontWeight:600}}>{summation}</span>
-                          {data.mcclellan.summationPct != null && (
-                            <span style={{fontSize:10,color:'var(--text3)',marginLeft:6}}>({data.mcclellan.summationPct}th pct 1y)</span>
+                          {mcSrc.summationPct != null && (
+                            <span style={{fontSize:10,color:'var(--text3)',marginLeft:6}}>({mcSrc.summationPct}th pct 1y)</span>
                           )}
                         </div>
                         <div style={{fontSize:11,color:'var(--text3)'}}>Previous: {prev}</div>
