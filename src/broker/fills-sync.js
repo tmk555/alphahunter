@@ -12,6 +12,72 @@ const { createTaxLot, sellTaxLots } = require('../risk/tax-engine');
 const { logExecution } = require('../risk/execution-quality');
 const { assignStrategy } = require('../risk/strategy-manager');
 
+// ─── ensureBracketFields ────────────────────────────────────────────────
+// Guarantee that a freshly-inserted trade row has a usable bracket
+// (stop/T1/T2) and share-accounting (initial/remaining_shares) so the
+// scale-out tracker participates this row when target legs fire.
+//
+// Strategy (first match wins):
+//   1. Already set — no-op.
+//   2. Sibling OPEN row for the same symbol with a bracket — copy it.
+//      This is the common scale-in case: row #1 has a full bracket from
+//      staged_orders, rows #2 and #3 were filled without staged entries.
+//   3. Broker's live stop leg for the symbol — use its stop_price (T1/T2
+//      stay NULL; not ideal but better than a fully orphaned row).
+//
+// initial_shares/remaining_shares are ALWAYS coalesced from shares so
+// scale-out partial_exit accounting works even when no bracket is found.
+//
+// Called by:
+//   • syncBrokerFills() after the staged_orders backfill
+//   • reconcileOrphanPositions() after the position-centric INSERT
+function ensureBracketFields(db, alpacaOrderId, symbol, opts = {}) {
+  const row = db.prepare(
+    'SELECT id, stop_price, target1, target2, initial_shares, remaining_shares, shares, strategy, exit_strategy FROM trades WHERE alpaca_order_id = ?'
+  ).get(alpacaOrderId);
+  if (!row) return;
+
+  const needsBracket = row.stop_price == null || row.target1 == null;
+
+  if (needsBracket) {
+    // Look for a sibling open row with a usable bracket.
+    const sibling = db.prepare(
+      `SELECT stop_price, target1, target2, strategy, exit_strategy
+         FROM trades
+        WHERE symbol = ? AND id != ? AND exit_date IS NULL
+          AND stop_price IS NOT NULL AND target1 IS NOT NULL
+        ORDER BY entry_date DESC
+        LIMIT 1`
+    ).get(symbol, row.id);
+
+    if (sibling) {
+      db.prepare(
+        `UPDATE trades SET
+           stop_price    = COALESCE(stop_price, ?),
+           target1       = COALESCE(target1, ?),
+           target2       = COALESCE(target2, ?),
+           strategy      = COALESCE(strategy, ?),
+           exit_strategy = COALESCE(exit_strategy, ?)
+         WHERE id = ?`
+      ).run(sibling.stop_price, sibling.target1, sibling.target2,
+            sibling.strategy, sibling.exit_strategy || 'full_in_scale_out', row.id);
+    } else if (opts.brokerStop != null) {
+      // Last resort: whatever live stop leg the broker has on this symbol.
+      // T1/T2 remain NULL — the row will be flagged needs_review=1 already.
+      db.prepare('UPDATE trades SET stop_price = COALESCE(stop_price, ?) WHERE id = ?')
+        .run(opts.brokerStop, row.id);
+    }
+  }
+
+  // Always lock in share accounting.
+  db.prepare(
+    `UPDATE trades SET
+       initial_shares   = COALESCE(initial_shares, shares),
+       remaining_shares = COALESCE(remaining_shares, shares)
+     WHERE id = ?`
+  ).run(row.id);
+}
+
 async function syncBrokerFills() {
   const db = getDB();
 
@@ -66,6 +132,21 @@ async function syncBrokerFills() {
       db.prepare('UPDATE trades SET stop_price=?, target1=?, target2=?, strategy=?, exit_strategy=?, was_system_signal=1 WHERE alpaca_order_id=?')
         .run(staged.stop_price, staged.target1_price, staged.target2_price, staged.strategy || null, staged.exit_strategy || 'full_in_scale_out', order.id);
     }
+
+    // ─── Bracket backfill for scale-in tranches ─────────────────────────
+    // When the 2nd/3rd pyramid tranche lacks a staged_orders row (e.g. filled
+    // outside this app, or the staged row was pruned), the INSERT above
+    // leaves stop_price / target1 / target2 NULL. The scale-out tracker
+    // then IGNORES this row at T1/T2 time, so when a broker sell fires
+    // proportionally across tranches, this row's slice is never recorded —
+    // journal silently drifts from broker.
+    //
+    // Fix: if we still have NULL bracket fields after the staged step, copy
+    // them from a sibling OPEN row for the same symbol. Falls back to the
+    // live broker stop leg as a last resort. Always populate
+    // initial_shares/remaining_shares from shares so scale-out accounting
+    // works even in the no-bracket case.
+    ensureBracketFields(db, order.id, order.symbol);
 
     let snapData = null;
     try {
@@ -180,67 +261,116 @@ async function syncBrokerFills() {
       'SELECT * FROM trades WHERE pending_close_order_id = ? AND exit_date IS NULL LIMIT 1'
     ).get(sell.id);
 
-    // 2. Fallback: most-recent open long row for the symbol. Covers sells that
-    //    originated outside this app (bracket TP legs, manual Alpaca-UI sells).
-    const trade = pendingTrade || db.prepare(
-      'SELECT * FROM trades WHERE symbol = ? AND exit_date IS NULL AND side = ? ORDER BY entry_date DESC LIMIT 1'
-    ).get(sell.symbol, 'long');
-    if (!trade) continue;
-
-    const fromPendingClose = !!pendingTrade;
-
     let exitDate = (sell.filled_at || sell.created_at).split('T')[0];
     if (exitDate > todayStr) exitDate = todayStr;
-    const exitPrice   = +sell.filled_avg_price;
-    const pnl_dollars = (exitPrice - trade.entry_price) * (trade.shares || 0);
-    const pnl_percent = +((exitPrice / trade.entry_price - 1) * 100).toFixed(2);
-    const risk        = trade.entry_price - (trade.stop_price || trade.entry_price * 0.95);
-    const r_multiple  = risk > 0 ? +((exitPrice - trade.entry_price) / risk).toFixed(2) : 0;
+    const exitPrice = +sell.filled_avg_price;
+    const sellQty   = +sell.filled_qty;
+    const orderDate = (sell.submitted_at || sell.created_at)?.split('T')[0];
 
-    const exitReason = fromPendingClose ? 'manual_exit_fill' : 'auto_sync';
-    const noteSuffix = fromPendingClose
-      ? `\n[PENDING-CLOSE FILLED] Limit sell order ${sell.id} filled at $${exitPrice.toFixed(2)}.`
-      : `\n[AUTO-EXIT] Sold at $${exitPrice.toFixed(2)}. Update exit reason and review.`;
+    // ── PATH A: pending_close pinned to a specific lot ──────────────────
+    if (pendingTrade) {
+      const trade       = pendingTrade;
+      const pnl_dollars = (exitPrice - trade.entry_price) * (trade.shares || 0);
+      const pnl_percent = +((exitPrice / trade.entry_price - 1) * 100).toFixed(2);
+      const risk        = trade.entry_price - (trade.stop_price || trade.entry_price * 0.95);
+      const r_multiple  = risk > 0 ? +((exitPrice - trade.entry_price) / risk).toFixed(2) : 0;
+      const noteSuffix  = `\n[PENDING-CLOSE FILLED] Limit sell order ${sell.id} filled at $${exitPrice.toFixed(2)}.`;
 
-    db.prepare(`
-      UPDATE trades SET exit_date=?, exit_price=?, exit_reason=?,
-        pnl_dollars=?, pnl_percent=?, r_multiple=?, needs_review=1,
-        exit_order_id=?,
-        pending_close_order_id=NULL, pending_close_submitted_at=NULL,
-        notes=COALESCE(notes,'') || ? WHERE id=?
-    `).run(exitDate, exitPrice, exitReason, pnl_dollars, pnl_percent, r_multiple,
-      sell.id, noteSuffix, trade.id);
+      db.prepare(`
+        UPDATE trades SET exit_date=?, exit_price=?, exit_reason='manual_exit_fill',
+          pnl_dollars=?, pnl_percent=?, r_multiple=?, needs_review=1,
+          exit_order_id=?,
+          pending_close_order_id=NULL, pending_close_submitted_at=NULL,
+          notes=COALESCE(notes,'') || ? WHERE id=?
+      `).run(exitDate, exitPrice, pnl_dollars, pnl_percent, r_multiple,
+        sell.id, noteSuffix, trade.id);
 
-    // Mark in-memory so the same sell can't close two rows within this run
-    // (defensive — no known trigger today, but belts + suspenders).
-    seenExitIds.add(sell.id);
+      seenExitIds.add(sell.id);
+      try { sellTaxLots({ symbol: sell.symbol, shares: trade.shares || sellQty, salePrice: exitPrice, saleDate: exitDate, method: 'fifo' }); } catch (_) {}
+      try { logExecution({ tradeId: trade.id, symbol: sell.symbol, side: 'sell', intendedPrice: trade.target1 || exitPrice, fillPrice: exitPrice, shares: sellQty || trade.shares, orderType: sell.type || 'market', signalDate: exitDate, orderDate, fillDate: exitDate }); } catch (_) {}
+      exited.push({ symbol: sell.symbol, exitPrice, pnl_percent, source: 'pending_close_fill' });
+      continue;
+    }
 
-    try {
-      sellTaxLots({
-        symbol: sell.symbol,
-        shares: trade.shares || +sell.filled_qty,
-        salePrice: exitPrice,
-        saleDate: exitDate,
-        method: 'fifo',
+    // ── PATH B: fallback — pro-rate across all open rows ────────────────
+    //
+    // The old code closed the oldest open row wholesale with the full sell
+    // qty. For multi-tranche positions that's badly wrong: a 9-share sell
+    // on 3 open 9-share lots belongs 3/3/3, not 9/0/0. Symptom: the oldest
+    // row showed as "closed" in the UI while Alpaca still held the position
+    // (the ghost-close that bit DELL #23 on 2026-04-22).
+    //
+    // Fix: allocate sellQty across open rows proportional to remaining_shares
+    // (floor + remainder-to-last), append a partial_exit to each row, and
+    // close only rows whose remaining_shares reaches 0.
+    const openRows = db.prepare(
+      'SELECT * FROM trades WHERE symbol = ? AND exit_date IS NULL AND side = ? ORDER BY entry_date ASC, id ASC'
+    ).all(sell.symbol, 'long');
+    if (!openRows.length) continue;
+
+    const totalRem = openRows.reduce((s, r) => s + (r.remaining_shares != null ? r.remaining_shares : (r.shares || 0)), 0);
+    if (totalRem <= 0) continue;
+
+    // Proportional allocation. Floor per row, remainder goes to the last row
+    // so the allocation sums exactly to sellQty.
+    const allocs = openRows.map(r => {
+      const rem = r.remaining_shares != null ? r.remaining_shares : (r.shares || 0);
+      return { row: r, rem, alloc: Math.floor(rem / totalRem * sellQty) };
+    });
+    const allocSum = allocs.reduce((s, a) => s + a.alloc, 0);
+    if (allocSum < sellQty && allocs.length) {
+      allocs[allocs.length - 1].alloc += (sellQty - allocSum);
+    }
+
+    const isProrata = allocs.filter(a => a.alloc > 0).length > 1;
+    const reason    = isProrata ? 'auto_sync_prorata' : 'auto_sync';
+
+    let rowsTouched = 0;
+    for (const { row, rem, alloc } of allocs) {
+      if (alloc <= 0) continue;
+      const actualAlloc = Math.min(alloc, rem);  // defensive clamp
+      const newRem      = rem - actualAlloc;
+      const existing    = row.partial_exits ? JSON.parse(row.partial_exits) : [];
+      const partialPnl  = +((exitPrice - row.entry_price) * actualAlloc).toFixed(2);
+      existing.push({
+        level: isProrata ? 'auto_sync_prorata' : 'auto_sync',
+        shares: actualAlloc, price: exitPrice, pnl: partialPnl,
+        timestamp: sell.filled_at || sell.created_at, order_id: sell.id,
       });
-    } catch (_) {}
 
-    try {
-      logExecution({
-        tradeId: trade.id,
-        symbol: sell.symbol,
-        side: 'sell',
-        intendedPrice: trade.target1 || exitPrice,
-        fillPrice: exitPrice,
-        shares: +sell.filled_qty || trade.shares,
-        orderType: sell.type || 'market',
-        signalDate: exitDate,
-        orderDate: (sell.submitted_at || sell.created_at)?.split('T')[0],
-        fillDate: exitDate,
-      });
-    } catch (_) {}
+      if (newRem <= 0) {
+        // Fully closed this row.
+        const pnl_dollars = (exitPrice - row.entry_price) * (row.shares || 0);
+        const pnl_percent = +((exitPrice / row.entry_price - 1) * 100).toFixed(2);
+        const risk        = row.entry_price - (row.stop_price || row.entry_price * 0.95);
+        const r_multiple  = risk > 0 ? +((exitPrice - row.entry_price) / risk).toFixed(2) : 0;
+        const noteSuffix  = `\n[AUTO-EXIT${isProrata ? ' PRO-RATA' : ''}] Closed ${actualAlloc}sh @ $${exitPrice.toFixed(2)} (order ${sell.id.slice(0,8)}).`;
+        db.prepare(`
+          UPDATE trades SET exit_date=?, exit_price=?, exit_reason=?,
+            pnl_dollars=?, pnl_percent=?, r_multiple=?, needs_review=1,
+            remaining_shares=0, partial_exits=?, exit_order_id=?,
+            notes=COALESCE(notes,'') || ? WHERE id=?
+        `).run(exitDate, exitPrice, reason, pnl_dollars, pnl_percent, r_multiple,
+          JSON.stringify(existing), sell.id, noteSuffix, row.id);
+      } else {
+        // Still open — append partial_exit + decrement remaining.
+        const noteSuffix = `\n[AUTO-EXIT PRO-RATA] Sold ${actualAlloc}sh @ $${exitPrice.toFixed(2)} (order ${sell.id.slice(0,8)}); ${newRem}sh remain.`;
+        db.prepare(`
+          UPDATE trades SET remaining_shares=?, partial_exits=?, needs_review=1,
+            exit_order_id=?,
+            notes=COALESCE(notes,'') || ? WHERE id=?
+        `).run(newRem, JSON.stringify(existing), sell.id, noteSuffix, row.id);
+      }
 
-    exited.push({ symbol: sell.symbol, exitPrice, pnl_percent, source: fromPendingClose ? 'pending_close_fill' : 'auto_sync' });
+      rowsTouched++;
+      try { sellTaxLots({ symbol: sell.symbol, shares: actualAlloc, salePrice: exitPrice, saleDate: exitDate, method: 'fifo' }); } catch (_) {}
+      try { logExecution({ tradeId: row.id, symbol: sell.symbol, side: 'sell', intendedPrice: row.target1 || exitPrice, fillPrice: exitPrice, shares: actualAlloc, orderType: sell.type || 'market', signalDate: exitDate, orderDate, fillDate: exitDate }); } catch (_) {}
+    }
+
+    if (rowsTouched > 0) {
+      seenExitIds.add(sell.id);
+      exited.push({ symbol: sell.symbol, exitPrice, qty: sellQty, rows: rowsTouched, source: reason });
+    }
   }
 
   // ── Position-centric reconcile ──
@@ -369,6 +499,15 @@ async function reconcileOrphanPositions({ lookbackDays = 90, recentCloseWindowMi
         : `[RECONCILED-FROM-BROKER] ${qty}sh @ $${avgEntry.toFixed(2)} — no originating buy order found within last ${lookbackDays}d (older than window, or submitted outside this app). Set entry_date / strategy manually if needed.`;
 
       stmt.run(sym, 'long', entryDate, avgEntry, qty, sector, brokerStop, orderId, note);
+
+      // Sibling-copy bracket + always set initial/remaining_shares.
+      // Orphan rows were the original stop/T1/T2 NULL source — this closes
+      // the loop so re-running this reconciler on partial-position days
+      // (e.g. after a scale-out) produces rows that fully participate in
+      // the next scale-out trigger.
+      if (orderId) {
+        try { ensureBracketFields(db, orderId, sym, { brokerStop }); } catch (_) {}
+      }
 
       reconciled.push({
         symbol: sym, qty, avgEntry, stopPrice: brokerStop,
