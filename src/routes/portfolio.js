@@ -7,7 +7,8 @@ const { calculatePositionSize, kellyOptimal } = require('../risk/position-sizer'
 const {
   getConfig, updateConfig,
   getPortfolioHeat, getSectorExposure, getCorrelationRisk,
-  getDrawdownStatus, preTradeCheck,
+  getDrawdownStatus, resetPeakEquity, preTradeCheck,
+  suggestPyramidAdd,
 } = require('../risk/portfolio');
 const { getMarketRegime } = require('../risk/regime');
 const { createStopAlert, deactivateAlertsForTrade } = require('../broker/alerts');
@@ -39,10 +40,12 @@ module.exports = function(db) {
       const config = getConfig();
       const heat = getPortfolioHeat(openPositions);
       const exposure = getSectorExposure(openPositions);
-      const drawdown = getDrawdownStatus(config.accountSize);
-      const regime = await getMarketRegime();
 
-      // Fetch live broker data for accurate dashboard
+      // Fetch live broker data FIRST so drawdown can use real equity.
+      // Previously we passed config.accountSize to getDrawdownStatus, which
+      // made drawdown stuck at 0.0% (peak seeded from accountSize, current
+      // also accountSize → 0 delta). Now we use broker equity when available
+      // and fall back to accountSize only when the broker is unreachable.
       let broker = null;
       let brokerPositions = [];
       try {
@@ -105,21 +108,92 @@ module.exports = function(db) {
             localExitStrategy: local?.exit_strategy || staged?.exit_strategy || null,
             sector:            local?.sector || null,
             inJournal:         !!local,
+            // Pending-close state: if the trader submitted a LIMIT sell via
+            // /broker/close-position, the journal row carries an open
+            // pending_close_order_id until fills-sync reconciles the fill.
+            // Surface to the UI so LIVE POSITIONS can render a "PENDING CLOSE"
+            // pill instead of looking like a fresh untouched position.
+            pendingCloseOrderId:    local?.pending_close_order_id    || null,
+            pendingCloseSubmittedAt: local?.pending_close_submitted_at || null,
           };
         });
       } catch (_) { /* broker unavailable — fall back to local-only */ }
+
+      // Now that broker equity is captured (or null), compute drawdown
+      // against real equity. Fallback to accountSize keeps dry-run sessions
+      // and paper-token-expired states from producing garbage drawdown math.
+      const liveEquity = broker?.equity || config.accountSize;
+      const drawdown = getDrawdownStatus(liveEquity);
+      const regime = await getMarketRegime();
+
+      // Position-count telemetry (distinct symbols — multi-tranche positions
+      // are ONE logical position). The cap is ramp-tier-aware; callers surface
+      // this to the UI so the trader sees "5/7 positions used" at a glance.
+      const distinctSymbols = new Set(openPositions.map(p => p.symbol)).size;
+      const tier = regime?.exposureRamp?.exposureLevel;
+      const tierCap = tier && config.maxOpenPositionsByTier?.[tier] != null
+        ? config.maxOpenPositionsByTier[tier]
+        : null;
+      const effectiveMaxPositions = tierCap != null ? tierCap : config.maxOpenPositions;
+      const positionCount = {
+        current: distinctSymbols,
+        cap:     effectiveMaxPositions,
+        tier:    tier || null,
+        tierOverride: tierCap != null,
+        atCap:   distinctSymbols >= effectiveMaxPositions,
+      };
+
+      // Pyramid-first nudge. Feeds live broker prices (when we have them) so
+      // the R-multiple calc uses the freshest mark. Falls back to stored
+      // entry price when broker is unavailable — which produces a winners
+      // list of ZERO (0R gain), harmless default.
+      const currentPrices = {};
+      for (const bp of brokerPositions) {
+        if (bp.symbol && bp.currentPrice) currentPrices[bp.symbol] = bp.currentPrice;
+      }
+      const pyramidSuggestion = suggestPyramidAdd(openPositions, currentPrices, regime);
 
       res.json({
         heat,
         exposure,
         drawdown,
-        regime: { mode: regime.regime, sizeMultiplier: regime.sizeMultiplier },
+        // Surface above50/above200 so the UI can explain WHY a REDUCED tier
+        // was chosen (e.g., "SPY below 50MA" vs. "3+ distribution days").
+        regime: {
+          mode: regime.regime,
+          sizeMultiplier: regime.sizeMultiplier,
+          exposureRamp: regime.exposureRamp,
+          above50:  regime.above50,
+          above200: regime.above200,
+        },
         openPositions: openPositions.length,
+        positionCount,
+        pyramidSuggestion,
         config,
         broker,
         brokerPositions,
       });
     } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Peak Equity Reset ─────────────────────────────────────────────────────
+  // Two modes:
+  //   POST /portfolio/peak-equity/reset         → clear + recompute from trades
+  //   POST /portfolio/peak-equity/reset {value} → pin peak to caller-supplied
+  //
+  // Use case: after a bulk trade import (the backfill on first load won't
+  // re-run because a peak is already persisted), or after an account
+  // deposit/withdrawal that the trade-based curve can't reflect.
+  router.post('/portfolio/peak-equity/reset', (req, res) => {
+    try {
+      const { value } = req.body || {};
+      if (value != null) {
+        const peak = resetPeakEquity(+value);
+        return res.json({ ok: true, peakEquity: peak, mode: 'forced' });
+      }
+      const peak = resetPeakEquity();
+      res.json({ ok: true, peakEquity: peak, mode: 'recomputed' });
+    } catch(e) { res.status(400).json({ error: e.message }); }
   });
 
   // ─── Position Sizer ────────────────────────────────────────────────────────
@@ -278,10 +352,23 @@ module.exports = function(db) {
 
   // POST /api/trades/sync — Auto-sync filled broker orders into journal
   // (Logic lives in src/broker/fills-sync.js so the scheduler job can reuse it.)
+  // Runs both the order-centric sync (last 7d of filled BUYs) AND the
+  // position-centric reconcile (every broker position not already in trades).
   router.post('/trades/sync', async (req, res) => {
     try {
-      const { synced, exited, backfilled } = await syncBrokerFills();
-      res.json({ synced, exited, backfilled, message: `Synced ${synced.length} entries, ${exited.length} exits${backfilled?`, backfilled sector on ${backfilled} trades`:''}` });
+      const { synced, exited, backfilled, reconciled } = await syncBrokerFills();
+      const parts = [
+        `Synced ${synced.length} entries`,
+        `${exited.length} exits`,
+      ];
+      if (backfilled) parts.push(`backfilled sector on ${backfilled} trades`);
+      if (reconciled?.reconciled?.length) {
+        parts.push(`reconciled ${reconciled.reconciled.length} orphan position(s) from broker`);
+      }
+      if (reconciled?.stillOrphan?.length) {
+        parts.push(`${reconciled.stillOrphan.length} still orphaned (see logs)`);
+      }
+      res.json({ synced, exited, backfilled, reconciled, message: parts.join(', ') });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 

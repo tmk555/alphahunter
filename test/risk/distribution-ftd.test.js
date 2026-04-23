@@ -122,6 +122,110 @@ describe('Phase 3.11: Distribution Day Detection', () => {
     const result = _countDistributionDays(bars, 'SPY');
     expect(result.count).toBe(0);
   });
+
+  // ── O'Neil +5% recovery-scrub rule ──────────────────────────────────────
+  test('scrubs a dist day when index subsequently closes ≥+5% above that close', () => {
+    // Early dist day, then a long rally that closes >5% above the dist close.
+    // O'Neil: the market absorbed the selling — that dist day is invalidated.
+    const specs = [
+      { chg: -0.01,  vol: 1_500_000 },  // dist day #1 — should be scrubbed
+      // Now rally +6% cumulatively — last close > dist close × 1.05
+      { chg: 0.015, vol: 900_000 },
+      { chg: 0.015, vol: 900_000 },
+      { chg: 0.015, vol: 900_000 },
+      { chg: 0.015, vol: 900_000 },      // cumulative ~+6.1%
+      // More quiet sessions so we stay inside 25-session window
+      { chg: 0.001, vol: 900_000 },
+      { chg: 0.001, vol: 900_000 },
+      { chg: 0.001, vol: 900_000 },
+      { chg: 0.001, vol: 900_000 },
+      { chg: 0.001, vol: 900_000 },
+    ];
+    const bars = buildBarsWithHistory(specs);
+    const result = _countDistributionDays(bars, 'SPY');
+    expect(result.rawCount).toBe(1);            // raw O'Neil count = 1
+    expect(result.count).toBe(0);               // after scrub = 0
+    expect(result.scrubbedCount).toBe(1);
+    expect(result.scrubbed.length).toBe(1);
+  });
+
+  test('does NOT scrub a dist day when subsequent recovery < +5%', () => {
+    const specs = [
+      { chg: -0.01,  vol: 1_500_000 },  // dist day
+      // Shallow bounce — only ~+2% total, well below +5% scrub threshold
+      { chg: 0.005, vol: 900_000 },
+      { chg: 0.005, vol: 900_000 },
+      { chg: 0.005, vol: 900_000 },
+      { chg: 0.005, vol: 900_000 },
+    ];
+    const bars = buildBarsWithHistory(specs);
+    const result = _countDistributionDays(bars, 'SPY');
+    expect(result.rawCount).toBe(1);
+    expect(result.count).toBe(1);               // still counting — not scrubbed
+    expect(result.scrubbedCount).toBe(0);
+  });
+
+  test('scrubs some dist days but keeps fresh ones (mixed case)', () => {
+    // Early dist day → rally +6% (scrubs it) → fresh dist day right at end
+    const specs = [
+      { chg: -0.01,  vol: 1_500_000 },  // old dist day — will be scrubbed
+      { chg: 0.015, vol: 900_000 },
+      { chg: 0.015, vol: 900_000 },
+      { chg: 0.015, vol: 900_000 },
+      { chg: 0.015, vol: 900_000 },
+      // +5% recovery complete. Now some quiet days.
+      { chg: 0.001, vol: 900_000 },
+      { chg: 0.001, vol: 900_000 },
+      { chg: 0.001, vol: 900_000 },
+      { chg: 0.001, vol: 900_000 },
+      { chg: -0.005, vol: 1_500_000 }, // FRESH dist day — no further +5% recovery possible
+    ];
+    const bars = buildBarsWithHistory(specs);
+    const result = _countDistributionDays(bars, 'SPY');
+    expect(result.rawCount).toBe(2);            // both raw dist days
+    expect(result.count).toBe(1);               // only fresh one remains
+    expect(result.scrubbedCount).toBe(1);       // old one scrubbed
+  });
+
+  test('recent10Count counts only active (non-scrubbed) dist days in last 10 sessions', () => {
+    // Layout: old dist day that gets scrubbed (>10 sessions ago),
+    // then a fresh dist day inside the last 10.
+    const specs = [
+      { chg: -0.01,  vol: 1_500_000 },  // old dist day — will be scrubbed
+      { chg: 0.015, vol: 900_000 },
+      { chg: 0.015, vol: 900_000 },
+      { chg: 0.015, vol: 900_000 },
+      { chg: 0.015, vol: 900_000 },     // +6% recovery
+      // These push the old dist day beyond the last-10 window
+      { chg: 0.001, vol: 900_000 },
+      { chg: 0.001, vol: 900_000 },
+      { chg: 0.001, vol: 900_000 },
+      { chg: 0.001, vol: 900_000 },
+      { chg: 0.001, vol: 900_000 },
+      { chg: 0.001, vol: 900_000 },
+      { chg: 0.001, vol: 900_000 },     // now old dist day is ~12 sessions back
+      // Fresh dist day — in last 10 sessions, cannot be scrubbed yet
+      { chg: -0.005, vol: 1_500_000 },
+    ];
+    const bars = buildBarsWithHistory(specs);
+    const result = _countDistributionDays(bars, 'SPY');
+    expect(result.count).toBe(1);               // fresh only (old was scrubbed)
+    expect(result.recent10Count).toBe(1);       // the fresh one is in last 10
+  });
+
+  test('returns 0 recent10 when all active dist days are older than 10 sessions', () => {
+    // A single non-scrubbed dist day placed ~15 sessions ago, no recovery to scrub it
+    const specs = [];
+    specs.push({ chg: -0.005, vol: 1_500_000 });   // dist day
+    // 15 quiet sessions with small drift — never reaches +5% above dist close
+    for (let i = 0; i < 15; i++) specs.push({ chg: 0.001, vol: 900_000 });
+
+    const bars = buildBarsWithHistory(specs);
+    const result = _countDistributionDays(bars, 'SPY');
+    expect(result.count).toBe(1);               // still active
+    expect(result.scrubbedCount).toBe(0);       // not enough bounce
+    expect(result.recent10Count).toBe(0);       // but older than last 10
+  });
 });
 
 // ─── 3.12: Follow-Through Day Tests ─────────────────────────────────────────

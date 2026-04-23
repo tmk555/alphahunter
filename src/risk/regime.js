@@ -100,6 +100,8 @@ async function getMarketRegime() {
         const ftdConfirmed = cycle.ftd?.confirmed;
         const ftdFailed = cycle.ftd?.failed;
         const distDays = cycle.distributionDays?.count || 0;
+        const distDaysRecent10 = cycle.distributionDays?.recent10Count || 0;
+        const distDaysScrubbed = cycle.distributionDays?.scrubbedCount || 0;
         // O'Neil ramp: pilot → half → three-quarter → full
         let maxHeatPct, exposureLevel;
         if (ftdFailed) {
@@ -116,7 +118,13 @@ async function getMarketRegime() {
         } else {
           maxHeatPct = 4; exposureLevel = 'REDUCED';        // Too many dist days
         }
-        exposureRamp = { maxHeatPct, exposureLevel, rallyDay, ftdConfirmed, distDays };
+        exposureRamp = {
+          maxHeatPct, exposureLevel, rallyDay, ftdConfirmed, distDays,
+          // Surface recovery-scrub metadata for UI tooltips — the tier may
+          // read REDUCED due to old dist days that have since been scrubbed
+          // by +5% recovery, and users need to see that transparently.
+          distDaysRecent10, distDaysScrubbed,
+        };
       }
     } catch (_) {}
 
@@ -336,9 +344,34 @@ async function getMarketRegime() {
 //   confirmation failed due to subsequent distribution).
 
 // ── Distribution day detection for a single index ─────────────────────────
-// Returns { all: [{date, chg, vol, index}...], active: [date...], count }
+// O'Neil's full rules — NOT just a 25-session count:
+//   1. 25-session expiry (days outside the window fall off automatically)
+//   2. +5% recovery scrub — a dist day is invalidated if the index
+//      subsequently closes ≥+5% above that day's close. Rationale: the
+//      market absorbed the selling and rallied through it; dragging that
+//      dist day forward is stale signal.
+// Both rules applied here. `active` = after both filters. `scrubbed` are
+// surfaced separately so the UI can explain why the raw count shrinks.
+//
+// Returns:
+//   all          — last 50 sessions, raw dist days (for display only)
+//   active       — dates still counting (25-session + not +5% recovered)
+//   count        — active.length
+//   scrubbed     — dates that WOULD be active but were invalidated by +5%
+//   recent10     — active dates falling in the last 10 sessions
+//   rawCount     — 25-session count BEFORE scrub (raw O'Neil count)
+const RECOVERY_SCRUB_PCT = 0.05; // +5% above dist-day close → scrubbed
+const RECENT_DIST_WINDOW = 10;   // for the "X in last 10" tooltip split
+
 function _countDistributionDays(bars, indexLabel) {
-  if (!bars || bars.length < 50) return { all: [], active: [], count: 0 };
+  if (!bars || bars.length < 50) {
+    return {
+      all: [], active: [], count: 0,
+      scrubbed: [], scrubbedCount: 0,
+      recent10: [], recent10Count: 0,
+      rawCount: 0, vol50Avg: 0,
+    };
+  }
 
   const vol50Avg = bars.slice(-50).reduce((s, b) => s + b.volume, 0) / 50;
 
@@ -352,17 +385,41 @@ function _countDistributionDays(bars, indexLabel) {
     }
   }
 
-  // Active distribution days: only last 25 sessions (O'Neil: they expire after 25 trading days)
+  // 25-session window + O'Neil recovery-scrub
   const recent25 = bars.slice(-25);
   const active = [];
+  const scrubbed = [];
+  let rawCount = 0;
   for (let i = 1; i < recent25.length; i++) {
     const chg = (recent25[i].close - recent25[i - 1].close) / recent25[i - 1].close;
-    if (chg <= -0.002 && recent25[i].volume > vol50Avg) {
-      active.push(recent25[i].date);
+    if (!(chg <= -0.002 && recent25[i].volume > vol50Avg)) continue;
+    rawCount++;
+
+    // Did the index subsequently close ≥+5% above this dist-day close?
+    // Scan only within recent25 — anything farther back is already aged out.
+    const scrubThreshold = recent25[i].close * (1 + RECOVERY_SCRUB_PCT);
+    let recovered = false;
+    for (let j = i + 1; j < recent25.length; j++) {
+      if (recent25[j].close >= scrubThreshold) { recovered = true; break; }
     }
+    if (recovered) scrubbed.push(recent25[i].date);
+    else           active.push(recent25[i].date);
   }
 
-  return { all, active, count: active.length, vol50Avg };
+  // Recent-10-session split — only ACTIVE (non-scrubbed) days count toward
+  // the "market recovering" indicator the user asked for. If there are
+  // fresh dist days in the last 10 sessions, the recovery isn't clean.
+  const recent10DateSet = new Set(bars.slice(-RECENT_DIST_WINDOW).map(b => b.date));
+  const recent10 = active.filter(d => recent10DateSet.has(d));
+
+  return {
+    all,
+    active, count: active.length,
+    scrubbed, scrubbedCount: scrubbed.length,
+    recent10, recent10Count: recent10.length,
+    rawCount,
+    vol50Avg,
+  };
 }
 
 // ── FTD detection for a single index ──────────────────────────────────────
@@ -448,6 +505,18 @@ async function autoDetectCycleState() {
     const distCount = activeDateSet.size;
     const distDays25 = [...activeDateSet].sort();
     const distDaysAll = [...spyDist.all, ...qqqDist.all].sort((a, b) => a.date.localeCompare(b.date));
+
+    // Merge scrubbed dates. If a date is active on ONE index and scrubbed on
+    // the other, active wins — don't double-count or mislabel.
+    const scrubbedDateSet = new Set([...spyDist.scrubbed, ...qqqDist.scrubbed]);
+    for (const d of activeDateSet) scrubbedDateSet.delete(d);
+    const distScrubbed = [...scrubbedDateSet].sort();
+
+    // Recent-10 split: any active date that falls in last 10 sessions on
+    // EITHER index (the union — consistent with how the active set is built).
+    const recent10Set = new Set([...spyDist.recent10, ...qqqDist.recent10]);
+    const recent10Dates = [...recent10Set].sort();
+    const rawCount25 = distCount + distScrubbed.length;
 
     // ── SPY position vs MAs ──────────────────────────────────────────────
     const n = spyBars.length;
@@ -560,6 +629,8 @@ async function autoDetectCycleState() {
     if (ma200Rising) signals.push('200MA rising');
     if (distCount >= 4) signals.push(`${distCount} distribution days across SPY+QQQ (25-session window)`);
     else if (distCount >= 2) signals.push(`${distCount} distribution days (25-session window)`);
+    if (distScrubbed.length > 0) signals.push(`${distScrubbed.length} dist day(s) scrubbed by +5% recovery`);
+    if (recent10Dates.length > 0) signals.push(`${recent10Dates.length} active dist day(s) in last 10 sessions`);
     if (ftdFired) signals.push(`FTD fired on ${ftdIndex} ${ftdDate}`);
     if (ftdConfirmed) signals.push('FTD confirmed');
     if (ftdFailed) signals.push(`FTD failed — distribution followed on ${ftdDate}`);
@@ -571,8 +642,24 @@ async function autoDetectCycleState() {
         count: distCount,
         dates: distDays25,
         all: distDaysAll,
-        spy: { count: spyDist.count, dates: spyDist.active },
-        qqq: { count: qqqDist.count, dates: qqqDist.active },
+        // Phase: O'Neil +5% recovery-scrub transparency
+        scrubbed: distScrubbed,
+        scrubbedCount: distScrubbed.length,
+        rawCount25,                  // 25-session count BEFORE scrub
+        recent10: recent10Dates,     // active dist days in last 10 sessions
+        recent10Count: recent10Dates.length,
+        spy: {
+          count: spyDist.count,
+          dates: spyDist.active,
+          scrubbed: spyDist.scrubbed,
+          recent10: spyDist.recent10,
+        },
+        qqq: {
+          count: qqqDist.count,
+          dates: qqqDist.active,
+          scrubbed: qqqDist.scrubbed,
+          recent10: qqqDist.recent10,
+        },
       },
       ftd: {
         fired: ftdFired,

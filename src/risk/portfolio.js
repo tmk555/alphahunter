@@ -13,6 +13,30 @@ const DEFAULT_CONFIG = {
   maxSectorExposure: 25,   // % of account in any single sector
   maxIndustryPositions: 3, // max positions in same industry group
   maxPositionPct: 20,      // max single position as % of account
+  // Hard cap on concurrent OPEN positions. Without this, multiplier-driven
+  // size reductions (regime × beta × vol × correlation × factor) would be
+  // silently absorbed by opening MORE positions until heat caught up — the
+  // "dilution paradox". With the cap, regime reductions actually reduce
+  // aggregate risk (fewer positions, each roughly full size) instead of
+  // fragmenting conviction across a bigger book.
+  maxOpenPositions: 6,
+  // Tier-aware override: when the FTD cycle is active and exposureRamp
+  // reports a level, this mapping wins over maxOpenPositions. Matches the
+  // O'Neil cadence — few bets early in a rally, more once confirmed.
+  // Set any tier to null to fall back to maxOpenPositions for that level.
+  maxOpenPositionsByTier: {
+    PILOT:         2,
+    HALF:          3,
+    THREE_QUARTER: 5,
+    FULL:          7,
+    REDUCED:       3,
+  },
+  // Pyramid-first nudge: when heat utilization (current / cap) falls below
+  // this threshold AND there are open winners at ≥ pyramidMinR unrealized
+  // R-multiples, the UI suggests adding to the winner rather than opening a
+  // new position. Encodes "concentrate into winners" (Minervini/O'Neil).
+  pyramidNudgeHeatPct: 50,  // % — below this utilization, suggest pyramid
+  pyramidMinR:         1.0, // min unrealized R on an open position to pyramid
   drawdownLevels: {
     tighten: 3,            // -3% from peak: tighten stops
     reduce50: 5,           // -5% from peak: reduce to 50% cash
@@ -78,17 +102,71 @@ function updateConfig(updates) {
 }
 
 // ─── Peak Equity (persisted) ────────────────────────────────────────────────
+//
+// On first load (no persisted value), seed the peak from the realized equity
+// curve: walk closed trades in exit-date order, compute a running equity of
+// accountSize + cumulative pnl_dollars, and take the running max. This gives
+// an accurate high-water mark on day one instead of the old "peak = account-
+// Size" behavior — which pinned drawdown at 0.0% forever because the route
+// also passes accountSize as currentEquity.
+//
+// Caveats: this is realized-P&L only. We can't reconstruct historical
+// unrealized peaks without bar-by-bar mark-to-market data, so there's a
+// theoretical undercount if you ran up big unrealized gains and gave them
+// all back before closing. In practice the max() of the realized curve is
+// a close-enough seed — and from this point forward, _savePeakEquity is
+// called every time a live currentEquity exceeds the stored peak, so the
+// high-water mark tracks reality from the first real tick.
 
 function _loadPeakEquity() {
   const saved = _loadState('peakEquity', null);
   if (saved && typeof saved === 'number' && saved > 0) return saved;
-  // First time: use accountSize from config
+
   _ensureConfig();
-  return config.accountSize;
+  let seed = config.accountSize;
+  try {
+    const closed = db().prepare(
+      `SELECT pnl_dollars FROM trades
+       WHERE exit_date IS NOT NULL AND pnl_dollars IS NOT NULL
+       ORDER BY exit_date ASC`
+    ).all();
+    let running = config.accountSize;
+    let peak    = running;
+    for (const t of closed) {
+      running += (t.pnl_dollars || 0);
+      if (running > peak) peak = running;
+    }
+    seed = peak;
+  } catch (_) {
+    // Fresh DB or missing columns — fall back to accountSize.
+  }
+  _savePeakEquity(seed);
+  return seed;
 }
 
 function _savePeakEquity(value) {
   _saveState('peakEquity', value);
+}
+
+// ─── Reset Peak Equity ──────────────────────────────────────────────────────
+// Two modes:
+//   - forceValue provided:  pin the peak to the caller's number (e.g. mark
+//     today's broker equity as the new high-water mark after a config
+//     change or a manual capital injection).
+//   - no args:              clear the persisted value and re-run the trade-
+//     based backfill. Useful after a bulk import or if the peak got pinned
+//     too low by a bad currentEquity value.
+
+function resetPeakEquity(forceValue = null) {
+  if (forceValue != null) {
+    if (!(forceValue > 0)) throw new Error('resetPeakEquity: forceValue must be > 0');
+    _savePeakEquity(+forceValue);
+    return +forceValue;
+  }
+  try {
+    db().prepare(`DELETE FROM portfolio_state WHERE key = 'peakEquity'`).run();
+  } catch (_) { /* table may not exist yet — _loadPeakEquity will seed */ }
+  return _loadPeakEquity();
 }
 
 // ─── Portfolio Heat ──────────────────────────────────────────────────────────
@@ -278,6 +356,86 @@ function evaluateSignalConfirmation(symbol) {
   return { count: present.length, present, missing, hasData };
 }
 
+// ─── Pyramid-First Suggestion ───────────────────────────────────────────────
+// Encodes the O'Neil/Minervini rule: when the book is underutilized (heat
+// well below cap) AND existing positions are working (open winners at ≥1R),
+// the next deploy should CONCENTRATE into the winner, not fragment into a
+// new name. This helper is advisory — it doesn't block anything. It returns
+// metadata for the UI to display a nudge alongside the stage-order flow.
+//
+// @param  openPositions   [{ symbol, entry_price, stop_price, shares, current_price? }]
+// @param  currentPrices   optional { symbol: price } map (overrides trade.current_price)
+// @param  regime          optional regime object — used to read exposureRamp.maxHeatPct
+// @returns {
+//   shouldPyramid:    boolean,
+//   heatUtilization:  0..1 (current / effective cap),
+//   reason:           human-readable string,
+//   candidates:       [{ symbol, unrealizedR, price, entry, stop }]
+//                     sorted by unrealizedR DESC (best winners first)
+// }
+function suggestPyramidAdd(openPositions, currentPrices = {}, regime = null) {
+  _ensureConfig();
+  if (!openPositions?.length) {
+    return { shouldPyramid: false, heatUtilization: 0, reason: 'no open positions', candidates: [] };
+  }
+
+  const heat = getPortfolioHeat(openPositions);
+  const effectiveMaxHeat = regime?.exposureRamp?.maxHeatPct || config.maxPortfolioHeat;
+  const heatUtilization = effectiveMaxHeat > 0 ? heat.heatPct / effectiveMaxHeat : 0;
+  const threshold = (config.pyramidNudgeHeatPct || 50) / 100;
+
+  // Find open winners. "Winner" = unrealized R-multiple ≥ pyramidMinR. We use
+  // R-multiples (not % gain) because R bakes in the per-trade risk — a tight-
+  // stop name needs less % move to hit 1R than a wide-stop name. Using % would
+  // favor low-vol names and under-weight true winners.
+  const winners = [];
+  for (const pos of openPositions) {
+    const price = currentPrices[pos.symbol] ?? pos.current_price ?? pos.entry_price;
+    if (!pos.entry_price || !pos.stop_price || !price) continue;
+    const r = pos.entry_price - pos.stop_price;
+    if (r <= 0) continue;
+    const unrealizedR = (price - pos.entry_price) / r;
+    if (unrealizedR >= (config.pyramidMinR || 1.0)) {
+      winners.push({
+        symbol:      pos.symbol,
+        unrealizedR: +unrealizedR.toFixed(2),
+        price:       +(+price).toFixed(2),
+        entry:       +(+pos.entry_price).toFixed(2),
+        stop:        +(+pos.stop_price).toFixed(2),
+      });
+    }
+  }
+  winners.sort((a, b) => b.unrealizedR - a.unrealizedR);
+
+  // Decision tree:
+  //   1. heat utilization already ≥ threshold → no nudge (you've deployed enough)
+  //   2. utilization low but no winners yet → no nudge (nothing to add to)
+  //   3. utilization low AND winners exist → YES, pyramid into the best winner
+  if (heatUtilization >= threshold) {
+    return {
+      shouldPyramid: false,
+      heatUtilization: +heatUtilization.toFixed(2),
+      reason: `heat at ${(heatUtilization * 100).toFixed(0)}% of cap — meaningful risk already deployed`,
+      candidates: winners, // surface winners anyway so UI can show R-ranking
+    };
+  }
+  if (!winners.length) {
+    return {
+      shouldPyramid: false,
+      heatUtilization: +heatUtilization.toFixed(2),
+      reason: `heat at ${(heatUtilization * 100).toFixed(0)}% of cap but no open winners at ≥${config.pyramidMinR}R yet`,
+      candidates: [],
+    };
+  }
+  return {
+    shouldPyramid: true,
+    heatUtilization: +heatUtilization.toFixed(2),
+    reason: `heat only ${(heatUtilization * 100).toFixed(0)}% of cap AND ${winners.length} winner(s) at ≥${config.pyramidMinR}R — concentrate into winners before opening new`,
+    candidates: winners,
+    topWinner: winners[0],
+  };
+}
+
 // ─── Pre-trade Validation ────────────────────────────────────────────────────
 // Checks all rules before allowing a new position.
 //
@@ -307,6 +465,44 @@ function preTradeCheck(candidate, openPositions, regime, currentPrices = {}) {
     approved = false;
   } else {
     checks.push({ rule: 'Portfolio Heat', pass: true, detail: `${newHeat.toFixed(1)}% after trade (max ${effectiveMaxHeat}%${rampNote})` });
+  }
+
+  // 1b. Position count cap. Prevents the dilution paradox: without this, a
+  // poor regime's multiplier-driven size cuts just open the door to more
+  // small positions until heat catches up. We count DISTINCT symbols (not
+  // raw rows), because multi-tranche pyramid entries write ≥2 trade rows
+  // per symbol — counting rows would double-count and block legitimate
+  // adds. Tier-aware cap (if exposureRamp active) overrides the flat
+  // maxOpenPositions. Candidate that's ALREADY an open symbol bypasses the
+  // cap — that's a pyramid add, not a new concurrent position.
+  const distinctSymbols = new Set(openPositions.map(p => p.symbol)).size;
+  const candidateSymbol = (candidate.symbol || candidate.ticker || '').toUpperCase();
+  const isAddToExisting = candidateSymbol && openPositions.some(p => p.symbol === candidateSymbol);
+  const tier = regime?.exposureRamp?.exposureLevel;
+  const tierCap = tier && config.maxOpenPositionsByTier?.[tier] != null
+    ? config.maxOpenPositionsByTier[tier]
+    : null;
+  const effectiveMaxPositions = tierCap != null ? tierCap : config.maxOpenPositions;
+  const tierLabel = tierCap != null ? ` [tier: ${tier}]` : '';
+  if (isAddToExisting) {
+    checks.push({
+      rule: 'Position Count',
+      pass: true,
+      detail: `Pyramid add to ${candidateSymbol} — doesn't count against ${effectiveMaxPositions}-position cap${tierLabel}`,
+    });
+  } else if (distinctSymbols >= effectiveMaxPositions) {
+    checks.push({
+      rule: 'Position Count',
+      pass: false,
+      detail: `${distinctSymbols} open positions — at cap of ${effectiveMaxPositions}${tierLabel}. Close a laggard or add to a winner instead of opening a new name.`,
+    });
+    approved = false;
+  } else {
+    checks.push({
+      rule: 'Position Count',
+      pass: true,
+      detail: `${distinctSymbols}/${effectiveMaxPositions} positions used${tierLabel}`,
+    });
   }
 
   // 2. Sector exposure
@@ -470,5 +666,6 @@ function preTradeCheck(candidate, openPositions, regime, currentPrices = {}) {
 module.exports = {
   getConfig, updateConfig,
   getPortfolioHeat, getSectorExposure, getCorrelationRisk,
-  getDrawdownStatus, preTradeCheck,
+  getDrawdownStatus, resetPeakEquity, preTradeCheck,
+  suggestPyramidAdd,
 };
