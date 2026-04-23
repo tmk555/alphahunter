@@ -433,10 +433,76 @@ async function pLimit(tasks, limit = 5) {
   return results;
 }
 
+// ── Calendar events: earnings + ex-dividend dates ─────────────────────────
+// Pulls the next-scheduled earnings date and the next ex-dividend date from
+// Yahoo's quoteSummary endpoint. Used by the chart route to annotate the
+// price pane with vertical markers so the user can spot upcoming volatility
+// events at a glance.
+//
+// Returns { earningsDate: 'YYYY-MM-DD' | null, exDividendDate: 'YYYY-MM-DD' | null }.
+// Always returns a shape (never null) so callers don't need null-checks.
+// Cached for 6h — these dates rarely change mid-day.
+const TTL_EVENTS = 6 * 60 * 60 * 1000; // 6 hours
+async function yahooChartEvents(symbol) {
+  const key = `cev:${symbol}`;
+  const cached = cacheGet(key, TTL_EVENTS);
+  if (cached) return cached;
+
+  const empty = { earningsDate: null, exDividendDate: null };
+  try {
+    const { crumb, cookie } = await getYahooCrumb();
+    const modules = 'calendarEvents,summaryDetail';
+    const url = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=${encodeURIComponent(modules)}&crumb=${encodeURIComponent(crumb)}`;
+    const r = await fetchWithRetry(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+        'Cookie': cookie,
+        'Accept': 'application/json',
+      },
+    });
+    if (r.status === 401 || r.status === 403) { resetAuth(); return empty; }
+    const d = await r.json();
+    const result = d?.quoteSummary?.result?.[0];
+    if (!result) { cacheSet(key, empty); return empty; }
+
+    // Earnings: calendarEvents.earnings.earningsDate is an ARRAY of timestamps.
+    // Yahoo returns a range [start, end] when the date is unconfirmed, or a
+    // single-element array when confirmed. Use the first entry — it's always
+    // the earliest possible report date.
+    const earningsArr = result.calendarEvents?.earnings?.earningsDate || [];
+    const earningsTs  = earningsArr.length ? raw(earningsArr[0]) : null;
+
+    // Ex-dividend: summaryDetail.exDividendDate is a single timestamp field.
+    const exDivTs = raw(result.summaryDetail?.exDividendDate);
+
+    const toISO = (ts) => {
+      if (!ts || typeof ts !== 'number') return null;
+      // Yahoo returns unix seconds; convert to YYYY-MM-DD in market TZ (ET)
+      // so a "Wednesday" earnings print stays on Wednesday regardless of
+      // where the user's browser clock lives.
+      const d = new Date(ts * 1000);
+      const et = d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      return et; // en-CA gives 'YYYY-MM-DD'
+    };
+
+    const events = {
+      earningsDate:   toISO(earningsTs),
+      exDividendDate: toISO(exDivTs),
+    };
+    cacheSet(key, events);
+    return events;
+  } catch (e) {
+    // Chart overlay is best-effort — never break the chart on event fetch failure.
+    cacheSet(key, empty);  // cache the empty shape so we don't retry every request
+    return empty;
+  }
+}
+
 module.exports = {
   getYahooCrumb, resetAuth,
   yahooQuote, yahooHistory, yahooHistoryFull,
   yahooIntradayBars,
   getYahooFundamentals, raw,
+  yahooChartEvents,
   pLimit,
 };

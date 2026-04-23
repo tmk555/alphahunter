@@ -642,6 +642,40 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
       }
     }
 
+    // ── Event markers: next earnings + next ex-dividend ─────────────────
+    // Rendered as arrow-shape markers anchored at the event date on the
+    // candle series (Lightweight Charts doesn't expose a vertical-line
+    // primitive, but setMarkers is the canonical way to annotate dates).
+    // Amber = earnings, Cyan = ex-div. Skipped on intraday — the markers
+    // would land outside the visible range.
+    if (chartData.events && !isIntraday) {
+      const evMarkers = [];
+      const { earningsDate, exDividendDate } = chartData.events;
+      if (earningsDate) {
+        evMarkers.push({
+          time:     earningsDate,
+          position: 'aboveBar',
+          color:    '#f0a500',
+          shape:    'arrowDown',
+          text:     `E ${earningsDate.slice(5)}`,  // MM-DD
+        });
+      }
+      if (exDividendDate) {
+        evMarkers.push({
+          time:     exDividendDate,
+          position: 'belowBar',
+          color:    '#00d4ff',
+          shape:    'arrowUp',
+          text:     `X ${exDividendDate.slice(5)}`,
+        });
+      }
+      // setMarkers REPLACES, so sort by time (required by Lightweight Charts).
+      if (evMarkers.length) {
+        evMarkers.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
+        candleSeries.setMarkers(evMarkers);
+      }
+    }
+
     // ── OHLC crosshair: update hoverBar as user moves the mouse over candles ──
     //
     // Volume lookup strategy: go directly to `param.seriesData.get(volSeries)`.
@@ -4138,7 +4172,8 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
                       {rank+1}
                     </div>
                     <div className="ts-card-identity">
-                      <div className="ts-card-ticker td-ticker">{s.ticker}</div>
+                      <div className="ts-card-ticker td-ticker"
+                           onClick={(e) => { e.stopPropagation(); window.navigateToScanner && window.navigateToScanner(s.ticker); }}>{s.ticker}</div>
                       <div className="ts-card-name">{s.name || '—'}</div>
                     </div>
                     <div className="ts-card-price">${s.price?.toFixed(2)}</div>
@@ -4381,7 +4416,8 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
                       {ov.tier === 'elite' ? 'ELT' : 'STR'}
                     </div>
                     <div className="ts-card-identity">
-                      <div className="ts-card-ticker td-ticker">{s.ticker}</div>
+                      <div className="ts-card-ticker td-ticker"
+                           onClick={(e) => { e.stopPropagation(); window.navigateToScanner && window.navigateToScanner(s.ticker); }}>{s.ticker}</div>
                       <div className="ts-card-name">{s.name || s.sector}</div>
                     </div>
                     <div className="ts-card-price">${s.price?.toFixed(2)}</div>
@@ -4441,7 +4477,8 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
                   <div className="ts-card-top">
                     <div className="ts-card-rank" style={{background:'var(--amber)22',color:'var(--amber)'}}>{i+1}</div>
                     <div className="ts-card-identity">
-                      <div className="ts-card-ticker td-ticker">{s.ticker}</div>
+                      <div className="ts-card-ticker td-ticker"
+                           onClick={(e) => { e.stopPropagation(); window.navigateToScanner && window.navigateToScanner(s.ticker); }}>{s.ticker}</div>
                       <div className="ts-card-name">vs 50MA: <span style={{color:'var(--amber)',fontWeight:700}}>{s.vsMA50?.toFixed(1)}%</span> extended</div>
                     </div>
                     <div className="ts-card-price">${s.price?.toFixed(2)}</div>
@@ -4496,7 +4533,8 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
                 <div className="ts-card-top">
                   <div className="ts-card-rank" style={{background:i<3?'var(--green)22':'var(--text3)22',color:i<3?'var(--green)':'var(--text3)'}}>{i+1}</div>
                   <div className="ts-card-identity">
-                    <div className="ts-card-ticker td-ticker">{s.ticker}</div>
+                    <div className="ts-card-ticker td-ticker"
+                           onClick={(e) => { e.stopPropagation(); window.navigateToScanner && window.navigateToScanner(s.ticker); }}>{s.ticker}</div>
                     <div className="ts-card-name">{s.sector} -- {s.mktCapLabel}</div>
                   </div>
                   <div className="ts-card-price">${s.price?.toFixed(2)}</div>

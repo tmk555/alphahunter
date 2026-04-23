@@ -2,6 +2,7 @@
 const express = require('express');
 
 const { getHistoryFull, getIntradayBars } = require('../data/providers/manager');
+const { yahooChartEvents } = require('../data/providers/yahoo');
 const { getDB }          = require('../data/database');
 
 // ─── Check if US equity market is open (or within ~30 min after close) ─────
@@ -415,6 +416,13 @@ module.exports = function () {
         if (!isNaN(target1Price)) markers.push({ label: 'Target 1', price: target1Price, color: '#4CAF50' });
         if (!isNaN(target2Price)) markers.push({ label: 'Target 2', price: target2Price, color: '#8BC34A' });
 
+        // ── Calendar events (earnings + ex-div) for weekly chart ────────
+        // Weekly timeframe shows ~3y of data so upcoming events are still
+        // useful context — a known earnings date the week after makes the
+        // setup much more actionable.
+        let weeklyEvents = { earningsDate: null, exDividendDate: null };
+        try { weeklyEvents = await yahooChartEvents(symbol); } catch (_) {}
+
         return res.json({
           symbol,
           timeframe: 'weekly',
@@ -427,6 +435,7 @@ module.exports = function () {
             vwap:  wmaSlice(wVwap),
           },
           markers,
+          events: weeklyEvents,
           meta: {
             timeframe: 'weekly',
             totalBars: weeklyBars.length,
@@ -575,6 +584,12 @@ module.exports = function () {
       const currentMa150 = ma150s[lastIdx] != null ? +ma150s[lastIdx].toFixed(2) : null;
       const currentMa200 = ma200s[lastIdx] != null ? +ma200s[lastIdx].toFixed(2) : null;
 
+      // ── Calendar events (earnings + ex-dividend) ──────────────────────
+      // Best-effort — the chart still renders if the events fetch fails.
+      // Cached 6h inside the provider so refresh-on-market-hours stays cheap.
+      let events = { earningsDate: null, exDividendDate: null };
+      try { events = await yahooChartEvents(symbol); } catch (_) {}
+
       res.json({
         symbol,
         timeframe: 'daily',
@@ -582,6 +597,7 @@ module.exports = function () {
         volume,
         overlays: { ma50, ma150, ma200, vwap },
         markers,
+        events,
         meta: {
           timeframe:  'daily',
           totalBars:  allBars.length,
