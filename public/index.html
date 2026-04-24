@@ -454,12 +454,52 @@ function ErrorBox({ msg }) {
 // Tiny ⓘ icon that reveals a rich tooltip on hover/click. Lets us bake the
 // "what does this panel mean?" explanations straight into the UI instead of
 // asking the user to DM for context. `text` can be a string or JSX.
-function InfoTip({ text, width = 320, side = 'right' }) {
-  const [show, setShow] = React.useState(false);
-  const leftPos = side === 'right' ? 'auto' : 0;
-  const rightPos = side === 'right' ? 0 : 'auto';
+// Viewport-anchored tooltip. Uses position:fixed + getBoundingClientRect so the
+// bubble clamps to the visible viewport with a 12px margin — prior version
+// used position:absolute with right:0 which clipped off-screen whenever the
+// icon sat near a narrow panel's edge (Edge Validation tab was the canary).
+// The `side` prop is accepted for backward-compat with existing call sites
+// but ignored — placement is now automatic.
+function InfoTip({ text, width = 320 /*, side: legacy */ }) {
+  const [show, setShow]     = React.useState(false);
+  const [coords, setCoords] = React.useState({ top: 0, left: 0 });
+  const iconRef             = React.useRef(null);
+
+  const reposition = React.useCallback(() => {
+    if (!iconRef.current) return;
+    const r      = iconRef.current.getBoundingClientRect();
+    const vpW    = window.innerWidth;
+    const vpH    = window.innerHeight;
+    const margin = 12;
+    // Center under the icon by default, then clamp to viewport horizontally.
+    let left = r.left + r.width / 2 - width / 2;
+    if (left + width > vpW - margin) left = vpW - margin - width;
+    if (left < margin) left = margin;
+    // Flip above the icon if there's not enough room below (rough ~220px guess;
+    // tooltip height varies with content but this is good enough to keep it
+    // on-screen at the bottom of the page).
+    const approxHeight = 220;
+    const top = r.bottom + approxHeight + margin > vpH
+      ? Math.max(margin, r.top - approxHeight - 6)
+      : r.bottom + 6;
+    setCoords({ top, left });
+  }, [width]);
+
+  React.useEffect(() => {
+    if (!show) return;
+    reposition();
+    const closeOnScroll = () => setShow(false);
+    window.addEventListener('scroll', closeOnScroll, true);
+    window.addEventListener('resize', reposition);
+    return () => {
+      window.removeEventListener('scroll', closeOnScroll, true);
+      window.removeEventListener('resize', reposition);
+    };
+  }, [show, reposition]);
+
   return (
-    <span style={{position:'relative',display:'inline-block',marginLeft:6,verticalAlign:'middle'}}
+    <span ref={iconRef}
+          style={{position:'relative',display:'inline-block',marginLeft:6,verticalAlign:'middle'}}
           onMouseEnter={()=>setShow(true)}
           onMouseLeave={()=>setShow(false)}
           onClick={e=>{e.stopPropagation(); setShow(s=>!s);}}>
@@ -468,13 +508,15 @@ function InfoTip({ text, width = 320, side = 'right' }) {
                     fontSize:10,textAlign:'center',lineHeight:'12px',
                     cursor:'help',fontWeight:600,fontFamily:'var(--font-sans)'}}>i</span>
       {show && (
-        <div style={{position:'absolute',top:'100%',left:leftPos,right:rightPos,marginTop:6,
-                     zIndex:50,width,padding:'10px 12px',
+        <div style={{position:'fixed',top:coords.top,left:coords.left,
+                     zIndex:1000,width,maxWidth:'calc(100vw - 24px)',
+                     padding:'10px 12px',
                      background:'var(--bg)',border:'1px solid var(--cyan)',borderRadius:4,
                      boxShadow:'0 4px 14px rgba(0,0,0,0.5)',
                      fontSize:11,lineHeight:1.55,color:'var(--text2)',
                      textTransform:'none',letterSpacing:'normal',fontWeight:400,
-                     fontFamily:'var(--font-sans)',whiteSpace:'normal'}}>
+                     fontFamily:'var(--font-sans)',whiteSpace:'normal',
+                     pointerEvents:'none'}}>
           {text}
         </div>
       )}
