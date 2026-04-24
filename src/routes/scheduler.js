@@ -8,6 +8,26 @@ const {
   runJobNow, getJobTypes, getSchedulerStatus,
   getJobHistory, getRecentHistory, clearHistory,
 } = require('../scheduler/engine');
+const { seedDefaultJobs, DEFAULT_JOBS } = require('../scheduler/jobs');
+const { getDB } = require('../data/database');
+
+// Legacy job names that were created by an earlier hard-coded seed list in
+// this route. Each maps to the canonical DEFAULT_JOBS job_type that now
+// replaces it. When the canonical row exists, the legacy row is a pure
+// duplicate and should be removed so the UI isn't cluttered with two rows
+// firing the same handler.
+//
+// Intentionally excluded:
+//   • "Stop Monitor" (stop_monitor)       — no canonical replacement
+//   • "RS History Cleanup" (rs_history_cleanup) — no canonical replacement
+// Those two stay as-is until explicitly promoted into DEFAULT_JOBS.
+const LEGACY_TO_CANONICAL = {
+  'Daily RS Scan':          'rs_scan',
+  'Expire Stale Orders':    'expire_stale_orders',
+  'Portfolio Reconcile':    'portfolio_reconcile',
+  'Job Log Cleanup':        'job_history_cleanup',
+  'equity_snapshot_daily':  'equity_snapshot',  // stale-cron orphan from an older DEFAULT_JOBS
+};
 
 // ─── Status ─────────────────────────────────────────────────────────────────
 router.get('/scheduler/status', (req, res) => {
@@ -110,29 +130,56 @@ router.delete('/scheduler/history', (req, res) => {
 });
 
 // ─── Seed default jobs (convenience endpoint) ───────────────────────────────
+// Delegates to the canonical seedDefaultJobs() in src/scheduler/jobs.js so the
+// UI button and the server-startup seed path share ONE source of truth. Before
+// this was consolidated, the UI seed used a 6-row list with legacy PascalCase
+// names ("Daily RS Scan") while startup seeded the 24-row DEFAULT_JOBS list
+// with snake_case names ("rs_scan_daily"). Clicking "SEED DEFAULTS" therefore
+// created duplicate rows firing the same handler on the same schedule.
+//
+// On each call we also sweep any known legacy-name duplicates whose canonical
+// equivalent now exists — that's how an already-polluted DB self-heals when
+// the user clicks the button.
 router.post('/scheduler/seed', (req, res) => {
   try {
-    const defaults = [
-      { name: 'Daily RS Scan', description: 'Full universe RS scan at market close', job_type: 'rs_scan', cron_expression: '0 16 * * 1-5', config: { persist: true } },
-      { name: 'Stop Monitor', description: 'Check stop alerts every 5 minutes', job_type: 'stop_monitor', cron_expression: '*/5 * * * 1-5', config: { marketHoursOnly: true } },
-      { name: 'Expire Stale Orders', description: 'Clean up old staged orders hourly', job_type: 'expire_stale_orders', cron_expression: '0 * * * *', config: { maxAgeHours: 24 } },
-      { name: 'Portfolio Reconcile', description: 'Sync trades with broker at close', job_type: 'portfolio_reconcile', cron_expression: '30 16 * * 1-5', config: {} },
-      { name: 'RS History Cleanup', description: 'Prune RS snapshots older than 1 year', job_type: 'rs_history_cleanup', cron_expression: '0 2 * * 0', config: { keepDays: 365 } },
-      { name: 'Job Log Cleanup', description: 'Prune job history older than 30 days', job_type: 'job_history_cleanup', cron_expression: '0 3 * * 0', config: { keepDays: 30 } },
-    ];
+    const { seeded, skipped } = seedDefaultJobs();
 
-    const created = [];
-    const skipped = [];
-    for (const def of defaults) {
+    // Sweep legacy duplicates. We only delete a legacy row when at least one
+    // canonical row of the same job_type exists — that guarantees we never
+    // drop the last scheduler for a given handler.
+    const db = getDB();
+    const existingTypes = new Set(
+      db.prepare('SELECT DISTINCT job_type FROM scheduled_jobs').all().map(r => r.job_type)
+    );
+    const removedLegacy = [];
+    for (const [legacyName, canonicalType] of Object.entries(LEGACY_TO_CANONICAL)) {
+      if (!existingTypes.has(canonicalType)) continue;  // safety: canonical missing
+      // Verify at least one canonical (non-legacy) row for this type exists.
+      const canonicalExists = db.prepare(
+        'SELECT 1 FROM scheduled_jobs WHERE job_type = ? AND name != ? LIMIT 1'
+      ).get(canonicalType, legacyName);
+      if (!canonicalExists) continue;
       try {
-        const job = createJob(def);
-        created.push(job.name);
-      } catch (e) {
-        if (e.message.includes('UNIQUE')) skipped.push(def.name);
-        else throw e;
-      }
+        const row = db.prepare('SELECT id FROM scheduled_jobs WHERE name = ?').get(legacyName);
+        if (row) {
+          deleteJob(row.id);  // use engine's deleteJob so the cron task is also stopped
+          removedLegacy.push(legacyName);
+        }
+      } catch (_) { /* row may have already been removed — ignore */ }
     }
-    res.json({ created, skipped, message: `Seeded ${created.length} jobs, skipped ${skipped.length} existing` });
+
+    const msg = [
+      `Seeded ${seeded.length}`,
+      `skipped ${skipped.length} existing`,
+      removedLegacy.length ? `removed ${removedLegacy.length} legacy duplicate(s)` : null,
+    ].filter(Boolean).join(', ');
+
+    res.json({
+      created: seeded,         // preserve legacy response shape for the UI
+      skipped,
+      removedLegacy,
+      message: msg,
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
