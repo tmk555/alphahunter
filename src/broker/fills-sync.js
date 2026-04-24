@@ -205,7 +205,7 @@ async function syncBrokerFills({ lookbackDays = 7, limit = 100 } = {}) {
         db.prepare('UPDATE trades SET entry_rs=?, entry_sepa=? WHERE alpaca_order_id=? AND entry_rs IS NULL')
           .run(snap.rs_rank, snap.sepa_score, order.id);
       }
-      const regime = getMarketRegime();
+      const regime = await getMarketRegime();
       if (regime?.regime) {
         db.prepare('UPDATE trades SET regime_at_entry=? WHERE alpaca_order_id=? AND regime_at_entry IS NULL')
           .run(regime.regime, order.id);
