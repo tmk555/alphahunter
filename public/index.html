@@ -2915,6 +2915,9 @@ function useSortTable(defaultKey, defaultDir = -1) {
     if (sortKey === k) setSortDir(d => -d);
     else { setSortKey(k); setSortDir(-1); }
   }
+  // Programmatic seed — used when an outer filter (e.g., strategy) wants to
+  // change the column/direction as a NEW default. User clicks on SH still win.
+  function setSort(k, d = -1) { setSortKey(k); setSortDir(d); }
   function sortData(data) {
     if (!sortKey || !data) return data || [];
     function getVal(obj, key) {
@@ -2936,7 +2939,7 @@ function useSortTable(defaultKey, defaultDir = -1) {
       </th>
     );
   }
-  return { sortKey, sortDir, toggleSort, sortData, SH };
+  return { sortKey, sortDir, toggleSort, setSort, sortData, SH };
 }
 
 // ─── SECTORS TAB ──────────────────────────────────────────────────────────────
@@ -3502,7 +3505,25 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
       rowRefs.current[ticker]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 50);
   }
-  const { sortData: sortRS, SH } = useSortTable('rsRank');
+  const { sortData: sortRS, SH, setSort } = useSortTable('rsRank');
+
+  // When the user picks a strategy, reset the column sort to that strategy's
+  // canonical ranking field so the first render reflects the replay engine's
+  // picks. Subsequent column clicks still win — this is a seed, not an override.
+  useEffect(() => {
+    if (!strategyFilter) return;
+    const seeds = {
+      rs_momentum:      ['rsRank',        -1],
+      vcp_breakout:     ['volumeRatio',    1],   // lowest first — quietest coils
+      sepa_trend:       ['sepaScore',     -1],
+      rs_line_new_high: ['rsRank',        -1],
+      conviction:       ['rsRank',        -1],
+      emerging_leader:  ['rsTrend.vs4w',  -1],
+    };
+    const s = seeds[strategyFilter];
+    if (s) setSort(s[0], s[1]);
+  }, [strategyFilter]);
+
   // Signal filter chips — from App props, persists across tab switches
   const toggleSig = key => setSigFilters(prev => {
     const next = new Set(prev);
@@ -3556,7 +3577,7 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     'REV↑':s => (s.revisionScore||0) >= 50,
   };
 
-  const filtered = (() => {
+  const { filtered, replayTop5, replayRank } = (() => {
     const q = searchQuery.trim().toLowerCase();
     let list = rsData.filter(s => {
       if (!baseFilter(s)) return false;
@@ -3575,11 +3596,18 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
       }
       return true;
     });
-    // When strategy active, use strategy-specific sort; otherwise default table sort
+    // When a strategy is active, compute its canonical top-5 separately so the
+    // replay-pick highlighting stays correct even after the user clicks a
+    // column header to re-sort the displayed table.
+    let top5 = new Set();
+    const rankMap = new Map();
     if (strategyFilter && strategySorts[strategyFilter]) {
-      return list.slice().sort(strategySorts[strategyFilter]);
+      const ranked = list.slice().sort(strategySorts[strategyFilter]);
+      ranked.forEach((s, i) => rankMap.set(s.ticker, i + 1));
+      top5 = new Set(ranked.slice(0, 5).map(s => s.ticker));
     }
-    return sortRS(list);
+    // Always apply the user's column sort to the displayed order.
+    return { filtered: sortRS(list), replayTop5: top5, replayRank: rankMap };
   })();
 
   return (
@@ -3808,23 +3836,27 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
                     <SH k="rsTrend.vs4w"  label="Accel"     title="RS Accel: percentile rank change vs 28 days ago. +12=passed 12% of peers. Sort ↓ to find fastest institutional accumulation."/>
                     <SH k="stage"         label="Stage"     title="Weinstein Stage (150MA trend). S1=Basing, S2=Uptrend (buy zone), S3=Topping (reduce), S4=Decline (avoid/short). Sort to cluster by stage."/>
                     <th title="Signals: ★=Triple (RS>70+Accel+Mom>60). ⭐=RS Line 52wk high. ↗=Emerging RS65-79. VCP=coiling setup. SEPA/8=Minervini score.">Signals</th>
-                    <th title="Ticker symbol. Hover for company name.">Ticker</th>
-                    <th title="Company name (truncated)">Name</th>
+                    <SH k="ticker"        label="Ticker"    title="Ticker symbol. Click to sort alphabetically."/>
+                    <SH k="name"          label="Name"      title="Company name. Click to sort alphabetically."/>
                     <SH k="price"         label="Price"     title="Current market price"/>
                     <SH k="chg1d"         label="1D"        title="Today's price change %"/>
                     <SH k="chg1w"         label="1W"        title="5-day price return"/>
                     <SH k="vsMA50"        label="vs 50MA"   title="% above/below 50-day MA. 0-5% above = buyable pullback zone. >5% = extended. Negative = caution."/>
                     <SH k="distFromHigh"  label="52wkH%"    title="% below 52-week high. <5% = near breakout. Sort ascending to find stocks nearest highs."/>
                     <SH k="volumeRatio"   label="Vol"       title="Today's volume ÷ 3M avg. ⚡=surge ≥2x near highs. ACC=above 50MA+vol>1.2x. DIST=below 50MA+vol>1.2x."/>
-                    <th title="Days until next earnings. ⚠ red=7d, amber=14d. Never hold swings into earnings.">Earn</th>
+                    <SH k="daysToEarnings" label="Earn"     title="Days until next earnings. Sort ascending to find closest earnings reports. ⚠ red=7d, amber=14d. Never hold swings into earnings."/>
                     <th style={{width:50}}></th>
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.map((s, _idx) => {
-                    const stratRank = strategyFilter ? _idx + 1 : null;
-                    const isReplayPick = stratRank != null && stratRank <= 5;
-                    const isBeyondReplay = stratRank != null && stratRank > 5;
+                    // Replay-pick highlight is now driven by the strategy's
+                    // canonical ranking (replayTop5), decoupled from the
+                    // displayed sort — so clicking a column header no longer
+                    // re-labels which rows were the engine's top picks.
+                    const isReplayPick    = strategyFilter ? replayTop5.has(s.ticker) : false;
+                    const isBeyondReplay  = strategyFilter ? !replayTop5.has(s.ticker) : false;
+                    const stratRank       = strategyFilter ? (replayRank.get(s.ticker) || null) : null;
                     return (
                     <React.Fragment key={s.ticker}>
                     <tr ref={el => rowRefs.current[s.ticker] = el} data-ticker={s.ticker}
