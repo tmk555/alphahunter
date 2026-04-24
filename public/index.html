@@ -15021,7 +15021,12 @@ function DecisionQualitySection() {
     try {
       const url = rescore ? '/api/decisions/score-all?rescore=true' : '/api/decisions/score-all';
       const r = await api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-      alert(`Scored ${r.scored} trades${rescore ? ' (rescored with enriched context)' : ''}`);
+      // Server returns { scored, totalCandidates, remaining, limit, results }.
+      // Flag leftover work so the user knows a second pass is needed — the
+      // batch is capped to keep the request bounded.
+      const suffix = rescore ? ' (rescored with enriched context)' : '';
+      const leftover = r.remaining > 0 ? ` — ${r.remaining} still pending (re-run to continue)` : '';
+      alert(`Scored ${r.scored} trades${suffix}${leftover}`);
       load();
     } catch(e) { setError(e.message); }
     setScoring(false);
@@ -15206,6 +15211,23 @@ function DecisionQualitySection() {
               </div>
               <div style={{fontSize:12,color:'var(--text2)',marginBottom:4}}>{analytics.summary.weakestArea.score}</div>
               <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.7}}>{analytics.summary.weakestArea.recommendation}</div>
+              {/* Additional components also scoring <50% — "weakest" is a
+                  single pick, but multiple weak areas need separate attention. */}
+              {Array.isArray(analytics.summary.weakComponents) && analytics.summary.weakComponents.length > 1 && (
+                <div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
+                  <div style={{fontSize:9,letterSpacing:1.5,color:'var(--text3)',marginBottom:6,fontFamily:'var(--font-mono)'}}>ALSO BELOW 50%</div>
+                  {analytics.summary.weakComponents.slice(1).map(c => (
+                    <div key={c.component}
+                      onClick={e => { e.stopPropagation(); openDrillDown('component', c.component, `${c.component.toUpperCase()} failures`); }}
+                      style={{fontSize:11,color:'var(--text2)',marginBottom:4,cursor:'pointer'}}
+                      title={`Click to see ${c.component} failures`}>
+                      <span style={{color:'var(--amber)',fontFamily:'var(--font-mono)'}}>{c.component.padEnd(7)}</span>
+                      {' '}<span style={{color:'var(--text3)'}}>{c.score}</span>
+                      {' · '}{c.recommendation}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

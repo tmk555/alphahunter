@@ -388,14 +388,22 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
   // Batch score all unscored trades (enriches missing context from rs_snapshots)
   router.post('/decisions/score-all', (req, res) => {
     try {
-      // Include already-scored trades if rescore=true, so we can fix stale scores
+      // Include already-scored trades if rescore=true, so we can fix stale scores.
+      // Cap at 1000 (>>5x the batch size) with a ?limit= override for future growth
+      // and surface the unscored total so the UI can tell when a second pass is needed.
       const rescore = req.query.rescore === 'true' || req.body.rescore;
+      const limit = Math.max(1, Math.min(5000, parseInt(req.query.limit || req.body.limit || 1000, 10)));
       const query = rescore
-        ? `SELECT t.* FROM trades t WHERE t.exit_date IS NOT NULL ORDER BY t.exit_date DESC LIMIT 100`
+        ? `SELECT t.* FROM trades t WHERE t.exit_date IS NOT NULL ORDER BY t.exit_date DESC LIMIT ?`
         : `SELECT t.* FROM trades t LEFT JOIN decision_log d ON t.id = d.trade_id
            WHERE t.exit_date IS NOT NULL AND d.trade_id IS NULL
-           ORDER BY t.exit_date DESC LIMIT 100`;
-      const unscored = db.prepare(query).all();
+           ORDER BY t.exit_date DESC LIMIT ?`;
+      const unscored = db.prepare(query).all(limit);
+      const totalUnscoredCountSql = rescore
+        ? `SELECT COUNT(*) c FROM trades WHERE exit_date IS NOT NULL`
+        : `SELECT COUNT(*) c FROM trades t LEFT JOIN decision_log d ON t.id = d.trade_id
+           WHERE t.exit_date IS NOT NULL AND d.trade_id IS NULL`;
+      const totalCandidates = db.prepare(totalUnscoredCountSql).get().c;
 
       const results = [];
       for (const trade of unscored) {
@@ -431,7 +439,12 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
         const staged = trade.alpaca_order_id
           ? db.prepare('SELECT conviction_score, strategy FROM staged_orders WHERE alpaca_order_id = ?').get(trade.alpaca_order_id)
           : null;
-        const wasSystemSignal = staged?.conviction_score > 0 || trade.was_system_signal === 1 || trade.strategy != null;
+        // wasSystemSignal: the point is "did the engine pick this, or did YOU?"
+        // trade.strategy gets populated on discretionary trades too (for tagging
+        // /filtering), so it's an unreliable proxy. Only trust:
+        //   1. staged_orders.conviction_score > 0 (came from the signal engine), OR
+        //   2. trade.was_system_signal === 1 (explicitly flagged at entry).
+        const wasSystemSignal = (staged?.conviction_score > 0) || trade.was_system_signal === 1;
 
         // Check if sizing followed rules (within 20% of recommended size)
         let followedSizingRules = null;
@@ -466,7 +479,13 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
         logDecisionQuality(trade.id, quality);
         results.push(quality);
       }
-      res.json({ scored: results.length, results });
+      res.json({
+        scored: results.length,
+        totalCandidates,
+        remaining: Math.max(0, totalCandidates - results.length),
+        limit,
+        results,
+      });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

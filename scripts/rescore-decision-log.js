@@ -59,8 +59,11 @@ let done = 0, skipped = 0;
 for (const t of trades) {
   const snapshot = snapStmt.get(t.symbol, t.entry_date);
   const staged   = t.alpaca_order_id ? stagedStmt.get(t.alpaca_order_id) : null;
+  // Only trust origin signals, not the strategy tag — `strategy` gets set on
+  // discretionary trades too (for filtering/labeling), so using it as a proxy
+  // for "system signal" over-counts. Mirrors edge.js /decisions/score-all.
   const wasSystemSignal =
-    (staged?.conviction_score > 0) || t.was_system_signal === 1 || t.strategy != null;
+    (staged?.conviction_score > 0) || t.was_system_signal === 1;
 
   // Sizing rule check: within 50-150% of the risk-engine recommendation.
   let followedSizingRules = null;

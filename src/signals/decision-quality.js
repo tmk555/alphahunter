@@ -19,6 +19,27 @@ function db() { return getDB(); }
 // Evaluates a completed trade against the system rules that should have governed it.
 // Returns a 0-100 process quality score independent of P&L outcome.
 
+// ─── Effective exit reason ────────────────────────────────────────────────
+// The raw `exit_reason` column often reads "auto_sync" or "market_close" —
+// that's the CLOSING mechanism, not the trade's real outcome. If the position
+// already hit target1/target2 before the daemon swept remaining shares, the
+// real exit was the target hit. Parse partial_exits to recover that.
+//
+// Precedence: target2 > target1 > stop > raw reason (auto_sync / market_close
+// / regime_change / manual fall through unchanged).
+function deriveEffectiveExitReason(trade, rawReason) {
+  const bookkeeping = rawReason === 'auto_sync' || rawReason === 'auto_sync_prorata' || rawReason === 'market_close';
+  if (!bookkeeping) return rawReason;
+  try {
+    const exits = trade.partial_exits ? JSON.parse(trade.partial_exits) : null;
+    if (!Array.isArray(exits) || !exits.length) return rawReason;
+    if (exits.some(e => e.level === 'target2')) return 'target2';
+    if (exits.some(e => e.level === 'target1')) return 'target1';
+    if (exits.some(e => e.level === 'stop'))    return 'stop';
+    return rawReason;
+  } catch (_) { return rawReason; }
+}
+
 function scoreTrade(trade, context = {}) {
   const {
     regimeAtEntry,           // market regime when trade was opened
@@ -28,7 +49,7 @@ function scoreTrade(trade, context = {}) {
     portfolioHeatAtEntry,    // portfolio heat when trade was opened
     wasSystemSignal,         // true if the system generated this trade
     followedSizingRules,     // true if position sized per risk engine
-    exitReason,              // stop | target | manual | regime_change
+    exitReason,              // stop | target | manual | regime_change | auto_sync | market_close
     plannedStop,             // the stop price at entry
     actualExit,              // actual exit price
     holdingDays,
@@ -93,9 +114,12 @@ function scoreTrade(trade, context = {}) {
   scores.sizing = Math.min(20, sizingScore);
 
   // 4. Exit Quality (25 points)
-  // Did you exit according to plan?
+  // Did you exit according to plan? Note: prefer the "effective" reason —
+  // an auto_sync wrapping a target1 fill should credit the target, not the
+  // daemon cleanup.
   let exitScore = 0;
-  const reason = exitReason || trade.exit_reason;
+  const rawReason = exitReason || trade.exit_reason;
+  const reason = deriveEffectiveExitReason(trade, rawReason);
 
   if (reason === 'target1' || reason === 'target2') {
     exitScore = 25; // Perfect — hit target
@@ -110,6 +134,16 @@ function scoreTrade(trade, context = {}) {
     }
   } else if (reason === 'regime_change') {
     exitScore = 22; // Systematic exit — following the rules
+  } else if (reason === 'market_close') {
+    // EOD force-close (day-trade guard, pattern-day rule, etc.) — systematic
+    // and policy-driven, not emotional. Score similar to regime_change.
+    exitScore = 20;
+  } else if (reason === 'auto_sync' || reason === 'auto_sync_prorata') {
+    // Daemon closed the position after a partial that didn't hit a target.
+    // Mechanical, not emotional, but also not the ideal outcome — we wanted
+    // a target hit. Credit ~70% of a target.
+    exitScore = 18;
+    notes.push('Closed by daemon sweep without hitting target/stop');
   } else if (reason === 'manual') {
     // Manual exits need scrutiny
     if (rMultiple != null) {
@@ -126,9 +160,14 @@ function scoreTrade(trade, context = {}) {
   scores.exit = Math.min(25, exitScore);
 
   // 5. Risk Management (10 points)
+  // Grade the ORIGINAL stop placement, not where the stop ended up — a stop
+  // that trailed to breakeven looks like 0% risk using `stop_price`, which
+  // would misrepresent the entry decision. Fall back to `stop_price` only
+  // when `initial_stop_price` is missing (legacy rows pre-column addition).
   let riskScore = 0;
-  if (trade.stop_price && trade.entry_price) {
-    const riskPct = Math.abs(trade.entry_price - trade.stop_price) / trade.entry_price * 100;
+  const entryStop = trade.initial_stop_price ?? trade.stop_price;
+  if (entryStop && trade.entry_price) {
+    const riskPct = Math.abs(trade.entry_price - entryStop) / trade.entry_price * 100;
     if (riskPct >= 1 && riskPct <= 5) riskScore += 5; // appropriate stop distance
     else if (riskPct > 5 && riskPct <= 8) { riskScore += 3; notes.push('Wide stop (>5%)'); }
     else if (riskPct > 8) { riskScore += 0; notes.push('Stop too wide (>8%) — risk too large'); }
@@ -153,14 +192,17 @@ function scoreTrade(trade, context = {}) {
   // Total process quality score
   const totalScore = scores.entry + scores.regime + scores.sizing + scores.exit + scores.risk;
 
-  // Determine if outcome correlated with process
+  // Determine if outcome correlated with process. Single threshold at the
+  // C-grade cutoff (55) — a process at-or-above C is "deserved", below is
+  // not. The old 50/70 band produced a huge "mixed" bucket that swallowed
+  // ~40% of trades and told the user nothing actionable.
   const pnl = trade.pnl_percent || trade.pnl_dollars;
+  const ALIGNMENT_THRESHOLD = 55;
   let outcomeAlignment;
-  if (pnl > 0 && totalScore >= 70) outcomeAlignment = 'deserved_win';
-  else if (pnl > 0 && totalScore < 50) outcomeAlignment = 'lucky_win';
-  else if (pnl <= 0 && totalScore >= 70) outcomeAlignment = 'unlucky_loss';
-  else if (pnl <= 0 && totalScore < 50) outcomeAlignment = 'deserved_loss';
-  else outcomeAlignment = 'mixed';
+  if (pnl > 0  && totalScore >= ALIGNMENT_THRESHOLD) outcomeAlignment = 'deserved_win';
+  else if (pnl > 0)                                  outcomeAlignment = 'lucky_win';
+  else if (totalScore >= ALIGNMENT_THRESHOLD)        outcomeAlignment = 'unlucky_loss';
+  else                                               outcomeAlignment = 'deserved_loss';
 
   return {
     processScore: totalScore,
@@ -244,11 +286,23 @@ function getDecisionAnalytics(params = {}) {
     risk: +(decisions.reduce((s, d) => s + (d.risk_score || 0), 0) / decisions.length).toFixed(1),
   };
 
-  // Find weakest component
-  const weakest = Object.entries(componentAvgs)
+  // Rank components weakest-first. We surface both the single weakest (for
+  // back-compat UI) AND every component below 50% — a "weakest area" is
+  // misleading if two components are both scoring 30%; the user needs to
+  // see both to prioritize.
+  const componentRanking = Object.entries(componentAvgs)
     .map(([name, avg]) => ({ name, avg, maxPossible: name === 'entry' ? 25 : name === 'exit' ? 25 : name === 'regime' ? 20 : name === 'sizing' ? 20 : 10 }))
     .map(c => ({ ...c, pct: +(c.avg / c.maxPossible * 100).toFixed(0) }))
-    .sort((a, b) => a.pct - b.pct)[0];
+    .sort((a, b) => a.pct - b.pct);
+  const weakest = componentRanking[0];
+  const weakComponents = componentRanking
+    .filter(c => c.pct < 50)
+    .map(c => ({
+      component: c.name,
+      score: `${c.avg}/${c.maxPossible} (${c.pct}%)`,
+      pct: c.pct,
+      recommendation: getComponentRecommendation(c.name, c.pct),
+    }));
 
   return {
     totalDecisions: decisions.length,
@@ -283,6 +337,7 @@ function getDecisionAnalytics(params = {}) {
         score: `${weakest.avg}/${weakest.maxPossible} (${weakest.pct}%)`,
         recommendation: getComponentRecommendation(weakest.name, weakest.pct),
       } : null,
+      weakComponents, // every component <50% — [] if none. UI can render a list.
     },
   };
 }
@@ -338,10 +393,20 @@ function getProcessTrend(windowSize = 20) {
     });
   }
 
-  // Trend: compare last window to first window
+  // Trend: compare last window to first window. Guard with a variance floor —
+  // if the whole rolling series barely moves (stdev < 2 pts), any 3-point
+  // first-vs-last gap is noise. Without this guard, a trivially-flat series
+  // flickers between "improving" and "deteriorating" labels as one trade
+  // rolls on/off the window.
   const first = series.slice(0, 5).reduce((s, d) => s + d.avgProcessScore, 0) / 5;
-  const last = series.slice(-5).reduce((s, d) => s + d.avgProcessScore, 0) / 5;
-  const trend = last > first + 3 ? 'improving' : last < first - 3 ? 'deteriorating' : 'stable';
+  const last  = series.slice(-5).reduce((s, d) => s + d.avgProcessScore, 0) / 5;
+  const mean = series.reduce((s, d) => s + d.avgProcessScore, 0) / series.length;
+  const stdev = Math.sqrt(series.reduce((s, d) => s + (d.avgProcessScore - mean) ** 2, 0) / series.length);
+  const FLAT_STDEV_FLOOR = 2;
+  const trend = stdev < FLAT_STDEV_FLOOR ? 'stable'
+              : last > first + 3 ? 'improving'
+              : last < first - 3 ? 'deteriorating'
+              : 'stable';
 
   return {
     trend,
