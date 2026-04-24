@@ -14747,13 +14747,38 @@ function ExecutionQualitySection() {
 
       {report?.summary ? (
         <div>
+          {(() => {
+            const s = report.summary;
+            // Render helpers — null/undefined → "—", not "0". A zero is a real
+            // value ("perfect execution"); null means "we didn't capture it."
+            // Distinguish them visually so the user can tell the difference.
+            const pct  = v => v == null ? '—' : `${v}%`;
+            const dol  = v => v == null ? '—' : `$${v}`;
+            const days = v => v == null ? '—' : `${v}d`;
+            const gradeColor = g =>
+              g === 'A' ? 'var(--green)' :
+              g === 'B' ? '#8bc34a' :
+              g === 'C' ? 'var(--amber)' :
+              g === 'N/A' ? 'var(--text3)' :
+              'var(--red)';
+            const slipColor = v => v == null ? 'var(--text3)'
+              : Math.abs(v) < 0.1 ? 'var(--green)' : 'var(--red)';
+            const fqColor   = v => v == null ? 'var(--text3)'
+              : v > 60 ? 'var(--green)' : 'var(--amber)';
+            const shortColor = v => v == null ? 'var(--text3)'
+              : v < 500 ? 'var(--green)' : 'var(--red)';
+            const delayColor = v => v == null ? 'var(--text3)'
+              : v < 2 ? 'var(--green)' : 'var(--amber)';
+            return (
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10,marginBottom:14}}>
             {[
-              {label:'Grade',val:report.summary.grade,color:report.summary.grade==='A'?'var(--green)':report.summary.grade==='B'?'#8bc34a':report.summary.grade==='C'?'var(--amber)':'var(--red)',sub:`${report.summary.totalExecutions} executions`},
-              {label:'Avg Slippage',val:`${report.summary.slippage.avg||0}%`,color:Math.abs(report.summary.slippage.avg||0)<0.1?'var(--green)':'var(--red)',sub:`worst: ${report.summary.slippage.worst||0}%`},
-              {label:'Fill Quality',val:`${report.summary.fillQuality.avg||0}%`,color:(report.summary.fillQuality.avg||0)>60?'var(--green)':'var(--amber)',sub:'0=worst, 100=best'},
-              {label:'Impl Shortfall',val:`$${report.summary.implementationShortfall.totalDollars||0}`,color:(report.summary.implementationShortfall.totalDollars||0)<500?'var(--green)':'var(--red)',sub:`${report.summary.implementationShortfall.totalPct||0}%`},
-              {label:'Avg Delay',val:`${report.summary.timingDelay.avg||0}d`,color:(report.summary.timingDelay.avg||0)<2?'var(--green)':'var(--amber)',sub:'signal to fill'},
+              {label:'Grade',val:s.grade,color:gradeColor(s.grade),sub: s.grade === 'N/A'
+                 ? (s.gradeNote || `${s.totalExecutions} executions`)
+                 : `${s.trustworthyCount ?? s.totalExecutions} executions${s.outlierCount ? ` (+${s.outlierCount} outliers excluded)` : ''}`},
+              {label:'Avg Slippage',val:pct(s.slippage.avg),color:slipColor(s.slippage.avg),sub:`worst: ${pct(s.slippage.worst)} · cost basis`},
+              {label:'Fill Quality',val:pct(s.fillQuality.avg),color:fqColor(s.fillQuality.avg),sub: s.fillQuality.avg == null ? 'not tracked' : '0=worst, 100=best'},
+              {label:'Impl Shortfall',val:dol(s.implementationShortfall.totalDollars),color:shortColor(s.implementationShortfall.totalDollars),sub:pct(s.implementationShortfall.totalPct)},
+              {label:'Avg Delay',val:days(s.timingDelay.avg),color:delayColor(s.timingDelay.avg),sub: s.timingDelay.avg == null ? 'not tracked' : 'signal to fill'},
             ].map(m=>(
               <div key={m.label} className="panel" style={{padding:12,textAlign:'center'}}>
                 <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>{m.label.toUpperCase()}</div>
@@ -14762,6 +14787,8 @@ function ExecutionQualitySection() {
               </div>
             ))}
           </div>
+            );
+          })()}
 
           {/* By Order Type */}
           {report.summary.byOrderType && Object.keys(report.summary.byOrderType).length > 0 && (

@@ -37,10 +37,14 @@ function logExecution(params) {
     dayVolume,
   } = params;
 
-  // Calculate slippage
+  // Slippage — cost convention: POSITIVE = bad (cost to me), NEGATIVE = favorable.
+  //   buy  at 100.05 vs intent 100.00 → slippage = +0.05 (I paid MORE)
+  //   sell at  99.95 vs intent 100.00 → slippage = +0.05 (I received LESS)
+  // Everything downstream (predictSlippage, warnings, UI) must agree on this.
+  // If you flip this, flip every consumer — there is no "both directions are fine."
   const slippage = side === 'buy'
-    ? fillPrice - intendedPrice    // paid more = negative (bad)
-    : intendedPrice - fillPrice;   // received less = negative (bad)
+    ? fillPrice - intendedPrice    // paid more = positive (bad)
+    : intendedPrice - fillPrice;   // received less = positive (bad)
   const slippagePct = intendedPrice > 0 ? (slippage / intendedPrice) * 100 : 0;
 
   // Fill quality: where in the day's range did we fill?
@@ -121,6 +125,14 @@ function logExecution(params) {
 
 // ─── Execution Quality Report ───────────────────────────────────────────────
 // Aggregates execution quality across all trades for a given period.
+//
+// Sanity filter: any single fill with |slippage_pct| > SANITY_SLIPPAGE_LIMIT
+// is treated as a bad-intent-price record (stale expected price captured
+// hours/days before fill, failed ref-price lookup, or a market-dislocation
+// single tick). These rows poison the mean and grade without reflecting
+// actual execution — we count them but exclude from aggregates.
+const SANITY_SLIPPAGE_LIMIT = 5.0;   // % — any single fill beyond this is suspect
+const MIN_GRADABLE_SAMPLES  = 20;    // below this, grade is "N/A — insufficient samples"
 
 function getExecutionReport(params = {}) {
   const { startDate, endDate, symbol, side } = params;
@@ -136,11 +148,18 @@ function getExecutionReport(params = {}) {
   const executions = db().prepare(query).all(...qp);
   if (executions.length === 0) return { executions: [], summary: null };
 
-  // Aggregate statistics
-  const slippages = executions.map(e => e.slippage_pct).filter(s => s != null);
-  const fillQualities = executions.map(e => e.fill_quality).filter(q => q != null);
-  const shortfalls = executions.map(e => e.implementation_shortfall).filter(s => s != null);
-  const timingDelays = executions.map(e => e.timing_delay_days).filter(d => d != null);
+  // Partition rows into "trustworthy" vs "outlier" using the sanity filter.
+  // All aggregates below operate on trustworthy rows only; the outlier count
+  // is surfaced so the UI can say "5 of 55 fills flagged as bad-intent-price."
+  const isOutlier = e => e.slippage_pct != null && Math.abs(e.slippage_pct) > SANITY_SLIPPAGE_LIMIT;
+  const outlierRows    = executions.filter(isOutlier);
+  const trustworthyRows = executions.filter(e => !isOutlier(e));
+
+  // Aggregate statistics (trustworthy rows only)
+  const slippages     = trustworthyRows.map(e => e.slippage_pct).filter(s => s != null);
+  const fillQualities = trustworthyRows.map(e => e.fill_quality).filter(q => q != null);
+  const shortfalls    = trustworthyRows.map(e => e.implementation_shortfall).filter(s => s != null);
+  const timingDelays  = trustworthyRows.map(e => e.timing_delay_days).filter(d => d != null);
 
   const avg = arr => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
   const median = arr => {
@@ -150,9 +169,10 @@ function getExecutionReport(params = {}) {
     return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
   };
 
-  // Break down by order type
+  // Break down by order type (trustworthy rows only so the by-type grades
+  // aren't skewed by the same bad-intent-price rows)
   const byOrderType = {};
-  for (const exec of executions) {
+  for (const exec of trustworthyRows) {
     const t = exec.order_type || 'unknown';
     if (!byOrderType[t]) byOrderType[t] = { count: 0, avgSlippage: [], avgFillQuality: [] };
     byOrderType[t].count++;
@@ -167,35 +187,49 @@ function getExecutionReport(params = {}) {
     };
   }
 
-  // Break down by side (buy vs sell)
+  // Break down by side (buy vs sell) — trustworthy rows only
   const bySide = { buy: [], sell: [] };
-  for (const exec of executions) {
-    if (exec.side && bySide[exec.side]) {
+  for (const exec of trustworthyRows) {
+    if (exec.side && bySide[exec.side] && exec.slippage_pct != null) {
       bySide[exec.side].push(exec.slippage_pct);
     }
   }
 
   const totalShortfall = shortfalls.reduce((a, b) => a + b, 0);
-  const totalNotional = executions.reduce((s, e) => s + (e.shares || 0) * (e.fill_price || 0), 0);
+  const totalNotional = trustworthyRows.reduce((s, e) => s + (e.shares || 0) * (e.fill_price || 0), 0);
 
-  // Grade the execution quality
+  // Grade the execution quality — requires a minimum sample size, otherwise
+  // the aggregates aren't meaningful. Math.abs because slippage is signed
+  // in the cost convention (positive = bad) and grade doesn't distinguish
+  // "paid too much to buy" from "received too little on sell".
   const avgSlippage = avg(slippages);
-  let grade;
-  if (avgSlippage == null) grade = 'N/A';
-  else if (Math.abs(avgSlippage) < 0.05) grade = 'A';
-  else if (Math.abs(avgSlippage) < 0.10) grade = 'B';
-  else if (Math.abs(avgSlippage) < 0.20) grade = 'C';
-  else if (Math.abs(avgSlippage) < 0.40) grade = 'D';
-  else grade = 'F';
+  let grade, gradeNote;
+  if (avgSlippage == null || slippages.length < MIN_GRADABLE_SAMPLES) {
+    grade = 'N/A';
+    gradeNote = `insufficient samples (${slippages.length} / ${MIN_GRADABLE_SAMPLES} required)`;
+  } else if (Math.abs(avgSlippage) < 0.05) { grade = 'A'; }
+  else if (Math.abs(avgSlippage) < 0.10)   { grade = 'B'; }
+  else if (Math.abs(avgSlippage) < 0.20)   { grade = 'C'; }
+  else if (Math.abs(avgSlippage) < 0.40)   { grade = 'D'; }
+  else                                     { grade = 'F'; }
 
   const summary = {
     totalExecutions: executions.length,
+    trustworthyCount: trustworthyRows.length,
+    outlierCount: outlierRows.length,
+    outliers: outlierRows.map(e => ({
+      trade_id: e.trade_id, symbol: e.symbol, side: e.side,
+      intended_price: e.intended_price, fill_price: e.fill_price,
+      slippage_pct: e.slippage_pct, fill_date: e.fill_date,
+    })),
     grade,
+    gradeNote,   // present only when grade='N/A'; UI should show this instead of a misleading letter
     slippage: {
+      // Cost convention: worst = MAX (highest cost), best = MIN (most favorable / negative).
       avg: avgSlippage != null ? +avgSlippage.toFixed(4) : null,
       median: median(slippages) != null ? +median(slippages).toFixed(4) : null,
-      worst: slippages.length > 0 ? +Math.min(...slippages).toFixed(4) : null,
-      best: slippages.length > 0 ? +Math.max(...slippages).toFixed(4) : null,
+      worst: slippages.length > 0 ? +Math.max(...slippages).toFixed(4) : null,
+      best:  slippages.length > 0 ? +Math.min(...slippages).toFixed(4) : null,
     },
     fillQuality: {
       avg: avg(fillQualities) != null ? +avg(fillQualities).toFixed(1) : null,
@@ -219,13 +253,18 @@ function getExecutionReport(params = {}) {
     },
   };
 
-  // Warnings
+  // Warnings — cost convention: POSITIVE average slippage = bad (paid/lost),
+  // NEGATIVE = favorable. We warn on positive cost only.
   summary.warnings = [];
-  if (avgSlippage != null && avgSlippage < -0.15) {
-    summary.warnings.push(`Average slippage ${avgSlippage.toFixed(3)}% — consider using limit orders or TWAP`);
+  if (avgSlippage != null && avgSlippage > 0.15) {
+    summary.warnings.push(`Average slippage ${avgSlippage.toFixed(3)}% cost — consider using limit orders or TWAP`);
   }
-  if (avg(timingDelays) > 2) {
-    summary.warnings.push(`Average ${avg(timingDelays).toFixed(1)} day delay from signal to fill — speed up execution`);
+  if (outlierRows.length > 0) {
+    summary.warnings.push(`${outlierRows.length} fill(s) flagged as likely stale intended_price (|slippage| > ${SANITY_SLIPPAGE_LIMIT}%) and excluded from aggregates`);
+  }
+  const tdAvg = avg(timingDelays);
+  if (tdAvg != null && tdAvg > 2) {
+    summary.warnings.push(`Average ${tdAvg.toFixed(1)} day delay from signal to fill — speed up execution`);
   }
   if (totalShortfall > 1000) {
     summary.warnings.push(`$${totalShortfall.toFixed(0)} total implementation shortfall — review order routing`);
@@ -327,10 +366,10 @@ function analyzeLiquidity(params) {
 //      swing traders see in their own behaviour drift.
 //
 // Design notes:
-// - Signs are in our standard "buyer paid MORE = negative" convention:
-//     buy at 100.05 on intended 100.00 → slippage = -0.05 (bad)
-//   So the function returns a NON-POSITIVE number (or 0) in decimal form.
-//   Callers typically invert the sign and convert to bps.
+// - Signs follow the "cost-to-me" convention (POSITIVE = bad) used by
+//   logExecution. A buy at 100.05 on intended 100.00 → slippage = +0.05 (paid
+//   more). This function returns a NON-NEGATIVE predicted cost (or 0) in
+//   decimal form. Callers convert to bps via |slippage_pct| × 100.
 // - Returns a shape the sizer can log directly. The "bps" form is the
 //   UI-friendly number, the "decimal" form is math-friendly.
 
@@ -370,10 +409,11 @@ const DEFAULT_SLIPPAGE_BPS = {
  */
 function predictSlippage({ symbol, side, orderType = 'limit', now, lookbackDays = 365 } = {}) {
   if (!symbol || !side) {
+    const defaultBps = DEFAULT_SLIPPAGE_BPS[orderType] || DEFAULT_SLIPPAGE_BPS.default;
     return {
-      predictedSlippageBps: DEFAULT_SLIPPAGE_BPS[orderType] || DEFAULT_SLIPPAGE_BPS.default,
-      predictedSlippagePct: -(DEFAULT_SLIPPAGE_BPS[orderType] || DEFAULT_SLIPPAGE_BPS.default) / 100,
-      stressSlippageBps: (DEFAULT_SLIPPAGE_BPS[orderType] || DEFAULT_SLIPPAGE_BPS.default) * 2,
+      predictedSlippageBps: defaultBps,
+      predictedSlippagePct: +(defaultBps / 100).toFixed(4),   // positive = cost
+      stressSlippageBps: defaultBps * 2,
       sampleSize: 0,
       tier: 'D',
       tierLabel: 'default — no symbol/side provided',
@@ -436,7 +476,7 @@ function predictSlippage({ symbol, side, orderType = 'limit', now, lookbackDays 
         const defaultBps = DEFAULT_SLIPPAGE_BPS[orderType] || DEFAULT_SLIPPAGE_BPS.default;
         return {
           predictedSlippageBps: defaultBps,
-          predictedSlippagePct: -defaultBps / 100,
+          predictedSlippagePct: +(defaultBps / 100).toFixed(4),
           stressSlippageBps: defaultBps * 2,
           sampleSize: rowsC.length,
           tier: 'D',
@@ -469,25 +509,24 @@ function predictSlippage({ symbol, side, orderType = 'limit', now, lookbackDays 
     if (cum >= totalW / 2) { median = x.slip; break; }
   }
 
-  // p90 stress — 90th weight-percentile slippage (most negative tail).
-  // We re-sort ascending by slippage and walk the weights again from the
-  // left until 10% of total weight remains above → that's the p90-worst.
-  let p90 = weighted[0].slip;  // default to most negative if we fall through
+  // p90 stress — 90th weight-percentile slippage cost (most POSITIVE tail,
+  // since cost = positive in this module's convention). We walk from the HIGH
+  // end until 10% of weight remains above → that's the p90-worst cost.
+  let p90 = weighted[weighted.length - 1].slip;  // default to worst if we fall through
   cum = 0;
-  for (const x of weighted) {
-    cum += x.w;
-    if (cum >= totalW * 0.10) { p90 = x.slip; break; }
+  for (let i = weighted.length - 1; i >= 0; i--) {
+    cum += weighted[i].w;
+    if (cum >= totalW * 0.10) { p90 = weighted[i].slip; break; }
   }
 
-  // Enforce "no improvement allowed" clamp. median > 0 means recent fills
-  // were better than intended — which is either luck or a bug in the
-  // logging pipeline. In either case, the sizer should plan for 0, not
-  // a free lunch.
-  if (median > 0) median = 0;
-  if (p90 > 0) p90 = 0;
+  // Enforce "no improvement allowed" clamp. In the cost convention,
+  // improvement = NEGATIVE (paid less than intended). Don't let the sizer
+  // plan for a free lunch — floor at 0.
+  if (median < 0) median = 0;
+  if (p90 < 0) p90 = 0;
 
-  // Convert to basis points (bps = % × 100). Sign: slippage_pct is already
-  // signed with "paid more" = negative, so |slippage_pct| × 100 = bps cost.
+  // Convert to basis points (bps = % × 100). slippage_pct is already in
+  // cost-positive units, so Math.abs is belt-and-suspenders.
   const bps = Math.ceil(Math.abs(median) * 100);
   const stressBps = Math.ceil(Math.abs(p90) * 100);
 
@@ -497,7 +536,7 @@ function predictSlippage({ symbol, side, orderType = 'limit', now, lookbackDays 
 
   return {
     predictedSlippageBps: bps,
-    predictedSlippagePct: +median.toFixed(4),
+    predictedSlippagePct: +median.toFixed(4),   // positive = expected cost
     stressSlippageBps: stressBps,
     sampleSize: rows.length,
     tier,
