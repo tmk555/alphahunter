@@ -544,6 +544,29 @@ function initSchema() {
   safeAddColumn('trades', 'regime_at_entry', 'TEXT');
   safeAddColumn('trades', 'heat_at_entry', 'REAL');
 
+  // ─── Partial UNIQUE index on trades.alpaca_order_id ────────────────────
+  // Prevents future duplicate trade rows with the same broker order_id (the
+  // DELL ghost-loop bug of 2026-04). NULL-tolerant so manual journal entries
+  // without a broker linkage still work.
+  //
+  // Wrapped in try/catch because a DB with pre-existing duplicates fails the
+  // CREATE. In that case we log a clear warning pointing the user at the
+  // dedup script — the server still boots and functions; the index just
+  // isn't enforced until cleanup runs.
+  try {
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_alpaca_order_id_unique
+        ON trades(alpaca_order_id) WHERE alpaca_order_id IS NOT NULL;
+    `);
+  } catch (e) {
+    console.warn(
+      `⚠ Could not create UNIQUE index on trades.alpaca_order_id: ${e.message}\n` +
+      `  Likely cause: existing duplicate rows. Run:\n` +
+      `    node scripts/dedup-trade-rows.js\n` +
+      `  Then restart the server to enable the constraint.`
+    );
+  }
+
   // Migration: breadth columns
   safeAddColumn('breadth_snapshots', 'mcclellan_osc', 'REAL');
   safeAddColumn('breadth_snapshots', 'summation_index', 'REAL');

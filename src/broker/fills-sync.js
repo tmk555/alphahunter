@@ -12,6 +12,28 @@ const { createTaxLot, sellTaxLots } = require('../risk/tax-engine');
 const { logExecution } = require('../risk/execution-quality');
 const { assignStrategy } = require('../risk/strategy-manager');
 
+// ─── computeTargetsFromStop ─────────────────────────────────────────────
+// Derive T1/T2 from (entry, stop) using the classic Minervini/O'Neil
+// 2R/4R formula where R = entry − stop.
+//
+// WHY a separate function from auto-stage's 2.5×ATR / 4×ATR formula:
+//   • auto-stage.js runs at signal time and has ATR from the live quote,
+//     which is the "right" way to size targets for a fresh setup.
+//   • This function runs at reconcile/backfill time, where all we have is
+//     the persisted stop. 2R/4R on (entry−stop) is the right fallback —
+//     it guarantees targets scale with the stop the user actually chose.
+//
+// Returns { target1, target2 } rounded to 2dp, or null if inputs are
+// non-positive (e.g. entry < stop → invalid long trade).
+function computeTargetsFromStop(entry, stop) {
+  if (!(entry > 0) || !(stop > 0) || !(entry > stop)) return null;
+  const r = entry - stop;
+  return {
+    target1: +(entry + 2 * r).toFixed(2),
+    target2: +(entry + 4 * r).toFixed(2),
+  };
+}
+
 // ─── ensureBracketFields ────────────────────────────────────────────────
 // Guarantee that a freshly-inserted trade row has a usable bracket
 // (stop/T1/T2) and share-accounting (initial/remaining_shares) so the
@@ -74,13 +96,18 @@ function ensureBracketFields(db, alpacaOrderId, symbol, opts = {}) {
             sibling.strategy, sibling.exit_strategy || 'full_in_scale_out', row.id);
     } else if (opts.brokerStop != null) {
       // Last resort: whatever live stop leg the broker has on this symbol.
-      // T1/T2 remain NULL — the row will be flagged needs_review=1 already.
+      // Compute 2R/4R targets from that stop so the row PARTICIPATES in
+      // scale-out triggers instead of sitting permanently at T1=NULL (which
+      // caused ANET / MKSI to get stop-only rows with no profit-take plan).
+      const t1t2 = computeTargetsFromStop(row.entry_price, opts.brokerStop);
       db.prepare(
         `UPDATE trades SET
            stop_price         = COALESCE(stop_price, ?),
-           initial_stop_price = COALESCE(initial_stop_price, ?)
+           initial_stop_price = COALESCE(initial_stop_price, ?),
+           target1            = COALESCE(target1, ?),
+           target2            = COALESCE(target2, ?)
          WHERE id = ?`
-      ).run(opts.brokerStop, opts.brokerStop, row.id);
+      ).run(opts.brokerStop, opts.brokerStop, t1t2?.target1 ?? null, t1t2?.target2 ?? null, row.id);
     } else if (row.entry_price > 0) {
       // Final-fallback defensive stop. Prevents orphaned rows from sitting with
       // NULL stops (no stop = no exit signals = unbounded downside). Mirrors
@@ -90,15 +117,18 @@ function ensureBracketFields(db, alpacaOrderId, symbol, opts = {}) {
       // Real-world trigger: MKSI / ANET auto-filled without matched staged rows
       // (April 2026), leaving stops NULL for days before manual backfill.
       const defaultStop = +(row.entry_price * 0.93).toFixed(2);
+      const t1t2 = computeTargetsFromStop(row.entry_price, defaultStop);
       db.prepare(
         `UPDATE trades SET
            stop_price         = COALESCE(stop_price, ?),
            initial_stop_price = COALESCE(initial_stop_price, ?),
+           target1            = COALESCE(target1, ?),
+           target2            = COALESCE(target2, ?),
            needs_review       = 1,
            notes              = COALESCE(notes,'') || ' [auto-default stop: entry×0.93 = $' || ? || ' — verify]'
          WHERE id = ?`
-      ).run(defaultStop, defaultStop, defaultStop, row.id);
-      console.warn(`  ensureBracketFields: ${symbol} #${row.id} — auto-default stop $${defaultStop} (entry×0.93)`);
+      ).run(defaultStop, defaultStop, t1t2?.target1 ?? null, t1t2?.target2 ?? null, defaultStop, row.id);
+      console.warn(`  ensureBracketFields: ${symbol} #${row.id} — auto-default stop $${defaultStop} (entry×0.93), T1 $${t1t2?.target1} / T2 $${t1t2?.target2} (2R/4R)`);
     }
   }
 
@@ -521,8 +551,8 @@ async function reconcileOrphanPositions({ lookbackDays = 90, recentCloseWindowMi
 
   const stmt = db.prepare(`
     INSERT INTO trades (symbol, side, entry_date, entry_price, shares, sector,
-                        stop_price, alpaca_order_id, needs_review, notes, was_system_signal)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0)
+                        stop_price, target1, target2, alpaca_order_id, needs_review, notes, was_system_signal)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0)
   `);
 
   const reconciled = [];
@@ -554,12 +584,19 @@ async function reconcileOrphanPositions({ lookbackDays = 90, recentCloseWindowMi
 
       const brokerStop = stopBySymbol[sym] || null;
       const sector     = sectorLookup.get(sym)?.sector || null;
+      // Compute T1/T2 from the harvested broker stop so every reconciled row
+      // participates in scale-out triggers. Without this, reconciled positions
+      // ended up with stop-only rows — the exact "has stop but no target"
+      // state the user flagged on ANET / MKSI.
+      const t1t2   = computeTargetsFromStop(avgEntry, brokerStop);
+      const target1 = t1t2?.target1 ?? null;
+      const target2 = t1t2?.target2 ?? null;
 
       const note = originating
         ? `[RECONCILED-FROM-BROKER] ${qty}sh @ $${avgEntry.toFixed(2)} — linked to filled order ${orderId.slice(0,8)}... Review thesis + exit plan, then clear needs_review.`
         : `[RECONCILED-FROM-BROKER] ${qty}sh @ $${avgEntry.toFixed(2)} — no originating buy order found within last ${lookbackDays}d (older than window, or submitted outside this app). Set entry_date / strategy manually if needed.`;
 
-      stmt.run(sym, 'long', entryDate, avgEntry, qty, sector, brokerStop, orderId, note);
+      stmt.run(sym, 'long', entryDate, avgEntry, qty, sector, brokerStop, target1, target2, orderId, note);
 
       // Sibling-copy bracket + always set initial/remaining_shares.
       // Orphan rows were the original stop/T1/T2 NULL source — this closes
@@ -583,4 +620,4 @@ async function reconcileOrphanPositions({ lookbackDays = 90, recentCloseWindowMi
   return { reconciled, stillOrphan };
 }
 
-module.exports = { syncBrokerFills, reconcileOrphanPositions };
+module.exports = { syncBrokerFills, reconcileOrphanPositions, computeTargetsFromStop };

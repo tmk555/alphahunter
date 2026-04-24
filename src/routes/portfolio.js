@@ -584,6 +584,122 @@ module.exports = function(db) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ─── POST /api/trades/backfill-targets ────────────────────────────────
+  // Compute T1/T2 using 2R/4R for any OPEN trade that has a stop but NULL
+  // targets. Mirrors scripts/backfill-missing-targets.js so the user can
+  // fire it from the UI without SSHing. Safe to re-run — COALESCE means
+  // pre-existing non-NULL targets are never overwritten.
+  router.post('/trades/backfill-targets', (req, res) => {
+    try {
+      const { computeTargetsFromStop } = require('../broker/fills-sync');
+      const candidates = db.prepare(`
+        SELECT id, symbol, entry_price, stop_price, target1, target2
+          FROM trades
+         WHERE exit_date IS NULL
+           AND stop_price IS NOT NULL
+           AND (target1 IS NULL OR target2 IS NULL)
+      `).all();
+      const upd = db.prepare(
+        'UPDATE trades SET target1 = COALESCE(target1, ?), target2 = COALESCE(target2, ?) WHERE id = ?'
+      );
+      const patched = [];
+      const skipped = [];
+      for (const t of candidates) {
+        const t1t2 = computeTargetsFromStop(t.entry_price, t.stop_price);
+        if (!t1t2) { skipped.push({ id: t.id, symbol: t.symbol, reason: 'invalid entry/stop' }); continue; }
+        upd.run(t1t2.target1, t1t2.target2, t.id);
+        patched.push({ id: t.id, symbol: t.symbol, entry: t.entry_price, stop: t.stop_price, ...t1t2 });
+      }
+      res.json({
+        ok: true,
+        patched: patched.length,
+        skipped: skipped.length,
+        rows: patched,
+        skippedRows: skipped,
+        message: `Backfilled T1/T2 on ${patched.length} trade(s); skipped ${skipped.length}.`,
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── POST /api/trades/dedup ────────────────────────────────────────────
+  // Detect and delete duplicate OPEN trade rows (same alpaca_order_id, OR
+  // same symbol+entry_date+entry_price+shares with NULL order_id). The
+  // canonical row is the one with the most complete bracket + any
+  // partial_exits history. Mirrors scripts/dedup-trade-rows.js.
+  //
+  // Requires ?apply=1 — default is a dry-run preview so a misfire doesn't
+  // eat live data. Returns per-group plans either way.
+  router.post('/trades/dedup', (req, res) => {
+    try {
+      const APPLY = req.query.apply === '1' || req.query.apply === 'true' || req.body?.apply === true;
+
+      const openRows = db.prepare(`
+        SELECT id, symbol, entry_date, entry_price, stop_price, initial_stop_price,
+               target1, target2, shares, alpaca_order_id, strategy, partial_exits
+          FROM trades WHERE exit_date IS NULL ORDER BY symbol, id
+      `).all();
+
+      const bracketScore = r => {
+        let s = 0;
+        if (r.stop_price != null) s += 2;
+        if (r.target1 != null) s += 2;
+        if (r.target2 != null) s += 2;
+        if (r.strategy) s += 1;
+        if (r.initial_stop_price) s += 1;
+        if (r.partial_exits && r.partial_exits !== 'null' && r.partial_exits !== '[]') s += 100;
+        return s;
+      };
+      const pickCanonical = rows => rows.slice().sort((a, b) => bracketScore(b) - bracketScore(a) || a.id - b.id)[0];
+
+      const groupsA = {}; const groupsB = {};
+      for (const r of openRows) {
+        if (r.alpaca_order_id) (groupsA[r.alpaca_order_id] ||= []).push(r);
+        else (groupsB[`${r.symbol}|${r.entry_date}|${r.entry_price}|${r.shares}`] ||= []).push(r);
+      }
+      const dupsA = Object.entries(groupsA).filter(([, g]) => g.length > 1);
+      const dupsB = Object.entries(groupsB).filter(([, g]) => g.length > 1);
+
+      const plan = [];
+      for (const [key, rows] of [...dupsA, ...dupsB]) {
+        const canonical = pickCanonical(rows);
+        plan.push({
+          key,
+          keepId: canonical.id,
+          deleteIds: rows.filter(r => r.id !== canonical.id).map(r => r.id),
+          symbol: canonical.symbol,
+        });
+      }
+
+      let deleted = 0;
+      if (APPLY && plan.length) {
+        const del     = db.prepare('DELETE FROM trades WHERE id = ?');
+        const delHist = db.prepare('DELETE FROM decision_log WHERE trade_id = ?');
+        const delExec = db.prepare('UPDATE execution_log SET trade_id = NULL WHERE trade_id = ?');
+        const tx = db.transaction(() => {
+          for (const p of plan) for (const id of p.deleteIds) {
+            try { delExec.run(id); } catch (_) {}
+            try { delHist.run(id); } catch (_) {}
+            del.run(id);
+            deleted++;
+          }
+        });
+        tx();
+      }
+
+      res.json({
+        ok: true,
+        applied: APPLY,
+        groupsFound: plan.length,
+        rowsToDelete: plan.reduce((n, p) => n + p.deleteIds.length, 0),
+        rowsDeleted: deleted,
+        plan,
+        message: APPLY
+          ? `Deleted ${deleted} duplicate row(s) across ${plan.length} group(s). Restart server to enable the UNIQUE index.`
+          : `Found ${plan.length} duplicate group(s). Pass ?apply=1 to delete.`,
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // POST /api/trades/sync — Auto-sync filled broker orders into journal
   // (Logic lives in src/broker/fills-sync.js so the scheduler job can reuse it.)
   // Runs both the order-centric sync (last 7d of filled BUYs) AND the
