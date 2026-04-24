@@ -315,7 +315,10 @@ module.exports = function(db) {
 
       const pnl_dollars = (exit_price - trade.entry_price) * (trade.shares || 0) * (trade.side === 'short' ? -1 : 1);
       const pnl_percent = +((exit_price / trade.entry_price - 1) * 100 * (trade.side === 'short' ? -1 : 1)).toFixed(2);
-      const risk = trade.entry_price - (trade.stop_price || trade.entry_price * 0.95);
+      // initial_stop_price preserves the pre-T1 stop so R-multiple isn't
+      // collapsed by breakeven moves. See src/risk/scaling.js moveStopTo: entry.
+      const riskBase = trade.initial_stop_price || trade.stop_price || trade.entry_price * 0.95;
+      const risk = trade.entry_price - riskBase;
       const r_multiple = risk > 0 ? +((exit_price - trade.entry_price) / risk * (trade.side === 'short' ? -1 : 1)).toFixed(2) : 0;
 
       db.prepare(`
@@ -338,16 +341,247 @@ module.exports = function(db) {
   });
 
   // GET /api/trades — List trades
+  //
+  // excludePartials=1 strips rows that already carry scale-out events out of
+  // the listing. Use case: the Journal's "Open" tab shouldn't double-count
+  // names that are also surfaced in "Partials" — AVGO with 3 tranches and
+  // 2 scale-outs per tranche is visible under both filters otherwise, which
+  // makes the count mismatch Alpaca's untouched-lots view.
   router.get('/trades', (req, res) => {
     try {
-      const { status = 'all', limit = 50 } = req.query;
+      const { status = 'all', limit = 50, excludePartials } = req.query;
+      const clauses = [];
+      if (status === 'open')   clauses.push('exit_date IS NULL');
+      else if (status === 'closed') clauses.push('exit_date IS NOT NULL');
+      if (excludePartials === '1' || excludePartials === 'true') {
+        // json_array_length is safe against NULL partial_exits (treats as 0)
+        // via COALESCE. Rows with an empty array '[]' also pass through — only
+        // rows that actually recorded ≥1 scale-out are filtered.
+        clauses.push(
+          `COALESCE(json_array_length(CASE WHEN json_valid(partial_exits) THEN partial_exits ELSE '[]' END), 0) = 0`
+        );
+      }
       let query = 'SELECT * FROM trades';
-      if (status === 'open') query += ' WHERE exit_date IS NULL';
-      else if (status === 'closed') query += ' WHERE exit_date IS NOT NULL';
+      if (clauses.length) query += ' WHERE ' + clauses.join(' AND ');
       query += ' ORDER BY entry_date DESC LIMIT ?';
       const trades = db.prepare(query).all(limit);
       res.json({ trades, count: trades.length });
     } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // GET /api/trades/partial-exits — Flatten partial_exits across rows
+  //
+  // A scale-out recorded on a still-open trade row (partial_exits JSON, realized
+  // dollars captured in realized_pnl_dollars) doesn't surface in the "closed"
+  // filter because exit_date is still NULL. The Trade Journal tab needs a way
+  // to answer "how much P&L have I banked from scale-outs this week?" without
+  // pretending the underlying position is closed. This endpoint flattens every
+  // event out of the partial_exits JSON across ALL rows (open OR closed) into
+  // a single ordered list: one row per event, with enough trade context for
+  // the UI to render a journal entry. The parent row's entry stays visible
+  // under the "open" filter.
+  router.get('/trades/partial-exits', (req, res) => {
+    try {
+      const { limit = 100 } = req.query;
+      // Only pull rows that have partial_exits data. JSON1 LENGTH skips empty arrays.
+      const rows = db.prepare(`
+        SELECT id, symbol, side, sector, strategy, entry_date, entry_price,
+               stop_price, initial_stop_price, target1, target2, shares,
+               initial_shares, remaining_shares, exit_date, partial_exits,
+               realized_pnl_dollars, notes
+          FROM trades
+         WHERE partial_exits IS NOT NULL
+           AND json_valid(partial_exits) = 1
+           AND json_array_length(partial_exits) > 0
+         ORDER BY entry_date DESC
+      `).all();
+
+      const events = [];
+      for (const r of rows) {
+        let parsed = [];
+        try { parsed = JSON.parse(r.partial_exits || '[]'); } catch (_) { continue; }
+        for (const pe of parsed) {
+          // risk base for R — prefer initial_stop_price (see stop=entry bug fix).
+          const stopBase = r.initial_stop_price || r.stop_price;
+          const risk     = stopBase && stopBase > 0 && r.entry_price !== stopBase
+            ? r.entry_price - stopBase : null;
+          const sideMul  = r.side === 'short' ? -1 : 1;
+          const rMult    = risk && risk !== 0 && pe.price != null
+            ? +((pe.price - r.entry_price) / risk * sideMul).toFixed(2) : null;
+
+          events.push({
+            tradeId: r.id,
+            symbol: r.symbol,
+            side: r.side,
+            sector: r.sector,
+            strategy: r.strategy,
+            entry_date: r.entry_date,
+            entry_price: r.entry_price,
+            stop_price: r.stop_price,
+            initial_stop_price: r.initial_stop_price,
+            target1: r.target1,
+            target2: r.target2,
+            initial_shares: r.initial_shares || r.shares,
+            remaining_shares: r.remaining_shares,
+            trade_exit_date: r.exit_date,       // null if parent row still open
+            tradeClosed: r.exit_date != null,   // convenience flag for UI styling
+            // partial event fields
+            level: pe.level,
+            shares: pe.shares,
+            price: pe.price,
+            pnl: pe.pnl,
+            timestamp: pe.timestamp,
+            order_id: pe.order_id || null,
+            r_multiple: rMult,
+          });
+        }
+      }
+
+      // Sort newest-first by event timestamp (fallback entry_date)
+      events.sort((a, b) => (b.timestamp || b.entry_date || '').localeCompare(a.timestamp || a.entry_date || ''));
+
+      const sliced = events.slice(0, +limit || 100);
+
+      // Summary for the tab header: realized dollars across all partial exits
+      // where the parent row is still OPEN — this is the "hidden P&L" the UI
+      // can't see in any other view.
+      const openOnly = events.filter(e => !e.tradeClosed);
+      const realizedOpen = openOnly.reduce((s, e) => s + (e.pnl || 0), 0);
+
+      res.json({
+        events: sliced,
+        count: events.length,
+        realizedOnOpenRows: +realizedOpen.toFixed(2),
+        openEventsCount: openOnly.length,
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // GET /api/pullback-alerts — Today's live pullback watcher events
+  //
+  // The pullback watcher (src/signals/pullback-watcher.js) writes rows into
+  // pullback_states when a strong-RS name actually touches its 50MA pullback
+  // zone. These are the *actionable* pullback candidates — distinct from the
+  // static "extended, waiting for pullback" watchlist computed client-side
+  // in TradeSetupsTab from rs_snapshots. Without this endpoint those fired
+  // alerts land in the phone push feed and nowhere else — the Trade Setup
+  // tab has no way to surface them, so the trader can't see "AA entered the
+  // zone 2h ago" without digging through Pushover history.
+  //
+  // Response shape:
+  //   { alerts: [{ symbol, state, ma50, atr, price_at_fire, fired_at,
+  //                updated_at, rsRank, sector, vsMA50, stage, sepaScore }],
+  //     count, byState: { kissing, in_zone, approaching } }
+  //
+  // States, ranked by urgency (UI uses this to colour-code):
+  //   kissing     → price within 1 ATR of 50MA (HOT — buy zone right now)
+  //   in_zone     → price in the 50MA halo [-1% … +3%] (actionable)
+  //   approaching → price 3-7% above 50MA, sliding toward the zone (watch)
+  router.get('/pullback-alerts', (req, res) => {
+    try {
+      // Freshness window: default 3 days so over-weekend / Monday-morning
+      // alerts still surface. Override via ?sinceHours=<n> if the trader
+      // wants just today.
+      const sinceHours = Math.max(1, Math.min(168, +req.query.sinceHours || 72));
+
+      const rows = db.prepare(`
+        SELECT symbol, state, ma50, atr, price_at_fire, fired_at, updated_at
+          FROM pullback_states
+         WHERE datetime(updated_at) >= datetime('now', ?)
+         ORDER BY
+           CASE state
+             WHEN 'kissing'     THEN 0
+             WHEN 'in_zone'     THEN 1
+             WHEN 'approaching' THEN 2
+             ELSE 3
+           END,
+           datetime(updated_at) DESC
+      `).all(`-${sinceHours} hours`);
+
+      // Enrich with latest RS snapshot per symbol so the UI can show
+      // RS rank / sector / stage / sepa without a second round-trip.
+      const symbols = rows.map(r => r.symbol);
+      const rsBySym = {};
+      if (symbols.length) {
+        const placeholders = symbols.map(() => '?').join(',');
+        const rsRows = db.prepare(`
+          SELECT s.symbol, s.rs_rank, s.stage, s.sepa_score, s.vs_ma50,
+                 s.price, s.pattern_type, s.pattern_confidence, s.vcp_forming,
+                 s.rs_line_new_high, s.atr_pct
+            FROM rs_snapshots s
+            JOIN (
+              SELECT symbol, MAX(date) AS max_date
+                FROM rs_snapshots
+               WHERE type='stock' AND symbol IN (${placeholders})
+               GROUP BY symbol
+            ) latest ON latest.symbol = s.symbol AND latest.max_date = s.date
+           WHERE s.type='stock'
+        `).all(...symbols);
+        for (const r of rsRows) rsBySym[r.symbol] = r;
+      }
+
+      // Also pull sector from universe_mgmt (rs_snapshots doesn't carry sector).
+      const uniBySym = {};
+      if (symbols.length) {
+        const placeholders = symbols.map(() => '?').join(',');
+        try {
+          const uniRows = db.prepare(`
+            SELECT symbol, sector
+              FROM universe_mgmt
+             WHERE symbol IN (${placeholders})
+               AND removed_date IS NULL
+          `).all(...symbols);
+          for (const u of uniRows) uniBySym[u.symbol] = u;
+        } catch (_) { /* universe_mgmt optional */ }
+      }
+
+      // Pending-entry guard: if the symbol already has an open trade row,
+      // flag it so the UI can disable the "Stage" button.
+      const openSet = new Set(
+        db.prepare(
+          `SELECT DISTINCT symbol FROM trades WHERE exit_date IS NULL`
+        ).all().map(r => r.symbol)
+      );
+
+      const alerts = rows.map(r => {
+        const rs = rsBySym[r.symbol] || {};
+        const uni = uniBySym[r.symbol] || {};
+        // Entry zone — the buy band around the 50MA (±1 ATR is O'Neil's
+        // classic pullback-to-rising-MA setup).
+        const zoneLo = r.ma50 ? +(r.ma50 - (r.atr || 0) * 0.3).toFixed(2) : null;
+        const zoneHi = r.ma50 ? +(r.ma50 + (r.atr || 0) * 0.8).toFixed(2) : null;
+        return {
+          symbol: r.symbol,
+          state: r.state,
+          ma50: r.ma50,
+          atr: r.atr,
+          priceAtFire: r.price_at_fire,
+          firedAt: r.fired_at,
+          updatedAt: r.updated_at,
+          entryZone: (zoneLo != null && zoneHi != null) ? [zoneLo, zoneHi] : null,
+          // RS context (may be null if snapshot is stale)
+          rsRank:           rs.rs_rank ?? null,
+          stage:            rs.stage ?? null,
+          sepaScore:        rs.sepa_score ?? null,
+          vsMA50:           rs.vs_ma50 ?? null,
+          latestPrice:      rs.price ?? null,
+          patternType:      rs.pattern_type ?? null,
+          patternConfidence: rs.pattern_confidence ?? null,
+          vcpForming:       !!rs.vcp_forming,
+          rsLineNewHigh:    !!rs.rs_line_new_high,
+          atrPct:           rs.atr_pct ?? null,
+          sector:           uni.sector ?? null,
+          hasOpenPosition:  openSet.has(r.symbol),
+        };
+      });
+
+      const byState = alerts.reduce((m, a) => {
+        m[a.state] = (m[a.state] || 0) + 1;
+        return m;
+      }, {});
+
+      res.json({ alerts, count: alerts.length, byState, sinceHours });
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   // POST /api/trades/sync — Auto-sync filled broker orders into journal

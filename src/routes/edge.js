@@ -488,6 +488,47 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // Drill-down: trades by grade (A/B/C/D/F), by outcome alignment
+  //   (deserved_win/lucky_win/unlucky_loss/deserved_loss), or by weakest
+  //   component (entry/regime/sizing/exit/risk — returns trades where that
+  //   component scored below half of max). One route, three filters.
+  router.get('/decisions/trades', (req, res) => {
+    try {
+      const { grade, alignment, component } = req.query;
+      if (!grade && !alignment && !component) {
+        return res.status(400).json({ error: 'Supply grade, alignment, or component filter' });
+      }
+      const conditions = ['t.exit_date IS NOT NULL'];
+      const params = [];
+      if (grade)     { conditions.push('d.grade = ?');             params.push(grade); }
+      if (alignment) { conditions.push('d.outcome_alignment = ?'); params.push(alignment); }
+      if (component) {
+        // "Failing" means <50% of the component's max (entry/exit max 25;
+        // regime/sizing max 20; risk max 10). Matches the "weakest area"
+        // math in decision-quality.js:249.
+        const maxByName = { entry:25, regime:20, sizing:20, exit:25, risk:10 };
+        const col       = `${component}_score`;
+        const max       = maxByName[component];
+        if (!max) return res.status(400).json({ error: `Unknown component: ${component}` });
+        conditions.push(`d.${col} < ?`);
+        params.push(max * 0.5);
+      }
+      const sql = `
+        SELECT t.id, t.symbol, t.entry_date, t.exit_date, t.entry_price, t.exit_price,
+               t.shares, t.pnl_percent, t.pnl_dollars, t.strategy, t.was_system_signal,
+               d.grade, d.process_score, d.outcome_alignment,
+               d.entry_score, d.regime_score, d.sizing_score, d.exit_score, d.risk_score
+          FROM decision_log d
+          JOIN trades t ON t.id = d.trade_id
+         WHERE ${conditions.join(' AND ')}
+         ORDER BY t.exit_date DESC
+         LIMIT 200
+      `;
+      const trades = db.prepare(sql).all(...params);
+      res.json({ count: trades.length, trades });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // ─── Momentum Scout: discover breakout stocks outside the universe ────────
   const { runMomentumScout, getExpansionWatchlist } = require('../signals/momentum-scout');
 
@@ -505,19 +546,73 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
   // ─── Universe Management (DB-backed, no file editing) ─────────────────────
 
   // Add stock to universe at runtime + persist to DB
-  router.post('/edge/universe/add', (req, res) => {
+  //
+  // If `sector` is not supplied, we look it up via Yahoo's assetProfile and
+  // map Yahoo's sector name to the 11 canonical sectors this app uses (see
+  // mapYahooSector below). Falls back to 'Technology' only as a last resort
+  // if the provider lookup fails entirely — better to pick a reasonable
+  // default than 400 the user when their internet is flaky.
+  const VALID_SECTORS = ['Technology','Comm Services','Consumer Disc','Industrials',
+    'Energy','Financials','Healthcare','Materials','Cons Staples','Real Estate','Utilities'];
+
+  // Yahoo's sector vocabulary → our internal canonical sectors. Yahoo uses
+  // GICS-like but slightly-different names (e.g. "Consumer Cyclical" vs our
+  // "Consumer Disc"). Unknown labels fall through to Technology.
+  function mapYahooSector(ySector) {
+    if (!ySector) return null;
+    const m = {
+      'Technology':             'Technology',
+      'Communication Services': 'Comm Services',
+      'Consumer Cyclical':      'Consumer Disc',
+      'Consumer Defensive':     'Cons Staples',
+      'Healthcare':             'Healthcare',
+      'Industrials':            'Industrials',
+      'Financial Services':     'Financials',
+      'Financial':              'Financials',   // seen on some tickers
+      'Energy':                 'Energy',
+      'Basic Materials':        'Materials',
+      'Real Estate':            'Real Estate',
+      'Utilities':              'Utilities',
+    };
+    return m[ySector] || null;
+  }
+
+  router.post('/edge/universe/add', async (req, res) => {
     try {
-      const { symbol, sector } = req.body;
-      if (!symbol || !sector) return res.status(400).json({ error: 'symbol and sector required' });
+      const { symbol, sector: explicitSector } = req.body;
+      if (!symbol) return res.status(400).json({ error: 'symbol required' });
       const sym = symbol.toUpperCase().trim();
-      const validSectors = ['Technology','Comm Services','Consumer Disc','Industrials',
-        'Energy','Financials','Healthcare','Materials','Cons Staples','Real Estate','Utilities'];
-      if (!validSectors.includes(sector)) {
-        return res.status(400).json({ error: `Invalid sector. Must be one of: ${validSectors.join(', ')}` });
-      }
+
       if (SECTOR_MAP[sym]) {
-        return res.json({ message: `${sym} already in universe (${SECTOR_MAP[sym]})`, existed: true });
+        return res.json({ message: `${sym} already in universe (${SECTOR_MAP[sym]})`, existed: true, sector: SECTOR_MAP[sym] });
       }
+
+      // Validate explicit sector if given; otherwise auto-resolve via Yahoo.
+      let sector = null;
+      let resolvedFrom = 'explicit';
+      if (explicitSector) {
+        if (!VALID_SECTORS.includes(explicitSector)) {
+          return res.status(400).json({ error: `Invalid sector. Must be one of: ${VALID_SECTORS.join(', ')}` });
+        }
+        sector = explicitSector;
+      } else {
+        // Auto-resolve from Yahoo's assetProfile (cached 7d).
+        try {
+          const { yahooAssetProfile } = require('../data/providers/yahoo');
+          const prof = await yahooAssetProfile(sym);
+          if (prof?.sector) {
+            const mapped = mapYahooSector(prof.sector);
+            if (mapped) { sector = mapped; resolvedFrom = 'yahoo'; }
+          }
+        } catch(_) {}
+        if (!sector) {
+          // Last-resort default. Caller sees `resolvedFrom: 'default'` so
+          // they can warn the user that classification may be imprecise.
+          sector = 'Technology';
+          resolvedFrom = 'default';
+        }
+      }
+
       // Add to live runtime universe
       SECTOR_MAP[sym] = sector;
       UNIVERSE.push(sym);
@@ -529,7 +624,7 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
         const { syncUniverse } = require('../signals/universe-tracker');
         syncUniverse(UNIVERSE, SECTOR_MAP);
       } catch(_){}
-      res.json({ added: sym, sector, universeSize: UNIVERSE.length });
+      res.json({ added: sym, sector, resolvedFrom, universeSize: UNIVERSE.length });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

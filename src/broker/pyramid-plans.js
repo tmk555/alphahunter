@@ -715,6 +715,47 @@ async function cancelPyramidPlan(id) {
   return getPyramidPlan(id);
 }
 
+// ─── Modify pilot trigger on an armed (not-yet-fired) pyramid plan ──────────
+// Only allowed while status === 'armed_pilot' (no tranche submitted yet).
+// Shifts add1/add2 triggers by the same delta so the ATR-scaled offsets
+// stay intact — a user who wanted pilot at 170 with adds at +0.5/+1.0 ATR
+// still wants those same offsets when they bump pilot to 172.
+function modifyPyramidPilotTrigger(id, newPilotPrice) {
+  const plan = getPyramidPlan(id);
+  if (!plan) throw new Error(`Pyramid plan #${id} not found`);
+  if (plan.status !== 'armed_pilot') {
+    throw new Error(`Pilot trigger can only be modified while armed (current status: ${plan.status})`);
+  }
+  const np = +newPilotPrice;
+  if (!(np > 0)) throw new Error('newPilotPrice must be a positive number');
+  if (plan.stop_price && np <= plan.stop_price) {
+    throw new Error(`New pilot $${np} must be above stop $${plan.stop_price}`);
+  }
+
+  const oldPilot = plan.tranches[0]?.trigger;
+  if (!(oldPilot > 0)) throw new Error('Existing pilot trigger missing on plan');
+  const delta = np - oldPilot;
+
+  const newTranches = plan.tranches.map((t, i) => {
+    if (i === 0) return { ...t, trigger: +np.toFixed(2) };
+    // Only shift triggers for not-yet-active tranches (waiting on earlier fill).
+    // Once a plan is armed_pilot the adds are always in waiting_* state so this
+    // is a no-op check — defensive though in case the guard above changes.
+    if (t.status && t.status.startsWith('waiting_')) {
+      return { ...t, trigger: +(t.trigger + delta).toFixed(2) };
+    }
+    return t;
+  });
+
+  db().prepare(
+    "UPDATE pyramid_plans SET tranches_json = ?, updated_at = datetime('now'), " +
+    "notes = COALESCE(notes,'') || ' [pilot modified: $' || ? || ' → $' || ? || ']' " +
+    "WHERE id = ?"
+  ).run(JSON.stringify(newTranches), oldPilot, np.toFixed(2), id);
+
+  return getPyramidPlan(id);
+}
+
 module.exports = {
   createPyramidPlan,
   getPyramidPlans,
@@ -722,6 +763,7 @@ module.exports = {
   checkPyramidPlans,
   handleTrancheFill,
   cancelPyramidPlan,
+  modifyPyramidPilotTrigger,
   detectPivotForPyramid,
   computeAddTriggers,
 };

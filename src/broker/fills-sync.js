@@ -33,7 +33,7 @@ const { assignStrategy } = require('../risk/strategy-manager');
 //   • reconcileOrphanPositions() after the position-centric INSERT
 function ensureBracketFields(db, alpacaOrderId, symbol, opts = {}) {
   const row = db.prepare(
-    'SELECT id, stop_price, target1, target2, initial_shares, remaining_shares, shares, strategy, exit_strategy FROM trades WHERE alpaca_order_id = ?'
+    'SELECT id, entry_price, stop_price, target1, target2, initial_shares, remaining_shares, shares, strategy, exit_strategy FROM trades WHERE alpaca_order_id = ?'
   ).get(alpacaOrderId);
   if (!row) return;
 
@@ -51,21 +51,54 @@ function ensureBracketFields(db, alpacaOrderId, symbol, opts = {}) {
     ).get(symbol, row.id);
 
     if (sibling) {
+      // NOTE: sibling.stop_price may already be the sibling's breakeven stop if
+      // the sibling has hit T1. To avoid propagating a zero-risk stop we prefer
+      // the sibling's initial_stop_price when available (select below).
+      const siblingInit = db.prepare(
+        `SELECT COALESCE(initial_stop_price, stop_price) AS seed FROM trades
+          WHERE symbol = ? AND id != ? AND exit_date IS NULL
+            AND (initial_stop_price IS NOT NULL OR stop_price IS NOT NULL)
+          ORDER BY entry_date DESC LIMIT 1`
+      ).get(symbol, row.id);
+      const seedStop = siblingInit?.seed ?? sibling.stop_price;
       db.prepare(
         `UPDATE trades SET
-           stop_price    = COALESCE(stop_price, ?),
-           target1       = COALESCE(target1, ?),
-           target2       = COALESCE(target2, ?),
-           strategy      = COALESCE(strategy, ?),
-           exit_strategy = COALESCE(exit_strategy, ?)
+           stop_price         = COALESCE(stop_price, ?),
+           initial_stop_price = COALESCE(initial_stop_price, ?),
+           target1            = COALESCE(target1, ?),
+           target2            = COALESCE(target2, ?),
+           strategy           = COALESCE(strategy, ?),
+           exit_strategy      = COALESCE(exit_strategy, ?)
          WHERE id = ?`
-      ).run(sibling.stop_price, sibling.target1, sibling.target2,
+      ).run(sibling.stop_price, seedStop, sibling.target1, sibling.target2,
             sibling.strategy, sibling.exit_strategy || 'full_in_scale_out', row.id);
     } else if (opts.brokerStop != null) {
       // Last resort: whatever live stop leg the broker has on this symbol.
       // T1/T2 remain NULL — the row will be flagged needs_review=1 already.
-      db.prepare('UPDATE trades SET stop_price = COALESCE(stop_price, ?) WHERE id = ?')
-        .run(opts.brokerStop, row.id);
+      db.prepare(
+        `UPDATE trades SET
+           stop_price         = COALESCE(stop_price, ?),
+           initial_stop_price = COALESCE(initial_stop_price, ?)
+         WHERE id = ?`
+      ).run(opts.brokerStop, opts.brokerStop, row.id);
+    } else if (row.entry_price > 0) {
+      // Final-fallback defensive stop. Prevents orphaned rows from sitting with
+      // NULL stops (no stop = no exit signals = unbounded downside). Mirrors
+      // O'Neil's classic 7% rule but slightly wider (7% → 0.93 multiplier) to
+      // leave room for normal volatility; user can tighten later via the UI.
+      //
+      // Real-world trigger: MKSI / ANET auto-filled without matched staged rows
+      // (April 2026), leaving stops NULL for days before manual backfill.
+      const defaultStop = +(row.entry_price * 0.93).toFixed(2);
+      db.prepare(
+        `UPDATE trades SET
+           stop_price         = COALESCE(stop_price, ?),
+           initial_stop_price = COALESCE(initial_stop_price, ?),
+           needs_review       = 1,
+           notes              = COALESCE(notes,'') || ' [auto-default stop: entry×0.93 = $' || ? || ' — verify]'
+         WHERE id = ?`
+      ).run(defaultStop, defaultStop, defaultStop, row.id);
+      console.warn(`  ensureBracketFields: ${symbol} #${row.id} — auto-default stop $${defaultStop} (entry×0.93)`);
     }
   }
 
@@ -133,8 +166,17 @@ async function syncBrokerFills({ lookbackDays = 7, limit = 100 } = {}) {
     );
 
     if (staged) {
-      db.prepare('UPDATE trades SET stop_price=?, target1=?, target2=?, strategy=?, exit_strategy=?, was_system_signal=1 WHERE alpaca_order_id=?')
-        .run(staged.stop_price, staged.target1_price, staged.target2_price, staged.strategy || null, staged.exit_strategy || 'full_in_scale_out', order.id);
+      // initial_stop_price mirrors stop_price at insert time but is NEVER updated
+      // later. Scale-out moves stop to breakeven on T1 (see risk/scaling.js); if
+      // r_multiple were computed against that moved stop, every T1/T2 winner
+      // records 0.0R because risk = entry - breakeven = 0. The exit-reconciliation
+      // code reads COALESCE(initial_stop_price, stop_price) so legacy rows still
+      // fall back to the current stop.
+      db.prepare(`UPDATE trades SET stop_price=?, initial_stop_price=COALESCE(initial_stop_price, ?),
+                    target1=?, target2=?, strategy=?, exit_strategy=?, was_system_signal=1
+                  WHERE alpaca_order_id=?`)
+        .run(staged.stop_price, staged.stop_price, staged.target1_price, staged.target2_price,
+             staged.strategy || null, staged.exit_strategy || 'full_in_scale_out', order.id);
     }
 
     // ─── Bracket backfill for scale-in tranches ─────────────────────────
@@ -284,7 +326,11 @@ async function syncBrokerFills({ lookbackDays = 7, limit = 100 } = {}) {
       const trade       = pendingTrade;
       const pnl_dollars = (exitPrice - trade.entry_price) * (trade.shares || 0);
       const pnl_percent = +((exitPrice / trade.entry_price - 1) * 100).toFixed(2);
-      const risk        = trade.entry_price - (trade.stop_price || trade.entry_price * 0.95);
+      // Use initial_stop_price when available — stop_price may have been moved
+      // to breakeven on T1, which zeros the denominator. Fallback chain:
+      // initial_stop_price → stop_price → entry * 0.95 (last-resort 5% guard).
+      const riskBase    = trade.initial_stop_price || trade.stop_price || trade.entry_price * 0.95;
+      const risk        = trade.entry_price - riskBase;
       const r_multiple  = risk > 0 ? +((exitPrice - trade.entry_price) / risk).toFixed(2) : 0;
       const noteSuffix  = `\n[PENDING-CLOSE FILLED] Limit sell order ${sell.id} filled at $${exitPrice.toFixed(2)}.`;
 
@@ -354,7 +400,10 @@ async function syncBrokerFills({ lookbackDays = 7, limit = 100 } = {}) {
         // Fully closed this row.
         const pnl_dollars = (exitPrice - row.entry_price) * (row.shares || 0);
         const pnl_percent = +((exitPrice / row.entry_price - 1) * 100).toFixed(2);
-        const risk        = row.entry_price - (row.stop_price || row.entry_price * 0.95);
+        // Use initial_stop_price (immutable) so T1-triggered breakeven stops
+        // don't collapse the R denominator. See comment on pending-close path.
+        const riskBase    = row.initial_stop_price || row.stop_price || row.entry_price * 0.95;
+        const risk        = row.entry_price - riskBase;
         const r_multiple  = risk > 0 ? +((exitPrice - row.entry_price) / risk).toFixed(2) : 0;
         const noteSuffix  = `\n[AUTO-EXIT${isProrata ? ' PRO-RATA' : ''}] Closed ${actualAlloc}sh @ $${exitPrice.toFixed(2)} (order ${sell.id.slice(0,8)}).`;
         db.prepare(`

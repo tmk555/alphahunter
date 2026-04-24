@@ -5,7 +5,8 @@ const router  = express.Router();
 
 const {
   createPyramidPlan, getPyramidPlans, getPyramidPlan,
-  cancelPyramidPlan, detectPivotForPyramid, computeAddTriggers,
+  cancelPyramidPlan, modifyPyramidPilotTrigger,
+  detectPivotForPyramid, computeAddTriggers,
 } = require('../broker/pyramid-plans');
 const { getVolumePace } = require('../signals/volume-pace');
 
@@ -164,6 +165,17 @@ module.exports = function(runScan) {
       const plan = await cancelPyramidPlan(+req.params.id);
       res.json(plan);
     } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Modify pilot trigger on armed plan (no broker call — JSON-only edit) ─
+  // Body: { newEntryPrice: number }  — aliased for UI re-use of modify-entry modal
+  router.post('/pyramid-plans/:id/modify-entry', async (req, res) => {
+    try {
+      const newPrice = +(req.body?.newEntryPrice ?? req.body?.newPilotPrice);
+      if (!(newPrice > 0)) return res.status(400).json({ error: 'newEntryPrice must be a positive number' });
+      const plan = modifyPyramidPilotTrigger(+req.params.id, newPrice);
+      res.json(plan);
+    } catch (e) { res.status(400).json({ error: e.message }); }
   });
 
   // ─── Arm / disarm VWAP gate on an existing plan ─────────────────────────

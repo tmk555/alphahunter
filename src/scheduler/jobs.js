@@ -839,6 +839,25 @@ registerJobType('edge_close_outcomes', {
   },
 });
 
+// ─── Swing-day + earnings auto-exit watcher ───────────────────────────────
+// Closes swing positions that breach the 10-day swing limit OR have earnings
+// within 2 days. Holding through earnings is non-negotiable for momentum
+// names — config.earningsWindowDays guards that; config.swingLimitDays
+// guards day-10+ dead-money trades. See src/signals/swing-exit-watcher.js.
+
+registerJobType('swing_exit_check', {
+  description: 'Auto-exit swing positions at swing-day limit (10d) OR pre-earnings (<=2d)',
+  defaultConfig: { swingLimitDays: 10, earningsWindowDays: 2, dryRun: false },
+  handler: async (config) => {
+    const { evaluateSwingExits } = require('../signals/swing-exit-watcher');
+    return await evaluateSwingExits({
+      swingLimitDays: config.swingLimitDays ?? 10,
+      earningsWindowDays: config.earningsWindowDays ?? 2,
+      dryRun: !!config.dryRun,
+    });
+  },
+});
+
 // Shared helper — builds channel list from env vars when no DB channels exist
 function _envFallbackChannels() {
   const channels = [];
@@ -965,6 +984,30 @@ const DEFAULT_JOBS = [
     job_type: 'portfolio_reconcile',
     cron_expression: '0 17 * * 1-5',  // 5:00 PM server local, weekdays
     config: {},
+  },
+
+  // Swing-day + earnings auto-exit. Runs twice daily by default:
+  //   • 09:35 ET — catches earnings-in-2d rows BEFORE any intraday gap-up
+  //     that would make the pre-earnings exit worse than today's open.
+  //   • 15:45 ET — catches day-10+ swing-limit rows near the close when the
+  //     swing thesis is officially out of time and dead money should go flat.
+  // Separate from stop_monitor because this is time/event-driven, not
+  // price-driven. Leaving dryRun=true by default would be safer for first
+  // deploy but the user's directive is to actually exit these positions —
+  // start in live mode.
+  {
+    name: 'swing_exit_check_open',
+    description: 'Auto-exit positions with earnings in next 2 days (morning pass)',
+    job_type: 'swing_exit_check',
+    cron_expression: '35 9 * * 1-5',  // 9:35 AM server local, weekdays
+    config: { swingLimitDays: 10, earningsWindowDays: 2, dryRun: false },
+  },
+  {
+    name: 'swing_exit_check_close',
+    description: 'Auto-exit swing positions at 10-day limit (pre-close pass)',
+    job_type: 'swing_exit_check',
+    cron_expression: '45 15 * * 1-5',  // 3:45 PM server local, weekdays
+    config: { swingLimitDays: 10, earningsWindowDays: 2, dryRun: false },
   },
 
   // Broker fills sync — pulls filled orders into the trades journal and

@@ -27,13 +27,13 @@ const FULL_UNIVERSE = {
   TYL:'Technology',  GWRE:'Technology', GEN:'Technology',  OTEX:'Technology',
   DUOL:'Technology', TOST:'Technology',
 
-  // ── Technology — Semiconductors (22) ───────────────────────────────────────
+  // ── Technology — Semiconductors (23) ───────────────────────────────────────
   NVDA:'Technology', AMD:'Technology',  AVGO:'Technology', TSM:'Technology',
   MRVL:'Technology', MU:'Technology',   ARM:'Technology',  SMCI:'Technology',
   AMAT:'Technology', LRCX:'Technology', KLAC:'Technology', ONTO:'Technology',
   SLAB:'Technology', WOLF:'Technology', QCOM:'Technology', TXN:'Technology',
   ADI:'Technology',  NXPI:'Technology', MCHP:'Technology', SWKS:'Technology',
-  ON:'Technology',   MPWR:'Technology',
+  ON:'Technology',   MPWR:'Technology', ASML:'Technology',
 
   // ── Technology — Hardware & Infrastructure (14) ────────────────────────────
   AAPL:'Technology', DELL:'Technology', HPQ:'Technology',  PSTG:'Technology',
@@ -106,7 +106,10 @@ const FULL_UNIVERSE = {
   NRG:'Energy',  EXC:'Energy',  CCJ:'Energy',  UEC:'Energy',
   TLN:'Energy',  CWEN:'Energy',
 
-  // ── Financials (29) ────────────────────────────────────────────────────────
+  // ── Financials (30) ────────────────────────────────────────────────────────
+  // NOTE: BRK-B uses Yahoo's dash form (not BRK.B). There is no ticker
+  // normalization layer — the same string is used for DB keys, Yahoo
+  // fetches, and snapshot lookups.
   JPM:'Financials', GS:'Financials',   V:'Financials',    MA:'Financials',
   AXP:'Financials', BX:'Financials',   KKR:'Financials',  SCHW:'Financials',
   COIN:'Financials',COF:'Financials',  SQ:'Financials',   HOOD:'Financials',
@@ -114,7 +117,7 @@ const FULL_UNIVERSE = {
   BLK:'Financials', ICE:'Financials',  CME:'Financials',  SPGI:'Financials',
   MCO:'Financials', MSCI:'Financials', FI:'Financials',   APO:'Financials',
   PYPL:'Financials',IBKR:'Financials', UPST:'Financials', AFRM:'Financials',
-  SOFI:'Financials',
+  SOFI:'Financials','BRK-B':'Financials',
 
   // ── Healthcare — Biopharma (21) ────────────────────────────────────────────
   LLY:'Healthcare',  NVO:'Healthcare',  ABBV:'Healthcare', VRTX:'Healthcare',

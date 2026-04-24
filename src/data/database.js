@@ -885,6 +885,14 @@ function initSchema() {
   // src/broker/fills-sync.js when it closes a trade via auto_sync.
   safeAddColumn('trades', 'exit_order_id', 'TEXT');
 
+  // Immutable original stop. Populated at entry-sync time and NEVER modified
+  // by the scale-out engine — risk.scaling.applyScalingAction moves
+  // `stop_price` to breakeven / trailing levels as T1/T2 hit, which
+  // previously destroyed the denominator of the R-multiple calc
+  // (risk = entry - stop became 0 → every scale-out winner recorded as 0.0R).
+  // Read path: fills-sync.js r_multiple = (exit - entry) / (entry - COALESCE(initial_stop_price, stop_price)).
+  safeAddColumn('trades', 'initial_stop_price', 'REAL');
+
   // ─── Pyramid Plans ────────────────────────────────────────────────────────
   // True pyramiding entry — pilot fires at pivot, tranche 2 fires only after
   // pilot is filled AND price advances to confirmation trigger, tranche 3

@@ -2,10 +2,20 @@
 const fetch = require('node-fetch');
 const { cacheGet, cacheSet, TTL_QUOTE, TTL_HIST } = require('../cache');
 
-let yhCrumb = null, yhCookie = null;
+let yhCrumb = null, yhCookie = null, yhAuthInFlight = null;
 
 async function getYahooCrumb() {
   if (yhCrumb && yhCookie) return { crumb: yhCrumb, cookie: yhCookie };
+  // In-flight dedup: when 20 concurrent tasks all see null crumb at cold
+  // start, they'd each launch their own auth hop — thundering-herd on
+  // fc.yahoo.com, many of which Yahoo throttles and silently empty-caches
+  // downstream. Collapse concurrent callers onto the same promise instead.
+  if (yhAuthInFlight) return yhAuthInFlight;
+  yhAuthInFlight = _fetchCrumb().finally(() => { yhAuthInFlight = null; });
+  return yhAuthInFlight;
+}
+
+async function _fetchCrumb() {
   // 15s hard cap on each Yahoo auth hop — if fc.yahoo.com or query2 is slow we
   // used to hang the caller indefinitely (rs-scan / macro would spin until
   // the browser timed out). Now we fail fast and the user sees a real error.
@@ -474,10 +484,14 @@ async function yahooChartEvents(symbol) {
         'Accept': 'application/json',
       },
     });
+    // Transient failures (auth expiry, missing result) must NOT be cached —
+    // otherwise a single Yahoo hiccup during cold-fetch pins `earningsDate:null`
+    // for the full 6h TTL, and the Upcoming Earnings panel silently shows
+    // missing symbols until the cache expires.
     if (r.status === 401 || r.status === 403) { resetAuth(); return empty; }
     const d = await r.json();
     const result = d?.quoteSummary?.result?.[0];
-    if (!result) { cacheSet(key, empty); return empty; }
+    if (!result) return empty; // NB: no cacheSet — retry next call
 
     // Earnings: calendarEvents.earnings.earningsDate is an ARRAY of timestamps.
     // Yahoo returns a range [start, end] when the date is unconfirmed, or a
@@ -535,8 +549,57 @@ async function yahooChartEvents(symbol) {
     return events;
   } catch (e) {
     // Chart overlay is best-effort — never break the chart on event fetch failure.
-    cacheSet(key, empty);  // cache the empty shape so we don't retry every request
+    // Do NOT cache the empty shape: a transient Yahoo failure during a cold
+    // fetch would otherwise poison the 6h cache and make the symbol silently
+    // disappear from the Upcoming Earnings panel until TTL expiry. Returning
+    // empty without caching lets the next request retry.
     return empty;
+  }
+}
+
+// ─── Lightweight asset profile lookup (sector / industry / longName) ────────
+//
+// Used when we need just the classification of a symbol without the full
+// fundamentals payload — e.g. "add to universe" UX, where we need to pick
+// one of the 11 canonical sectors. Modules requested are the smallest set
+// Yahoo will fulfil for this field.
+//
+// Returns null on any failure so the caller can decide whether to fall back
+// (we currently fall back to Technology in the add-to-universe handler).
+// Cached 7d — sector reclassifications are once-in-blue-moon events.
+const TTL_PROFILE = 7 * 24 * 60 * 60 * 1000;
+async function yahooAssetProfile(symbol) {
+  const key = `prof:${symbol}`;
+  const cached = cacheGet(key, TTL_PROFILE);
+  if (cached) return cached;
+  try {
+    const { crumb, cookie } = await getYahooCrumb();
+    const modules = 'assetProfile,quoteType';
+    const url = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=${encodeURIComponent(modules)}&crumb=${encodeURIComponent(crumb)}`;
+    const r = await fetchWithRetry(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+        'Cookie': cookie,
+        'Accept': 'application/json',
+      },
+    });
+    if (r.status === 401 || r.status === 403) { resetAuth(); return null; }
+    const d = await r.json();
+    const result = d?.quoteSummary?.result?.[0];
+    if (!result) return null;
+    const profile = result.assetProfile || {};
+    const qt = result.quoteType || {};
+    const out = {
+      symbol,
+      longName: qt.longName || qt.shortName || null,
+      sector:   profile.sector   || null,
+      industry: profile.industry || null,
+      quoteType: qt.quoteType || null,   // EQUITY / ETF / …
+    };
+    cacheSet(key, out);
+    return out;
+  } catch (_) {
+    return null;
   }
 }
 
@@ -546,5 +609,6 @@ module.exports = {
   yahooIntradayBars,
   getYahooFundamentals, raw,
   yahooChartEvents,
+  yahooAssetProfile,
   pLimit,
 };

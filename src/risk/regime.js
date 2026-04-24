@@ -126,7 +126,11 @@ async function getMarketRegime() {
           distDaysRecent10, distDaysScrubbed,
         };
       }
-    } catch (_) {}
+    } catch (err) {
+      // Don't crash regime if cycle detection fails, but surface it. Silent
+      // catches here were masking exposureRamp becoming null intermittently.
+      if (process.env.DEBUG_REGIME) console.warn('[regime] exposureRamp failed:', err.message);
+    }
 
     // ── Breadth-enhanced regime overlay ──────────────────────────────────────
     // Integrates market breadth internals for earlier regime signals.
@@ -190,8 +194,10 @@ async function getMarketRegime() {
           }
         }
       }
-    } catch (_) {
-      // Breadth integration failed — proceed with basic + cycle regime
+    } catch (err) {
+      // Breadth integration failed — proceed with basic + cycle regime. Log
+      // under DEBUG so silent failures don't hide stale-snapshot issues.
+      if (process.env.DEBUG_REGIME) console.warn('[regime] breadthOverlay failed:', err.message);
     }
 
     // ── Macro regime overlay (v8: yield curve, credit spreads, dollar, ISM) ──
@@ -225,6 +231,59 @@ async function getMarketRegime() {
       }
     } catch (macroErr) {
       console.error('  Macro overlay error:', macroErr.message);
+    }
+
+    // ── Exposure-ramp modulator (breadth + macro) ───────────────────────────
+    // The raw ramp above only looks at FTD/rallyDay/distDays. It can happily
+    // read FULL on Day-17 of a rally whose internals are quietly rolling
+    // (composite breadth 51, macro neutral). O'Neil's rule is: "don't push to
+    // full exposure when the generals are carrying the tape." Apply a tier
+    // downshift based on breadth score and macro regime so the ramp surfaced
+    // to the UI reflects the state of the whole market, not just SPY's MAs.
+    //
+    // Downshift ladder: FULL → THREE_QUARTER → HALF → PILOT.
+    // REDUCED is its own state (too many dist days) and is only further
+    // downshifted toward PILOT when stacking insults.
+    if (exposureRamp) {
+      const tiers = ['PILOT', 'HALF', 'THREE_QUARTER', 'FULL'];
+      const heatByTier = { PILOT: 2, HALF: 4, THREE_QUARTER: 6, FULL: 8, REDUCED: 4 };
+      const downshiftReasons = [];
+      const startTierIdx = tiers.indexOf(exposureRamp.exposureLevel);
+      let currentIdx = startTierIdx >= 0 ? startTierIdx : -1;
+
+      const bs = breadthOverlay?.score;
+      if (typeof bs === 'number') {
+        let n = 0;
+        if (bs < 30) n = 3;
+        else if (bs < 50) n = 2;
+        else if (bs < 60) n = 1;  // 51 (MIXED) softens ramp by one tier
+        if (n > 0) {
+          downshiftReasons.push(`breadth ${bs}/100 (-${n})`);
+          if (currentIdx >= 0) currentIdx = Math.max(0, currentIdx - n);
+        }
+      }
+
+      const mr = macroOverlay?.regime;
+      if (mr === 'MACRO_BEARISH') {
+        downshiftReasons.push('macro bearish (-1)');
+        if (currentIdx >= 0) currentIdx = Math.max(0, currentIdx - 1);
+      } else if (mr === 'MACRO_CAUTION') {
+        // Half-step caution: only downshift if we'd otherwise be at FULL.
+        if (currentIdx === tiers.indexOf('FULL')) {
+          downshiftReasons.push('macro caution (-1)');
+          currentIdx -= 1;
+        }
+      }
+
+      if (downshiftReasons.length && currentIdx >= 0 && currentIdx !== startTierIdx) {
+        const modulatedLevel = tiers[currentIdx];
+        exposureRamp.baseExposureLevel = exposureRamp.exposureLevel;
+        exposureRamp.baseMaxHeatPct    = exposureRamp.maxHeatPct;
+        exposureRamp.exposureLevel     = modulatedLevel;
+        exposureRamp.maxHeatPct        = heatByTier[modulatedLevel];
+        exposureRamp.modulated         = true;
+        exposureRamp.modulationReasons = downshiftReasons;
+      }
     }
 
     const result = {

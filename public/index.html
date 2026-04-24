@@ -450,6 +450,38 @@ function ErrorBox({ msg }) {
   return <div className="error-box">⚠ {msg}</div>;
 }
 
+// ─── InfoTip ────────────────────────────────────────────────────────────────
+// Tiny ⓘ icon that reveals a rich tooltip on hover/click. Lets us bake the
+// "what does this panel mean?" explanations straight into the UI instead of
+// asking the user to DM for context. `text` can be a string or JSX.
+function InfoTip({ text, width = 320, side = 'right' }) {
+  const [show, setShow] = React.useState(false);
+  const leftPos = side === 'right' ? 'auto' : 0;
+  const rightPos = side === 'right' ? 0 : 'auto';
+  return (
+    <span style={{position:'relative',display:'inline-block',marginLeft:6,verticalAlign:'middle'}}
+          onMouseEnter={()=>setShow(true)}
+          onMouseLeave={()=>setShow(false)}
+          onClick={e=>{e.stopPropagation(); setShow(s=>!s);}}>
+      <span style={{display:'inline-block',width:14,height:14,borderRadius:'50%',
+                    border:'1px solid var(--text3)',color:'var(--text3)',
+                    fontSize:10,textAlign:'center',lineHeight:'12px',
+                    cursor:'help',fontWeight:600,fontFamily:'var(--font-sans)'}}>i</span>
+      {show && (
+        <div style={{position:'absolute',top:'100%',left:leftPos,right:rightPos,marginTop:6,
+                     zIndex:50,width,padding:'10px 12px',
+                     background:'var(--bg)',border:'1px solid var(--cyan)',borderRadius:4,
+                     boxShadow:'0 4px 14px rgba(0,0,0,0.5)',
+                     fontSize:11,lineHeight:1.55,color:'var(--text2)',
+                     textTransform:'none',letterSpacing:'normal',fontWeight:400,
+                     fontFamily:'var(--font-sans)',whiteSpace:'normal'}}>
+          {text}
+        </div>
+      )}
+    </span>
+  );
+}
+
 function formatAI(text) {
   if (!text) return null;
   return text
@@ -1326,6 +1358,45 @@ function App() {
   // The scan is ~30-60s but runs in the background — the ticker bar and static
   // tabs render immediately; only the tabs that need rsData show a spinner.
   useEffect(() => { loadAll(); /* eslint-disable-next-line */ }, []);
+
+  // ─── Live-price overlay for rsData (every 45s) ──────────────────────────
+  // rsData is populated by /api/rs-scan — a heavy endpoint that re-runs the
+  // full scanner. We DON'T want to re-run that on a timer. But the price /
+  // chg1d columns go stale until the next manual REFRESH ALL. So every 45s
+  // we fetch /api/quotes for the already-loaded tickers and merge fresh
+  // price + chg1d into rsData without touching anything else. Backend quote
+  // cache is 60s, so 45s cross-tab polling still only triggers ~1 upstream
+  // call per minute.
+  useEffect(() => {
+    if (!rsData || rsData.length === 0) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        // Cap at 100 per call. If the user has a huge scanner output, we
+        // prioritize the top-RS names (which they're most likely watching).
+        const syms = rsData
+          .slice()
+          .sort((a,b) => (b.rsRank||0) - (a.rsRank||0))
+          .slice(0, 100)
+          .map(r => r.ticker).filter(Boolean).join(',');
+        if (!syms) return;
+        const d = await api('/api/quotes?symbols=' + encodeURIComponent(syms));
+        if (cancelled) return;
+        const byS = {};
+        (d.quotes || []).forEach(q => { byS[q.symbol] = q; });
+        setRsData(prev => prev.map(r => {
+          const q = byS[r.ticker];
+          if (!q) return r;
+          return { ...r,
+            price: q.price != null ? q.price : r.price,
+            chg1d: q.chg1d != null ? q.chg1d : r.chg1d,
+          };
+        }));
+      } catch(_) {}
+    };
+    const id = setInterval(refresh, 45000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [rsData.length]);
 
   const TABS = [
     { id:'pulse',     label:'⚡ Market Pulse' },
@@ -3932,8 +4003,12 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
   const [scoutLoading, setScoutLoading] = useState(false);
   const [expandedCard, setExpandedCard] = useState(null);
   const [picksLimit, setPicksLimit] = useState(12);
-  const [addModal, setAddModal] = useState(null);
-  const [addSector, setAddSector] = useState('Technology');
+  // (addModal/addSector state removed — sector is auto-resolved server-side)
+  // Live pullback-watcher alerts (pullback_states table). These are the
+  // "phone-pinged, touched the zone right now" candidates — separate from
+  // the rsData-derived "extended, waiting for pullback" watchlist below.
+  const [pullbackAlerts, setPullbackAlerts] = useState([]);
+  const [pullbackAlertsMeta, setPullbackAlertsMeta] = useState({ count:0, byState:{}, sinceHours:72 });
 
   // Signal filter chips — persists across tab switches via App props
   const FILTER_CHIPS = [
@@ -4126,6 +4201,22 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
     setScoutLoading(false);
   }
 
+  // Poll live pullback-watcher alerts on mount + refresh button + light
+  // interval (every 2 min) so the "AA entered the zone 6 min ago" state
+  // doesn't go stale while the tab is open.
+  async function loadPullbackAlerts() {
+    try {
+      const d = await api('/api/pullback-alerts?sinceHours=72');
+      setPullbackAlerts(d.alerts || []);
+      setPullbackAlertsMeta({ count: d.count || 0, byState: d.byState || {}, sinceHours: d.sinceHours || 72 });
+    } catch (_) {}
+  }
+  useEffect(() => {
+    loadPullbackAlerts();
+    const t = setInterval(loadPullbackAlerts, 120000);
+    return () => clearInterval(t);
+  }, []);
+
   async function runScan() {
     if (!rsLoaded || !rsData.length) {
       setError(rsLoading
@@ -4149,13 +4240,19 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
 
   async function addToUniverse(ticker, sector) {
     try {
+      // If the caller passes a sector (Momentum Scout cards already know it
+      // from the scan payload), use it — saves an upstream Yahoo call. If
+      // not, the server auto-resolves via Yahoo assetProfile.
+      const body = sector ? { symbol: ticker, sector } : { symbol: ticker };
       const r = await api('/api/edge/universe/add', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ symbol: ticker, sector }),
+        body: JSON.stringify(body),
       });
-      if (r.existed) showToast('Already exists', `${ticker} already in universe (${r.message})`);
+      if (r.existed) showToast('Already exists', `${ticker} already in universe (${r.sector})`);
       else {
-        showToast('Added', `${ticker} added to ${sector} -- will appear in next scan`);
+        const note = r.resolvedFrom === 'default'
+          ? ' (sector defaulted — manually reclassify if wrong)' : '';
+        showToast('Added', `${ticker} added to ${r.sector}${note} — will appear in next scan`);
         // Remove from Discovery list immediately so it doesn't linger
         if (scoutData?.candidates) {
           setScoutData(prev => ({
@@ -4166,7 +4263,6 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
         }
       }
     } catch(e) { showToast('Error', e.message, true); }
-    setAddModal(null);
   }
 
   const scoreColor = s => s >= 75 ? 'var(--green)' : s >= 55 ? 'var(--amber)' : 'var(--text3)';
@@ -4602,6 +4698,101 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
         </div>
       )}
 
+      {/* ── LIVE PULLBACK ALERTS ── (pullback_states table — watcher just pinged these) */}
+      {pullbackAlerts.length > 0 && (() => {
+        // State → colour / urgency map. 'kissing' is the actionable-now state
+        // (price sitting right on the 50MA ±1 ATR); 'in_zone' is the wider
+        // halo (good but not hot); 'approaching' is forecast-only.
+        const stateStyle = {
+          kissing:     { color:'var(--red)',   bg:'rgba(255,61,87,0.14)',  border:'rgba(255,61,87,0.45)',  label:'KISSING 50MA',   note:'price on the 50MA — buy zone right now' },
+          in_zone:     { color:'var(--amber)', bg:'rgba(255,170,0,0.12)',  border:'rgba(255,170,0,0.45)',  label:'IN ZONE',        note:'inside the 50MA ±1 ATR buy band' },
+          approaching: { color:'var(--cyan)',  bg:'rgba(0,212,255,0.10)',  border:'rgba(0,212,255,0.35)',  label:'APPROACHING',    note:'sliding down — watch for the dip' },
+        };
+        const fmtAgo = (iso) => {
+          if (!iso) return '';
+          const ms = Date.now() - new Date(iso.replace(' ', 'T') + 'Z').getTime();
+          const m = Math.max(0, Math.floor(ms / 60000));
+          if (m < 60) return `${m}m ago`;
+          const h = Math.floor(m / 60);
+          if (h < 24) return `${h}h ago`;
+          return `${Math.floor(h / 24)}d ago`;
+        };
+        const bs = pullbackAlertsMeta.byState || {};
+        const bsPills = ['kissing','in_zone','approaching']
+          .filter(k => bs[k])
+          .map(k => `${bs[k]} ${k}`).join(' -- ');
+        return (
+          <div style={{marginTop:32,marginBottom:20,paddingTop:20,borderTop:'1px solid var(--border)'}}>
+            <div className="ts-section-header">
+              <span className="ts-section-title" style={{color:'var(--red)'}}>LIVE PULLBACK ALERTS</span>
+              <span className="ts-section-count">{pullbackAlerts.length} live{bsPills ? ` (${bsPills})` : ''} — price just touched its 50MA buy zone</span>
+              <div className="ts-section-line" />
+              <button className="btn btn-sm" onClick={loadPullbackAlerts} style={{flexShrink:0}} title="Reload from pullback_states">Refresh</button>
+            </div>
+            <div className="ts-grid">
+              {pullbackAlerts.filter(a => setupSigFilters.size===0 || passesChipFilters({
+                rsRank:a.rsRank, sepaScore:a.sepaScore, stage:a.stage,
+                vcpForming:a.vcpForming, rsLineNewHigh:a.rsLineNewHigh,
+                convictionScore: a.rsRank ?? 0,
+              })).map((a, i) => {
+                const st = stateStyle[a.state] || stateStyle.approaching;
+                const zoneStr = a.entryZone ? `$${a.entryZone[0]} - $${a.entryZone[1]}` : (a.ma50 ? `~$${a.ma50.toFixed(2)}` : '—');
+                const hasPos = a.hasOpenPosition;
+                const isExpanded = expandedCard === `pba-${a.symbol}`;
+                return (
+                  <div key={a.symbol}
+                    className={`ts-card${isExpanded?' expanded':''}`}
+                    style={{borderColor:st.border,background:st.bg}}
+                    onClick={() => setExpandedCard(isExpanded ? null : `pba-${a.symbol}`)}>
+                    <div className="ts-card-top">
+                      <div className="ts-card-rank" style={{background:st.border,color:st.color}}>{i+1}</div>
+                      <div className="ts-card-identity">
+                        <div className="ts-card-ticker td-ticker"
+                             onClick={(e) => { e.stopPropagation(); window.navigateToScanner && window.navigateToScanner(a.symbol); }}>{a.symbol}</div>
+                        <div className="ts-card-name" style={{color:st.color,fontWeight:700,fontSize:10,letterSpacing:1}}>
+                          {st.label} -- {fmtAgo(a.updatedAt)}
+                        </div>
+                      </div>
+                      <div className="ts-card-price">${(a.latestPrice ?? a.priceAtFire ?? 0).toFixed(2)}</div>
+                    </div>
+                    <div className="ts-card-signals">
+                      {hasPos && <span className="ts-signal-tag" style={{background:'rgba(255,61,87,0.12)',color:'var(--red)',border:'1px solid rgba(255,61,87,0.35)'}}>OPEN POSITION</span>}
+                      {a.vcpForming && <span className="ts-signal-tag" style={{background:'rgba(196,77,255,0.1)',color:'var(--purple)',border:'1px solid rgba(196,77,255,0.3)'}}>VCP</span>}
+                      {a.stage===2 && <span className="ts-signal-tag" style={{background:'rgba(0,230,118,0.1)',color:'var(--green)',border:'1px solid rgba(0,230,118,0.3)'}}>Stage 2</span>}
+                      {a.rsLineNewHigh && <span className="ts-signal-tag" style={{background:'rgba(255,215,0,0.12)',color:'var(--gold)',border:'1px solid rgba(255,215,0,0.3)'}}>RS High</span>}
+                      {(a.sepaScore||0) >= 5 && <span className="ts-signal-tag" style={{background:'rgba(0,230,118,0.1)',color:'var(--green)',border:'1px solid rgba(0,230,118,0.3)'}}>SEPA {a.sepaScore}/8</span>}
+                      {a.patternType && <span className="ts-signal-tag" style={{background:'rgba(196,77,255,0.08)',color:'var(--text2)',border:'1px solid rgba(196,77,255,0.25)'}}>{a.patternType}{a.patternConfidence ? ` ${a.patternConfidence}%` : ''}</span>}
+                    </div>
+                    <div className="ts-card-metrics" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
+                      {[
+                        {label:'RS',       val:a.rsRank ?? '—', color:rsColor(a.rsRank || 0)},
+                        {label:'vs 50MA',  val:a.vsMA50 != null ? `${a.vsMA50>0?'+':''}${a.vsMA50.toFixed(1)}%` : '—', color:st.color},
+                        {label:'50MA',     val:a.ma50 ? `$${a.ma50.toFixed(2)}` : '—', color:'var(--text2)'},
+                        {label:'Buy Zone', val:zoneStr, color:'var(--cyan)'},
+                      ].map(m => (
+                        <div key={m.label} className="ts-metric">
+                          <div className="ts-metric-label">{m.label}</div>
+                          <div className="ts-metric-val" style={{color:m.color,fontSize:m.label==='Buy Zone'?10:13}}>{m.val}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="ts-card-footer">
+                      <span className="ts-sector">{a.sector || '—'} -- ATR ${(a.atr||0).toFixed(2)}{a.atrPct ? ` (${a.atrPct.toFixed(1)}%)` : ''}</span>
+                      <button className="ts-stage-btn"
+                        disabled={staging===a.symbol || hasPos}
+                        onClick={(e) => { e.stopPropagation(); stageFromSetup(a.symbol, 'position', e); }}
+                        style={{background: hasPos ? 'var(--bg3)' : st.color, color: hasPos ? 'var(--text3)' : '#000', border: hasPos ? '1px solid var(--border)' : 'none'}}>
+                        {hasPos ? 'HELD' : staging===a.symbol ? 'STAGING...' : 'STAGE PULLBACK'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ── PENDING PULLBACK WATCHLIST ── (always visible — separate lifecycle from Deep Scan) */}
       {pendingPullback.length > 0 && (
         <div style={{marginTop:32,marginBottom:20,paddingTop:20,borderTop:'1px solid var(--border)'}}>
@@ -4705,7 +4896,8 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
                   <span className="ts-sector">{s.sector}</span>
                   <button className="ts-stage-btn"
                     style={{background:'rgba(0,230,118,0.1)',color:'var(--green)',border:'1px solid rgba(0,230,118,0.3)'}}
-                    onClick={() => { setAddModal(s.ticker); setAddSector(s.sector||'Technology'); }}>
+                    title={`Add ${s.ticker} to universe — sector (${s.sector || 'auto'}) applied automatically`}
+                    onClick={() => addToUniverse(s.ticker, s.sector || null)}>
                     + ADD TO UNIVERSE
                   </button>
                 </div>
@@ -4734,25 +4926,8 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
       {/* (Toast rendered globally at App level — supports cross-tab visibility
            and an optional action button like "Open Trading →".) */}
 
-      {/* ── ADD TO UNIVERSE MODAL (replaces prompt) ── */}
-      {addModal && (
-        <>
-          <div className="ts-add-backdrop" onClick={() => setAddModal(null)} />
-          <div className="ts-add-modal">
-            <h3>Add {addModal} to Universe</h3>
-            <label style={{fontSize:11,color:'var(--text3)',display:'block',marginBottom:6}}>Select sector:</label>
-            <select value={addSector} onChange={e => setAddSector(e.target.value)}>
-              {['Technology','Comm Services','Consumer Disc','Industrials','Energy','Financials','Healthcare','Materials','Cons Staples','Real Estate','Utilities'].map(s => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
-            <div className="ts-add-btns">
-              <button className="btn" onClick={() => setAddModal(null)}>Cancel</button>
-              <button className="btn btn-primary" onClick={() => addToUniverse(addModal, addSector)}>Add to Universe</button>
-            </div>
-          </div>
-        </>
-      )}
+      {/* Sector-selection modal removed — sector is auto-resolved server-side
+          via /api/edge/universe/add (Yahoo assetProfile → canonical sector). */}
     </div>
   );
 }
@@ -4808,6 +4983,16 @@ function MarketPulseTab() {
   const [bWarning, setBWarning] = useState(null);
   const [bwApplying, setBwApplying] = useState(false);
   const [sparkRange, setSparkRange] = useState('1M');
+  // Sentiment + upcoming-earnings — fetched alongside the main load().
+  // fngErr captures the reason we couldn't load F&G so the UI can show a
+  // specific message (auth problem vs route-missing vs CNN down) rather
+  // than the generic "unavailable" placeholder that hides real bugs.
+  const [fng, setFng] = useState(null);
+  const [fngErr, setFngErr] = useState(null);
+  const [upEarnings, setUpEarnings] = useState(null);
+  const [upEarnErr, setUpEarnErr] = useState(null);
+  const [upEarnLoading, setUpEarnLoading] = useState(false);
+  const [upEarnDays, setUpEarnDays] = useState(7);
 
   // Sparkline period ranges — map to trading-day slice length.
   // Backend /api/macro serves up to 252 trading days (~1Y) per symbol, so
@@ -4839,13 +5024,46 @@ function MarketPulseTab() {
   };
 
   useEffect(() => { load(); }, []);
+  // Reload upcoming earnings whenever the day window changes.
+  useEffect(() => { loadUpEarnings(upEarnDays); }, [upEarnDays]);
+  // Auto-refresh macro/regime/F&G every 60s so prices on this tab stay live.
+  // Matches the backend TTL_QUOTE (60s) so a refresh will always re-hit upstream.
+  // Earnings are 6h-cached so no need to include them in the fast poll.
+  useEffect(() => {
+    const id = setInterval(() => {
+      // Skip the heavy initial-mount spinner during background refreshes.
+      (async () => {
+        try {
+          const [md, fg, bw] = await Promise.all([
+            api('/api/macro').catch(()=>null),
+            api('/api/market/fear-greed').catch(()=>null),
+            api('/api/breadth/early-warning').catch(()=>null),
+          ]);
+          if (md) {
+            setMacro(md.macro || []);
+            setSpread(md.yieldSpread);
+            setSpreadHistory(md.spreadHistory || []);
+            setOverlayHistory(md.overlayHistory || {});
+          }
+          if (fg) setFng(fg);
+          if (bw) setBWarning(bw);
+        } catch(_) {}
+      })();
+    }, 60000);
+    return () => clearInterval(id);
+  }, []);
 
   async function load() {
     setLoading(true);
+    setFngErr(null);
     try {
-      const [rd, md, cd, bw] = await Promise.all([
+      // F&G is allowed to fail independently of the others — capture the
+      // concrete error so the panel can surface it (helps diagnose
+      // auth/routing/CNN-down scenarios without opening devtools).
+      const [rd, md, cd, bw, fg] = await Promise.all([
         api('/api/regime'), api('/api/macro'), api('/api/cycle-auto-detect').catch(()=>null),
         api('/api/breadth/early-warning').catch(()=>null),
+        api('/api/market/fear-greed').catch(e => { setFngErr(e?.message || String(e)); return null; }),
       ]);
       setRegime(rd);
       setMacro(md.macro || []);
@@ -4854,6 +5072,7 @@ function MarketPulseTab() {
       setOverlayHistory(md.overlayHistory || {});
       setCycle(cd);
       setBWarning(bw);
+      setFng(fg);
     } catch(_) {}
     setLoading(false);
     setLlLoad(true);
@@ -4864,6 +5083,30 @@ function MarketPulseTab() {
     } catch(_) {}
     setLlLoad(false);
   }
+
+  async function loadUpEarnings(days) {
+    setUpEarnLoading(true);
+    setUpEarnErr(null);
+    try {
+      const d = await api('/api/market/upcoming-earnings?days=' + (days || 7));
+      setUpEarnings(d);
+    } catch(e) {
+      setUpEarnings(null);
+      setUpEarnErr(e?.message || String(e));
+    }
+    setUpEarnLoading(false);
+  }
+
+  // Color band for Fear & Greed 0-100 — matches CNN's own palette so the
+  // panel reads the same as fearandgreed.cnn.com.
+  const fngColor = (s) => {
+    if (s == null) return 'var(--text3)';
+    if (s < 25)  return '#ff3d57';   // extreme fear
+    if (s < 45)  return '#f0a500';   // fear
+    if (s <= 55) return '#bdbdbd';   // neutral
+    if (s <= 74) return '#69f0ae';   // greed
+    return '#00e676';                // extreme greed
+  };
 
   const modeColor = m => ({
     UPTREND:'#00e676', UPTREND_PRESSURE:'#f0a500', FTD_CONFIRMED:'#69f0ae', FTD_FIRED:'#f0a500',
@@ -5064,6 +5307,186 @@ function MarketPulseTab() {
           <span style={{fontSize:11,color:'var(--text2)'}}>No deterioration detected — composite {bWarning.currentScore}, breadth stable</span>
         </div>
       )}
+
+      {/* ─── FEAR & GREED + UPCOMING EARNINGS ROW ─────────────────────────── */}
+      {/* Two sentiment/event-risk panels side-by-side. F&G is a contrarian-
+          bearish signal at sustained Extreme Greed and a contrarian-bullish
+          signal at sustained Extreme Fear — it's one of the cleanest
+          crowd-psychology gauges for tactical sizing. Earnings panel shows
+          binary-event risk for names we care about (holdings + mega-caps
+          + leaders) so the user has zero surprises this week. */}
+      <div style={{display:'grid',gridTemplateColumns:'minmax(280px,1fr) minmax(420px,1.4fr)',gap:14,marginBottom:14}}>
+        {/* FEAR & GREED */}
+        <div className="panel" style={{padding:'14px 16px'}}>
+          <div className="panel-title"><span>FEAR &amp; GREED</span> — CNN Business Index</div>
+          {!fng ? (
+            <div style={{fontSize:11,color:'var(--text3)',padding:'16px 0',lineHeight:1.6}}>
+              {fngErr ? (
+                <>
+                  <div style={{color:'var(--red)',marginBottom:6}}>Failed to load: {fngErr}</div>
+                  {/404|not found/i.test(fngErr) && (
+                    <div style={{color:'var(--amber)'}}>
+                      Route not found — the running server may predate this panel. Restart the backend (`node server.js`) to pick up the new <code>/api/market/fear-greed</code> endpoint.
+                    </div>
+                  )}
+                  {/500|502|CNN returned/i.test(fngErr) && (
+                    <div style={{color:'var(--amber)'}}>Upstream CNN endpoint may be throttled — usually transient, retries on next 60s refresh.</div>
+                  )}
+                </>
+              ) : (
+                <>Loading…</>
+              )}
+            </div>
+          ) : (
+            <div>
+              <div style={{display:'flex',alignItems:'baseline',gap:14,marginBottom:10}}>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:42,fontWeight:800,color:fngColor(fng.score),lineHeight:1}}>
+                  {fng.score != null ? fng.score : '—'}
+                </div>
+                <div>
+                  <div style={{fontSize:14,fontWeight:700,color:fngColor(fng.score),letterSpacing:1}}>
+                    {fng.rating || '—'}
+                  </div>
+                  <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>0 = max fear · 100 = max greed</div>
+                </div>
+              </div>
+              {/* Horizontal gauge — colored by band, marker at current score */}
+              <div style={{position:'relative',height:10,borderRadius:5,overflow:'hidden',background:'linear-gradient(to right, #ff3d57 0%, #ff3d57 25%, #f0a500 25%, #f0a500 45%, #bdbdbd 45%, #bdbdbd 55%, #69f0ae 55%, #69f0ae 74%, #00e676 74%, #00e676 100%)',marginBottom:6}}>
+                {fng.score != null && (
+                  <div style={{position:'absolute',top:-3,left:`calc(${fng.score}% - 6px)`,width:12,height:16,background:'#fff',border:'2px solid #000',borderRadius:2,boxShadow:'0 0 4px rgba(0,0,0,0.5)'}}/>
+                )}
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)',letterSpacing:1,marginBottom:12}}>
+                <span>EXTREME FEAR</span><span>FEAR</span><span>NEUTRAL</span><span>GREED</span><span>EXTR. GREED</span>
+              </div>
+              {/* Time series — how sentiment has shifted. Flip from Greed to Fear
+                  is often the better trade signal than the absolute reading. */}
+              <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6,borderTop:'1px solid var(--border)',paddingTop:10}}>
+                {[
+                  {label:'Prev close', val: fng.previousClose},
+                  {label:'1W ago',     val: fng.oneWeekAgo},
+                  {label:'1M ago',     val: fng.oneMonthAgo},
+                  {label:'1Y ago',     val: fng.oneYearAgo},
+                ].map(({label,val}) => (
+                  <div key={label} style={{textAlign:'center'}}>
+                    <div style={{fontSize:8,color:'var(--text3)',letterSpacing:1}}>{label}</div>
+                    <div style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:700,color:fngColor(val)}}>
+                      {val != null ? val : '—'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div style={{fontSize:9,color:'var(--text3)',marginTop:10,lineHeight:1.5}}>
+                Contrarian signal: persistent Extreme Greed = reduce exposure; persistent Extreme Fear = opportunity zone.
+                Not a market-timing signal on its own — pair with regime &amp; breadth above.
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* UPCOMING EARNINGS */}
+        <div className="panel" style={{padding:'14px 16px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:4}}>
+            <div>
+              <div className="panel-title" style={{marginBottom:0}}><span>UPCOMING EARNINGS</span> — next {upEarnDays} days</div>
+              <div className="panel-sub" style={{marginBottom:0}}>
+                Your holdings + mega-caps + RS leaders. Holdings first.
+              </div>
+            </div>
+            <div style={{display:'flex',gap:4}}>
+              {[3,7,14,30].map(d => (
+                <button key={d} onClick={()=>setUpEarnDays(d)}
+                  style={{
+                    fontSize:10, padding:'3px 9px',
+                    background: upEarnDays===d ? 'var(--cyan)' : 'transparent',
+                    color: upEarnDays===d ? '#000' : 'var(--text2)',
+                    border:'1px solid ' + (upEarnDays===d ? 'var(--cyan)' : 'var(--border)'),
+                    borderRadius:3, cursor:'pointer', fontFamily:'var(--font-mono)',
+                  }}>{d}D</button>
+              ))}
+            </div>
+          </div>
+          {upEarnLoading && !upEarnings ? (
+            <div style={{fontSize:11,color:'var(--text3)',padding:'16px 0',lineHeight:1.6}}>
+              Loading earnings calendar…
+              <span style={{color:'var(--text3)'}}>
+                (~3-8s cold, instant after first load. Fetches ~60 tickers' earnings dates from Yahoo, cached 30 min.)
+              </span>
+            </div>
+          ) : !upEarnings ? (
+            <div style={{fontSize:11,color:'var(--text3)',padding:'16px 0',lineHeight:1.6}}>
+              {upEarnErr ? (
+                <>
+                  <div style={{color:'var(--red)',marginBottom:6}}>Failed to load: {upEarnErr}</div>
+                  {/404|not found/i.test(upEarnErr) && (
+                    <div style={{color:'var(--amber)'}}>
+                      Route not found — restart the backend (`node server.js`) to pick up the new <code>/api/market/upcoming-earnings</code> endpoint.
+                    </div>
+                  )}
+                </>
+              ) : 'Unavailable.'}
+            </div>
+          ) : upEarnings.items?.length === 0 ? (
+            <div style={{fontSize:11,color:'var(--text3)',padding:'16px 0'}}>
+              No notable earnings in the next {upEarnDays} days
+              ({upEarnings.universe || 0} symbols checked).
+            </div>
+          ) : (
+            <div style={{marginTop:8}}>
+              <table className="data-table" style={{fontSize:11}}>
+                <thead>
+                  <tr>
+                    <th style={{width:80}}>Symbol</th>
+                    <th>Date</th>
+                    <th style={{textAlign:'right'}}>Days</th>
+                    <th>Tags</th>
+                    <th style={{textAlign:'right'}}>RS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {upEarnings.items.map((it,i) => {
+                    const fmtDate = (s) => {
+                      try {
+                        const d = new Date(s + 'T00:00:00Z');
+                        return d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',timeZone:'UTC'});
+                      } catch(_) { return s; }
+                    };
+                    return (
+                      <tr key={i} style={it.isHolding ? {background:'rgba(0,212,255,0.06)'} : undefined}>
+                        <td><span className="td-ticker">{it.symbol}</span></td>
+                        <td style={{fontFamily:'var(--font-mono)',fontSize:11}}>{fmtDate(it.earningsDate)}</td>
+                        <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color: it.daysOut<=1 ? 'var(--red)' : it.daysOut<=3 ? 'var(--amber)' : 'var(--text2)'}}>
+                          {it.daysOut === 0 ? 'TODAY' : it.daysOut === 1 ? '1d' : it.daysOut + 'd'}
+                        </td>
+                        <td>
+                          <div style={{display:'flex',gap:3,flexWrap:'wrap'}}>
+                            {it.isHolding && (
+                              <span style={{fontSize:9,padding:'1px 6px',background:'rgba(0,212,255,0.18)',color:'var(--cyan)',borderRadius:2,fontWeight:700,letterSpacing:1}}>HOLDING</span>
+                            )}
+                            {it.source?.includes('mega') && (
+                              <span style={{fontSize:9,padding:'1px 6px',background:'rgba(255,214,0,0.15)',color:'#ffd600',borderRadius:2,letterSpacing:1}}>MEGA</span>
+                            )}
+                            {it.source?.includes('leader') && !it.isHolding && (
+                              <span style={{fontSize:9,padding:'1px 6px',background:'rgba(0,230,118,0.15)',color:'var(--green)',borderRadius:2,letterSpacing:1}}>LEADER</span>
+                            )}
+                          </div>
+                        </td>
+                        <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color: it.rsRank>=90 ? 'var(--green)' : it.rsRank>=80 ? 'var(--cyan)' : 'var(--text3)'}}>
+                          {it.rsRank != null ? it.rsRank : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <div style={{fontSize:9,color:'var(--text3)',marginTop:8,lineHeight:1.5}}>
+                {upEarnings.items.length} events across {upEarnings.universe} symbols · source: Yahoo calendarEvents (6h cache).
+                Holdings get row highlight — close or hedge before the print if you can't stomach the gap.
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
 
         {/* v8: MACRO REGIME MODEL */}
         {regime?.macroOverlay && (
@@ -5952,9 +6375,33 @@ function WatchlistTab({ rsData }) {
   const [stageFilter, setStageFilter] = useState('all');
   const [staging,   setStaging] = useState(null);
   const [wlExitStrategy, setWlExitStrategy] = useState('pyramid_auto');
+  // Live quote overlay: poll /api/quotes every 30s for the tickers in this
+  // tab. Without this, the "Price" column is only as fresh as the last
+  // rs-scan (which can be 10+ minutes old or never re-run). The backend is
+  // 60s-cached so polling at 30s cross-tab is still cheap.
+  const [liveQuotes, setLiveQuotes] = useState({});
   const { sortData: sortWL, SH: WLSH } = useSortTable('addedAt', -1);
 
   useEffect(() => { loadWL(); loadStaged(); }, []);
+
+  useEffect(() => {
+    if (!list.length) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const syms = list.map(w => w.ticker).filter(Boolean).join(',');
+        if (!syms) return;
+        const d = await api('/api/quotes?symbols=' + encodeURIComponent(syms));
+        if (cancelled) return;
+        const byS = {};
+        (d.quotes || []).forEach(q => { byS[q.symbol] = q; });
+        setLiveQuotes(byS);
+      } catch(_) {}
+    };
+    refresh();
+    const id = setInterval(refresh, 30000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [list]);
 
   async function loadWL() {
     try { const d = await api('/api/watchlist'); setList(d.watchlist || []); } catch(_) {}
@@ -6170,8 +6617,14 @@ function WatchlistTab({ rsData }) {
             <tbody>
               {sortWL(filtered.map(w => {
                 const s2 = rsData?.find(r => r.ticker === w.ticker);
-                return {...w, price:s2?.price, chg1d:s2?.chg1d, chg1w:s2?.chg1w, chg1m:s2?.chg1m,
-                        rsRank:s2?.rsRank, rsTrend:s2?.rsTrend, swingMomentum:s2?.swingMomentum};
+                // Live quote wins over rsData snapshot for price/chg1d — keeps
+                // the table current without re-running a full rs-scan.
+                const lq = liveQuotes[w.ticker];
+                return {...w,
+                  price:  (lq?.price  ?? s2?.price),
+                  chg1d:  (lq?.chg1d  ?? s2?.chg1d),
+                  chg1w:s2?.chg1w, chg1m:s2?.chg1m,
+                  rsRank:s2?.rsRank, rsTrend:s2?.rsTrend, swingMomentum:s2?.swingMomentum};
               })).map(w => {
                 const isStaged = stagedSymbols.has(w.ticker);
                 return (
@@ -6960,7 +7413,8 @@ function ExecutionTab() {
     if (!(newPrice > 0)) { setModifyError('Enter a valid price > 0'); return; }
     setModifyBusy(true); setModifyError('');
     try {
-      const r = await fetch(`/api/staging/${modifyModal.orderId}/modify-entry`, {
+      const basePath = modifyModal.recordType === 'pyramid' ? '/api/pyramid-plans' : '/api/staging';
+      const r = await fetch(`${basePath}/${modifyModal.orderId}/modify-entry`, {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ newEntryPrice: newPrice }),
       });
@@ -7230,11 +7684,14 @@ function ExecutionTab() {
                   <button onClick={()=>!modifyBusy&&setModifyModal(null)} style={{background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:10,padding:'3px 10px',cursor:'pointer'}}>✕</button>
                 </div>
                 <div style={{fontSize:11,color:'var(--text3)',marginBottom:14,lineHeight:1.6}}>
-                  Status: <strong style={{color:modifyModal.status==='submitted'?'var(--amber)':'var(--green)'}}>{modifyModal.status.toUpperCase()}</strong>
+                  Status: <strong style={{color:modifyModal.status==='submitted'?'var(--amber)':'var(--green)'}}>{modifyModal.status.replace(/_/g,' ').toUpperCase()}</strong>
                   {modifyModal.status==='submitted' && (
                     <span> — this will <strong style={{color:'var(--amber)'}}>PATCH {modifyModal.tranches} bracket parent(s)</strong> at Alpaca</span>
                   )}
                   {modifyModal.status==='staged' && <span> — updates local row, no broker call yet</span>}
+                  {modifyModal.status==='armed_pilot' && (
+                    <span> — shifts pilot + add1/add2 triggers; no broker call (pilot hasn't fired)</span>
+                  )}
                 </div>
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:14}}>
                   <div style={{padding:'8px 10px',background:'var(--bg3)',borderRadius:4}}>
@@ -7970,12 +8427,33 @@ function ExecutionTab() {
                         <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{p.total_qty}</td>
                         <td style={{padding:'8px 6px',fontSize:10,color:'var(--text3)'}}>{p.created_at?.split(' ')[0]}</td>
                         <td style={{padding:'8px 6px'}}>
-                          {isActive && (
-                            <button onClick={()=>cancelPyramid(p.id)}
-                              style={{padding:'3px 8px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:10,cursor:'pointer'}}>
-                              Cancel
-                            </button>
-                          )}
+                          <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+                            {p.status === 'armed_pilot' && pilot && (
+                              <button
+                                onClick={()=>{
+                                  setModifyModal({
+                                    orderId: p.id, symbol: p.symbol,
+                                    currentEntry: pilot.trigger,
+                                    currentStop: p.stop_price,
+                                    status: p.status, qty: pilot.qty || p.total_qty,
+                                    recordType: 'pyramid',
+                                    tranches: p.tranches.length,
+                                  });
+                                  setModifyPrice(String(pilot.trigger || ''));
+                                  setModifyError('');
+                                }}
+                                title="Modify pilot trigger price (only allowed pre-fill)"
+                                style={{padding:'3px 8px',background:'transparent',border:'1px solid var(--cyan)',borderRadius:3,color:'var(--cyan)',fontSize:10,cursor:'pointer'}}>
+                                ✏️ Edit
+                              </button>
+                            )}
+                            {isActive && (
+                              <button onClick={()=>cancelPyramid(p.id)}
+                                style={{padding:'3px 8px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:10,cursor:'pointer'}}>
+                                Cancel
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -8351,8 +8829,19 @@ function PortfolioTab() {
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState('');
   const [sizing, setSizing]   = useState(null);
+  const [sizeTicker, setSizeTicker] = useState('');
   const [sizeEntry, setSizeEntry] = useState('');
   const [sizeStop, setSizeStop]   = useState('');
+  // Optional target prices — used for staging, not sizing. Letting these be
+  // blank still allows the Calculate button to work; required only when the
+  // user clicks Stage Order and wants the staged row to carry target legs.
+  const [sizeT1, setSizeT1] = useState('');
+  const [sizeT2, setSizeT2] = useState('');
+  const [sizeStopPreset, setSizeStopPreset] = useState('manual'); // manual | pct7 | pct10
+  const [sizeQuoteLoading, setSizeQuoteLoading] = useState(false);
+  const [sizeLivePrice, setSizeLivePrice] = useState(null); // last fetched {price, ma50, w52l, ...}
+  const [sizeStaging, setSizeStaging] = useState(false);
+  const [sizeStageMsg, setSizeStageMsg] = useState(null); // {ok, text} | {error, text}
   const [editConfig, setEditConfig] = useState(false);
   const [cfgForm, setCfgForm] = useState({});
   // Manual exit state
@@ -8430,6 +8919,72 @@ function PortfolioTab() {
       });
       setSizing(d);
     } catch(e) { setError(e.message); }
+  }
+
+  // Fetch current live price + reference levels (MA50, 52w low) for the
+  // typed ticker. Used to (a) pre-fill the entry, (b) auto-derive stop when
+  // the user picks a preset like -7% or 50MA.
+  async function fetchLivePrice() {
+    const sym = (sizeTicker || '').trim().toUpperCase();
+    if (!sym) return;
+    setSizeQuoteLoading(true); setSizeStageMsg(null);
+    try {
+      const r = await api('/api/quotes?symbols=' + encodeURIComponent(sym));
+      const q = (r.quotes || [])[0];
+      if (!q || q.price == null) {
+        setError('No quote for ' + sym);
+        setSizeLivePrice(null);
+      } else {
+        setSizeLivePrice(q);
+        setSizeEntry(String(q.price.toFixed(2)));
+        // Apply current preset to regenerate stop relative to new entry
+        applyStopPreset(sizeStopPreset, q);
+      }
+    } catch (e) { setError(e.message); }
+    finally { setSizeQuoteLoading(false); }
+  }
+
+  function applyStopPreset(preset, quoteOverride) {
+    setSizeStopPreset(preset);
+    if (preset === 'manual') return;
+    const q = quoteOverride || sizeLivePrice;
+    const entry = +sizeEntry;
+    if (!entry) return;
+    let stop = null;
+    if (preset === 'pct7')       stop = entry * 0.93;   // -7% (ONeil classic)
+    else if (preset === 'pct10') stop = entry * 0.90;   // -10% (wider swing)
+    else if (preset === 'ma50' && q?.ma50) stop = q.ma50;
+    if (stop != null) setSizeStop(stop.toFixed(2));
+  }
+
+  // Stage the sized trade as a pending broker order. The /api/staging
+  // endpoint accepts {symbol, entry_price, stop_price, qty, target1_price?,
+  // target2_price?}. We only stage after a successful sizing call so `qty`
+  // is known and risk-validated.
+  async function stageOrder() {
+    const sym = (sizeTicker || '').trim().toUpperCase();
+    if (!sym || !sizing || !sizing.shares) {
+      setSizeStageMsg({ error: true, text: 'Enter a ticker and Calculate first.' });
+      return;
+    }
+    setSizeStaging(true); setSizeStageMsg(null);
+    try {
+      const payload = {
+        symbol: sym,
+        entry_price: +sizeEntry,
+        stop_price:  +sizeStop,
+        qty:         sizing.shares,
+      };
+      if (sizeT1) payload.target1_price = +sizeT1;
+      if (sizeT2) payload.target2_price = +sizeT2;
+      const r = await api('/api/staging', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(payload),
+      });
+      setSizeStageMsg({ ok: true, text: 'Staged #' + (r.id || r.staged?.id || '?') + ' — ' + sym + ' × ' + sizing.shares });
+    } catch (e) {
+      setSizeStageMsg({ error: true, text: e.message });
+    } finally { setSizeStaging(false); }
   }
 
   async function saveConfig() {
@@ -8824,10 +9379,43 @@ function PortfolioTab() {
             )}
           </div>
 
-          {/* Position Sizer */}
+          {/* Position Sizer — ticker-aware, one-click stage */}
           <div className="panel" style={{padding:14}}>
-            <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>POSITION SIZER</div>
-            <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:10,flexWrap:'wrap',gap:8}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>POSITION SIZER</div>
+              <div style={{fontSize:10,color:'var(--text3)'}}>
+                Risk/trade: <strong style={{color:'var(--amber)'}}>{config?.riskPerTrade ?? '?'}%</strong>
+                {status?.broker?.equity != null && <span> · Equity: <strong style={{color:'var(--text)'}}>${Number(status.broker.equity).toLocaleString()}</strong></span>}
+              </div>
+            </div>
+            {/* Row 1: ticker + live-price fetch */}
+            <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap',marginBottom:10}}>
+              <div>
+                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Ticker</label>
+                <input type="text" value={sizeTicker}
+                  onChange={e=>setSizeTicker(e.target.value.toUpperCase())}
+                  onKeyDown={e=>{ if (e.key==='Enter') fetchLivePrice(); }}
+                  placeholder="AAPL"
+                  style={{width:110,padding:'6px 8px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)',textTransform:'uppercase'}}/>
+              </div>
+              <button className="btn" onClick={fetchLivePrice} disabled={!sizeTicker || sizeQuoteLoading}
+                style={{opacity:(!sizeTicker||sizeQuoteLoading)?0.5:1}}>
+                {sizeQuoteLoading ? 'Loading…' : 'Use Live Price'}
+              </button>
+              {sizeLivePrice && (
+                <div style={{fontSize:10,color:'var(--text3)',paddingBottom:6}}>
+                  Last ${sizeLivePrice.price?.toFixed(2)}
+                  {sizeLivePrice.ma50 && <span> · 50MA ${sizeLivePrice.ma50?.toFixed(2)}</span>}
+                  {sizeLivePrice.chg1d != null && (
+                    <span style={{color:sizeLivePrice.chg1d>=0?'var(--green)':'var(--red)'}}>
+                      {' '}· {sizeLivePrice.chg1d>=0?'+':''}{sizeLivePrice.chg1d.toFixed(2)}%
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+            {/* Row 2: entry + stop (with preset chips) */}
+            <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap',marginBottom:10}}>
               <div>
                 <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Entry Price</label>
                 <input type="number" value={sizeEntry} onChange={e=>setSizeEntry(e.target.value)} placeholder="0.00"
@@ -8835,10 +9423,47 @@ function PortfolioTab() {
               </div>
               <div>
                 <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Stop Price</label>
-                <input type="number" value={sizeStop} onChange={e=>setSizeStop(e.target.value)} placeholder="0.00"
+                <input type="number" value={sizeStop} onChange={e=>{setSizeStop(e.target.value);setSizeStopPreset('manual');}} placeholder="0.00"
                   style={{width:120,padding:'6px 8px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
               </div>
+              <div style={{display:'flex',gap:4,paddingBottom:4}}>
+                {[
+                  {k:'pct7',  label:'-7%',  title:'7% below entry — ONeil classic stop'},
+                  {k:'pct10', label:'-10%', title:'10% below entry — wider swing stop'},
+                  {k:'ma50',  label:'50MA', title:'Stop at the 50-day moving average'},
+                ].map(p => (
+                  <button key={p.k} title={p.title}
+                    onClick={()=>applyStopPreset(p.k)}
+                    disabled={p.k==='ma50' && !sizeLivePrice?.ma50}
+                    style={{
+                      padding:'4px 8px',fontSize:11,fontFamily:'var(--font-mono)',
+                      background:sizeStopPreset===p.k?'var(--amber)':'var(--bg3)',
+                      color:sizeStopPreset===p.k?'#000':'var(--text2)',
+                      border:'1px solid var(--border)',borderRadius:3,cursor:'pointer',
+                      opacity:(p.k==='ma50'&&!sizeLivePrice?.ma50)?0.4:1,
+                    }}>{p.label}</button>
+                ))}
+              </div>
               <button className="btn btn-primary" onClick={calcSize}>Calculate</button>
+            </div>
+            {/* Row 3: optional target prices for staged order */}
+            <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap',marginBottom:4}}>
+              <div>
+                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Target 1 <span style={{color:'var(--text3)'}}>(optional)</span></label>
+                <input type="number" value={sizeT1} onChange={e=>setSizeT1(e.target.value)} placeholder="0.00"
+                  style={{width:120,padding:'6px 8px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
+              </div>
+              <div>
+                <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Target 2 <span style={{color:'var(--text3)'}}>(optional)</span></label>
+                <input type="number" value={sizeT2} onChange={e=>setSizeT2(e.target.value)} placeholder="0.00"
+                  style={{width:120,padding:'6px 8px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
+              </div>
+              {sizeEntry && sizeStop && (
+                <div style={{fontSize:10,color:'var(--text3)',paddingBottom:6}}>
+                  Risk/share: <strong style={{color:'var(--red)'}}>${(+sizeEntry - +sizeStop).toFixed(2)}</strong>
+                  {' '}({(((+sizeEntry - +sizeStop) / +sizeEntry) * 100).toFixed(1)}%)
+                </div>
+              )}
             </div>
             {sizing && (
               <div>
@@ -8867,6 +9492,29 @@ function PortfolioTab() {
                     <span style={{fontSize:10,color:'var(--text3)'}}>Tier {sizing.slippagePrediction.tier} ({sizing.slippagePrediction.sampleSize} fills)</span>
                   </div>
                 )}
+                {/* Stage Order: the thing that makes this panel pay rent.
+                    Pushes entry/stop/targets + sized shares to the broker
+                    staging queue so the user doesn't have to retype in the
+                    Alpaca UI. Enabled only when we have a ticker + shares. */}
+                <div style={{marginTop:12,display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
+                  <button className="btn btn-primary"
+                    onClick={stageOrder}
+                    disabled={!sizeTicker || !sizing?.shares || sizeStaging}
+                    style={{opacity:(!sizeTicker||!sizing?.shares||sizeStaging)?0.5:1}}
+                    title={!sizeTicker ? 'Enter a ticker above' : !sizing?.shares ? 'Calculate first' : 'Push this sized trade to the broker staging queue'}>
+                    {sizeStaging ? 'Staging…' : '⬢ Stage Order'}
+                  </button>
+                  {sizeStageMsg && (
+                    <div style={{
+                      fontSize:11,padding:'6px 10px',borderRadius:3,fontFamily:'var(--font-mono)',
+                      background: sizeStageMsg.ok ? 'rgba(0,200,120,0.1)' : 'rgba(230,80,80,0.1)',
+                      color:      sizeStageMsg.ok ? 'var(--green)'       : 'var(--red)',
+                      border:     '1px solid ' + (sizeStageMsg.ok ? 'rgba(0,200,120,0.3)' : 'rgba(230,80,80,0.3)'),
+                    }}>
+                      {sizeStageMsg.ok ? '✓ ' : '✕ '}{sizeStageMsg.text}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -8882,8 +9530,12 @@ function PortfolioTab() {
 // ─── TRADE JOURNAL TAB ─────────────────────────────────────────────────────
 function TradeJournalTab() {
   const [trades, setTrades]     = useState([]);
+  const [partialEvents, setPartialEvents] = useState([]);
+  const [partialSummary, setPartialSummary] = useState({ realizedOnOpenRows: 0, openEventsCount: 0, count: 0 });
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState('');
+  // 'partials' view surfaces scale-out events from still-open rows — invisible
+  // under the 'closed' filter because exit_date stays NULL while remaining_shares > 0.
   const [filter, setFilter]     = useState('all');
   const [showEntry, setShowEntry] = useState(false);
   const [showExit, setShowExit] = useState(null);
@@ -8893,6 +9545,36 @@ function TradeJournalTab() {
   const [syncMsg, setSyncMsg]   = useState('');
   const [editNoteId, setEditNoteId] = useState(null);
   const [editNoteVal, setEditNoteVal] = useState('');
+  // Shared UX: symbol search + pagination + per-tab extras.
+  const [search, setSearch]       = useState('');
+  const [page, setPage]           = useState(0);
+  const [pageSize, setPageSize]   = useState(25);
+  // Partials tab: level filter chip + legend toggle.
+  const [levelFilter, setLevelFilter] = useState('all');
+  const [showLegend, setShowLegend]   = useState(false);
+  // Reset page/search/level whenever the filter changes.
+  useEffect(() => { setPage(0); setSearch(''); setLevelFilter('all'); }, [filter]);
+
+  // Level legend — the master map. Keep synced with partial_exits writers:
+  //   scaling.js        → target1 / target2 / stop / (future) runner_trail
+  //   fills-sync.js     → auto_sync / auto_sync_prorata
+  //   repair scripts    → repair_<tag>
+  const LEVEL_INFO = {
+    target1:            { color:'var(--green)', label:'Target 1',       desc:'System scale-out at Target1 (scaling.js) — the ONeil sell-into-strength rule at +20-25%.' },
+    target2:            { color:'var(--cyan)',  label:'Target 2',       desc:'System scale-out at Target2 — second planned exit above T1.' },
+    stop:               { color:'var(--red)',   label:'Stop',           desc:'Hard stop hit: scaling.js triggered a full_exit at the stop price.' },
+    runner_trail:       { color:'var(--amber)', label:'Trail',          desc:'Trailing-stop exit on the runner after T2 filled (or 20MA break).' },
+    auto_sync:          { color:'var(--amber)', label:'Auto-sync',      desc:'fills-sync saw an Alpaca SELL it could pin to a single tranche — manual close logged automatically.' },
+    auto_sync_prorata:  { color:'var(--amber)', label:'Auto-sync (pro-rata)', desc:'fills-sync saw an Alpaca SELL that could not be pinned to one tranche → pro-rated across siblings by share count.' },
+    earnings_exit:      { color:'var(--purple)',label:'Earnings exit',  desc:'swing-exit-watcher closed the position ≤2d before earnings (non-negotiable guard).' },
+    swing_limit_exit:   { color:'var(--purple)',label:'Swing limit',    desc:'swing-exit-watcher closed the position after 10 days held (ONeil swing-day cutoff).' },
+  };
+  const levelStyle = (lvl) => {
+    if (!lvl) return { color:'var(--text3)', label:'—' };
+    if (LEVEL_INFO[lvl]) return LEVEL_INFO[lvl];
+    if (lvl.startsWith('repair_')) return { color:'var(--text3)', label:'Repair', desc:'Manual reconciliation entry (one-off script — e.g. aligning stale partials with Alpaca fills).' };
+    return { color:'var(--text2)', label:lvl };
+  };
 
   const needsReviewCount = trades.filter(t => t.needs_review).length;
 
@@ -8920,8 +9602,44 @@ function TradeJournalTab() {
   async function loadTrades() {
     setLoading(true); setError('');
     try {
-      const d = await api(`/api/trades?status=${filter}&limit=100`);
-      setTrades(d.trades || []);
+      if (filter === 'partials') {
+        // Pull a generous cap — pagination is client-side so this is the
+        // upper bound across all pages. Bump if the journal ever exceeds 1k.
+        const d = await api('/api/trades/partial-exits?limit=1000');
+        setPartialEvents(d.events || []);
+        setPartialSummary({
+          realizedOnOpenRows: d.realizedOnOpenRows || 0,
+          openEventsCount: d.openEventsCount || 0,
+          count: d.count || 0,
+        });
+        setTrades([]); // clear the other view's data
+      } else {
+        // "Open" excludes rows with partial_exits so they only show in the
+        // Partials tab — otherwise AVGO/DELL appear in both views and the
+        // Open count overshoots Alpaca's untouched-lots view. Also filter
+        // client-side as belt-and-suspenders in case an old server build
+        // hasn't picked up the excludePartials query yet.
+        const qs = filter === 'open'
+          ? `status=open&limit=500&excludePartials=1`
+          : `status=${filter}&limit=500`;
+        const d = await api(`/api/trades?${qs}`);
+        let rows = d.trades || [];
+        if (filter === 'open') {
+          rows = rows.filter(t => {
+            // A row "has partials" if either realized_pnl_dollars is non-zero
+            // OR partial_exits is a non-empty JSON array.
+            if ((t.realized_pnl_dollars || 0) !== 0) return false;
+            if (t.partial_exits) {
+              try {
+                const arr = typeof t.partial_exits === 'string' ? JSON.parse(t.partial_exits) : t.partial_exits;
+                if (Array.isArray(arr) && arr.length > 0) return false;
+              } catch (_) {}
+            }
+            return true;
+          });
+        }
+        setTrades(rows);
+      }
     } catch(e) { setError(e.message); }
     setLoading(false);
   }
@@ -8953,6 +9671,38 @@ function TradeJournalTab() {
 
   const pnlColor = v => v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text3)';
 
+  // ── Per-render: apply search + level filter + pagination to whichever
+  //     dataset is active. Computed once and reused by both the toolbar
+  //     (count pills, page nav) and the table below.
+  const _q = search.trim().toUpperCase();
+  const _isPartials = filter === 'partials';
+  const _filteredTrades = trades.filter(t => !_q || (t.symbol||'').toUpperCase().includes(_q));
+  const _filteredEvents = partialEvents.filter(e => {
+    if (_q && !(e.symbol||'').toUpperCase().includes(_q)) return false;
+    if (levelFilter !== 'all') {
+      if (levelFilter === 'repair') { if (!(e.level||'').startsWith('repair_')) return false; }
+      else if (e.level !== levelFilter) return false;
+    }
+    return true;
+  });
+  const _total = _isPartials ? _filteredEvents.length : _filteredTrades.length;
+  const _pages = Math.max(1, Math.ceil(_total / pageSize));
+  const _safePage = Math.min(page, _pages - 1);
+  const _pageStart = _safePage * pageSize;
+  const _pagedTrades = _filteredTrades.slice(_pageStart, _pageStart + pageSize);
+  const _pagedEvents = _filteredEvents.slice(_pageStart, _pageStart + pageSize);
+  // Level histogram across the full (pre-pagination) Partials dataset.
+  const _levelHist = {};
+  if (_isPartials) {
+    for (const e of partialEvents) {
+      const k = (e.level || '').startsWith('repair_') ? 'repair' : (e.level || '—');
+      _levelHist[k] = (_levelHist[k] || 0) + 1;
+    }
+  }
+  const _knownLevelOrder = ['all','target1','target2','stop','runner_trail','auto_sync','auto_sync_prorata','earnings_exit','swing_limit_exit','repair'];
+  const _chipLevels = ['all', ..._knownLevelOrder.slice(1).filter(k => _levelHist[k]),
+                       ...Object.keys(_levelHist).filter(k => !_knownLevelOrder.includes(k))];
+
   return (
     <div>
       <div className="panel" style={{marginBottom:14}}>
@@ -8971,9 +9721,10 @@ function TradeJournalTab() {
               {syncing ? '⟳ Syncing...' : '⟳ Sync Broker'}
             </button>
             <div className="btn-group">
-              {['all','open','closed'].map(f => (
-                <button key={f} className={`mode-btn ${filter===f?'active':''}`} onClick={()=>setFilter(f)}>
-                  {f.charAt(0).toUpperCase()+f.slice(1)}
+              {['all','open','closed','partials'].map(f => (
+                <button key={f} className={`mode-btn ${filter===f?'active':''}`} onClick={()=>setFilter(f)}
+                  title={f==='partials'?'Scale-out events (including still-open positions)':''}>
+                  {f==='partials' ? 'Partials' : f.charAt(0).toUpperCase()+f.slice(1)}
                 </button>
               ))}
             </div>
@@ -9017,9 +9768,171 @@ function TradeJournalTab() {
 
       {loading && <div className="panel"><Loader msg="Loading trades..."/></div>}
 
-      {/* Trades Table */}
-      {trades.length > 0 && (
+      {/* ── Search / pagination / level-filter toolbar (applies to whichever tab is visible) ── */}
+      {!loading && (
+        <div className="panel" style={{marginBottom:10,padding:'10px 12px',display:'flex',flexDirection:'column',gap:8}}>
+          <div style={{display:'flex',flexWrap:'wrap',gap:10,alignItems:'center'}}>
+            <input
+              value={search}
+              onChange={e => { setSearch(e.target.value); setPage(0); }}
+              placeholder="Search symbol…"
+              style={{padding:'6px 10px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:12,fontFamily:'var(--font-mono)',minWidth:160}} />
+            <span style={{fontSize:11,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>
+              {_total} {_isPartials ? 'event' : 'row'}{_total===1?'':'s'}{_q?` matching "${_q}"`:''}
+            </span>
+            <div style={{flex:1}} />
+            <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>PAGE</span>
+            <button className="btn btn-sm" disabled={_safePage<=0} onClick={()=>setPage(p=>Math.max(0,p-1))} style={{minWidth:32}}>«</button>
+            <span style={{fontSize:11,color:'var(--text2)',fontFamily:'var(--font-mono)',minWidth:56,textAlign:'center'}}>{_safePage+1} / {_pages}</span>
+            <button className="btn btn-sm" disabled={_safePage>=_pages-1} onClick={()=>setPage(p=>Math.min(_pages-1,p+1))} style={{minWidth:32}}>»</button>
+            <select value={pageSize} onChange={e=>{ setPageSize(+e.target.value); setPage(0); }}
+              style={{padding:'4px 6px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}>
+              {[10,25,50,100,500].map(n => <option key={n} value={n}>{n}/pg</option>)}
+            </select>
+            {_isPartials && (
+              <button className="btn btn-sm" onClick={()=>setShowLegend(v=>!v)} title="What do target1/auto_sync/etc. mean?" style={{fontSize:11}}>
+                {showLegend ? '✕ Legend' : '? Level legend'}
+              </button>
+            )}
+          </div>
+          {_isPartials && _chipLevels.length > 1 && (
+            <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+              {_chipLevels.map(k => {
+                const active = levelFilter === k;
+                const s = k === 'all' ? { color:'var(--text2)', label:'All' } : levelStyle(k);
+                const count = k === 'all' ? partialEvents.length : (_levelHist[k] || 0);
+                return (
+                  <button key={k}
+                    onClick={() => { setLevelFilter(k); setPage(0); }}
+                    title={s.desc || ''}
+                    style={{
+                      padding:'4px 10px',
+                      borderRadius:3,
+                      fontSize:11,
+                      fontFamily:'var(--font-mono)',
+                      cursor:'pointer',
+                      border:`1px solid ${active ? s.color : 'var(--border)'}`,
+                      background: active ? s.color + '22' : 'var(--bg3)',
+                      color: active ? s.color : 'var(--text2)',
+                      fontWeight: active ? 700 : 400,
+                    }}>
+                    {s.label} <span style={{opacity:0.6,marginLeft:4}}>{count}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {_isPartials && showLegend && (
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:10,fontSize:11,display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))',gap:8}}>
+              {Object.entries(LEVEL_INFO).map(([k, v]) => (
+                <div key={k} style={{display:'flex',gap:8,alignItems:'flex-start'}}>
+                  <span style={{color:v.color,fontFamily:'var(--font-mono)',fontSize:10,minWidth:90,fontWeight:700,textTransform:'uppercase',letterSpacing:0.5}}>{v.label}</span>
+                  <span style={{color:'var(--text3)',fontSize:10,lineHeight:1.4}}>{v.desc}</span>
+                </div>
+              ))}
+              <div style={{display:'flex',gap:8,alignItems:'flex-start'}}>
+                <span style={{color:'var(--text3)',fontFamily:'var(--font-mono)',fontSize:10,minWidth:90,fontWeight:700,textTransform:'uppercase',letterSpacing:0.5}}>Repair_*</span>
+                <span style={{color:'var(--text3)',fontSize:10,lineHeight:1.4}}>Manual reconciliation entry from a one-off repair script (e.g. aligning stale partials with Alpaca fills).</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Partial Exits View
+          Each row here is one scale-out event. Events on still-open parent
+          trades (tradeClosed=false) are highlighted in cyan to make realized
+          P&L from scale-outs visible — the "closed" filter hides them because
+          the parent row's exit_date is still NULL. */}
+      {filter === 'partials' && !loading && partialEvents.length > 0 && (
         <div className="panel" style={{overflowX:'auto'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,flexWrap:'wrap',gap:10}}>
+            <div>
+              <div style={{fontSize:11,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>PARTIAL EXIT EVENTS</div>
+              <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>
+                {partialSummary.count} event{partialSummary.count===1?'':'s'} across open + closed rows
+              </div>
+            </div>
+            <div style={{padding:'6px 12px',background:'rgba(0,210,211,0.08)',border:'1px solid var(--cyan)',borderRadius:4}}>
+              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.2,fontFamily:'var(--font-mono)'}}>REALIZED (OPEN ROWS)</div>
+              <div style={{fontSize:15,fontWeight:700,color:partialSummary.realizedOnOpenRows>=0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)'}}>
+                {partialSummary.realizedOnOpenRows>=0?'+':''}${fmt(partialSummary.realizedOnOpenRows,2)}
+              </div>
+              <div style={{fontSize:9,color:'var(--text3)',marginTop:1}}>{partialSummary.openEventsCount} event{partialSummary.openEventsCount===1?'':'s'}</div>
+            </div>
+          </div>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+            <thead>
+              <tr style={{borderBottom:'1px solid var(--border)'}}>
+                {['Symbol','Level','Shares','Fill $','Entry $','P&L $','R','Parent','Entry Date','Event Time','Notes'].map(h =>
+                  <th key={h} style={{padding:'8px 6px',textAlign:'left',fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)'}}>{h}</th>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {_pagedEvents.map((e, i) => {
+                const pnlCol = e.pnl > 0 ? 'var(--green)' : e.pnl < 0 ? 'var(--red)' : 'var(--text3)';
+                const tsDisplay = e.timestamp ? String(e.timestamp).replace('T',' ').slice(0,16) : '—';
+                const ls = levelStyle(e.level);
+                return (
+                  <tr key={`${e.tradeId}-${i}`}
+                      style={{borderBottom:'1px solid var(--border)',
+                              background: e.tradeClosed ? 'transparent' : 'rgba(0,210,211,0.04)'}}>
+                    <td className="td-ticker" style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{e.symbol}</td>
+                    <td title={ls.desc || ''} style={{padding:'8px 6px',color:ls.color,fontSize:10,letterSpacing:0.5,fontFamily:'var(--font-mono)',textTransform:'uppercase'}}>
+                      {ls.label}
+                    </td>
+                    <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{e.shares || '—'}</td>
+                    <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>{e.price?'$'+fmt(e.price,2):'—'}</td>
+                    <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',color:'var(--text3)'}}>
+                      {e.entry_price?'$'+fmt(e.entry_price,2):'—'}
+                    </td>
+                    <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',fontWeight:700,color:pnlCol}}>
+                      {e.pnl != null ? (e.pnl>=0?'+':'')+'$'+fmt(e.pnl,2) : '—'}
+                    </td>
+                    <td style={{padding:'8px 6px',fontFamily:'var(--font-mono)',fontWeight:700,color:pnlCol}}>
+                      {e.r_multiple != null ? (e.r_multiple>=0?'+':'')+fmt(e.r_multiple,2)+'R' : '—'}
+                    </td>
+                    <td style={{padding:'8px 6px',fontSize:10}}>
+                      {e.tradeClosed ? (
+                        <span style={{color:'var(--text3)'}}>CLOSED</span>
+                      ) : (
+                        <span style={{color:'var(--cyan)',fontWeight:600}}>OPEN · {e.remaining_shares||0}sh left</span>
+                      )}
+                    </td>
+                    <td style={{padding:'8px 6px',color:'var(--text3)',fontSize:11}}>{e.entry_date}</td>
+                    <td style={{padding:'8px 6px',color:'var(--text3)',fontSize:10,fontFamily:'var(--font-mono)'}}>{tsDisplay}</td>
+                    <td style={{padding:'8px 6px',color:'var(--text3)',fontSize:10}}>
+                      {e.strategy || '—'}
+                      {e.order_id ? <span title={e.order_id} style={{marginLeft:6,opacity:0.5}}>#{String(e.order_id).slice(0,6)}</span> : null}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {filter === 'partials' && !loading && partialEvents.length === 0 && (
+        <div className="panel" style={{textAlign:'center',padding:30,color:'var(--text3)'}}>
+          No partial-exit events yet. Scale-outs at Target1/Target2 will appear here as they fire.
+        </div>
+      )}
+      {filter === 'partials' && !loading && partialEvents.length > 0 && _total === 0 && (
+        <div className="panel" style={{textAlign:'center',padding:20,color:'var(--text3)',fontSize:12}}>
+          No events match — clear the search{levelFilter!=='all'?' or change the level filter':''} to see all {partialEvents.length} events.
+        </div>
+      )}
+
+      {/* Trades Table */}
+      {filter !== 'partials' && trades.length > 0 && _total > 0 && (
+        <div className="panel" style={{overflowX:'auto'}}>
+          {filter === 'open' && (
+            <div style={{fontSize:10,color:'var(--text3)',marginBottom:8,fontFamily:'var(--font-mono)',letterSpacing:0.5}}>
+              {trades.length} open row{trades.length===1?'':'s'} with no scale-outs yet · rows with partial exits are listed in the <strong style={{color:'var(--cyan)'}}>Partials</strong> tab
+            </div>
+          )}
           <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
             <thead>
               <tr style={{borderBottom:'1px solid var(--border)'}}>
@@ -9029,7 +9942,7 @@ function TradeJournalTab() {
               </tr>
             </thead>
             <tbody>
-              {trades.map(t => (
+              {_pagedTrades.map(t => (
                 <tr key={t.id} style={{borderBottom:'1px solid var(--border)',background:t.needs_review?'rgba(240,165,0,0.06)':'transparent'}}>
                   <td className="td-ticker" style={{padding:'8px 6px',fontFamily:'var(--font-mono)'}}>
                     {t.needs_review ? <span title="Needs review" style={{color:'var(--amber)',marginRight:4}}>●</span> : null}
@@ -9093,9 +10006,16 @@ function TradeJournalTab() {
         </div>
       )}
 
-      {!loading && trades.length === 0 && (
+      {filter !== 'partials' && !loading && trades.length === 0 && (
         <div className="panel" style={{textAlign:'center',padding:30,color:'var(--text3)'}}>
-          No trades yet — click <strong>+ New Trade</strong> to log your first entry
+          {filter === 'open'
+            ? 'No fully-open rows (no scale-outs yet). Rows with partial exits live in the Partials tab.'
+            : <>No trades yet — click <strong>+ New Trade</strong> to log your first entry</>}
+        </div>
+      )}
+      {filter !== 'partials' && !loading && trades.length > 0 && _total === 0 && (
+        <div className="panel" style={{textAlign:'center',padding:20,color:'var(--text3)',fontSize:12}}>
+          No rows match "{_q}" — clear the search to see all {trades.length} rows.
         </div>
       )}
     </div>
@@ -12242,6 +13162,42 @@ function UniverseTrackingSection() {
   const [removing, setRemoving] = useState(null);     // ticker currently being removed
   const [statusMsg, setStatusMsg] = useState(null);   // { text, isError } — transient feedback
   const [filterText, setFilterText] = useState('');
+  // Direct-add form — for tickers that don't surface in Momentum Scout.
+  // Until this existed the only add-path was the Momentum Scout cards in
+  // Trade Setups, which only lit up when a ticker had already triggered a
+  // breakout. Sector is auto-resolved server-side via Yahoo's assetProfile
+  // (GICS sector → our 11-sector canonical). User just types the ticker.
+  const [newTicker, setNewTicker] = useState('');
+  const [addingNew, setAddingNew] = useState(false);
+
+  async function addTicker() {
+    const sym = (newTicker || '').toUpperCase().trim();
+    if (!sym) { flashStatus('Enter a ticker first.', true); return; }
+    setAddingNew(true);
+    try {
+      const r = await api('/api/edge/universe/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: sym }),   // sector auto-resolved
+      });
+      if (r.existed) {
+        flashStatus(`${sym} already in universe (${r.sector}).`);
+      } else {
+        // Surface how the sector was picked — "yahoo" is authoritative,
+        // "default" means Yahoo lookup failed so we guessed Technology.
+        const note = r.resolvedFrom === 'default'
+          ? ` (sector defaulted — Yahoo lookup failed, set manually if wrong)`
+          : '';
+        flashStatus(`Added ${sym} to ${r.sector}.${note}`);
+      }
+      setNewTicker('');
+      // Reload active universe so the list reflects the new symbol immediately.
+      load();
+    } catch (e) {
+      flashStatus(`Add failed: ${e.message}`, true);
+    }
+    setAddingNew(false);
+  }
 
   async function load() {
     setLoading(true); setError('');
@@ -12415,6 +13371,38 @@ function UniverseTrackingSection() {
           </div>
         );
       })()}
+
+      {/* ── Add ticker to universe ──────────────────────────────────────
+          Direct-entry add form for any ticker (not just Momentum Scout
+          expansion candidates). Sector is auto-resolved server-side via
+          Yahoo's assetProfile, so the user just types the ticker. Persists
+          via /api/edge/universe/add which writes to universe_mgmt AND
+          updates the live runtime UNIVERSE/SECTOR_MAP so the ticker is
+          pickable by the scanner on the very next scan — no restart. */}
+      <div className="panel" style={{marginBottom:14}}>
+        <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:10}}>
+          ADD TICKER TO UNIVERSE
+        </div>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+          <input
+            type="text"
+            placeholder="TICKER"
+            value={newTicker}
+            onChange={e => setNewTicker(e.target.value.toUpperCase())}
+            onKeyDown={e => { if (e.key === 'Enter') addTicker(); }}
+            disabled={addingNew}
+            style={{padding:'6px 10px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:12,fontFamily:'var(--font-mono)',width:140,letterSpacing:1}}
+          />
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={addTicker}
+            disabled={addingNew || !newTicker.trim()}
+          >{addingNew ? 'Resolving sector…' : '+ Add to Universe'}</button>
+          <span style={{fontSize:10,color:'var(--text3)',marginLeft:6}}>
+            Sector auto-resolved from Yahoo's classification. Available on the next scan — no restart needed.
+          </span>
+        </div>
+      </div>
 
       {/* ── Active Universe ─────────────────────────────────────────────
           Sector-grouped list of every active ticker. Click a sector header
@@ -13262,6 +14250,24 @@ function BreadthSection() {
                   <div>
                     <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',color:'var(--text3)',marginBottom:6}}>
                       MCCLELLAN OSCILLATOR <span style={{fontSize:8,opacity:0.6}}>(UNIVERSE BREADTH)</span>
+                      <InfoTip text={
+                        <span>
+                          <b>Market breadth momentum</b> = EMA(19) − EMA(39) of daily net advancers
+                          (advancing − declining stocks) across your scan universe.
+                          <br/><br/>
+                          <b>Positive & rising</b> → broad participation, healthy uptrend, pullbacks buyable.<br/>
+                          <b>Positive but falling</b> → rally narrowing, stay alert.<br/>
+                          <b>Negative</b> → more stocks falling than rising; be defensive.<br/>
+                          <b>Crossing zero upward</b> → classic early-trend signal.
+                          <br/><br/>
+                          <b>Summation</b> below is the running cumulative sum of this oscillator — a
+                          slower, longer-cycle view. Use the oscillator for timing and the summation
+                          for regime.
+                          <br/><br/>
+                          <b>Time-window buttons</b> (1M/3M/6M/1Y/ALL) re-compute using only snapshots
+                          within that lookback — "ALL" uses every day of stored breadth data.
+                        </span>
+                      } width={400} />
                     </div>
                     <div style={{display:'flex',gap:20,alignItems:'center',flexWrap:'wrap'}}>
                       <div>
@@ -13880,6 +14886,22 @@ function DecisionQualitySection() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [scoring, setScoring] = useState(false);
+  // Drill-down: which bucket the user clicked and the matching trades.
+  // { kind:'grade'|'alignment'|'component', value, label, trades, loading }
+  const [drillDown, setDrillDown] = useState(null);
+
+  async function openDrillDown(kind, value, label) {
+    setDrillDown({ kind, value, label, trades: null, loading: true, error: '' });
+    try {
+      const qs = kind === 'grade' ? `grade=${value}`
+               : kind === 'alignment' ? `alignment=${value}`
+               : `component=${value}`;
+      const r = await api(`/api/decisions/trades?${qs}`);
+      setDrillDown(d => d ? { ...d, trades: r.trades || [], loading: false } : null);
+    } catch (e) {
+      setDrillDown(d => d ? { ...d, trades: [], loading: false, error: e.message } : null);
+    }
+  }
 
   async function load() {
     setLoading(true); setError('');
@@ -13967,14 +14989,40 @@ function DecisionQualitySection() {
           {/* Grade Distribution */}
           {analytics.summary.gradeDistribution && (
             <div className="panel">
-              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:10,color:'var(--text3)'}}>GRADE DISTRIBUTION</div>
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:10,color:'var(--text3)'}}>
+                GRADE DISTRIBUTION <span style={{color:'var(--text3)',fontWeight:400,letterSpacing:0.5}}>· click any grade to see trades</span>
+                <InfoTip text={
+                  <span>
+                    <b>Decision-quality grade</b> for every closed trade, based on a 100-point process score:
+                    entry timing (25) + regime fit (20) + position sizing (20) + exit discipline (25) + risk management (10).
+                    <br/><br/>
+                    <b>A</b> ≥ 90 &nbsp; <b>B</b> 80–89 &nbsp; <b>C</b> 70–79 &nbsp; <b>D</b> 60–69 &nbsp; <b>F</b> &lt; 60
+                    <br/><br/>
+                    Grades measure <i>how well you followed process</i>, not whether the trade made money —
+                    that's the separate Outcome Alignment panel below. Click any letter to drill into the trades.
+                  </span>
+                } width={340} />
+              </div>
               <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
-                {['A','B','C','D','F'].map(g=>(
-                  <div key={g} style={{textAlign:'center',minWidth:50}}>
-                    <div style={{fontSize:24,fontWeight:800,color:gradeColor(g),fontFamily:'var(--font-mono)'}}>{analytics.summary.gradeDistribution[g]||0}</div>
-                    <div style={{fontSize:12,color:gradeColor(g),fontFamily:'var(--font-mono)',fontWeight:700}}>{g}</div>
-                  </div>
-                ))}
+                {['A','B','C','D','F'].map(g=>{
+                  const count = analytics.summary.gradeDistribution[g]||0;
+                  const enabled = count > 0;
+                  return (
+                    <div key={g}
+                      onClick={enabled ? ()=>openDrillDown('grade', g, `Grade ${g} trades`) : null}
+                      title={enabled ? `Show ${count} grade-${g} trade(s)` : `No grade-${g} trades yet`}
+                      style={{textAlign:'center',minWidth:50,padding:'6px 8px',borderRadius:4,
+                              cursor:enabled?'pointer':'default',
+                              border:'1px solid '+(enabled?gradeColor(g)+'40':'transparent'),
+                              transition:'all 0.15s',
+                              opacity:enabled?1:0.55}}
+                      onMouseEnter={e => enabled && (e.currentTarget.style.background = gradeColor(g)+'12')}
+                      onMouseLeave={e => enabled && (e.currentTarget.style.background = 'transparent')}>
+                      <div style={{fontSize:24,fontWeight:800,color:gradeColor(g),fontFamily:'var(--font-mono)'}}>{count}</div>
+                      <div style={{fontSize:12,color:gradeColor(g),fontFamily:'var(--font-mono)',fontWeight:700}}>{g}</div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -13982,28 +15030,79 @@ function DecisionQualitySection() {
           {/* Outcome Alignment */}
           {analytics.summary.outcomeAlignment && (
             <div className="panel">
-              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:10,color:'var(--text3)'}}>OUTCOME ALIGNMENT</div>
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:10,color:'var(--text3)'}}>
+                OUTCOME ALIGNMENT <span style={{color:'var(--text3)',fontWeight:400,letterSpacing:0.5}}>· click any bucket to see trades</span>
+                <InfoTip text={
+                  <span>
+                    Crosses <b>process quality</b> against <b>trade outcome</b> — separates skill from luck.
+                    <br/><br/>
+                    <b>Deserved Wins</b> (good process + profit) — repeatable. Keep doing this.<br/>
+                    <b>Lucky Wins</b> (bad process + profit) — dangerous. Don't let winners reinforce bad habits.<br/>
+                    <b>Unlucky Losses</b> (good process + loss) — acceptable. Cost of doing business.<br/>
+                    <b>Deserved Losses</b> (bad process + loss) — eliminate. Fix the process weakness the grade points to.
+                    <br/><br/>
+                    Goal: most wins in "Deserved", most losses in "Unlucky". If Lucky Wins + Deserved Losses dominate,
+                    your edge is fragile.
+                  </span>
+                } width={360} />
+              </div>
               <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
                 {[
                   {key:'deserved_win',label:'Deserved Wins',color:'var(--green)',desc:'Good process + profit'},
                   {key:'lucky_win',label:'Lucky Wins',color:'var(--amber)',desc:'Bad process + profit'},
                   {key:'unlucky_loss',label:'Unlucky Losses',color:'var(--cyan)',desc:'Good process + loss'},
                   {key:'deserved_loss',label:'Deserved Losses',color:'var(--red)',desc:'Bad process + loss'},
-                ].map(a=>(
-                  <div key={a.key} style={{background:'var(--bg3)',borderRadius:4,padding:10,textAlign:'center',minWidth:110,flex:1}}>
-                    <div style={{fontSize:22,fontWeight:700,color:a.color,fontFamily:'var(--font-mono)'}}>{analytics.summary.outcomeAlignment[a.key]||0}</div>
-                    <div style={{fontSize:10,color:a.color,fontWeight:600}}>{a.label}</div>
-                    <div style={{fontSize:9,color:'var(--text3)',marginTop:2}}>{a.desc}</div>
-                  </div>
-                ))}
+                ].map(a=>{
+                  const count = analytics.summary.outcomeAlignment[a.key]||0;
+                  const enabled = count > 0;
+                  return (
+                    <div key={a.key}
+                      onClick={enabled ? ()=>openDrillDown('alignment', a.key, a.label) : null}
+                      title={enabled ? `Show ${count} ${a.label} trade(s)` : `No ${a.label} trades yet`}
+                      style={{background:'var(--bg3)',borderRadius:4,padding:10,textAlign:'center',minWidth:110,flex:1,
+                              cursor:enabled?'pointer':'default',
+                              border:'1px solid '+(enabled?a.color+'40':'transparent'),
+                              transition:'all 0.15s',
+                              opacity:enabled?1:0.55}}
+                      onMouseEnter={e => enabled && (e.currentTarget.style.background = a.color+'15')}
+                      onMouseLeave={e => enabled && (e.currentTarget.style.background = 'var(--bg3)')}>
+                      <div style={{fontSize:22,fontWeight:700,color:a.color,fontFamily:'var(--font-mono)'}}>{count}</div>
+                      <div style={{fontSize:10,color:a.color,fontWeight:600}}>{a.label}</div>
+                      <div style={{fontSize:9,color:'var(--text3)',marginTop:2}}>{a.desc}</div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
 
-          {/* Weakest Area */}
+          {/* Weakest Area — clickable to see which trades failed this component */}
           {analytics.summary.weakestArea && (
-            <div className="panel" style={{borderColor:'rgba(240,165,0,0.3)'}}>
-              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:6,color:'var(--amber)'}}>WEAKEST AREA: {analytics.summary.weakestArea.component.toUpperCase()}</div>
+            <div className="panel"
+              onClick={()=>openDrillDown('component', analytics.summary.weakestArea.component, `${analytics.summary.weakestArea.component.toUpperCase()} failures`)}
+              title={`Show trades where ${analytics.summary.weakestArea.component} scored below 50%`}
+              style={{borderColor:'rgba(240,165,0,0.3)',cursor:'pointer',transition:'background 0.15s'}}
+              onMouseEnter={e => e.currentTarget.style.background = 'rgba(240,165,0,0.04)'}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:6,color:'var(--amber)'}}>
+                WEAKEST AREA: {analytics.summary.weakestArea.component.toUpperCase()}
+                <span style={{color:'var(--text3)',fontWeight:400,letterSpacing:0.5}}> · click to see failing trades</span>
+                <span onClick={e=>e.stopPropagation()}>
+                  <InfoTip text={
+                    <span>
+                      The lowest-scoring component across all your graded trades.
+                      This is where fixing one habit would most improve your overall decision quality.
+                      <br/><br/>
+                      Components: <b>entry</b> (timing vs setup), <b>regime</b> (trading with market tape),
+                      <b>sizing</b> (Van Tharp R-based position size), <b>exit</b> (stop/target discipline),
+                      <b>risk</b> (respecting max loss per trade).
+                      <br/><br/>
+                      Click to see every closed trade where this component scored below 50% of its max —
+                      those are the trades that dragged the average down.
+                    </span>
+                  } width={360} side="left" />
+                </span>
+              </div>
               <div style={{fontSize:12,color:'var(--text2)',marginBottom:4}}>{analytics.summary.weakestArea.score}</div>
               <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.7}}>{analytics.summary.weakestArea.recommendation}</div>
             </div>
@@ -14025,6 +15124,79 @@ function DecisionQualitySection() {
           <div style={{fontSize:12}}>Click "Score Unscored Trades" to analyze all closed trades, or trades are scored automatically going forward.</div>
         </div>
       ) : null}
+
+      {/* Drill-down Modal — shows trades matching a grade / alignment / component filter */}
+      {drillDown && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.65)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000,padding:20}}
+             onClick={()=>setDrillDown(null)}>
+          <div onClick={e=>e.stopPropagation()}
+               style={{background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,maxWidth:1000,width:'100%',maxHeight:'85vh',display:'flex',flexDirection:'column'}}>
+            <div style={{padding:'14px 20px',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{fontSize:13,fontWeight:700,color:'var(--text)',letterSpacing:1}}>{drillDown.label}</div>
+                <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>
+                  {drillDown.loading ? 'Loading…' :
+                   drillDown.trades ? `${drillDown.trades.length} trade${drillDown.trades.length===1?'':'s'}${drillDown.trades.length===200?' (showing first 200)':''}` :
+                   'No data'}
+                </div>
+              </div>
+              <button onClick={()=>setDrillDown(null)}
+                style={{background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:11,padding:'4px 12px',cursor:'pointer'}}>✕ Close</button>
+            </div>
+            <div style={{overflowY:'auto',flex:1,padding:'0 4px'}}>
+              {drillDown.loading && <div style={{padding:30,textAlign:'center',color:'var(--text3)'}}>Loading trades…</div>}
+              {drillDown.error && <div style={{padding:16,color:'var(--red)',fontSize:12}}>{drillDown.error}</div>}
+              {drillDown.trades && drillDown.trades.length === 0 && (
+                <div style={{padding:30,textAlign:'center',color:'var(--text3)',fontSize:12}}>No trades match this filter yet.</div>
+              )}
+              {drillDown.trades && drillDown.trades.length > 0 && (
+                <table style={{width:'100%',borderCollapse:'collapse',fontSize:11,fontFamily:'var(--font-mono)'}}>
+                  <thead>
+                    <tr style={{borderBottom:'1px solid var(--border)',position:'sticky',top:0,background:'var(--bg2)',zIndex:1}}>
+                      {['#','Symbol','Entry','Exit','Entry$','Exit$','P&L%','P&L$','Grade','Score','Align','Entry','Regime','Size','Exit','Risk','Strategy'].map(h => (
+                        <th key={h} style={{padding:'8px 6px',textAlign:'left',color:'var(--text3)',fontWeight:600,letterSpacing:0.5,fontSize:9}}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {drillDown.trades.map(t => {
+                      const gradeC = t.grade==='A'?'var(--green)':t.grade==='B'?'#8bc34a':t.grade==='C'?'var(--amber)':t.grade==='D'?'#ff8c00':'var(--red)';
+                      const pnlC = t.pnl_percent > 0 ? 'var(--green)' : t.pnl_percent < 0 ? 'var(--red)' : 'var(--text3)';
+                      const cmp = (v, max) => {
+                        if (v == null) return <span style={{color:'var(--text3)'}}>—</span>;
+                        const pct = v / max;
+                        const c = pct < 0.5 ? 'var(--red)' : pct < 0.7 ? 'var(--amber)' : 'var(--green)';
+                        return <span style={{color:c}}>{v}/{max}</span>;
+                      };
+                      return (
+                        <tr key={t.id} style={{borderBottom:'1px solid var(--border)'}}>
+                          <td style={{padding:'7px 6px',color:'var(--text3)'}}>{t.id}</td>
+                          <td style={{padding:'7px 6px',fontWeight:700,color:'var(--text)'}}>{t.symbol}</td>
+                          <td style={{padding:'7px 6px',color:'var(--text3)',fontSize:10}}>{t.entry_date}</td>
+                          <td style={{padding:'7px 6px',color:'var(--text3)',fontSize:10}}>{t.exit_date}</td>
+                          <td style={{padding:'7px 6px'}}>${t.entry_price?.toFixed(2)}</td>
+                          <td style={{padding:'7px 6px'}}>${t.exit_price?.toFixed(2) ?? '—'}</td>
+                          <td style={{padding:'7px 6px',color:pnlC,fontWeight:700}}>{t.pnl_percent?.toFixed(2) ?? '—'}%</td>
+                          <td style={{padding:'7px 6px',color:pnlC}}>${t.pnl_dollars?.toFixed(0) ?? '—'}</td>
+                          <td style={{padding:'7px 6px'}}><span style={{color:gradeC,fontWeight:700}}>{t.grade||'—'}</span></td>
+                          <td style={{padding:'7px 6px'}}>{t.process_score ?? '—'}</td>
+                          <td style={{padding:'7px 6px',fontSize:9,color:'var(--text3)'}}>{(t.outcome_alignment||'').replace(/_/g,' ')}</td>
+                          <td style={{padding:'7px 6px'}}>{cmp(t.entry_score, 25)}</td>
+                          <td style={{padding:'7px 6px'}}>{cmp(t.regime_score, 20)}</td>
+                          <td style={{padding:'7px 6px'}}>{cmp(t.sizing_score, 20)}</td>
+                          <td style={{padding:'7px 6px'}}>{cmp(t.exit_score, 25)}</td>
+                          <td style={{padding:'7px 6px'}}>{cmp(t.risk_score, 10)}</td>
+                          <td style={{padding:'7px 6px',fontSize:9,color:'var(--text3)'}}>{t.strategy || '—'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -14092,7 +15264,19 @@ function EdgeValidationSection() {
           {/* Survivorship Assessment */}
           {report.sections?.survivorship && (
             <div className="panel" style={{borderColor:report.sections.survivorship.severity==='critical'?'rgba(255,61,87,0.4)':'var(--border)'}}>
-              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:report.sections.survivorship.severity==='critical'?'var(--red)':'var(--text3)'}}>SURVIVORSHIP BIAS</div>
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:report.sections.survivorship.severity==='critical'?'var(--red)':'var(--text3)'}}>
+                SURVIVORSHIP BIAS
+                <InfoTip width={360} text={<>
+                  <strong style={{color:'var(--text)'}}>What it measures.</strong> Whether your backtest is
+                  cheating by only looking at stocks that survived to today. Real markets delist losers
+                  (bankruptcies, takeovers, reverse splits). If your backtest never sees them, your
+                  "edge" is inflated.<br/><br/>
+                  <strong style={{color:'var(--text)'}}>Your reading.</strong> "No stocks removed" means
+                  the universe tracker hasn't logged any delistings yet — either the window is too short
+                  or delistings haven't been ingested. Bias risk is <em>moderate</em>, not "clean," because
+                  you can't prove the absence of survivor-only data without actually tracking removals.
+                </>}/>
+              </div>
               <div style={{fontSize:13,color:report.sections.survivorship.severity==='critical'?'var(--red)':'var(--text2)',fontWeight:600,marginBottom:6}}>
                 {report.sections.survivorship.warning}
               </div>
@@ -14105,7 +15289,21 @@ function EdgeValidationSection() {
           {/* Execution Costs */}
           {report.sections?.executionCosts && (
             <div className="panel">
-              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>EXECUTION COST ESTIMATE</div>
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>
+                EXECUTION COST ESTIMATE
+                <InfoTip width={380} text={<>
+                  <strong style={{color:'var(--text)'}}>What it measures.</strong> The friction your
+                  signals have to overcome before they profit — spread + slippage + commissions on a
+                  round-trip (buy + sell).<br/><br/>
+                  <strong style={{color:'var(--text)'}}>Round-trip %.</strong> Typical drag per trade.
+                  If your signal averages a 2% move and round-trip is 0.16%, costs eat ~8% of the gross gain.<br/><br/>
+                  <strong style={{color:'var(--text)'}}>Annual @ 200 trades.</strong> What you'd lose
+                  in a year if you turn the portfolio over 200 times. This is <em>not</em> 32% of
+                  your yearly returns — it's 32% on whatever notional you churn. The point is:
+                  high-turnover strategies look great gross but can be unprofitable net. Slower
+                  position trading (&lt;50 trades/yr) reduces this drag 4×.
+                </>}/>
+              </div>
               <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
                 <div>
                   <div style={{fontSize:10,color:'var(--text3)'}}>Typical round-trip</div>
@@ -14123,7 +15321,23 @@ function EdgeValidationSection() {
           {/* Data Quality */}
           {report.sections?.dataQuality && (
             <div className="panel">
-              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>DATA QUALITY</div>
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>
+                DATA QUALITY
+                <InfoTip text={
+                  <span>
+                    How much historical scan data is on disk — the foundation every other panel here
+                    is computed from. <b>More days = more statistical power</b> for edge validation,
+                    survivorship analysis, and signal decay.
+                    <br/><br/>
+                    <b>Snapshot days</b>: distinct calendar days with a full scan saved.<br/>
+                    <b>Scan result days</b>: total symbol-day rows stored.<br/>
+                    <b>Minimum for validation</b>: the floor (typically ~60 days) below which edge
+                    numbers get flagged as unreliable.<br/>
+                    <b>Sufficient</b>: green means the analytics above are trustworthy; red means
+                    keep accumulating data before acting on the conclusions.
+                  </span>
+                } width={340} />
+              </div>
               <div style={{display:'flex',gap:20,flexWrap:'wrap',fontSize:12}}>
                 <div>Snapshot days: <span style={{fontFamily:'var(--font-mono)',fontWeight:600,color:report.sections.dataQuality.sufficient?'var(--green)':'var(--amber)'}}>{report.sections.dataQuality.snapshotDays}</span></div>
                 <div>Scan result days: <span style={{fontFamily:'var(--font-mono)',fontWeight:600}}>{report.sections.dataQuality.scanResultDays}</span></div>
@@ -14136,7 +15350,23 @@ function EdgeValidationSection() {
           {/* Signal Volume */}
           {report.sections?.signalVolume && (
             <div className="panel">
-              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>SIGNAL FREQUENCY</div>
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:'var(--text3)'}}>
+                SIGNAL FREQUENCY
+                <InfoTip text={
+                  <span>
+                    <b>Total signal firings across your entire snapshot history</b> — not per-day.
+                    Each number is <i>symbol × days</i> the signal was true, summed over every scan ever recorded.
+                    <br/><br/>
+                    Example: if <b>rs_high</b> shows <b>163,461</b>, that means across all daily snapshots
+                    combined, some symbol was tagged rs_high that many times total.
+                    A single stock in a long uptrend can contribute 100+ firings by itself.
+                    <br/><br/>
+                    Use this to judge <b>sample size</b> for the decay analysis below — signals with
+                    huge firing counts give you statistically solid decay curves; signals with only
+                    a few thousand firings are noisier.
+                  </span>
+                } width={360} />
+              </div>
               <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
                 {Object.entries(report.sections.signalVolume).map(([sig,cnt])=>(
                   <div key={sig} style={{background:'var(--bg3)',borderRadius:4,padding:'8px 14px',textAlign:'center'}}>

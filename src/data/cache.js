@@ -1,7 +1,14 @@
 // ─── In-memory cache with TTL ─────────────────────────────────────────────────
 const CACHE = {};
 
-const TTL_QUOTE = 10 * 60 * 1000;   // 10 min
+// Quotes used to be cached 10 min, which felt "cached" on the UI — a tile could
+// display a price that was 9 minutes old and the user had no way to tell.
+// 60s is a better compromise: still absorbs tight UI poll bursts (e.g. ticker
+// bar + MarketPulse both hitting /api/macro within the same second) so we
+// don't hammer upstream providers, but feels real-time on a per-minute
+// refresh. Scanner / signal jobs that read quotes run on a multi-minute
+// cadence anyway and won't notice the tighter TTL.
+const TTL_QUOTE = 60 * 1000;          // 60 sec  (was 10 min)
 const TTL_HIST  = 23 * 60 * 60 * 1000; // 23 hr
 
 function cacheGet(key, ttl) {

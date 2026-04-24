@@ -489,8 +489,10 @@ module.exports = function(db) {
               const pnlPercent = r.entry_price
                 ? ((fillPrice - r.entry_price) / r.entry_price) * 100 * (r.side === 'long' ? 1 : -1)
                 : 0;
-              const rMultiple = r.stop_price && r.entry_price !== r.stop_price
-                ? (fillPrice - r.entry_price) / (r.entry_price - r.stop_price)
+              // Use initial_stop_price so breakeven-moved stops don't collapse R.
+              const stopBase = r.initial_stop_price || r.stop_price;
+              const rMultiple = stopBase && r.entry_price !== stopBase
+                ? (fillPrice - r.entry_price) / (r.entry_price - stopBase)
                 : null;
               const info = updateStmt.run(fillPrice, exitType, pnlDollars, pnlPercent, rMultiple, r.id);
               rowsClosed += info.changes;

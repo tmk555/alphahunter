@@ -269,6 +269,18 @@ function analyzeSignalDecay(signalName, params = {}) {
       confidence: 0.95,
     });
 
+    // Min/max via loop — `Math.max(...rets)` / `Math.min(...rets)` blows the
+    // stack when rets.length > ~100k (V8 spread-args limit). Signal firings
+    // like rs_high and momentum_high routinely produce 150k–400k+ returns
+    // across all horizons, so spread was a hard crash:
+    //   "Maximum call stack size exceeded" surfaced on every scan.
+    let maxRet = -Infinity, minRet = Infinity;
+    for (let i = 0; i < rets.length; i++) {
+      const v = rets[i];
+      if (v > maxRet) maxRet = v;
+      if (v < minRet) minRet = v;
+    }
+
     decay[key] = {
       count: rets.length,
       avgReturn: +avg.toFixed(2),
@@ -279,8 +291,8 @@ function analyzeSignalDecay(signalName, params = {}) {
         p10: +p10.toFixed(2), p25: +p25.toFixed(2), p50: +p50.toFixed(2),
         p75: +p75.toFixed(2), p90: +p90.toFixed(2),
       },
-      maxGain: +Math.max(...rets).toFixed(2),
-      maxLoss: +Math.min(...rets).toFixed(2),
+      maxGain: +maxRet.toFixed(2),
+      maxLoss: +minRet.toFixed(2),
       // Phase 2.7: significance block (t-stat, p-value, verdict, CIs).
       // Consumers can gate on `significance.isSignificant` to hide
       // noise-flavoured horizons from the decay chart.

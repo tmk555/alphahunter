@@ -272,6 +272,12 @@ const NOTIFICATION_PRIORITY_MAP = {
   //                   but doesn't need a siren.
   drift_detected:      1,
   drift_resolved:      0,
+
+  // Swing-exit watcher. earnings_exit is the high-priority one — holding
+  // through a binary event is the failure mode we're preventing. swing_limit
+  // is priority-0: the thesis is out of time but there's no ticking clock.
+  earnings_exit:       1,
+  swing_limit_exit:    0,
 };
 
 // Backwards-compat alias — external callers (routes, older tests) may import
@@ -318,6 +324,12 @@ const PUSHOVER_SOUND_MAP = {
   weekly_digest:       'pushover',     // gentle default — informational
   drift_detected:      'falling',      // manual intervention required
   drift_resolved:      'pushover',     // informational — self-healed
+
+  // Swing-exit watcher. earnings_exit gets the urgent "falling" sound
+  // because it's closing a position to dodge a binary event — user should
+  // look at it immediately. swing_limit_exit is informational.
+  earnings_exit:       'falling',
+  swing_limit_exit:    'pushover',
 };
 
 function lookupSound(type, fallback = 'pushover') {
@@ -564,6 +576,8 @@ const TRADE_EVENT_EMOJIS = {
   // ground-truth positions (canceled-with-partial-fill orders, share count
   // drift, etc). drift_resolved = we fixed it; drift_detected = manual needed.
   drift_resolved: '🔄', drift_detected: '⚠️',
+  // Swing-exit watcher — 📅 = earnings calendar, ⏳ = day-count clock
+  earnings_exit: '📅', swing_limit_exit: '⏳',
 };
 
 async function notifyTradeEvent({ event, symbol, details = {} }) {
