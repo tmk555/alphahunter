@@ -307,10 +307,18 @@ function analyzeSignalDecay(signalName, params = {}) {
     };
   }
 
-  // Find optimal holding period (highest risk-adjusted return)
+  // Find optimal holding period (highest risk-adjusted return). Skip
+  // horizons where:
+  //   (a) sharpe is null (no samples),
+  //   (b) stdDev is 0 (sharpe degenerate — every return identical),
+  //   (c) the significance test rejected the mean (noise-flavoured edge).
+  // "Optimal" should mean tradeable, not the arithmetic max of potentially
+  // meaningless numbers.
   let optimalHorizon = null, bestSharpe = -Infinity;
   for (const [key, stats] of Object.entries(decay)) {
-    if (stats.sharpe != null && stats.sharpe > bestSharpe) {
+    if (stats.sharpe == null || stats.stdDev === 0) continue;
+    if (stats.significance && stats.significance.isSignificant === false) continue;
+    if (stats.sharpe > bestSharpe) {
       bestSharpe = stats.sharpe;
       optimalHorizon = key;
     }
@@ -322,7 +330,8 @@ function analyzeSignalDecay(signalName, params = {}) {
     totalFireings: firings.length,
     decay,
     optimalHorizon,
-    bestSharpe: +bestSharpe.toFixed(2),
+    // Emit null (not -Infinity) when no horizon qualified — cleaner for the UI.
+    bestSharpe: optimalHorizon ? +bestSharpe.toFixed(2) : null,
     dateRange: { start: dates[0], end: dates[dates.length - 1], tradingDays: dates.length },
   };
 }
@@ -551,50 +560,115 @@ function generateEdgeReport(currentUniverse, sectorMap) {
     sections: {},
   };
 
-  // 1. Survivorship assessment
+  // 1. Survivorship assessment. Three-way severity — critical/moderate/low —
+  //    so the border color and the warning text agree. "Tracked but nothing
+  //    removed" is NOT the same as "tracked and delistings captured": the
+  //    former is the absence of evidence, not evidence of cleanliness.
   const univHistory = getUniverseHistory();
+  const removedCount = univHistory.filter(r => r.removed_date).length;
+  let survivorshipSeverity, survivorshipWarning;
+  if (univHistory.length === 0) {
+    survivorshipSeverity = 'critical';
+    survivorshipWarning  = 'NO UNIVERSE TRACKING — all backtests suffer survivorship bias';
+  } else if (removedCount === 0) {
+    survivorshipSeverity = 'moderate';
+    survivorshipWarning  = 'No delistings captured yet — bias risk is moderate until removals accumulate';
+  } else {
+    survivorshipSeverity = 'low';
+    survivorshipWarning  = 'Universe changes tracked — survivorship-adjusted backtests available';
+  }
   report.sections.survivorship = {
     tracked: univHistory.length,
-    removed: univHistory.filter(r => r.removed_date).length,
-    warning: univHistory.length === 0
-      ? 'NO UNIVERSE TRACKING — all backtests suffer survivorship bias'
-      : univHistory.filter(r => r.removed_date).length === 0
-        ? 'No stocks removed — bias risk is moderate (no delistings captured)'
-        : 'Universe changes tracked — survivorship-adjusted backtests available',
-    severity: univHistory.length === 0 ? 'critical' : 'low',
+    removed: removedCount,
+    warning: survivorshipWarning,
+    severity: survivorshipSeverity,
   };
 
-  // 2. Execution cost estimate for typical trade
-  const typicalTrade = roundTripCost({
-    shares: 100, price: 150, avgDailyVolume: 2000000, atrPct: 2.5,
-  });
-  report.sections.executionCosts = {
-    typicalRoundTrip: typicalTrade.totalPct,
-    annualizedAt200Trades: +(typicalTrade.totalPct * 200).toFixed(2),
-    note: 'Must subtract from backtest returns to get realistic P&L',
-  };
+  // 2. Execution cost estimate. Previously hard-coded inputs (shares=100,
+  //    price=150, ADV=2M, atr=2.5%) — pure fiction. If we have ≥10 real
+  //    execution_log rows, derive the typical trade from fills: median price,
+  //    median shares per fill, and use our actual average round-trip slippage.
+  //    Fall back to the theoretical model if we don't have enough live data.
+  let executionCostBlock;
+  try {
+    const fills = db().prepare(`
+      SELECT intended_price, fill_price, shares, slippage_pct
+      FROM execution_log
+      WHERE intended_price > 0 AND fill_price > 0 AND shares > 0
+        AND ABS(slippage_pct) < 5 -- drop stale-price outliers (matches exec-quality partition)
+    `).all();
+    if (fills.length >= 10) {
+      const sortedShares = fills.map(f => f.shares).sort((a, b) => a - b);
+      const sortedPrices = fills.map(f => f.fill_price).sort((a, b) => a - b);
+      const median = arr => arr[Math.floor(arr.length / 2)];
+      const typicalShares = median(sortedShares);
+      const typicalPrice  = median(sortedPrices);
+      // avg |slippage| in pct. This is per-side; round-trip doubles.
+      const avgAbsSlippage = fills.reduce((s, f) => s + Math.abs(f.slippage_pct), 0) / fills.length;
+      const roundTripPct = +(avgAbsSlippage * 2).toFixed(4);
+      executionCostBlock = {
+        typicalRoundTrip: roundTripPct,
+        annualizedAt200Trades: +(roundTripPct * 200).toFixed(2),
+        source: 'live',
+        sampleSize: fills.length,
+        typicalShares, typicalPrice,
+        note: `Derived from ${fills.length} real fills (median ${typicalShares} sh @ $${typicalPrice.toFixed(2)}). Avg |slippage| = ${avgAbsSlippage.toFixed(3)}% per side.`,
+      };
+    }
+  } catch (_) { /* fall through to model */ }
+  if (!executionCostBlock) {
+    const typicalTrade = roundTripCost({
+      shares: 100, price: 150, avgDailyVolume: 2000000, atrPct: 2.5,
+    });
+    executionCostBlock = {
+      typicalRoundTrip: typicalTrade.totalPct,
+      annualizedAt200Trades: +(typicalTrade.totalPct * 200).toFixed(2),
+      source: 'model',
+      note: 'Theoretical cost — need ≥10 real fills in execution_log to switch to live estimate.',
+    };
+  }
+  report.sections.executionCosts = executionCostBlock;
 
-  // 3. Data quality
-  const snapCount = db().prepare('SELECT COUNT(DISTINCT date) as days FROM rs_snapshots WHERE type = \'stock\'').get();
-  const scanCount = db().prepare('SELECT COUNT(DISTINCT date) as days FROM scan_results').get();
+  // 3. Data quality. Different analyses need different minimums; one global
+  //    "sufficient: yes/no" misleads. Per-feature flags now — the UI can tell
+  //    the user which analyses are trustable today vs waiting on more data.
+  const snapDays = db().prepare('SELECT COUNT(DISTINCT date) as days FROM rs_snapshots WHERE type = \'stock\'').get()?.days || 0;
+  const scanDays = db().prepare('SELECT COUNT(DISTINCT date) as days FROM scan_results').get()?.days || 0;
+  const scanRows = db().prepare('SELECT COUNT(*) as n FROM scan_results').get()?.n || 0;
+  const flag = (have, need) => ({ have, need, sufficient: have >= need });
   report.sections.dataQuality = {
-    snapshotDays: snapCount?.days || 0,
-    scanResultDays: scanCount?.days || 0,
-    minimumForValidation: 252,
-    sufficient: (snapCount?.days || 0) >= 252,
+    snapshotDays: snapDays,
+    scanResultDays: scanDays,
+    scanResultRows: scanRows,
+    minimumForValidation: 252, // kept for back-compat with old UI tiles
+    sufficient: snapDays >= 252, // legacy flag
+    // Per-feature sufficiency. Each analysis has its own data floor.
+    featureFlags: {
+      signalDecay:        flag(snapDays,  30),   // 30 days = minimum for any decay look
+      convictionOptimizer: flag(scanRows, 100),  // 100 scan rows = optimizer floor
+      walkForward:        flag(snapDays, 180),   // trainDays 120 + testDays 60 = 180
+      fullValidation:     flag(snapDays, 252),   // 1 full trading year
+    },
   };
 
-  // 4. Signal count summary
+  // 4. Signal count summary. Total firings AND distinct symbols — 163k
+  //    firings all from one stock tells a different story than 163k across
+  //    500 names. Distinct-symbols count is the sample-breadth signal.
   const signals = ['rs_high', 'momentum_high', 'vcp', 'rs_line_new_high', 'sepa_strong'];
-  const signalCounts = {};
+  const signalVolume = {};
   for (const sig of signals) {
     const q = buildSignalQuery(sig, { minRS: 80, minMomentum: 60 });
-    if (q) {
-      const cnt = db().prepare(`SELECT COUNT(*) as cnt FROM (${q.sql})`).get(...(q.params || []));
-      signalCounts[sig] = cnt?.cnt || 0;
-    }
+    if (!q) continue;
+    const row = db().prepare(`
+      SELECT COUNT(*) AS total, COUNT(DISTINCT symbol) AS distinctSymbols
+      FROM (${q.sql})
+    `).get(...(q.params || []));
+    signalVolume[sig] = {
+      total: row?.total || 0,
+      distinctSymbols: row?.distinctSymbols || 0,
+    };
   }
-  report.sections.signalVolume = signalCounts;
+  report.sections.signalVolume = signalVolume;
 
   return report;
 }

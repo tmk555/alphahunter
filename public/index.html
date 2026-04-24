@@ -15385,9 +15385,24 @@ function EdgeValidationSection() {
       {report && (
         <div>
           {/* Survivorship Assessment */}
-          {report.sections?.survivorship && (
-            <div className="panel" style={{borderColor:report.sections.survivorship.severity==='critical'?'rgba(255,61,87,0.4)':'var(--border)'}}>
-              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:report.sections.survivorship.severity==='critical'?'var(--red)':'var(--text3)'}}>
+          {report.sections?.survivorship && (() => {
+            // Three-way severity: critical (no tracking at all), moderate
+            // (tracked but no removals captured — absence of evidence), low
+            // (tracked WITH removals, meaning the pipeline is actually
+            // working end-to-end).
+            const sev = report.sections.survivorship.severity;
+            const borderColor = sev === 'critical' ? 'rgba(255,61,87,0.4)'
+                              : sev === 'moderate' ? 'rgba(240,165,0,0.35)'
+                              : 'var(--border)';
+            const headColor = sev === 'critical' ? 'var(--red)'
+                            : sev === 'moderate' ? 'var(--amber)'
+                            : 'var(--text3)';
+            const warnColor = sev === 'critical' ? 'var(--red)'
+                            : sev === 'moderate' ? 'var(--amber)'
+                            : 'var(--text2)';
+            return (
+            <div className="panel" style={{borderColor}}>
+              <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:8,color:headColor}}>
                 SURVIVORSHIP BIAS
                 <InfoTip width={360} text={<>
                   <strong style={{color:'var(--text)'}}>What it measures.</strong> Whether your backtest is
@@ -15400,14 +15415,15 @@ function EdgeValidationSection() {
                   you can't prove the absence of survivor-only data without actually tracking removals.
                 </>}/>
               </div>
-              <div style={{fontSize:13,color:report.sections.survivorship.severity==='critical'?'var(--red)':'var(--text2)',fontWeight:600,marginBottom:6}}>
+              <div style={{fontSize:13,color:warnColor,fontWeight:600,marginBottom:6}}>
                 {report.sections.survivorship.warning}
               </div>
               <div style={{fontSize:11,color:'var(--text3)'}}>
                 Tracked: {report.sections.survivorship.tracked} | Removed: {report.sections.survivorship.removed}
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {/* Execution Costs */}
           {report.sections?.executionCosts && (
@@ -15427,7 +15443,7 @@ function EdgeValidationSection() {
                   position trading (&lt;50 trades/yr) reduces this drag 4×.
                 </>}/>
               </div>
-              <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
+              <div style={{display:'flex',gap:20,flexWrap:'wrap',alignItems:'center'}}>
                 <div>
                   <div style={{fontSize:10,color:'var(--text3)'}}>Typical round-trip</div>
                   <div style={{fontSize:18,fontWeight:700,color:'var(--amber)',fontFamily:'var(--font-mono)'}}>{report.sections.executionCosts.typicalRoundTrip}%</div>
@@ -15436,6 +15452,19 @@ function EdgeValidationSection() {
                   <div style={{fontSize:10,color:'var(--text3)'}}>Annual @ 200 trades</div>
                   <div style={{fontSize:18,fontWeight:700,color:'var(--red)',fontFamily:'var(--font-mono)'}}>{report.sections.executionCosts.annualizedAt200Trades}%</div>
                 </div>
+                {/* Source badge — at a glance, is this real or theoretical? */}
+                {report.sections.executionCosts.source && (
+                  <div style={{
+                    fontSize:9, letterSpacing:1.5, fontFamily:'var(--font-mono)',
+                    padding:'3px 8px', borderRadius:3,
+                    background: report.sections.executionCosts.source === 'live' ? 'rgba(0,230,118,0.12)' : 'rgba(240,165,0,0.12)',
+                    color: report.sections.executionCosts.source === 'live' ? 'var(--green)' : 'var(--amber)',
+                  }}>
+                    {report.sections.executionCosts.source === 'live'
+                      ? `LIVE · n=${report.sections.executionCosts.sampleSize}`
+                      : 'MODEL (need ≥10 real fills)'}
+                  </div>
+                )}
               </div>
               <div style={{fontSize:11,color:'var(--text3)',marginTop:6}}>{report.sections.executionCosts.note}</div>
             </div>
@@ -15467,6 +15496,34 @@ function EdgeValidationSection() {
                 <div>Minimum for validation: <span style={{fontFamily:'var(--font-mono)',fontWeight:600}}>{report.sections.dataQuality.minimumForValidation}</span></div>
                 <div>Sufficient: <span style={{fontWeight:600,color:report.sections.dataQuality.sufficient?'var(--green)':'var(--red)'}}>{report.sections.dataQuality.sufficient?'YES':'NO'}</span></div>
               </div>
+              {/* Per-feature readiness. The one global "sufficient" flag above
+                  hides the truth that different analyses need different
+                  amounts of data — decay works on 30 days but walk-forward
+                  optimization wants 180+. */}
+              {report.sections.dataQuality.featureFlags && (
+                <div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
+                  <div style={{fontSize:9,letterSpacing:1.5,color:'var(--text3)',marginBottom:6,fontFamily:'var(--font-mono)'}}>PER-FEATURE READINESS</div>
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:8,fontSize:11}}>
+                    {Object.entries(report.sections.dataQuality.featureFlags).map(([name,f])=>{
+                      const label = ({
+                        signalDecay:         'Signal decay',
+                        convictionOptimizer: 'Conviction optimizer',
+                        walkForward:         'Walk-forward',
+                        fullValidation:      'Full 1yr validation',
+                      })[name] || name;
+                      const unit = name === 'convictionOptimizer' ? 'rows' : 'days';
+                      return (
+                        <div key={name} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'4px 8px',background:'var(--bg3)',borderRadius:3}}>
+                          <span style={{color:'var(--text2)'}}>{label}</span>
+                          <span style={{fontFamily:'var(--font-mono)',fontWeight:600,color:f.sufficient?'var(--green)':'var(--amber)'}}>
+                            {f.have}/{f.need} {unit} {f.sufficient ? '✓' : '…'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -15491,12 +15548,24 @@ function EdgeValidationSection() {
                 } width={360} />
               </div>
               <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
-                {Object.entries(report.sections.signalVolume).map(([sig,cnt])=>(
+                {Object.entries(report.sections.signalVolume).map(([sig,v])=>{
+                  // `v` is either {total, distinctSymbols} (new shape) or a
+                  // raw number (legacy, still tolerated if an older API is
+                  // fronting this UI). Normalize.
+                  const total    = typeof v === 'object' ? v.total           : v;
+                  const distinct = typeof v === 'object' ? v.distinctSymbols : null;
+                  return (
                   <div key={sig} style={{background:'var(--bg3)',borderRadius:4,padding:'8px 14px',textAlign:'center'}}>
-                    <div style={{fontSize:18,fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{cnt.toLocaleString()}</div>
+                    <div style={{fontSize:18,fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{(total||0).toLocaleString()}</div>
                     <div style={{fontSize:9,color:'var(--text3)',marginTop:2}}>{sig.replace(/_/g,' ')}</div>
+                    {distinct != null && (
+                      <div style={{fontSize:9,color:'var(--text3)',marginTop:1}}>
+                        across <span style={{color:'var(--text2)',fontFamily:'var(--font-mono)'}}>{distinct}</span> symbols
+                      </div>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -15523,27 +15592,47 @@ function EdgeValidationSection() {
           <div style={{fontSize:10,letterSpacing:2,fontFamily:'var(--font-mono)',marginBottom:4,color:'var(--cyan)'}}>
             {decay.signal?.replace(/_/g,' ').toUpperCase()} — {decay.totalFireings} signal firings
           </div>
-          {decay.optimalHorizon && (
+          {decay.optimalHorizon ? (
             <div style={{fontSize:12,color:'var(--green)',marginBottom:10}}>
               Optimal holding period: <strong>{decay.optimalHorizon}</strong> (Sharpe: {decay.bestSharpe})
             </div>
+          ) : (
+            <div style={{fontSize:12,color:'var(--text3)',marginBottom:10}}>
+              No horizon passed the significance filter — every row below is noise-flavoured.
+            </div>
           )}
           <table className="data-table">
-            <thead><tr><th>Horizon</th><th>Trades</th><th>Avg Return</th><th>Hit Rate</th><th>Sharpe</th><th>Std Dev</th><th>P10</th><th>P50</th><th>P90</th></tr></thead>
+            <thead><tr><th>Horizon</th><th>Trades</th><th>Avg Return</th><th>Hit Rate</th><th>Sharpe</th><th>Std Dev</th><th>P10</th><th>P50</th><th>P90</th><th>Sig?</th></tr></thead>
             <tbody>
-              {Object.entries(decay.decay).filter(([,s])=>s.count>0).map(([horizon,s])=>(
-                <tr key={horizon} style={horizon===decay.optimalHorizon?{background:'rgba(0,230,118,0.06)'}:{}}>
-                  <td style={{fontWeight:600,color:horizon===decay.optimalHorizon?'var(--green)':'var(--cyan)'}}>{horizon}</td>
+              {Object.entries(decay.decay).filter(([,s])=>s.count>0).map(([horizon,s])=>{
+                // V-7: mute rows that failed the significance test — the
+                // numbers look like signal but statistically they're noise.
+                // Showing them in full color misleads the eye. Separately,
+                // highlight the chosen optimalHorizon as before.
+                const isSig = s.significance ? s.significance.isSignificant !== false : true;
+                const isOptimal = horizon === decay.optimalHorizon;
+                const rowStyle = isOptimal ? { background: 'rgba(0,230,118,0.06)' }
+                               : !isSig    ? { opacity: 0.5 }
+                               : {};
+                const sigColor = isSig ? (s.sharpe > 0.5 ? 'var(--green)' : s.sharpe > 0 ? 'var(--amber)' : 'var(--red)') : 'var(--text3)';
+                return (
+                <tr key={horizon} style={rowStyle}>
+                  <td style={{fontWeight:600,color:isOptimal?'var(--green)':isSig?'var(--cyan)':'var(--text3)'}}>{horizon}</td>
                   <td>{s.count}</td>
-                  <td style={{color:s.avgReturn>=0?'var(--green)':'var(--red)',fontWeight:600}}>{s.avgReturn>0?'+':''}{s.avgReturn}%</td>
-                  <td style={{color:s.hitRate>=50?'var(--green)':'var(--red)'}}>{s.hitRate}%</td>
-                  <td style={{color:s.sharpe>0.5?'var(--green)':s.sharpe>0?'var(--amber)':'var(--red)'}}>{s.sharpe}</td>
+                  <td style={{color:isSig?(s.avgReturn>=0?'var(--green)':'var(--red)'):'var(--text3)',fontWeight:600}}>{s.avgReturn>0?'+':''}{s.avgReturn}%</td>
+                  <td style={{color:isSig?(s.hitRate>=50?'var(--green)':'var(--red)'):'var(--text3)'}}>{s.hitRate}%</td>
+                  <td style={{color:sigColor}}>{s.sharpe}</td>
                   <td>{s.stdDev}%</td>
-                  <td style={{color:'var(--red)'}}>{s.percentiles?.p10}%</td>
+                  <td style={{color:isSig?'var(--red)':'var(--text3)'}}>{s.percentiles?.p10}%</td>
                   <td>{s.percentiles?.p50}%</td>
-                  <td style={{color:'var(--green)'}}>{s.percentiles?.p90}%</td>
+                  <td style={{color:isSig?'var(--green)':'var(--text3)'}}>{s.percentiles?.p90}%</td>
+                  <td style={{fontSize:10,fontFamily:'var(--font-mono)',color:isSig?'var(--green)':'var(--text3)'}}
+                      title={s.significance?.reason || (isSig?'significant':'not significant')}>
+                    {isSig ? '✓' : '—'}
+                  </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
