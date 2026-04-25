@@ -5155,20 +5155,29 @@ function MarketPulseTab() {
   async function load() {
     setLoading(true);
     setFngErr(null);
+    // Per-endpoint catches so a 500 on /api/regime doesn't take the whole tab
+    // down via Promise.all rejection — the rest of the panels (cycle, breadth,
+    // F&G, earnings) keep rendering. Pre-fix behavior: a transient regime
+    // failure dropped EVERYTHING into the catch-all silent-empty branch and
+    // the user saw a blank Market Pulse with no error indication.
     try {
-      // F&G is allowed to fail independently of the others — capture the
-      // concrete error so the panel can surface it (helps diagnose
-      // auth/routing/CNN-down scenarios without opening devtools).
       const [rd, md, cd, bw, fg] = await Promise.all([
-        api('/api/regime'), api('/api/macro'), api('/api/cycle-auto-detect').catch(()=>null),
+        api('/api/regime').catch(()=>null),
+        api('/api/macro').catch(()=>null),
+        api('/api/cycle-auto-detect').catch(()=>null),
         api('/api/breadth/early-warning').catch(()=>null),
+        // F&G is allowed to fail independently of the others — capture the
+        // concrete error so the panel can surface it (helps diagnose
+        // auth/routing/CNN-down scenarios without opening devtools).
         api('/api/market/fear-greed').catch(e => { setFngErr(e?.message || String(e)); return null; }),
       ]);
-      setRegime(rd);
-      setMacro(md.macro || []);
-      setSpread(md.yieldSpread);
-      setSpreadHistory(md.spreadHistory || []);
-      setOverlayHistory(md.overlayHistory || {});
+      if (rd) setRegime(rd);
+      if (md) {
+        setMacro(md.macro || []);
+        setSpread(md.yieldSpread);
+        setSpreadHistory(md.spreadHistory || []);
+        setOverlayHistory(md.overlayHistory || {});
+      }
       setCycle(cd);
       setBWarning(bw);
       setFng(fg);
@@ -5502,8 +5511,13 @@ function MarketPulseTab() {
                   <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>0 = max fear · 100 = max greed</div>
                 </div>
               </div>
-              {/* Horizontal gauge — colored by band, marker at current score */}
-              <div style={{position:'relative',height:10,borderRadius:5,overflow:'hidden',background:'linear-gradient(to right, #ff3d57 0%, #ff3d57 25%, #f0a500 25%, #f0a500 45%, #bdbdbd 45%, #bdbdbd 55%, #69f0ae 55%, #69f0ae 74%, #00e676 74%, #00e676 100%)',marginBottom:6}}>
+              {/* Horizontal gauge — colored by band, marker at current score.
+                  Palette MUST stay in lockstep with fngColor() above (contrarian:
+                  green=fear=opportunity, red=greed=danger). The CNN-traditional
+                  palette would put a green marker on a red gauge for an
+                  Extreme-Fear reading, which is exactly the visual mismatch we're
+                  inverting away from. */}
+              <div style={{position:'relative',height:10,borderRadius:5,overflow:'hidden',background:'linear-gradient(to right, #00e676 0%, #00e676 25%, #69f0ae 25%, #69f0ae 45%, #bdbdbd 45%, #bdbdbd 55%, #f0a500 55%, #f0a500 74%, #ff3d57 74%, #ff3d57 100%)',marginBottom:6}}>
                 {fng.score != null && (
                   <div style={{position:'absolute',top:-3,left:`calc(${fng.score}% - 6px)`,width:12,height:16,background:'#fff',border:'2px solid #000',borderRadius:2,boxShadow:'0 0 4px rgba(0,0,0,0.5)'}}/>
                 )}
