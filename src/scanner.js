@@ -8,6 +8,33 @@ const { cacheGet, cacheSet, TTL_QUOTE } = require('./data/cache');
 function marketDate() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 }
+
+// Is `date` a US-equity trading day? Defense-in-depth guard for the persistence
+// sites below. Pre-fix, runRSScan unconditionally wrote rows dated marketDate()
+// — so a manual /api/rs-scan hit, a runJobNow trigger from the scheduler UI,
+// or any other non-cron entry point on a Saturday morning would persist
+// weekend-dated rs_snapshots / scan_results rows. Those rows are Friday's last
+// close re-stamped with a Saturday date, which:
+//   • shifts MA windows by 1 (oldest bar drops, "Saturday" bar adds — but
+//     Saturday's close == Friday's close, so the MA wobbles by 1/N which can
+//     flip a few names across the 50MA threshold)
+//   • makes MAX(date) FROM rs_snapshots return Saturday, so anything that
+//     queries "today's snapshot" gets the synthetic weekend row
+//   • polluted the user's universe with the SLAB Saturday-row case we just
+//     traced — the row that wasn't supposed to exist
+//
+// This only checks Sat/Sun. Holiday detection is out of scope: the existing
+// `30 16 * * 1-5` cron doesn't honor holidays either, so the bar is
+// "weekday-aware" not "holiday-aware". The risk on a market holiday is
+// limited to one bad row that gets cleaned up by INSERT OR IGNORE on the
+// next trading day's run.
+function isTradingDay(dateStr) {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return true; // fail-open
+  // Construct as UTC noon to avoid any local-time DST edge — only the day-of-week matters.
+  const d = new Date(dateStr + 'T12:00:00Z');
+  const dow = d.getUTCDay(); // 0=Sun..6=Sat
+  return dow !== 0 && dow !== 6;
+}
 const { loadHistory, saveHistory, RS_HISTORY, SEC_HISTORY, IND_HISTORY } = require('./data/store');
 const { getQuotes, getHistory, getHistoryFull, pLimit } = require('./data/providers/manager');
 const { calcRS, calcRSWeekly, calcRSMonthly, rankToRS, rankBySector, getRSTrend, preGenerateHistoryFor, getTimeframeAlignment } = require('./signals/rs');
@@ -267,28 +294,38 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
 
   // Save today's snapshot (use market date to avoid UTC→tomorrow issues)
   const today = marketDate();
-  const snap  = {};
-  for (const s of results) snap[s.ticker] = s.rsRank;
-  saveHistory(RS_HISTORY, snap, today);
 
-  // Persist scan_results for signal replay / backtest
-  try {
-    const { getDB } = require('./data/database');
-    const { calcConviction } = require('./signals/conviction');
-    const rsHist = loadHistory(RS_HISTORY);
-    const { getRSTrend } = require('./signals/rs');
-    const scanInsert = getDB().prepare(
-      'INSERT OR REPLACE INTO scan_results (date, symbol, data, conviction_score) VALUES (?, ?, ?, ?)'
-    );
-    const scanTxn = getDB().transaction(() => {
-      for (const s of results) {
-        const rsTrend = getRSTrend(s.ticker, rsHist);
-        const { convictionScore } = calcConviction(s, rsTrend);
-        scanInsert.run(today, s.ticker, JSON.stringify(s), convictionScore);
-      }
-    });
-    scanTxn();
-  } catch (_) { /* non-critical */ }
+  // Trading-day guard: skip persistence on Sat/Sun even if the scan was
+  // triggered (e.g. via /api/rs-scan, runJobNow). The fresh `results` are
+  // still returned to the caller for live display — we just don't pollute
+  // rs_snapshots / scan_results with weekend-dated rows that aren't real
+  // market data. See isTradingDay() comment for the full rationale.
+  if (isTradingDay(today)) {
+    const snap  = {};
+    for (const s of results) snap[s.ticker] = s.rsRank;
+    saveHistory(RS_HISTORY, snap, today);
+
+    // Persist scan_results for signal replay / backtest
+    try {
+      const { getDB } = require('./data/database');
+      const { calcConviction } = require('./signals/conviction');
+      const rsHist = loadHistory(RS_HISTORY);
+      const { getRSTrend } = require('./signals/rs');
+      const scanInsert = getDB().prepare(
+        'INSERT OR REPLACE INTO scan_results (date, symbol, data, conviction_score) VALUES (?, ?, ?, ?)'
+      );
+      const scanTxn = getDB().transaction(() => {
+        for (const s of results) {
+          const rsTrend = getRSTrend(s.ticker, rsHist);
+          const { convictionScore } = calcConviction(s, rsTrend);
+          scanInsert.run(today, s.ticker, JSON.stringify(s), convictionScore);
+        }
+      });
+      scanTxn();
+    } catch (_) { /* non-critical */ }
+  } else {
+    console.log(`  runRSScan: skipping persistence for non-trading day ${today} (returning live results only)`);
+  }
 
   // Sync universe tracker — captures additions/removals for survivorship-bias-free backtesting
   try {
@@ -350,10 +387,15 @@ async function runETFScan(etfs, histType, prefix, extraMap) {
   preGenerateHistoryFor(histMap, sym => prefix + sym, histType, prefix.replace('_','').toLowerCase() || 'stock');
 
   // Save today's snapshot (use market date to avoid UTC→tomorrow issues)
+  // Same trading-day guard as the stock-RS persistence above — keeps
+  // weekend-dated sector/industry rows out of rs_snapshots even when the
+  // scan is triggered manually on a non-trading day.
   const todayStr = marketDate();
-  const snap = {};
-  for (const r of result) snap[prefix + r.symbol] = r.rsRank;
-  saveHistory(histType, snap, todayStr);
+  if (isTradingDay(todayStr)) {
+    const snap = {};
+    for (const r of result) snap[prefix + r.symbol] = r.rsRank;
+    saveHistory(histType, snap, todayStr);
+  }
 
   // Attach RS trends
   const hist = loadHistory(histType);
