@@ -91,6 +91,36 @@ module.exports = function (db, runScan) {
     }
   });
 
+  // Helper: read the rolled-up score the daily revision_scan job persisted.
+  // Used as a fallback when Yahoo's live estimate fetch fails (weekend
+  // throttling, off-hours quirks, ticker without coverage). Without this,
+  // the Scanner row could show a revisionScore from yesterday's job while
+  // the Levels-tab panel silently disappeared because /api/revisions/:sym
+  // returned 404 — exactly the divergence the user reported for TXN on
+  // 2026-04-25 (Saturday).
+  function loadCachedRevisionScore(symbol) {
+    try {
+      const row = db.prepare(`
+        SELECT date, revision_score, direction, tier,
+               eps_current_yr_chg, eps_next_yr_chg, rev_chg, acceleration
+        FROM revision_scores
+        WHERE symbol = ?
+        ORDER BY date DESC LIMIT 1
+      `).get(symbol);
+      if (!row || row.revision_score == null) return null;
+      return {
+        revisionScore: row.revision_score,
+        direction:     row.direction,
+        tier:          row.tier,
+        epsCurrentYrChg: row.eps_current_yr_chg,
+        epsNextYrChg:    row.eps_next_yr_chg,
+        revChg:          row.rev_chg,
+        acceleration:    row.acceleration,
+        cachedFromDate:  row.date,  // marker so the UI can show "as of YYYY-MM-DD"
+      };
+    } catch (_) { return null; }
+  }
+
   // GET /api/revisions/:symbol — single stock revision data
   router.get('/revisions/:symbol', async (req, res) => {
     try {
@@ -98,9 +128,28 @@ module.exports = function (db, runScan) {
       console.log(`  Fetching revisions for ${symbol}...`);
 
       const current = await fetchEstimateRevisions(symbol);
+
+      // Live-fetch failed: try the daily-job's cached score so the Levels
+      // panel can still surface SOMETHING that matches the Scanner row.
+      // 200 with `liveDataFailed: true` lets the UI render the badge from
+      // cache + a small "as of X" label. Old behavior was a 404 → silent
+      // empty panel even though revision_scores had the answer.
       if (!current) {
+        const cached = loadCachedRevisionScore(symbol);
+        if (cached) {
+          console.log(`  Revisions ${symbol}: live fetch failed, served cached score=${cached.revisionScore} (as of ${cached.cachedFromDate})`);
+          return res.json({
+            symbol,
+            estimates: null,
+            revision: cached,
+            signal: null,
+            hasPriorData: true,
+            liveDataFailed: true,
+            source: 'revision_scores_cache',
+          });
+        }
         return res.status(404).json({
-          error: `No analyst estimate data for ${symbol} — stock may lack coverage`,
+          error: `No analyst estimate data for ${symbol} — stock may lack coverage and no cached score is available`,
         });
       }
 
@@ -123,15 +172,29 @@ module.exports = function (db, runScan) {
         // Scan data not available — skip signal calculation
       }
 
+      // If the live fetch succeeded but there's no prior (first-ever snapshot),
+      // serve the daily-job cached score as a stop-gap — Levels panel
+      // otherwise hides until tomorrow's job pulls a second snapshot.
+      let outRevision = revision;
+      let source = 'live';
+      if (!revision) {
+        const cached = loadCachedRevisionScore(symbol);
+        if (cached) {
+          outRevision = cached;
+          source = 'revision_scores_cache';
+        }
+      }
+
       console.log(`  Revisions ${symbol}: EPS CY=${current.epsCurrentYear} NY=${current.epsNextYear}` +
-        (revision ? ` score=${revision.revisionScore} tier=${revision.tier}` : ' (no prior data)'));
+        (outRevision ? ` score=${outRevision.revisionScore} tier=${outRevision.tier} (${source})` : ' (no prior data, no cached score)'));
 
       res.json({
         symbol,
         estimates: current,
-        revision,
+        revision: outRevision,
         signal,
         hasPriorData: prior != null,
+        source,
       });
     } catch (e) {
       console.error(`  Revisions error ${req.params.symbol}:`, e.message);

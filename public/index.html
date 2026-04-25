@@ -2297,12 +2297,24 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
       .catch(() => {});
   }, [s?.ticker]);
 
+  // Track 404 / network errors separately from "no revision history yet"
+  // so the empty-state can distinguish "Yahoo refused" from "we have data
+  // but only one snapshot". Pre-fix, a 404 silently set neither revData
+  // nor any error → the Levels panel just disappeared with no signal,
+  // even though the Scanner row was still showing a cached score from
+  // the daily revision_scan job. That divergence was the user's bug
+  // report.
+  const [revErr, setRevErr] = useState(null);
   useEffect(() => {
     if (!s?.ticker) return;
     setRevLoad(true);
+    setRevErr(null);
     api(`/api/revisions/${s.ticker}`)
-      .then(d => { if (d && !d.error) setRevData(d); })
-      .catch(() => {})
+      .then(d => {
+        if (d && !d.error) setRevData(d);
+        else if (d?.error) setRevErr(d.error);
+      })
+      .catch(e => setRevErr(e?.message || String(e)))
       .finally(() => setRevLoad(false));
   }, [s?.ticker]);
 
@@ -2408,9 +2420,14 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
         <span style={{color:'var(--text3)'}}> · Position size = (1% account) ÷ ${risk?.toFixed(2)} = shares</span>
       </div>
 
-      {/* ── Analyst Revision badge (prominent, at top of levels) ── */}
+      {/* ── Analyst Revision badge (prominent, at top of levels) ──
+          Source can be 'live' (fresh Yahoo fetch + prior snapshot) or
+          'revision_scores_cache' (daily-job rollup, used when live fetch
+          fails — typically weekends / off-hours). Cache-served scores
+          show an "as of YYYY-MM-DD" label so the user can tell the
+          panel agrees with the Scanner row even when it's stale. */}
       {revData?.revision && (
-        <div title="Analyst estimate revision score: Wall Street consensus direction for EPS/revenue. Higher = estimates rising (bullish future catalyst). Minervini's 'rising estimates' check."
+        <div title={`Analyst estimate revision score: Wall Street consensus direction for EPS/revenue. Higher = estimates rising (bullish future catalyst). Minervini's 'rising estimates' check.${revData.source === 'revision_scores_cache' ? '\n\nServed from the daily revision_scan job cache — Yahoo live-fetch was unavailable (typical on weekends).' : ''}`}
           style={{marginTop:10,padding:'8px 12px',background:revData.revision.revisionScore>=70?'rgba(0,230,118,0.08)':revData.revision.revisionScore>=50?'rgba(139,195,74,0.06)':revData.revision.revisionScore>=30?'rgba(240,165,0,0.06)':'rgba(255,61,87,0.08)',border:`1px solid ${revData.revision.revisionScore>=70?'rgba(0,230,118,0.3)':revData.revision.revisionScore>=50?'rgba(139,195,74,0.2)':revData.revision.revisionScore>=30?'rgba(240,165,0,0.2)':'rgba(255,61,87,0.3)'}`,borderRadius:4,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
           <span style={{fontSize:10,fontFamily:'var(--font-mono)',color:'var(--text3)',letterSpacing:1.5}}>
             ANALYST REVISIONS
@@ -2426,6 +2443,17 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
           {revData.revision.direction && (
             <span style={{fontSize:11,color:'var(--text2)'}}>{revData.revision.direction === 'up' ? '↑ Raising' : revData.revision.direction === 'down' ? '↓ Cutting' : '→ Mixed'}</span>
           )}
+          {/* Cache-served indicator — visible when the live fetch failed but
+              the daily-job rollup answered. Same data the Scanner row sees,
+              now reflected here so the two surfaces stop disagreeing. */}
+          {revData.source === 'revision_scores_cache' && revData.revision.cachedFromDate && (
+            <span style={{fontSize:9,fontFamily:'var(--font-mono)',padding:'1px 6px',borderRadius:3,
+              background:'rgba(240,165,0,0.10)',border:'1px solid rgba(240,165,0,0.35)',
+              color:'var(--amber)',letterSpacing:1}}
+              title={`Yahoo's live analyst-estimate fetch failed (typical weekend behavior). Showing the score from the last successful daily revision_scan run on ${revData.revision.cachedFromDate}. Same data the Scanner row uses.`}>
+              CACHED · as of {revData.revision.cachedFromDate}
+            </span>
+          )}
           <span style={{fontSize:10,color:'var(--text3)',marginLeft:'auto'}}>
             Future earnings catalyst signal
           </span>
@@ -2436,9 +2464,22 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
           Loading analyst revision data...
         </div>
       )}
+      {/* Empty state: live fetch returned `revision: null` but API succeeded
+          (we have current estimates but no prior to compute change). */}
       {!revLoad && !revData?.revision && revData != null && (
         <div style={{marginTop:10,padding:'8px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,fontSize:11,color:'var(--text3)'}}>
           <span style={{color:'var(--amber)'}}>⚠</span> No revision history yet for <strong>{s.ticker}</strong>. Data will populate after the daily <code>revision_scan</code> job runs (5 PM weekdays) and requires 2 snapshots to compute change.
+        </div>
+      )}
+      {/* Hard-fail state: live fetch 404'd AND no cached score in
+          revision_scores. Pre-fix this case rendered nothing — user
+          couldn't tell why the panel was missing. */}
+      {!revLoad && !revData && revErr && (
+        <div style={{marginTop:10,padding:'8px 12px',background:'rgba(255,61,87,0.05)',border:'1px solid rgba(255,61,87,0.2)',borderRadius:4,fontSize:11,color:'var(--text3)'}}>
+          <span style={{color:'var(--red)'}}>⚠</span> Could not load analyst revisions for <strong>{s.ticker}</strong>: {revErr}
+          <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>
+            Likely causes: Yahoo Finance throttled the analyst-estimate endpoint (common on weekends/off-hours), the ticker has no analyst coverage, or the daily <code>revision_scan</code> job hasn't populated a cached score yet.
+          </div>
         </div>
       )}
       {(fLoad || funds || fundsError) && (
