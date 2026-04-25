@@ -573,7 +573,32 @@ function detectBreadthDivergence(days = 60) {
 // ─── Historical Breadth Snapshots ───────────────────────────────────────────
 // Store breadth data for backtesting the breadth regime model itself.
 
-function saveBreadthSnapshot(date, data) {
+function saveBreadthSnapshot(date, data, opts = {}) {
+  // Idempotency on `date` + composite_score:
+  // Skip the write when a non-null composite already exists for this date,
+  // unless the caller explicitly opts in with `{ force: true }`.
+  //
+  // Why: getFullBreadthDashboard pulls LIVE ^VIX/TLT/HYG quotes and writes
+  // back via this function. If the dashboard runs again for the same date
+  // (catch-up runner on a Saturday, /api/breadth re-hit after cache miss,
+  // manual runJobNow), the live-quote variance (provider cascade, off-hours
+  // last-trade staleness) gives a slightly different composite — and
+  // INSERT OR REPLACE silently overwrites the authoritative row. That's
+  // how the user's composite breadth moved 48 → 51 between Friday close
+  // and Saturday morning on a market with zero trading activity.
+  //
+  // The first write of a day still happens (existing.composite_score IS NULL
+  // → guard passes). Re-runs no-op. Backfill (`backfillBreadthHistory`) does
+  // its own date-set pre-filter so it never reaches this guard.
+  if (opts.force !== true) {
+    const existing = db().prepare(
+      'SELECT composite_score FROM breadth_snapshots WHERE date = ?'
+    ).get(date);
+    if (existing && existing.composite_score != null) {
+      return { saved: false, reason: 'idempotent-skip', date };
+    }
+  }
+
   db().prepare(`
     INSERT OR REPLACE INTO breadth_snapshots
     (date, pct_above_50ma, pct_above_200ma, new_highs, new_lows, ad_ratio,
@@ -586,6 +611,7 @@ function saveBreadthSnapshot(date, data) {
     data.compositeScore || null, data.regime || null,
     data.mcclellanOsc || null, data.summationIndex || null
   );
+  return { saved: true, date };
 }
 
 function getBreadthHistory(days = 90) {
