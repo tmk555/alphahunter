@@ -213,7 +213,10 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
       daysToEarnings,
       earningsRisk: daysToEarnings != null && daysToEarnings >= 0 && daysToEarnings <= 14,
       volumeTrend: volumeTrend(q),
-      ...calcVCP(closes),
+      // Pass full OHLCV bars so calcVCP engages textbook mode (intraday
+      // high/low for pivot/stop + volume-drying confirmation). Falls back
+      // to price-only checks when bars are missing.
+      ...calcVCP(closes, barsMap[sym]),
       ma150, vsMA150,
       sepa, sepaScore,
       ...calcRSLine(closes, histMap['SPY'] || []),
