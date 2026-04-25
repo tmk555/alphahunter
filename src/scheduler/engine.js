@@ -11,6 +11,14 @@ const activeTasks = new Map();
 // Registry of built-in job type handlers
 const jobHandlers = new Map();
 
+// In-flight guard: keyed by job.id while executeJob is mid-run. Prevents the
+// same job from firing twice concurrently — a real risk because the startup
+// catch-up runner can overlap with a cron tick (e.g. the */2 pullback_watch
+// cron fires while catchup is still working through the queue and reaches
+// pullback_watch). Without this guard we'd double-update last_run_at, double
+// emit phone alerts, and double-bill any provider-call inside the handler.
+const inFlight = new Set();
+
 // ─── Job Type Registry ─────────────────────────────────────────────────────
 
 function registerJobType(type, { handler, description, defaultConfig = {} }) {
@@ -116,6 +124,22 @@ function toggleJob(id, enabled) {
 // ─── Execution ──────────────────────────────────────────────────────────────
 
 async function executeJob(job) {
+  // Skip if the same job is already mid-execution (catchup vs cron race).
+  // Returning a benign skip object — not throwing — keeps the cron task
+  // wrapper happy and the catchup runner's serial loop moving.
+  if (inFlight.has(job.id)) {
+    console.log(`  Scheduler: ⤳ ${job.name} already running — skipping concurrent fire`);
+    return { status: 'skipped', reason: 'in-flight' };
+  }
+  inFlight.add(job.id);
+  try {
+    return await _executeJobBody(job);
+  } finally {
+    inFlight.delete(job.id);
+  }
+}
+
+async function _executeJobBody(job) {
   const handler = jobHandlers.get(job.job_type);
   if (!handler) throw new Error(`No handler for job type: ${job.job_type}`);
 
@@ -212,6 +236,213 @@ function clearHistory(jobId) {
   }
 }
 
+// ─── Startup Catch-up Runner ────────────────────────────────────────────────
+//
+// Cron has no replay. If the process is down through a scheduled fire time,
+// that fire is just lost — node-cron does not check "did I miss anything?"
+// when it boots. For this user that meant: come back from a long weekend
+// or a server restart and the Friday-evening rs_scan_daily, the Sunday
+// weekly_digest, and Saturday's job_history_cleanup all silently never ran.
+// The Morning Brief on Monday then reads stale RS data and the user has no
+// signal that anything is wrong.
+//
+// runMissedJobsOnStartup walks every enabled job, classifies its cron's
+// natural cadence, computes the moment that job *should* have fired next
+// after its last_run_at, and fires it now if that moment is in the past.
+//
+// Cadence classification (NOT a full cron parser — just the four shapes
+// used by DEFAULT_JOBS):
+//   • "*/N * * * ..."     → minutes, interval = N min
+//   • "M * * * ..."       → hourly,  interval = 1 h
+//   • "M H * * 1-5" / "M H * * *" → daily, interval = 1 day
+//   • "M H * * D" (single dow) → weekly
+//
+// Daily rule (user-specified): fire if EITHER ≥24h have elapsed since
+// last_run_at OR a calendar day boundary (local midnight) has been crossed,
+// whichever comes first. A 16-hour overnight gap (yesterday 4:30 PM →
+// today 9 AM) is < 24 h but is a "new trading day", so the daily job
+// should still fire on the morning app-load.
+//
+// Weekly rule (user-specified): fire if EITHER ≥7 days have elapsed since
+// last_run_at OR a Monday boundary has been crossed since last_run_at,
+// whichever comes first. Anchoring weekly catch-up to "next Monday" keeps
+// the trading-week cadence intact even if last_run_at drifts off the
+// originally-scheduled day.
+//
+// First-run case (last_run_at IS NULL): always fire. This is the
+// "fresh install" path — the seed just inserted the row, the user wants
+// populated data on first pageview without waiting until the next cron.
+
+function classifyCadence(cronExpr) {
+  if (!cronExpr || typeof cronExpr !== 'string') return { cadence: 'unknown' };
+  const parts = cronExpr.trim().split(/\s+/);
+  if (parts.length !== 5) return { cadence: 'unknown' };
+  const [min, hour, , , dow] = parts;
+
+  // Step minute (e.g. "*/2", "*/15") → fast intraday cadence
+  const stepMin = min.match(/^\*\/(\d+)$/);
+  if (stepMin) {
+    const n = parseInt(stepMin[1], 10);
+    if (n > 0) return { cadence: 'minutes', intervalMs: n * 60 * 1000 };
+  }
+
+  // Specific minute, hour wildcard or range → hourly
+  if (/^\d+$/.test(min) && (hour === '*' || /^\d+-\d+$/.test(hour) || /^\*\//.test(hour))) {
+    return { cadence: 'hourly', intervalMs: 60 * 60 * 1000 };
+  }
+
+  // Specific minute + hour + single-digit dow → weekly
+  if (/^\d+$/.test(min) && /^\d+$/.test(hour) && /^\d+$/.test(dow)) {
+    return { cadence: 'weekly', dow: parseInt(dow, 10), intervalMs: 7 * 24 * 60 * 60 * 1000 };
+  }
+
+  // Specific minute + hour, dow wildcard or range (e.g. "1-5") → daily
+  if (/^\d+$/.test(min) && /^\d+$/.test(hour)) {
+    return { cadence: 'daily', intervalMs: 24 * 60 * 60 * 1000 };
+  }
+
+  return { cadence: 'unknown' };
+}
+
+// First Monday strictly after `date` (server local time). Used as the
+// "Monday boundary" for the weekly catch-up rule.
+function nextMondayMidnightAfter(date) {
+  const d = new Date(date.getTime());
+  const day = d.getDay();         // 0=Sun, 1=Mon, ..., 6=Sat
+  const daysUntilMon = ((1 - day + 7) % 7) || 7;  // strictly future — never 0
+  d.setDate(d.getDate() + daysUntilMon);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+// First local-midnight strictly after `date`. Used as the "day boundary"
+// for the daily catch-up rule — a daily job that ran at 4:30 PM yesterday
+// has crossed a day boundary at next midnight, so an app-load at 9 AM
+// today (only 16.5 h elapsed, < 24 h) should still fire it. Without this
+// the daily catchup silently skips the morning restart and the user's
+// data stays one trading day stale.
+function nextMidnightAfter(date) {
+  const d = new Date(date.getTime());
+  d.setDate(d.getDate() + 1);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+// Decide whether a job should fire on startup based on its cadence and last
+// run. Pure function (no DB / clock side-effects beyond the optional `now`),
+// so it's straightforward to unit-test.
+function shouldCatchUp(lastRunAt, cronExpr, now = new Date()) {
+  const cls = classifyCadence(cronExpr);
+  if (cls.cadence === 'unknown') {
+    return { fire: false, reason: 'cadence-unknown', cadence: 'unknown' };
+  }
+  if (!lastRunAt) {
+    return { fire: true, reason: 'never-run', cadence: cls.cadence };
+  }
+
+  // SQLite datetime('now') is UTC, stored without a 'Z' suffix.
+  // Append 'Z' so JS parses it as UTC instead of local time.
+  const last = new Date(lastRunAt.endsWith('Z') ? lastRunAt : lastRunAt + 'Z');
+  if (Number.isNaN(last.getTime())) {
+    return { fire: true, reason: 'invalid-last-run', cadence: cls.cadence };
+  }
+
+  if (cls.cadence === 'weekly') {
+    const sevenDays = new Date(last.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const nextMon   = nextMondayMidnightAfter(last);
+    const threshold = sevenDays < nextMon ? sevenDays : nextMon;
+    if (now >= threshold) {
+      return {
+        fire: true,
+        reason: `weekly-threshold-passed (${threshold.toISOString()})`,
+        cadence: 'weekly',
+      };
+    }
+    return { fire: false, reason: 'within-weekly-cadence', cadence: 'weekly' };
+  }
+
+  if (cls.cadence === 'daily') {
+    // Mirror the weekly rule at day-granularity: 24h elapsed OR a calendar
+    // day boundary crossed — whichever comes first. This catches the
+    // overnight-gap case where the trader restarts the app in the morning
+    // and the daily job last ran at the previous afternoon's close (only
+    // ~16 h ago, but a "new day" by every other measure that matters).
+    const oneDay     = new Date(last.getTime() + 24 * 60 * 60 * 1000);
+    const nextMid    = nextMidnightAfter(last);
+    const threshold  = oneDay < nextMid ? oneDay : nextMid;
+    if (now >= threshold) {
+      return {
+        fire: true,
+        reason: `daily-threshold-passed (${threshold.toISOString()})`,
+        cadence: 'daily',
+      };
+    }
+    return { fire: false, reason: 'within-daily-cadence', cadence: 'daily' };
+  }
+
+  // minutes / hourly — straightforward elapsed check (no boundary concept;
+  // these fire many times a day, so calendar-day rollover is irrelevant).
+  const ageMs = now.getTime() - last.getTime();
+  if (ageMs >= cls.intervalMs) {
+    return {
+      fire: true,
+      reason: `elapsed ${Math.round(ageMs / 1000)}s ≥ ${Math.round(cls.intervalMs / 1000)}s`,
+      cadence: cls.cadence,
+    };
+  }
+  return { fire: false, reason: 'within-cadence', cadence: cls.cadence };
+}
+
+// Walk every enabled scheduled_jobs row and execute the ones whose cadence
+// has lapsed. Serial (not parallel) — most of these jobs hit the same
+// upstream providers (Yahoo / Polygon / Alpaca) and the same SQLite handle,
+// so parallel kickoff would either rate-limit us or contend on writes.
+// `delayMs` is a small spacer between fires to be polite to those providers.
+async function runMissedJobsOnStartup({ delayMs = 250, now = new Date() } = {}) {
+  let rows;
+  try {
+    rows = db().prepare('SELECT * FROM scheduled_jobs WHERE enabled = 1').all();
+  } catch (e) {
+    console.error(`  Scheduler catchup: could not read scheduled_jobs: ${e.message}`);
+    return { fired: [], skipped: [], errored: [] };
+  }
+
+  const fired = [];
+  const skipped = [];
+  const errored = [];
+
+  for (const row of rows) {
+    const decision = shouldCatchUp(row.last_run_at, row.cron_expression, now);
+    if (!decision.fire) {
+      skipped.push({ name: row.name, cadence: decision.cadence, reason: decision.reason });
+      continue;
+    }
+
+    try {
+      const job = { ...row, config: JSON.parse(row.config || '{}') };
+      console.log(`  Scheduler catchup: ▶ ${row.name} [${decision.cadence}] ${decision.reason}`);
+      await executeJob(job);
+      fired.push({ name: row.name, cadence: decision.cadence, reason: decision.reason });
+    } catch (e) {
+      console.error(`  Scheduler catchup: ✗ ${row.name} threw: ${e.message}`);
+      errored.push({ name: row.name, error: e.message });
+    }
+
+    if (delayMs > 0) await new Promise(r => setTimeout(r, delayMs));
+  }
+
+  if (fired.length) {
+    console.log(`   Scheduler catchup: ✓ fired ${fired.length} missed job(s) [${fired.map(f => f.name).join(', ')}]`);
+  } else {
+    console.log(`   Scheduler catchup: ✓ no missed jobs (${skipped.length} within cadence)`);
+  }
+  if (errored.length) {
+    console.error(`   Scheduler catchup: ✗ ${errored.length} job(s) errored: ${errored.map(e => e.name).join(', ')}`);
+  }
+
+  return { fired, skipped, errored };
+}
+
 // ─── Startup ────────────────────────────────────────────────────────────────
 
 function startScheduler() {
@@ -247,4 +478,6 @@ module.exports = {
   executeJob, runJobNow,
   getJobHistory, getRecentHistory, clearHistory,
   startScheduler, stopScheduler, getSchedulerStatus,
+  // Catch-up runner (called once at boot from server.js)
+  runMissedJobsOnStartup, classifyCadence, shouldCatchUp,
 };

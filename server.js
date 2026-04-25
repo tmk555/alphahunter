@@ -151,7 +151,7 @@ const { startStopMonitor } = require('./src/broker/monitor');
 const alpacaConfig = require('./src/broker/alpaca').getConfig();
 
 // ─── Job Scheduler (Tier 5) ─────────────────────────────────────────────────
-const { startScheduler }                = require('./src/scheduler/engine');
+const { startScheduler, runMissedJobsOnStartup } = require('./src/scheduler/engine');
 const { setRunScan, setSectorEtfs, setIndustryEtfs, seedDefaultJobs } = require('./src/scheduler/jobs');
 
 // ─── TLS — optional HTTPS listener ──────────────────────────────────────────
@@ -238,4 +238,28 @@ app.listen(PORT, () => {
     console.error(`   Scheduler seed failed: ${e.message}`);
   }
   startScheduler();
+
+  // Catch-up runner: walk every enabled job and fire any whose natural
+  // cadence has lapsed during downtime (overnight, weekend, deploy gap).
+  // Without this, weekend restarts silently skip Friday's rs_scan_daily,
+  // Sunday's weekly_digest, etc. — Monday morning UI then reads stale
+  // data with no visible signal.
+  //
+  // Fired async (not awaited) so the listen callback doesn't block on
+  // potentially long-running scans. The in-flight guard inside executeJob
+  // prevents same-job double-fires if a fast cron task ticks while
+  // catchup is still working through the queue.
+  //
+  // Disable with SCHEDULER_DISABLE_CATCHUP=1 if a deploy needs to come
+  // up cold without firing any jobs (e.g. troubleshooting a job that
+  // crashes on every run).
+  if (process.env.SCHEDULER_DISABLE_CATCHUP !== '1') {
+    setImmediate(() => {
+      runMissedJobsOnStartup().catch(e =>
+        console.error(`   Scheduler catchup failed: ${e.message}`)
+      );
+    });
+  } else {
+    console.log('   Scheduler catchup: ⊘ disabled (SCHEDULER_DISABLE_CATCHUP=1)');
+  }
 });
