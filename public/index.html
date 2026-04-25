@@ -5067,6 +5067,12 @@ function MarketPulseTab() {
   const [upEarnErr, setUpEarnErr] = useState(null);
   const [upEarnLoading, setUpEarnLoading] = useState(false);
   const [upEarnDays, setUpEarnDays] = useState(7);
+  // Background-poll error state — surfaces when the 60s auto-refresh below
+  // can't reach /api/macro|fear-greed|breadth. Without this, a multi-minute
+  // outage left the tab quietly displaying stale data with no visible signal,
+  // which is dangerous for a position trader making sizing decisions.
+  const [pollErr, setPollErr] = useState(null);
+  const [lastPollOk, setLastPollOk] = useState(null); // ms-epoch of last good poll
 
   // VIX color thresholds — single source of truth used by the VIX tile, the
   // SPY-trend panel, and any future panel that wants to color VIX-derived
@@ -5146,7 +5152,22 @@ function MarketPulseTab() {
           }
           if (fg) setFng(fg);
           if (bw) setBWarning(bw);
-        } catch(_) {}
+          // If everything came back null the network is presumably down or
+          // the backend is unhealthy — flag it so the user sees the data is
+          // stale, even though no individual fetch threw.
+          if (!md && !fg && !bw) {
+            setPollErr('All endpoints returned no data');
+          } else {
+            setPollErr(null);
+            setLastPollOk(Date.now());
+          }
+        } catch(err) {
+          // Catch the unexpected: a bug inside the setX dispatch chain (e.g.
+          // a malformed response that throws on .map). Surface to console for
+          // devtools triage, and to the UI via the stale-pill below.
+          if (typeof console !== 'undefined') console.warn('[MarketPulse] background refresh failed:', err?.message || err);
+          setPollErr(err?.message || String(err));
+        }
       })();
     }, 60000);
     return () => clearInterval(id);
@@ -5423,9 +5444,14 @@ function MarketPulseTab() {
                     setBwApplying(true);
                     try {
                       const r = await api('/api/breadth/early-warning/apply',{method:'POST'});
-                      alert(`Applied ${r.applied?.applied||0} stop adjustment(s)`);
+                      // Use the global toast helper (set up by the App root,
+                      // see public/index.html:1311) for consistency with the
+                      // rest of the app — native alert() blocks the UI thread
+                      // and feels jarring against the rest of the toast UX.
+                      const n = r.applied?.applied || 0;
+                      window.showToast?.('Stops Tightened', `Applied ${n} stop adjustment${n === 1 ? '' : 's'}`);
                       load();
-                    } catch(e){ alert('Error: '+e.message); }
+                    } catch(e){ window.showToast?.('Error', e.message, true); }
                     setBwApplying(false);
                   }}>
                   {bwApplying ? 'Applying...' : 'Apply Stop Tightening'}
@@ -5817,9 +5843,15 @@ function MarketPulseTab() {
           {l:'Russell',  q:iwm,  big:false, col:'var(--amber)'},
           {l:'VIX',      q:vix,  big:true,  col: vixColor(vix?.price)},
           {l:'10Y Yield',q:t10,  big:false, col:'var(--cyan)', pct:false, sfx:'%'},
-          {l:'Yield Curve', q:null, big:false, col:spread&&spread<0?'var(--red)':'var(--green)',
+          {l:'Yield Curve', q:null, big:false, col:spread!=null && spread<0?'var(--red)':'var(--green)',
             customVal: spread!=null ? (spread > 0 ? `+${spread}%` : `${spread}%`) : '—',
-            customSub: spread&&spread<0 ? '⚠ INVERTED (10Y < 3M)' : spread&&spread===0 ? 'Flat' : `10Y minus 3M = ${spread}%`,
+            // Use explicit nullish check so spread===0 reaches the 'Flat' branch
+            // — the previous `spread && spread===0` was unreachable because 0
+            // is falsy, leaving '10Y minus 3M = 0%' as the de-facto Flat label.
+            customSub: spread == null ? ''
+              : spread < 0 ? '⚠ INVERTED (10Y < 3M)'
+              : spread === 0 ? 'Flat'
+              : `10Y minus 3M = ${spread}%`,
             customHistory: spreadHistory,
             customHasZero: true,
             title: 'Yield Curve = 10Y Treasury minus 3M Treasury. Normal: +100 to +250bps. 0 to +100bps = late-cycle caution. Negative = INVERTED: historically 80% recession signal within 12-18 months. Markets often rally 12-18 months after first inversion — do not short on inversion alone. Sustained -50bps for 3+ months = high conviction recession signal.'},
@@ -5870,8 +5902,20 @@ function MarketPulseTab() {
         </div>
       )}
 
-      <div style={{display:'flex',gap:8,marginBottom:14}}>
+      <div style={{display:'flex',gap:8,marginBottom:14,alignItems:'center'}}>
         <button className="btn btn-sm" onClick={load}>↻ Refresh</button>
+        {/* Stale-data pill — shown when the 60s auto-refresh has failed at
+            least once since the last good poll. Click Refresh to retry the
+            full load (which has its own per-endpoint catches). */}
+        {pollErr && (
+          <span title={`Background refresh failed: ${pollErr}${lastPollOk ? ` · last good poll ${Math.floor((Date.now()-lastPollOk)/1000)}s ago` : ''}`}
+                style={{fontSize:10,fontFamily:'var(--font-mono)',padding:'2px 8px',
+                        background:'rgba(240,165,0,0.12)',
+                        border:'1px solid rgba(240,165,0,0.45)',borderRadius:3,
+                        color:'var(--amber)',letterSpacing:1,cursor:'help'}}>
+            STALE — auto-refresh failing
+          </span>
+        )}
       </div>
 
       {/* O'Neil Cycle Engine — distribution days, FTD, rally attempt */}
@@ -5951,13 +5995,31 @@ function MarketPulseTab() {
                   )}
                 </div>
               )}
-              {cycle.distributionDays?.dates?.length > 0 && (
-                <div style={{marginTop:6,fontSize:9,color:'var(--text3)',textAlign:'left'}}>
-                  {cycle.distributionDays.dates.slice(-5).map((d,i) => (
-                    <div key={i} style={{padding:'1px 0'}}>{typeof d === 'object' ? `${d.date} ${d.chg}% (${d.index})` : d}</div>
-                  ))}
-                </div>
-              )}
+              {cycle.distributionDays?.dates?.length > 0 && (() => {
+                // `dates` is the post-scrub active set (string[]) per
+                // src/risk/regime.js:734. The richer chg/index detail lives
+                // in `all` (object[]). Cross-reference so the user sees
+                // -1.4% (SPY) on each active date instead of a bare YYYY-MM-DD.
+                // Pre-fix the JSX did `typeof d === 'object'` against a
+                // string-only array — that branch was unreachable, so the
+                // panel only ever rendered plain dates.
+                const allByDate = new Map();
+                for (const it of (cycle.distributionDays.all || [])) {
+                  if (it && it.date && !allByDate.has(it.date)) allByDate.set(it.date, it);
+                }
+                return (
+                  <div style={{marginTop:6,fontSize:9,color:'var(--text3)',textAlign:'left'}}>
+                    {cycle.distributionDays.dates.slice(-5).map((d, i) => {
+                      const detail = allByDate.get(d);
+                      return (
+                        <div key={i} style={{padding:'1px 0'}}>
+                          {detail ? `${detail.date} ${detail.chg>0?'+':''}${detail.chg}% (${detail.index})` : d}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
             <div style={{background:'var(--bg)',borderRadius:4,padding:12,textAlign:'center',border:'1px solid var(--border)'}}>
               <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:4}}>FOLLOW-THROUGH DAY</div>
@@ -6011,7 +6073,7 @@ function MarketPulseTab() {
               <div className="section-label" style={{color:'var(--green)',marginBottom:8}}>
                 ⬆ LEADERS — Highest IBD RS, above 50MA
               </div>
-              {leaders.length===0 && <div className="muted" style={{fontSize:12,padding:'10px 0'}}>Run RS Scanner first to populate</div>}
+              {leaders.length===0 && <div className="muted" style={{fontSize:12,padding:'10px 0'}}>No qualifying leaders — filter: above 50MA + RS ≥ 70</div>}
               <table className="data-table">
                 <thead><tr><th>RS</th><th>Trend</th><th>Ticker</th><th>1D</th><th>1W</th><th>1M</th><th>vs 50MA</th></tr></thead>
                 <tbody>
@@ -6047,7 +6109,7 @@ function MarketPulseTab() {
               <div className="section-label" style={{color:'var(--red)',marginBottom:8}}>
                 ⬇ LAGGARDS — Lowest IBD RS (avoid/short)
               </div>
-              {laggards.length===0 && <div className="muted" style={{fontSize:12,padding:'10px 0'}}>Run RS Scanner first to populate</div>}
+              {laggards.length===0 && <div className="muted" style={{fontSize:12,padding:'10px 0'}}>No qualifying laggards — filter: below 50MA + RS ≤ 30</div>}
               <table className="data-table">
                 <thead><tr><th>RS</th><th>Trend</th><th>Ticker</th><th>1D</th><th>1W</th><th>1M</th><th>vs 50MA</th></tr></thead>
                 <tbody>
