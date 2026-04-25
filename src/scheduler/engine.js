@@ -304,6 +304,55 @@ function classifyCadence(cronExpr) {
   return { cadence: 'unknown' };
 }
 
+// Parse a cron field's day-of-week constraint and check whether `date`
+// satisfies it. Supports the four shapes used by DEFAULT_JOBS:
+//   • "*"        → all days
+//   • "0".."6"   → single dow (0=Sun, 6=Sat)
+//   • "a-b"      → inclusive range (e.g. "1-5" = Mon-Fri)
+//   • "a,b,c"    → comma-separated list (e.g. "0,6" = weekends)
+// Returns true when the field permits firing on `date`. Anything we don't
+// recognize is treated as permissive (fail-open) — better to fire a
+// suspect job once than silently miss a known-good one.
+//
+// Why this exists: pre-fix, my catch-up runner classified `30 16 * * 1-5`
+// as cadence="daily" and ignored the `1-5` weekday-only constraint. On a
+// Saturday morning app-load, rs_scan_daily and breadth_snapshot_daily
+// both fired — they wrote new rs_snapshots/breadth_snapshots rows using
+// live (Saturday) provider quotes, which differ subtly from Friday's
+// closing prints. The user's composite breadth score moved overnight on
+// a closed market. Honoring the dow constraint stops weekday-only jobs
+// from running on weekends.
+function cronAllowsDay(cronExpr, date) {
+  if (!cronExpr || typeof cronExpr !== 'string') return true;
+  const parts = cronExpr.trim().split(/\s+/);
+  if (parts.length !== 5) return true;
+  const dow = parts[4];
+  if (!dow || dow === '*') return true;
+
+  const today = date.getDay(); // 0=Sun..6=Sat (local time, matches node-cron)
+
+  // Comma list: "0,6"
+  if (dow.includes(',')) {
+    return dow.split(',').some(p => _dowAtomMatches(p.trim(), today));
+  }
+  return _dowAtomMatches(dow, today);
+}
+
+function _dowAtomMatches(atom, today) {
+  // Single digit
+  if (/^\d+$/.test(atom)) return parseInt(atom, 10) === today;
+  // Range "a-b"
+  const range = atom.match(/^(\d+)-(\d+)$/);
+  if (range) {
+    const lo = parseInt(range[1], 10);
+    const hi = parseInt(range[2], 10);
+    if (lo <= hi) return today >= lo && today <= hi;
+    // Wrap-around (e.g. "5-1" = Fri,Sat,Sun,Mon) — uncommon but valid cron.
+    return today >= lo || today <= hi;
+  }
+  return true; // unknown atom → fail-open
+}
+
 // First Monday strictly after `date` (server local time). Used as the
 // "Monday boundary" for the weekly catch-up rule.
 function nextMondayMidnightAfter(date) {
@@ -335,6 +384,20 @@ function shouldCatchUp(lastRunAt, cronExpr, now = new Date()) {
   const cls = classifyCadence(cronExpr);
   if (cls.cadence === 'unknown') {
     return { fire: false, reason: 'cadence-unknown', cadence: 'unknown' };
+  }
+  // Honor the cron's day-of-week constraint. Catch-up runs on app load,
+  // not at scheduled times, so a Saturday morning restart would otherwise
+  // fire weekday-only jobs (rs_scan_daily, breadth_snapshot_daily, …).
+  // That's how the user's composite breadth score moved 48→51 overnight
+  // on a closed market: catchup wrote a fresh row using live Saturday
+  // VIX quotes that diverge from Friday's at-close print. Skip when the
+  // dow excludes today.
+  //
+  // Weekly jobs (single-dow crons) are exempt: they intentionally fire
+  // on a non-matching day to fill in a missed slot, and the weekly
+  // threshold logic below already gates correctness.
+  if (cls.cadence !== 'weekly' && !cronAllowsDay(cronExpr, now)) {
+    return { fire: false, reason: 'dow-excludes-today', cadence: cls.cadence };
   }
   if (!lastRunAt) {
     return { fire: true, reason: 'never-run', cadence: cls.cadence };
@@ -479,5 +542,5 @@ module.exports = {
   getJobHistory, getRecentHistory, clearHistory,
   startScheduler, stopScheduler, getSchedulerStatus,
   // Catch-up runner (called once at boot from server.js)
-  runMissedJobsOnStartup, classifyCadence, shouldCatchUp,
+  runMissedJobsOnStartup, classifyCadence, shouldCatchUp, cronAllowsDay,
 };
