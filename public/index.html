@@ -3298,6 +3298,20 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
   // minRS/setMinRS now from App props — persists across tab switches
   const [expandedTicker, setExpandedTicker] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  // Live account size for position-sizing math in stageFromRS. Pre-fix
+  // the pyramid path hardcoded $100,000 / $1,000 risk — fine for a stub
+  // but wrong for any user whose account isn't exactly that size. Fetch
+  // once on mount; broker equity wins, then config.accountSize, then a
+  // 100k fallback so an offline broker doesn't break staging entirely.
+  const [accountSize, setAccountSize] = useState(100000);
+  useEffect(() => {
+    api('/api/portfolio/status')
+      .then(d => {
+        const live = d?.broker?.equity ?? d?.config?.accountSize;
+        if (Number.isFinite(live) && live > 0) setAccountSize(live);
+      })
+      .catch(() => {});  // keep 100k fallback
+  }, []);
 
   // ── Universe-as-of filter ────────────────────────────────────────────────
   // A date picker that intersects the live scan with the S&P 500 (or other
@@ -3473,13 +3487,19 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
           body: JSON.stringify({ ticker, pivot: customEntry || undefined }),
         });
         if (!preview.ok) {
-          alert(`Cannot pyramid ${ticker}: ${preview.error}`);
+          // Native alert() blocks the UI thread and looks out of place
+          // against the rest of the app's toast UX. Switched to the
+          // global showToast helper (set up at line 1311 by App root).
+          window.showToast?.('Pyramid Failed', `${ticker}: ${preview.error}`, true);
           setRsStaging(null);
           return;
         }
-        // Default qty = account position sized for pilot-stop distance
-        const accountSize = 100000; // rough default; could fetch from /api/portfolio
-        const riskPerTrade = 1000;  // 1% default
+        // Position size = (1% of account) per tranche × 3 tranches, sized
+        // by pilot-stop distance. accountSize is fetched on mount from
+        // /api/portfolio/status (broker equity → config → 100k fallback)
+        // so this number reflects the trader's real bankroll instead of
+        // the old hardcoded $100,000 stub.
+        const riskPerTrade = accountSize * 0.01;
         const pilotRisk = preview.triggers.pilot - preview.stop;
         const totalQty = Math.max(3, Math.floor((riskPerTrade * 3) / pilotRisk));
 
