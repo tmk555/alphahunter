@@ -92,14 +92,24 @@ module.exports = function(UNIVERSE, SECTOR_MAP) {
   });
 
   // /api/leaders-laggards
+  // Leaders: above 50MA AND high RS — names actually leading the tape.
+  // Laggards: below 50MA AND low RS — Stage-4-ish weakness, real downtrenders.
+  // Symmetric structure prevents the previous bug where "not in leaders" was
+  // labelled "laggard" — that mislabelled mid-RS names with strong vsMA50
+  // (e.g. consolidating breakouts) as avoid/short candidates.
   router.get('/leaders-laggards', async (req, res) => {
     try {
       const stocks  = await runRSScan(UNIVERSE, SECTOR_MAP);
       const history = loadRSHistory();
       const all = stocks.map(s => ({ ...s, rsTrend: getRSTrend(s.ticker, history) }));
-      const leaders  = all.filter(s => s.vsMA50 != null && s.vsMA50 > 0).sort((a,b) => b.rsRank-a.rsRank).slice(0,15);
-      const lSet     = new Set(leaders.map(s => s.ticker));
-      const laggards = all.filter(s => !lSet.has(s.ticker)).sort((a,b) => a.rsRank-b.rsRank).slice(0,15);
+      const leaders  = all
+        .filter(s => s.vsMA50 != null && s.vsMA50 > 0 && s.rsRank != null && s.rsRank >= 70)
+        .sort((a, b) => b.rsRank - a.rsRank)
+        .slice(0, 15);
+      const laggards = all
+        .filter(s => s.vsMA50 != null && s.vsMA50 < 0 && s.rsRank != null && s.rsRank <= 30)
+        .sort((a, b) => a.rsRank - b.rsRank)
+        .slice(0, 15);
       res.json({ leaders, laggards });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });

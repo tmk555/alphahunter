@@ -858,6 +858,37 @@ registerJobType('swing_exit_check', {
   },
 });
 
+// ─── Breadth Snapshot — Daily breadth + composite + McClellan persist ──────
+// Without a daily writer, breadth_snapshots only fills in when a user opens
+// the Market Pulse tab (getFullBreadthDashboard saves on read). On weekends
+// nobody opens the app, so when Monday's Breadth Early Warning runs at the
+// open it has stale data and reads NONE for level when the tape was actually
+// deteriorating across Friday's close. This job runs post-RS-scan so the
+// composite reads the same-day rs_snapshots the scan just wrote.
+registerJobType('breadth_snapshot', {
+  description: 'Persist daily breadth snapshot (composite + McClellan + divergence) for early-warning history',
+  defaultConfig: {},
+  handler: async () => {
+    const { getFullBreadthDashboard } = require('../signals/breadth');
+    // Fetch quotes so VIX term structure + credit spread components can
+    // contribute to the composite — same shape the live tab uses.
+    let quotes = null;
+    try {
+      quotes = await getQuotes(['^VIX', 'TLT', 'HYG']);
+    } catch (_) { /* breadth still computes without these, just lower fidelity */ }
+    const dashboard = await getFullBreadthDashboard(quotes);
+    return {
+      date: dashboard?.date || null,
+      compositeScore: dashboard?.composite?.score ?? null,
+      regime: dashboard?.composite?.regime ?? null,
+      pctAbove50MA: dashboard?.breadth?.pctAbove50MA ?? null,
+      mcclellan: dashboard?.mcclellan?.current ?? null,
+      divergence: !!dashboard?.divergence?.divergence,
+      saved: !!dashboard?.date,
+    };
+  },
+});
+
 // Shared helper — builds channel list from env vars when no DB channels exist
 function _envFallbackChannels() {
   const channels = [];
@@ -1155,6 +1186,21 @@ const DEFAULT_JOBS = [
     job_type: 'edge_close_outcomes',
     cron_expression: '30 17 * * 1-5',  // 5:30 PM server local, weekdays
     config: { minAgeDays: 5, limit: 500 },
+  },
+
+  // ─── Breadth Snapshot — Daily persist after RS scan ────────────────────
+  // Writes a fresh row in breadth_snapshots so the early-warning system
+  // (signals/breadth-warning.js) has same-day deltas to compute against on
+  // every open. Without this row the warning silently reads "Insufficient
+  // breadth history" until a user happens to open the Market Pulse tab.
+  // Runs at 4:50 PM — after rs_scan_daily (4:30) writes the rs_snapshots
+  // row that breadth derives % above 50MA / 200MA from.
+  {
+    name: 'breadth_snapshot_daily',
+    description: 'Persist daily breadth snapshot (composite + McClellan + divergence)',
+    job_type: 'breadth_snapshot',
+    cron_expression: '50 16 * * 1-5',  // 4:50 PM server local, weekdays
+    config: {},
   },
 
   // ─── Weekly Digest — Sunday evening performance summary ────────────────

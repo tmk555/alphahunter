@@ -2,7 +2,7 @@
 // Simple regime: SPY vs MAs + VIX (existing)
 // Enhanced regime: Distribution days, FTD, rally attempt (new)
 
-const { cacheGet, cacheSet, TTL_QUOTE } = require('../data/cache');
+const { cacheGet, cacheSet, cacheInvalidatePrefix, TTL_QUOTE } = require('../data/cache');
 // Route through the provider manager — cascades Polygon → Yahoo → FMP → AV for
 // quotes (Alpaca is skipped for quotes — history-only) and Polygon → Alpaca →
 // Yahoo → FMP → AV for history. When a single provider is down (Yahoo 401,
@@ -171,9 +171,17 @@ async function getMarketRegime() {
           };
 
           // Breadth can DOWNGRADE regime (never upgrade — that's the FTD's job)
+          // Hard floor at SIZE_FLOOR — without it, the cascade compounding
+          // (BULL × 0.70 × 0.85 from divergence, then macro × 0.85, …) can
+          // drive sizing toward 0 inside a single regime call. That kills new
+          // entries even when SPY is comfortably above 50/200MA. The floor
+          // matches MIN_SIZE_MULT in conviction.js so a single regime read
+          // can't size below the global minimum unless the basic regime says
+          // so (which sets sizeMultiplier=0 directly above).
+          const SIZE_FLOOR = 0.25;
           if (composite.sizeMultiplier < sizeMultiplier && composite.score < 40) {
             const prevRegime = regime;
-            sizeMultiplier = Math.max(sizeMultiplier * 0.7, composite.sizeMultiplier);
+            sizeMultiplier = Math.max(sizeMultiplier * 0.7, composite.sizeMultiplier, SIZE_FLOOR);
             if (sizeMultiplier < 0.5 && regime === 'BULL / RISK ON') {
               regime = 'NEUTRAL'; color = '#f0a500';
               warning = `Breadth deteriorating (score ${composite.score}/100) — reducing exposure`;
@@ -188,7 +196,7 @@ async function getMarketRegime() {
           if (divergence.divergence) {
             breadthOverlay.divergenceWarning = divergence.message;
             if (sizeMultiplier >= 0.75) {
-              sizeMultiplier *= 0.85;
+              sizeMultiplier = Math.max(sizeMultiplier * 0.85, SIZE_FLOOR);
               warning = (warning ? warning + '. ' : '') + 'BREADTH DIVERGENCE detected — reduce new entries';
             }
           }
@@ -454,12 +462,27 @@ function _countDistributionDays(bars, indexLabel) {
     if (!(chg <= -0.002 && recent25[i].volume > vol50Avg)) continue;
     rawCount++;
 
-    // Did the index subsequently close ≥+5% above this dist-day close?
-    // Scan only within recent25 — anything farther back is already aged out.
+    // Did the index subsequently close ≥+5% above this dist-day close AND
+    // hold that recovery for at least 2 consecutive sessions? The 2-session
+    // hold filters dead-cat bounces in CORRECTION/BEAR regimes — without it,
+    // a single +5% reflex day inside a downtrend invalidated dist days that
+    // were still actively warning. Sustained recovery is what O'Neil meant
+    // by "the market absorbed the selling".
     const scrubThreshold = recent25[i].close * (1 + RECOVERY_SCRUB_PCT);
     let recovered = false;
-    for (let j = i + 1; j < recent25.length; j++) {
-      if (recent25[j].close >= scrubThreshold) { recovered = true; break; }
+    for (let j = i + 1; j < recent25.length - 1; j++) {
+      if (recent25[j].close >= scrubThreshold &&
+          recent25[j + 1].close >= scrubThreshold) {
+        recovered = true;
+        break;
+      }
+    }
+    // Edge case: the most recent bar may itself be the recovery — accept a
+    // single-bar recovery only on the very last session so we don't have to
+    // wait an extra day to scrub a day that genuinely cleared.
+    if (!recovered && recent25.length >= 2) {
+      const last = recent25[recent25.length - 1];
+      if (last && last.close >= scrubThreshold && last !== recent25[i]) recovered = true;
     }
     if (recovered) scrubbed.push(recent25[i].date);
     else           active.push(recent25[i].date);
@@ -670,7 +693,16 @@ async function autoDetectCycleState() {
       mode = 'FTD_FAILED'; confidence = 65; action = 'WATCH_ONLY';
     } else if (ftdFired && !ftdConfirmed) {
       mode = 'FTD_FIRED'; confidence = 60; action = 'WATCH_ONLY';
-    } else if (rallyDay >= 1 && rallyDay <= 7 && !above50) {
+    } else if (rallyDay >= 1 && rallyDay <= 7 && !above50
+               // Rally confirmation: SPY must have rallied at least 2% off
+               // the swing low. Without this, ANY day 1-7 sequence (even one
+               // that ground sideways or made lower lows) was being labelled
+               // RALLY_ATTEMPT, dragging confidence to 50 and lighting up
+               // the FTD-watch UI on tape that wasn't actually rallying.
+               // 2% threshold is the floor O'Neil uses to distinguish a
+               // legitimate rally attempt from random oscillation.
+               && last20[swingLowIdx]?.close > 0
+               && spyNow / last20[swingLowIdx].close >= 1.02) {
       mode = 'RALLY_ATTEMPT'; confidence = 50; action = 'WATCH_ONLY';
     } else if (above50 && above200 && ma200Rising && distCount <= 2) {
       mode = 'UPTREND'; confidence = 90; action = 'FULL_DEPLOY';
@@ -739,6 +771,11 @@ async function autoDetectCycleState() {
     };
 
     cacheSet('cycle:auto', result);
+    // Atomic invalidation: regime is a derived view that embeds this cycle
+    // result. Without this, a refreshed cycle could be served alongside a
+    // 60s-stale regime that captured the previous cycle state — distribution
+    // count and FTD flags drifting between tabs is the symptom.
+    cacheInvalidatePrefix('regime');
     return result;
   } catch (e) {
     console.warn('Cycle detection error:', e.message);

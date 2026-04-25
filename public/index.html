@@ -5068,6 +5068,31 @@ function MarketPulseTab() {
   const [upEarnLoading, setUpEarnLoading] = useState(false);
   const [upEarnDays, setUpEarnDays] = useState(7);
 
+  // VIX color thresholds — single source of truth used by the VIX tile, the
+  // SPY-trend panel, and any future panel that wants to color VIX-derived
+  // signals. Hardcoded numbers in two places drifted (15/25 vs 20/28) before
+  // this was unified, leaving the tile saying "amber" while the panel said
+  // "normal". Override at runtime by setting `window.VIX_THRESHOLDS = {...}`
+  // in the browser console if you want to backtest a different sensitivity.
+  const VIX_THRESHOLDS = (typeof window !== 'undefined' && window.VIX_THRESHOLDS) || {
+    calm:     15,   // < calm     → green / "CALM"
+    normal:   20,   // < normal   → green / "NORMAL"
+    elevated: 28,   // < elevated → amber / "ELEVATED"
+                    // >= elevated → red / "FEAR"
+  };
+  const vixColor = (v) =>
+    v == null            ? 'var(--text2)' :
+    v <  VIX_THRESHOLDS.calm     ? 'var(--green)' :
+    v <  VIX_THRESHOLDS.normal   ? 'var(--green)' :
+    v <  VIX_THRESHOLDS.elevated ? 'var(--amber)' :
+                                   'var(--red)';
+  const vixLabel = (v) =>
+    v == null            ? '—'         :
+    v <  VIX_THRESHOLDS.calm     ? 'CALM'     :
+    v <  VIX_THRESHOLDS.normal   ? 'NORMAL'   :
+    v <  VIX_THRESHOLDS.elevated ? 'ELEVATED' :
+                                   'FEAR';
+
   // Sparkline period ranges — map to trading-day slice length.
   // Backend /api/macro serves up to 252 trading days (~1Y) per symbol, so
   // any range up to 1Y is a cheap client-side slice. YTD is resolved by
@@ -5171,20 +5196,37 @@ function MarketPulseTab() {
     setUpEarnLoading(false);
   }
 
-  // Color band for Fear & Greed 0-100 — matches CNN's own palette so the
-  // panel reads the same as fearandgreed.cnn.com.
+  // Color band for Fear & Greed 0-100 — INVERTED from CNN's "green = greed"
+  // palette because for a position trader the contrarian read is the actionable
+  // one: Extreme Greed at sustained 80+ = crowd is loaded long, mean-reversion
+  // pressure builds → red/danger. Extreme Fear at sustained <20 = crowd is
+  // capitulating, historically the best long entries → green/opportunity.
+  // Neutral stays grey. This matches how hedge funds use the index, not how
+  // CNN's retail-targeted dial colors it.
   const fngColor = (s) => {
     if (s == null) return 'var(--text3)';
-    if (s < 25)  return '#ff3d57';   // extreme fear
-    if (s < 45)  return '#f0a500';   // fear
+    if (s < 25)  return '#00e676';   // extreme fear   → contrarian opportunity
+    if (s < 45)  return '#69f0ae';   // fear           → cautiously bullish
     if (s <= 55) return '#bdbdbd';   // neutral
-    if (s <= 74) return '#69f0ae';   // greed
-    return '#00e676';                // extreme greed
+    if (s <= 74) return '#f0a500';   // greed          → caution
+    return '#ff3d57';                // extreme greed  → contrarian danger
   };
 
+  // Mode color — aligned with the action color so the user gets a consistent
+  // visual: any mode whose action is CASH is red, TIGHTEN is amber, WATCH_ONLY
+  // is amber/cyan, FULL_DEPLOY is green. Previously CORRECTION was orange
+  // (#ff8c00) while BEAR was red (#ff3d57) — both produce action=CASH so
+  // splitting them visually was confusing ("which is worse?").
   const modeColor = m => ({
-    UPTREND:'#00e676', UPTREND_PRESSURE:'#f0a500', FTD_CONFIRMED:'#69f0ae', FTD_FIRED:'#f0a500',
-    FTD_FAILED:'#ff3d57', RALLY_ATTEMPT:'#80d8ff', CORRECTION:'#ff8c00', BEAR:'#ff3d57', CHOPPY:'#888',
+    UPTREND:           '#00e676',  // FULL_DEPLOY — risk on
+    UPTREND_PRESSURE:  '#f0a500',  // TIGHTEN
+    FTD_CONFIRMED:     '#69f0ae',  // FULL_DEPLOY — confirmed rally
+    FTD_FIRED:         '#f0a500',  // WATCH_ONLY — pending confirmation
+    FTD_FAILED:        '#ff3d57',  // WATCH_ONLY — distribution followed
+    RALLY_ATTEMPT:     '#80d8ff',  // WATCH_ONLY — early-stage rally
+    CORRECTION:        '#ff3d57',  // CASH — risk off (was #ff8c00, now matches BEAR)
+    BEAR:              '#ff3d57',  // CASH — risk off
+    CHOPPY:            '#888',     // WATCH_ONLY — sideways
   }[m] || '#888');
 
   const actionLabel = a => ({
@@ -5244,6 +5286,18 @@ function MarketPulseTab() {
             {regime.exposureRamp.ftdConfirmed && ' · FTD confirmed'}
             {regime.exposureRamp.distDays > 0 && ` · ${regime.exposureRamp.distDays} dist days`}
           </span>
+          {/* Modulation pill — when breadth/macro downshifted the raw ramp
+              tier, the user MUST see why or REDUCED/HALF reads as a mystery.
+              Surfaced unconditionally whenever the modulator fired (see
+              src/risk/regime.js:247-287). */}
+          {regime.exposureRamp.modulated && regime.exposureRamp.modulationReasons?.length > 0 && (
+            <span style={{fontSize:10,color:'var(--amber)',fontFamily:'var(--font-mono)',
+                          padding:'2px 8px',background:'rgba(240,165,0,0.10)',
+                          border:'1px solid rgba(240,165,0,0.35)',borderRadius:3}}
+                  title={`Raw tier ${regime.exposureRamp.baseExposureLevel} (${regime.exposureRamp.baseMaxHeatPct}% heat) → ${regime.exposureRamp.exposureLevel} after market-internals downshift. Source: src/risk/regime.js:247-287`}>
+              modulated {regime.exposureRamp.baseExposureLevel} → {regime.exposureRamp.exposureLevel}: {regime.exposureRamp.modulationReasons.join(' · ')}
+            </span>
+          )}
           {/* Why-explainer: named reason the tier landed where it did.
               Especially important for REDUCED, which otherwise reads as
               "something's wrong" without saying what. Mirrors the decision
@@ -5278,7 +5332,7 @@ function MarketPulseTab() {
         <div style={{padding:'14px 18px',background:bWarning.color+'15',border:`2px solid ${bWarning.color}`,borderRadius:8,marginBottom:14}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:12}}>
             <div style={{flex:1}}>
-              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8,flexWrap:'wrap'}}>
                 <span style={{fontFamily:'var(--font-mono)',fontSize:11,letterSpacing:2,color:bWarning.color,fontWeight:800}}>
                   BREADTH EARLY WARNING
                 </span>
@@ -5286,6 +5340,30 @@ function MarketPulseTab() {
                   padding:'2px 10px',background:bWarning.color+'25',borderRadius:3}}>
                   {bWarning.label}
                 </span>
+                {/* Stale snapshot badge — if the latest breadth_snapshots row
+                    is > 1 trading day old the warning is computing deltas
+                    against yesterday's stale data. Caused by missing the
+                    breadth_snapshot_daily cron (e.g. weekend, scan failed).
+                    Without this badge a CRITICAL warning could be acted on
+                    when the underlying data hasn't actually moved. */}
+                {(() => {
+                  const ld = bWarning.latest?.date;
+                  if (!ld) return null;
+                  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+                  if (ld >= today) return null;
+                  const ms = Date.parse(today) - Date.parse(ld);
+                  const daysBehind = Math.floor(ms / 86400000);
+                  if (daysBehind <= 1) return null;
+                  const c = daysBehind >= 5 ? 'var(--red)' : 'var(--amber)';
+                  const bg = daysBehind >= 5 ? 'rgba(255,61,87,0.12)' : 'rgba(240,165,0,0.12)';
+                  return (
+                    <span style={{fontSize:9,fontFamily:'var(--font-mono)',padding:'2px 7px',
+                      background:bg,border:`1px solid ${c}55`,borderRadius:3,color:c,letterSpacing:1}}
+                      title={`Latest breadth snapshot is from ${ld} (${daysBehind} day(s) ago). Deltas are against stale data — verify the breadth_snapshot_daily job is running before acting on this signal.`}>
+                      DATA STALE {daysBehind}D
+                    </span>
+                  );
+                })()}
               </div>
               <div style={{fontSize:12,color:'var(--text)',lineHeight:1.6,marginBottom:8}}>{bWarning.message}</div>
               <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
@@ -5462,7 +5540,56 @@ function MarketPulseTab() {
         <div className="panel" style={{padding:'14px 16px'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:4}}>
             <div>
-              <div className="panel-title" style={{marginBottom:0}}><span>UPCOMING EARNINGS</span> — next {upEarnDays} days</div>
+              <div className="panel-title" style={{marginBottom:0,display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                <span>UPCOMING EARNINGS</span><span>— next {upEarnDays} days</span>
+                {/* Coverage badge — flags when Yahoo's calendarEvents fan-out
+                    came back thin. Below 75% means a meaningful slice of the
+                    notable universe didn't return any earnings date, so the
+                    visible list is INCOMPLETE — the next refresh re-tries
+                    cold. Don't trust "0 holdings reporting" silently when
+                    the badge is amber/red. (route returns coverage in
+                    src/routes/market.js:281-290) */}
+                {(() => {
+                  const cv = upEarnings?.coverage;
+                  if (!cv || !cv.total) return null;
+                  const pct = (cv.withDate / cv.total) * 100;
+                  if (pct >= 75) return null;  // healthy — no badge
+                  const color = pct >= 50 ? 'var(--amber)' : 'var(--red)';
+                  const bg    = pct >= 50 ? 'rgba(240,165,0,0.12)' : 'rgba(255,61,87,0.12)';
+                  return (
+                    <span style={{fontSize:9,fontFamily:'var(--font-mono)',padding:'2px 7px',
+                      background:bg,border:`1px solid ${color}55`,borderRadius:3,color,letterSpacing:1}}
+                      title={`Yahoo returned earnings dates for only ${cv.withDate}/${cv.total} symbols (${pct.toFixed(0)}%). Threshold for healthy fan-out: ≥75%. List below may be incomplete; refresh in 30s.`}>
+                      THIN COVERAGE {pct.toFixed(0)}%
+                    </span>
+                  );
+                })()}
+                {/* RS snapshot freshness — leader-set in the universe comes
+                    from rs_snapshots latest date. If that's > 1 trading day
+                    old the leader pool can lag actual market leadership.
+                    Common cause: rs_scan_daily failed, weekend run, or
+                    fresh server install before first scan. */}
+                {(() => {
+                  const rsDate = upEarnings?.rsSnapshotDate;
+                  if (!rsDate) return null;
+                  // Compare to today (UTC date string for stability)
+                  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+                  if (rsDate >= today) return null;
+                  // Days behind — don't yell about a single weekend gap
+                  const ms = Date.parse(today) - Date.parse(rsDate);
+                  const daysBehind = Math.floor(ms / 86400000);
+                  if (daysBehind <= 1) return null;
+                  const color = daysBehind >= 5 ? 'var(--red)' : 'var(--amber)';
+                  const bg    = daysBehind >= 5 ? 'rgba(255,61,87,0.12)' : 'rgba(240,165,0,0.12)';
+                  return (
+                    <span style={{fontSize:9,fontFamily:'var(--font-mono)',padding:'2px 7px',
+                      background:bg,border:`1px solid ${color}55`,borderRadius:3,color,letterSpacing:1}}
+                      title={`Latest RS snapshot is from ${rsDate} (${daysBehind} day(s) ago). The "leader" tag below is computed from this snapshot — actual leadership may have rotated. Run /api/rs-scan or wait for the rs_scan_daily cron.`}>
+                      RS STALE {daysBehind}D
+                    </span>
+                  );
+                })()}
+              </div>
               <div className="panel-sub" style={{marginBottom:0}}>
                 Your holdings + mega-caps + RS leaders. Holdings first.
               </div>
@@ -5616,8 +5743,14 @@ function MarketPulseTab() {
                       `USO  RoC ${fmtRoc(d.usoRoc20)}  → contrib ${fmtContrib(c.uso)}   (asymmetric: >+15%=-1, >+10%=-0.5 oil shock)`,
                       '',
                     ];
-                    const nonSpy = (c.tlt || 0) + (c.gld || 0) + (c.uup || 0) + (c.uso || 0);
-                    const raw = (c.spy || 0) + nonSpy;
+                    // Round the partial sums to 1 decimal — contributions are
+                    // in 0.5 increments per the rules above, but JS float math
+                    // (e.g. -0.5 + -1 + 0 + 0) can produce 0.000000001-style
+                    // residue that flips a `<= 0` comparison and triggers the
+                    // wrong confirmation-cap branch. Mirror the display rounding.
+                    const round1 = v => Math.round(v * 10) / 10;
+                    const nonSpy = round1((c.tlt || 0) + (c.gld || 0) + (c.uup || 0) + (c.uso || 0));
+                    const raw = round1((c.spy || 0) + nonSpy);
                     lines.push(`Raw sum: ${fmtContrib(raw)}   (SPY ${fmtContrib(c.spy)} + non-SPY ${fmtContrib(nonSpy)})`);
                     if ((c.spy || 0) >= 2 && nonSpy <= 0) {
                       lines.push('⚠ Confirmation cap: SPY alone at +2 with no non-SPY tailwind → capped at +1.');
@@ -5668,7 +5801,7 @@ function MarketPulseTab() {
           {l:'S&P 500',  q:spy,  big:true,  col:'var(--cyan)'},
           {l:'Nasdaq',   q:qqq,  big:false, col:'var(--purple)'},
           {l:'Russell',  q:iwm,  big:false, col:'var(--amber)'},
-          {l:'VIX',      q:vix,  big:true,  col: vix?.price<15?'var(--green)':vix?.price<25?'var(--amber)':'var(--red)'},
+          {l:'VIX',      q:vix,  big:true,  col: vixColor(vix?.price)},
           {l:'10Y Yield',q:t10,  big:false, col:'var(--cyan)', pct:false, sfx:'%'},
           {l:'Yield Curve', q:null, big:false, col:spread&&spread<0?'var(--red)':'var(--green)',
             customVal: spread!=null ? (spread > 0 ? `+${spread}%` : `${spread}%`) : '—',
@@ -5712,10 +5845,10 @@ function MarketPulseTab() {
               <div style={{fontFamily:'var(--font-mono)',fontSize:14,color:regime.above200?'var(--green)':'var(--red)',fontWeight:700}}>{regime.above200?'ABOVE ✓':'BELOW ✗'}</div>
               {regime.spy200 && <div style={{fontSize:10,color:'var(--text3)',marginTop:4}}>MA: ${regime.spy200?.toFixed(1)}</div>}
             </div>
-            <div style={{textAlign:'center',padding:'10px',background:'var(--bg)',borderRadius:4,border:`1px solid ${regime.vixLevel<20?'rgba(0,230,118,0.3)':regime.vixLevel<28?'rgba(240,165,0,0.3)':'rgba(255,61,87,0.3)'}`}}>
+            <div style={{textAlign:'center',padding:'10px',background:'var(--bg)',borderRadius:4,border:`1px solid ${regime.vixLevel<VIX_THRESHOLDS.normal?'rgba(0,230,118,0.3)':regime.vixLevel<VIX_THRESHOLDS.elevated?'rgba(240,165,0,0.3)':'rgba(255,61,87,0.3)'}`}}>
               <div style={{fontSize:10,color:'var(--text3)',marginBottom:6}}>VIX REGIME</div>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:700,color:regime.vixLevel<20?'var(--green)':regime.vixLevel<28?'var(--amber)':'var(--red)'}}>
-                {regime.vixLevel<15?'CALM':regime.vixLevel<20?'NORMAL':regime.vixLevel<28?'ELEVATED':'FEAR'}
+              <div style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:700,color:vixColor(regime.vixLevel)}}>
+                {vixLabel(regime.vixLevel)}
               </div>
               <div style={{fontSize:13,color:'var(--text)',fontFamily:'var(--font-mono)',marginTop:4}}>{regime.vixLevel?.toFixed(1)}</div>
             </div>
@@ -5752,11 +5885,24 @@ function MarketPulseTab() {
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:10}}>
             <div title={(() => {
               const dd = cycle.distributionDays || {};
+              // Union breakdown — same union the regime uses (regime.js:563)
+              // so the user sees WHY the headline count > each index alone.
+              const spyDates = new Set(dd.spy?.dates || []);
+              const qqqDates = new Set(dd.qqq?.dates || []);
+              const both     = [...spyDates].filter(d => qqqDates.has(d));
+              const spyOnly  = [...spyDates].filter(d => !qqqDates.has(d));
+              const qqqOnly  = [...qqqDates].filter(d => !spyDates.has(d));
               const lines = [
                 `Active (after O'Neil filters): ${dd.count ?? 0}`,
                 `Raw 25-session count: ${dd.rawCount25 ?? dd.count ?? 0}`,
                 `Scrubbed by +5% recovery: ${dd.scrubbedCount ?? 0}`,
                 `In last 10 sessions: ${dd.recent10Count ?? 0}`,
+                '',
+                'SPY+QQQ union breakdown:',
+                `• Both indices same day: ${both.length}`,
+                `• SPY only: ${spyOnly.length}`,
+                `• QQQ only: ${qqqOnly.length}`,
+                `• Total union: ${dd.count ?? 0} (a day on EITHER index counts)`,
                 '',
                 "O'Neil rules applied:",
                 '• 25-session hard window (older days age out)',

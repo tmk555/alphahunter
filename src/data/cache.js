@@ -25,4 +25,20 @@ function cacheClear() {
   for (const key of Object.keys(CACHE)) delete CACHE[key];
 }
 
-module.exports = { CACHE, TTL_QUOTE, TTL_HIST, cacheGet, cacheSet, cacheClear };
+// Invalidate every cache entry whose key starts with `prefix`. Used by callers
+// that want atomic invalidation of a derived family — e.g. regime is derived
+// from cycle, so when cycle:* is updated the regime cache must drop too,
+// otherwise a 60s window of stale regime can serve a stale embedded cycle.
+function cacheInvalidatePrefix(prefix) {
+  if (!prefix) return 0;
+  let n = 0;
+  for (const key of Object.keys(CACHE)) {
+    if (key.startsWith(prefix)) { delete CACHE[key]; n++; }
+  }
+  return n;
+}
+
+module.exports = {
+  CACHE, TTL_QUOTE, TTL_HIST,
+  cacheGet, cacheSet, cacheClear, cacheInvalidatePrefix,
+};

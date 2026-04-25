@@ -285,6 +285,11 @@ router.get('/market/upcoming-earnings', async (req, res) => {
       universe: symbols.length,
       count: items.length,
       coverage: { withDate: withDateCount, total: symbols.length },
+      // RS snapshot freshness — UI uses this to flag when the leader-set
+      // contributing to the universe is stale (e.g. weekend, scan failed,
+      // server hasn't run rs_scan_daily yet today). Compared against the
+      // current US date in the UI; > 1 trading day old triggers a badge.
+      rsSnapshotDate: latestRsDate,
       items,
     };
     if (coverageOk) cacheSet(cacheKey, out);
