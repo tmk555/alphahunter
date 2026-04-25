@@ -776,18 +776,25 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
           // Style per event kind
           let label, bg, border, fg, tickColor, tip;
           if (ev.kind === 'earnings_past') {
-            label = 'E';
+            label = 'Q';
             bg = 'rgba(240,165,0,0.12)';
             border = '1px solid rgba(240,165,0,0.4)';
             fg = '#f0a500';
             tickColor = 'rgba(240,165,0,0.35)';
             const d = ev.data || {};
-            const parts = [`Earnings ${ev.date}`];
-            if (d.epsActual != null)   parts.push(`EPS $${d.epsActual.toFixed(2)}`);
+            // Honest labeling: the date is the FISCAL QUARTER END, not the
+            // earnings announcement. Yahoo's free earningsHistory doesn't
+            // expose announcement dates — for TXN, Q1 2026 ended 03/31 but
+            // they actually reported on 04/22 (22-day gap). Use 'Q' marker +
+            // explicit "Quarter ended" wording so the user doesn't expect
+            // the price reaction to align with this marker.
+            const parts = [`Quarter ended ${ev.date}`];
+            if (d.epsActual != null)   parts.push(`Actual EPS $${d.epsActual.toFixed(2)}`);
             if (d.epsEstimate != null) parts.push(`(est $${d.epsEstimate.toFixed(2)})`);
             if (d.surprisePct != null) {
               parts.push(`${d.surprisePct > 0 ? '+' : ''}${d.surprisePct.toFixed(1)}% vs est`);
             }
+            parts.push('(announcement date typically 2-4 weeks after quarter end)');
             tip = parts.join(' · ');
           } else if (ev.kind === 'earnings_next') {
             label = 'E';
@@ -2490,15 +2497,23 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
                     <span style={{fontSize:10,color:'var(--green)',fontWeight:700,background:'rgba(0,230,118,0.12)',padding:'2px 6px',borderRadius:3}}>★ 3-qtr streak ≥25%</span>
                   )}
                 </div>
-                {/* Actual EPS per share from earningsHistory */}
+                {/* Actual EPS per share from earningsHistory.
+                    Date shown is FISCAL QUARTER END (e.g. 2026-03-31 for Q1
+                    2026), NOT the earnings announcement date. Yahoo's free
+                    API doesn't expose announcement dates — for TXN the gap
+                    can be 3+ weeks. Label and tooltip make this explicit so
+                    users don't read "03/31: $1.45" as "earnings announced
+                    on 03/31 with EPS $1.45". */}
                 {funds.epsActualQuarterly?.length > 0 && (
-                  <div style={{marginTop:6,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
-                    <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>ACTUAL EPS/SHARE:</span>
+                  <div style={{marginTop:6,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}
+                    title="Each entry shows the fiscal-quarter end date and the EPS reported for that quarter. The actual earnings announcement typically lands 2-4 weeks after quarter end.">
+                    <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>ACTUAL EPS/SHARE (qtr ended):</span>
                     {funds.epsActualQuarterly.map((q,i) => (
                       <span key={i} style={{fontSize:10,fontFamily:'var(--font-mono)',padding:'1px 6px',borderRadius:3,
                         background:q.surprisePct>0?'rgba(0,230,118,0.08)':q.surprisePct<0?'rgba(255,61,87,0.08)':'var(--bg)',
                         border:`1px solid ${q.surprisePct>0?'var(--green)':q.surprisePct<0?'var(--red)':'var(--border)'}`,
-                        color:'var(--text)'}}>
+                        color:'var(--text)'}}
+                        title={`Q ended ${q.date}: actual $${q.actual?.toFixed(2)}${q.estimate!=null?` vs est $${q.estimate.toFixed(2)}`:''}${q.surprisePct!=null?` (${q.surprisePct>0?'+':''}${(q.surprisePct*100).toFixed(1)}% surprise)`:''}. Announcement date is typically 2-4 weeks after quarter end.`}>
                         {q.date}: <strong>${q.actual?.toFixed(2)}</strong>
                         {q.surprisePct!=null && <span style={{color:q.surprisePct>0?'var(--green)':'var(--red)',marginLeft:3,fontSize:9}}>
                           {q.surprisePct>0?'+':''}{(q.surprisePct*100).toFixed(1)}%

@@ -515,14 +515,28 @@ async function yahooChartEvents(symbol) {
 
     // Historical earnings — last 4 quarters. Yahoo's `earningsHistory.history`
     // is ordered most-recent-first; reverse so oldest comes first (natural
-    // left-to-right on a chart). Each item has `quarter` (timestamp of the
-    // fiscal quarter end — NOT the report date, but close enough for a
-    // bottom-strip marker) plus `epsActual`, `epsEstimate`.
+    // left-to-right on a chart). Each item has `quarter` — the timestamp of
+    // the fiscal QUARTER END, NOT the report date. For TXN, Q1 2026 ended
+    // 2026-03-31 but TXN actually announced earnings on 2026-04-22 — a
+    // 22-day gap. Yahoo's free API doesn't expose announcement dates.
+    //
+    // Two sources of truth in this object now:
+    //   • `date` — uses Yahoo's pre-formatted `q.quarter.fmt` (string,
+    //     no TZ ambiguity) so the chart-marker date and the Levels-tab
+    //     "ACTUAL EPS" date agree. The old toISO(q.quarter.raw) path was
+    //     converting Unix timestamps via America/New_York, which shifted
+    //     the calendar day by 1 vs Yahoo's own formatted view (e.g.
+    //     "2026-03-30" vs "2026-03-31" for the same Q1-end).
+    //   • `kind: 'quarter_end'` — explicit type tag so consumers know
+    //     this isn't an announcement date. UI labels say "Q ended X"
+    //     accordingly.
     const rawHist = result.earningsHistory?.history || [];
     const earningsHistory = rawHist
       .map(h => {
-        const ts       = raw(h.quarter);
-        const date     = toISO(ts);
+        const fmt      = h.quarter?.fmt;
+        // Prefer Yahoo's pre-formatted string; fall back to raw→ET conversion
+        // only when fmt is missing (older API responses sometimes lack it).
+        const date     = fmt && /^\d{4}-\d{2}-\d{2}$/.test(fmt) ? fmt : toISO(raw(h.quarter));
         const actual   = raw(h.epsActual);
         const estimate = raw(h.epsEstimate);
         if (!date) return null;
@@ -532,6 +546,7 @@ async function yahooChartEvents(symbol) {
         }
         return {
           date,
+          kind: 'quarter_end',
           epsActual:   actual != null ? +actual.toFixed(2) : null,
           epsEstimate: estimate != null ? +estimate.toFixed(2) : null,
           surprisePct,
