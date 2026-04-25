@@ -653,22 +653,98 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
       const { symbol } = req.body;
       if (!symbol) return res.status(400).json({ error: 'symbol required' });
       const sym = symbol.toUpperCase().trim();
-      if (!SECTOR_MAP[sym]) {
-        return res.status(404).json({ error: `${sym} not in universe` });
+
+      // Re-issuing remove on an already-removed symbol used to 404 here.
+      // That blocked the user from cleaning up residual rs_snapshots /
+      // caches when they hit the "SLAB removed but still shows everywhere"
+      // case — the original removal flagged universe_mgmt but never
+      // touched the downstream tables. Now we let the call through and
+      // re-run the cleanup steps idempotently. `wasInUniverse` is
+      // returned in the response so the caller can distinguish first-time
+      // removal vs re-cleanup.
+      const wasInUniverse = !!SECTOR_MAP[sym];
+      const sector = SECTOR_MAP[sym] || null;
+
+      if (wasInUniverse) {
+        delete SECTOR_MAP[sym];
+        const idx = UNIVERSE.indexOf(sym);
+        if (idx !== -1) UNIVERSE.splice(idx, 1);
       }
-      const sector = SECTOR_MAP[sym];
-      delete SECTOR_MAP[sym];
-      const idx = UNIVERSE.indexOf(sym);
-      if (idx !== -1) UNIVERSE.splice(idx, 1);
-      // Mark removed in DB
-      db.prepare(`UPDATE universe_mgmt SET removed_date = date('now'), reason = 'removed via UI'
+
+      // Idempotent: only flips removed_date if currently NULL. Re-calls don't
+      // overwrite the original removal date.
+      db.prepare(`UPDATE universe_mgmt SET removed_date = date('now'), reason = COALESCE(reason, 'removed via UI')
         WHERE symbol = ? AND removed_date IS NULL`).run(sym);
-      // Freeze snapshot
+
+      // Look up the canonical removed_date so we can scope the rs_snapshots
+      // cleanup to "rows from removal day forward". Falls back to today if
+      // somehow the symbol was never tracked (defensive — shouldn't happen
+      // for symbols that were in SECTOR_MAP).
+      const removedDate = db.prepare(
+        "SELECT removed_date FROM universe_mgmt WHERE symbol = ?"
+      ).get(sym)?.removed_date
+        || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+
+      // Freeze snapshot — captures the symbol's last-known signals so
+      // backtest/replay can still see it AS IT EXISTED before removal.
       try {
         const { freezeSnapshot } = require('../signals/universe-tracker');
         freezeSnapshot(sym, 'manual_removal');
       } catch(_){}
-      res.json({ removed: sym, sector, universeSize: UNIVERSE.length });
+
+      // ── Cascading cleanup: stop the symbol from surfacing anywhere ──
+      // Pre-fix, removing SLAB left ~2,500 rs_snapshots rows alive, plus
+      // entries in deep_scan_cache and stale rs:full / breadth caches.
+      // The symbol kept appearing in Leaders/Laggards, scanner tables, and
+      // morning-brief picks until each downstream cache happened to refresh
+      // (next scheduled scan, possibly days away on a weekend).
+
+      // 1. rs_snapshots: delete rows from the removal date forward. We
+      //    preserve pre-removal history so backtest / replay / closed
+      //    signal_outcomes still see SLAB as it existed during the period
+      //    it was actually in the universe. Anything date >= removed_date
+      //    is forward-leaking and shouldn't exist.
+      const rsRows = db.prepare(
+        "DELETE FROM rs_snapshots WHERE symbol = ? AND date >= ?"
+      ).run(sym, removedDate);
+
+      // 2. Active intraday alerts — pullback_states would otherwise keep
+      //    firing 50MA-zone notifications for a symbol the user just told
+      //    us to stop tracking.
+      let pullbackRows = { changes: 0 };
+      try {
+        pullbackRows = db.prepare("DELETE FROM pullback_states WHERE symbol = ?").run(sym);
+      } catch(_){}
+
+      // 3. deep_scan_cache holds a JSON blob of the last full scan.
+      //    Trade Setups + Morning Brief read from this directly, so a
+      //    blob containing SLAB keeps showing it on every page-load
+      //    until the next scheduled deep_scan. Cheaper to drop the
+      //    cache and force a fresh scan than to surgically filter the
+      //    JSON. Next /api/trade-setups call will repopulate.
+      const dscRows = db.prepare("DELETE FROM deep_scan_cache").run();
+
+      // 4. In-memory caches — rs:full (60s/24h), breadth_dashboard,
+      //    regime, cycle:auto, etc. cacheClear is broad but correct
+      //    after a universe edit; the next API call will re-fetch.
+      try {
+        const { cacheClear } = require('../data/cache');
+        cacheClear();
+      } catch(_){}
+
+      res.json({
+        removed: sym,
+        sector,
+        universeSize: UNIVERSE.length,
+        wasInUniverse,
+        removedDate,
+        flushed: {
+          rsSnapshotRows: rsRows.changes,
+          pullbackStates: pullbackRows.changes,
+          deepScanCacheRows: dscRows.changes,
+          inMemoryCaches: 'cleared',
+        },
+      });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
