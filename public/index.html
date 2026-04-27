@@ -12403,8 +12403,14 @@ function ReplayTab() {
         strategy: s.key,
         params: buildParamsForStrategy(s.key),
       }));
+      // Compare All runs ~10 strategies sequentially on the server. Each
+      // single-strategy run can take seconds on a multi-year window, so the
+      // 45s default api() timeout was being blown for any range >~2 years.
+      // Bumped to 5 minutes — well above worst-case backtest duration on
+      // the full 2016→2026 window.
       const r = await api('/api/replay/compare', {
         method:'POST', headers:{'Content-Type':'application/json'},
+        timeout: 5 * 60 * 1000,
         body: JSON.stringify({
           strategies: strats, startDate: form.startDate, endDate: form.endDate,
           tradeMode: form.tradeMode || undefined,
@@ -12486,8 +12492,13 @@ function ReplayTab() {
       // Entry, and factor_combo signals (via per-window params override
       // when the strategy is factor_combo). Previously WF silently ignored
       // these and ran every window in defaults.
+      // Walk-forward is the longest call path in the tab — runs combos ×
+      // windows simulations (capped at 256 combos). On a full 2016→2026
+      // range that's hundreds of replays. Bumped to 10 minutes; the
+      // engine's internal cap on combos is what really bounds the work.
       const r = await api('/api/replay/walk-forward', {
         method:'POST', headers:{'Content-Type':'application/json'},
+        timeout: 10 * 60 * 1000,
         body: JSON.stringify({
           strategy: form.strategy,
           tradeMode: form.tradeMode || undefined,
@@ -12536,8 +12547,12 @@ function ReplayTab() {
   async function runBackfill() {
     setBfLoading(true); setError(''); setBfResult(null);
     try {
+      // Universe-wide backfill at 2500 days hits the provider layer for
+      // every symbol — easily 5–15 minutes wall time. 45s default would
+      // abort almost any non-trivial backfill. 30 minutes is conservative.
       const r = await api('/api/replay/backfill', {
         method:'POST', headers:{'Content-Type':'application/json'},
+        timeout: 30 * 60 * 1000,
         body: JSON.stringify({ lookbackDays: +bfForm.lookbackDays }),
       });
       setBfResult(r);
