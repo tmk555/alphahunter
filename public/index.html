@@ -1830,6 +1830,7 @@ function StockBriefDrawer() {
   const news = data?.news || [];
   const earnings = data?.earningsTrack || [];
   const catalysts = data?.catalystCounts || {};
+  const sec = data?.secFilings || { filings: [], filingCounts: {}, insiderActivityCount: 0, cik: null };
   const upPct = h?.dayChangePct;
 
   return (
@@ -1979,6 +1980,76 @@ function StockBriefDrawer() {
               </div>
             )}
 
+            {/* SEC Filings — last 90d, high-signal forms only. Hidden when
+                the symbol doesn't resolve to an EDGAR registrant (most
+                ETFs, foreign-only listings, crypto). */}
+            {sec.cik && (
+              <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:12}}>
+                <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8,display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                  <span>SEC FILINGS — last 90d</span>
+                  {sec.insiderActivityCount > 0 && (
+                    <span style={{color:'var(--amber)'}}>{sec.insiderActivityCount} insider transaction{sec.insiderActivityCount===1?'':'s'} (Form 4)</span>
+                  )}
+                </div>
+
+                {/* Filing-type chips */}
+                {Object.keys(sec.filingCounts).length > 0 && (
+                  <div style={{display:'flex',flexWrap:'wrap',gap:5,marginBottom:8}}>
+                    {Object.entries(sec.filingCounts).sort((a,b)=>b[1]-a[1]).map(([form,cnt]) => {
+                      // 8-K = amber (event-driven, often material), Form 4 =
+                      // amber (insider activity worth noting), 10-K/Q = gray
+                      // (routine), 13D = red-ish (activist), default = gray.
+                      const color =
+                        form === '8-K' ? 'var(--amber)' :
+                        form === '4' || form === '4/A' ? 'var(--amber)' :
+                        form.startsWith('SC 13D') ? 'var(--red)' :
+                        form.startsWith('S-') ? 'var(--cyan)' :
+                        'var(--text3)';
+                      return (
+                        <span key={form} title={`${cnt} ${form} filing${cnt>1?'s':''} in last 90d`}
+                          style={{fontSize:10,padding:'3px 8px',background:color+'18',border:`1px solid ${color}50`,borderRadius:3,color,fontFamily:'var(--font-mono)',letterSpacing:0.5}}>
+                          {form} <strong>{cnt}</strong>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Filing rows */}
+                <div style={{maxHeight:200,overflowY:'auto'}}>
+                  {sec.filings.length === 0 ? (
+                    <div style={{fontSize:11,color:'var(--text3)'}}>No high-signal filings in the last 90 days.</div>
+                  ) : (
+                    <table className="data-table" style={{fontSize:10}}>
+                      <tbody>
+                        {sec.filings.slice(0,12).map((f,i) => {
+                          const formColor =
+                            f.form === '8-K' ? 'var(--amber)' :
+                            f.isInsider ? 'var(--amber)' :
+                            f.form.startsWith('SC 13D') ? 'var(--red)' :
+                            'var(--cyan)';
+                          return (
+                            <tr key={i}>
+                              <td style={{color:'var(--text3)',fontFamily:'var(--font-mono)',whiteSpace:'nowrap'}}>{f.date}</td>
+                              <td style={{color:formColor,fontFamily:'var(--font-mono)',fontWeight:700,whiteSpace:'nowrap'}}>{f.form}</td>
+                              <td style={{color:'var(--text2)'}}>{f.formLabel}</td>
+                              <td style={{textAlign:'right'}}>
+                                <a href={f.url} target="_blank" rel="noopener noreferrer"
+                                  style={{color:'var(--cyan)',fontSize:10,textDecoration:'none'}}>open ↗</a>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+                {sec.filings.length > 12 && (
+                  <div style={{fontSize:9,color:'var(--text3)',marginTop:6,textAlign:'center'}}>+ {sec.filings.length - 12} more</div>
+                )}
+              </div>
+            )}
+
             {/* News list */}
             <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:12}}>
               <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>NEWS (last {news.length})</div>
@@ -2007,7 +2078,7 @@ function StockBriefDrawer() {
             </div>
 
             <div style={{fontSize:9,color:'var(--text3)',textAlign:'center',marginTop:8}}>
-              Sourced from Yahoo Finance · classified locally · cached 6h · no AI API used
+              Sourced from Yahoo Finance + SEC EDGAR · classified locally · cached 6h · no AI API used
             </div>
           </>
         )}

@@ -17,6 +17,7 @@
 // add-on (Haiku, ~$0.0001/brief) can wrap this without re-fetching.
 
 const { yahooQuote, getYahooFundamentals, yahooAssetProfile, getYahooCrumb, resetAuth } = require('../data/providers/yahoo');
+const { getRecentFilings, summarizeFilings } = require('../data/providers/edgar');
 const fetch = global.fetch || require('node-fetch');
 
 // 6h cache. News and analyst views shift slowly; quote is light to refetch.
@@ -204,15 +205,18 @@ async function getStockBrief(symbol) {
   const cached = cacheGet(key);
   if (cached) return cached;
 
-  // Fetch in parallel — quote is fast, news + analyst + earnings can each
-  // take a second. Failures fall through with `null` so the panel still
-  // renders the pieces that did succeed.
-  const [quoteArr, profile, analyst, earnings, news] = await Promise.all([
+  // Fetch in parallel — quote is fast, news + analyst + earnings + EDGAR
+  // can each take a second. Failures fall through (null/empty) so the
+  // panel still renders the pieces that did succeed. EDGAR is a separate
+  // catch — most ETFs / ADRs / foreign listings won't resolve to a CIK
+  // and we don't want a missing-filings 500 to take down the whole brief.
+  const [quoteArr, profile, analyst, earnings, news, secResp] = await Promise.all([
     yahooQuote([symbol]).catch(() => []),
     yahooAssetProfile(symbol).catch(() => null),
     fetchAnalystTrend(symbol).catch(() => null),
     fetchEarningsTrack(symbol).catch(() => []),
     fetchYahooNews(symbol).catch(() => []),
+    getRecentFilings(symbol, { daysBack: 90, limit: 30 }).catch(() => ({ filings: [], cik: null, name: null })),
   ]);
   const quote = (Array.isArray(quoteArr) && quoteArr[0]) || null;
 
@@ -262,6 +266,16 @@ async function getStockBrief(symbol) {
     earningsTrack: earnings,
     news,
     catalystCounts,
+    // SEC filings — last 90 days of high-signal forms (8-K, 10-K, 10-Q,
+    // Form 4 insider, 13D/G, etc.). secResp.cik is null for symbols that
+    // don't map to an EDGAR registrant (most ETFs, foreign-only listings).
+    secFilings: {
+      cik: secResp?.cik || null,
+      registrantName: secResp?.name || null,
+      filings: secResp?.filings || [],
+      filingCounts: summarizeFilings(secResp?.filings || []),
+      insiderActivityCount: (secResp?.filings || []).filter(f => f.isInsider).length,
+    },
   };
 
   cacheSet(key, brief);
