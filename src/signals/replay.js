@@ -323,8 +323,12 @@ function evaluateEntry(stock, strategy, params) {
              stock.rs_line_new_high;
 
     case 'conviction':
-      // Minimum quality gate: RS ≥ 60 + momentum ≥ 40 (matches daily-picks filter)
-      return stock.rs_rank >= 60 && (stock.swing_momentum || 0) >= 40;
+      // Minimum quality gate. Default RS≥60/Mom≥40 matches the daily-picks
+      // filter, but `params.minRS` and `params.minMomentum` lift it when
+      // set so users can tighten the entry bar from the UI without the
+      // `topN` cap (which only affects ranking) silently being a no-op.
+      return stock.rs_rank >= (params.minRS || 60) &&
+             (stock.swing_momentum || 0) >= (params.minMomentum || 40);
 
     case 'emerging_leader':
       return stock.rs_rank >= params.minRS &&
@@ -886,11 +890,30 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
   // force-exit when regime turns risk-off. This matches the Trade Setup tab's
   // "NO NEW LONGS" gate. Short strategies are unaffected by the regime gate.
   const isAdaptive = strategy === 'regime_adaptive';
-  const isConviction = strategy === 'conviction';
   let spyByDate = {};
   const regimeStats = { BULL: 0, NEUTRAL: 0, CAUTION: 0, CORRECTION: 0 };
   for (const s of snapshots) {
     if (s.symbol === 'SPY') spyByDate[s.date] = s;
+  }
+  // Preload ~30 trading days of SPY before startDate so distribution-day
+  // rolling-25 detection has enough history on the very first replay day.
+  // Without this, every backtest's first ~25 days fall back to MA-only
+  // regime classification, which biases early-period results vs late-period.
+  if (mergedParams.strictRegime !== false) {
+    const preloadStart = new Date(startDate + 'T00:00:00Z');
+    preloadStart.setUTCDate(preloadStart.getUTCDate() - 45);
+    const preloadIso = preloadStart.toISOString().split('T')[0];
+    try {
+      const preRows = db().prepare(`
+        SELECT date, price, vs_ma50, vs_ma200, volume_ratio
+        FROM rs_snapshots
+        WHERE symbol = 'SPY' AND type = 'stock' AND date >= ? AND date < ?
+        ORDER BY date
+      `).all(preloadIso, startDate);
+      for (const r of preRows) {
+        if (!spyByDate[r.date]) spyByDate[r.date] = r;
+      }
+    } catch (_) { /* preload failure → fall back to in-window only */ }
   }
 
   // Resolves the sub-strategy for a given date. Returns null when the active
@@ -918,11 +941,30 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
   const isShort = stratDef.side === 'short';
   let capital = initialCapital;
   let totalSlippageCost = 0;
+  let totalCommissionCost = 0;
   let skippedGaps = 0;
   let skippedSurvivorship = 0;
+  // Per-share commission (default 0). Charged on every trade leg — pilot
+  // entry, pyramid adds, partial exits, full exits, and end-of-period
+  // closures. Previously the default value lived in DEFAULT_EXECUTION but
+  // no code consumed it, silently dropping the cost for any user who set
+  // it.
+  const commissionPerShare = +exec.commissionPerShare || 0;
+  function chargeCommission(shares) {
+    if (commissionPerShare <= 0 || shares <= 0) return 0;
+    const c = commissionPerShare * shares;
+    capital -= c;
+    totalCommissionCost += c;
+    return c;
+  }
   const positions = new Map();
   const trades = [];
-  const equityCurve = [{ date: dates[0], equity: capital, positions: 0 }];
+  // Equity curve is built inside the daily loop (one point per day, end-of-day
+  // mark-to-market). Previously we also pushed an "initial capital" point
+  // before the loop, which produced a duplicate entry for dates[0] — fine
+  // for stats (peak still seeds at initialCapital below) but messy for
+  // chart overlays. Initial capital is implicit in the maxDD seed.
+  const equityCurve = [];
   let totalWins = 0, totalLosses = 0;
 
   // Build prior-day price map for gap detection
@@ -1002,6 +1044,11 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     // 1/3 of the intended size. Each subsequent day, check if price hit the
     // add1 (+2%) or add2 (+4%) trigger and buy the next 1/3 at that day's
     // price. This simulates staggered entry on breakout confirmation.
+    //
+    // Adds are charged the same entry slippage as the pilot fill — without
+    // this, pyramid backtests systematically beat full-size single fills
+    // because the add legs got a free no-slippage execution while every
+    // comparison strategy ate slippage on every share.
     if (mergedParams.pyramidEntry) {
       for (const [symbol, pos] of positions) {
         if (!pos.pyramidEntryTranche || pos.pyramidEntryTranche >= 3) continue;
@@ -1016,18 +1063,35 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
         // Volume gate: daily volume ratio must be >= 1.1x for confirmation
         if (stock.volume_ratio != null && stock.volume_ratio < 1.1) continue;
 
-        // Buy another 1/3 worth at this day's price
+        // Gap filter on the add: if the bar gapped above maxGapPct vs prior
+        // close, the add chases extension — skip and try again tomorrow.
+        const priorPrice = priorPriceMap[symbol];
+        if (priorPrice && priorPrice > 0) {
+          const gapPct = ((stock.price / priorPrice) - 1) * 100;
+          if (gapPct > exec.maxGapPct) {
+            skippedGaps++;
+            continue;
+          }
+        }
+
+        // Buy another 1/3 worth at this day's price (entry slippage applied,
+        // matching the pilot's cost basis treatment)
         const addShares = Math.floor(pos.pyramidTargetShares / 3);
         if (addShares <= 0) continue;
-        const addCost = addShares * stock.price;
+        const rawAddPrice = stock.price;
+        const addPrice = applySlippage(rawAddPrice, exec.entrySlippageBps, 'buy');
+        const addCost = addShares * addPrice;
         if (addCost > capital) continue;  // out of capital
+        const addSlippage = Math.abs(rawAddPrice - addPrice) * addShares;
+        totalSlippageCost += addSlippage;
 
         capital -= addCost;
+        chargeCommission(addShares);
         pos.shares += addShares;
         pos.collateral += addCost;
         pos.pyramidEntryTranche += 1;
         // Blend entry price (weighted avg) so R-multiples are honest
-        pos.entryPrice = +((pos.entryPrice * (pos.shares - addShares) + stock.price * addShares) / pos.shares).toFixed(4);
+        pos.entryPrice = +((pos.entryPrice * (pos.shares - addShares) + addPrice * addShares) / pos.shares).toFixed(4);
       }
     }
 
@@ -1043,8 +1107,12 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       const posIsShort  = !!pos.isShort;
       let exitCheck = evaluateExit(stock, pos.entryStock, posStrategy, mergedParams, holdingDays, pos);
 
-      // Force-exit longs when regime turns risk-off (all long strategies)
-      if (!exitCheck.exit && !posIsShort) {
+      // Force-exit longs when regime turns risk-off (all long strategies).
+      // Default ON for every strategy. `forceExitOnRiskOff: false` (set
+      // via params, e.g. for buy-and-hold-style backtests that should
+      // ride out regime drawdowns) skips the force-exit and lets the
+      // strategy's own exit signals run.
+      if (!exitCheck.exit && !posIsShort && mergedParams.forceExitOnRiskOff !== false) {
         const regimeForExit = todayRegime || detectRegimeForDate(spyByDate, date, mergedParams.strictRegime !== false);
         if (regimeForExit === 'CAUTION' || regimeForExit === 'CORRECTION') {
           exitCheck = { exit: true, reason: `regime_${regimeForExit.toLowerCase()}` };
@@ -1065,6 +1133,7 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
           const pnlPct = ((exitPrice / pos.entryPrice) - 1) * 100;
           const partialCollateral = pos.collateral * (sellShares / pos.shares);
           capital += partialCollateral + pnl;
+          const partialCommission = chargeCommission(sellShares);
 
           trades.push({
             symbol, side: 'long',
@@ -1073,6 +1142,7 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
             shares: sellShares, pnl: +pnl.toFixed(2), pnlPct: +pnlPct.toFixed(2),
             atrPct: pos.entryStock.atr_pct || null,
             slippageCost: +slippageCost.toFixed(2),
+            commissionCost: +partialCommission.toFixed(2),
             holdingDays, exitReason: exitCheck.reason,
             entryRS: pos.entryStock.rs_rank, exitRS: stock.rs_rank,
             subStrategy: pos.subStrategy || null,
@@ -1104,6 +1174,7 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
           : ((exitPrice / pos.entryPrice) - 1) * 100;
 
         capital += pos.collateral + pnl;
+        const exitCommission = chargeCommission(pos.shares);
 
         trades.push({
           symbol, side: posIsShort ? 'short' : 'long',
@@ -1112,6 +1183,7 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
           shares: pos.shares, pnl: +pnl.toFixed(2), pnlPct: +pnlPct.toFixed(2),
           atrPct: pos.entryStock.atr_pct || null,
           slippageCost: +slippageCost.toFixed(2),
+          commissionCost: +exitCommission.toFixed(2),
           holdingDays, exitReason: exitCheck.reason,
           entryRS: pos.entryStock.rs_rank, exitRS: stock.rs_rank,
           subStrategy: pos.subStrategy || null,
@@ -1177,6 +1249,7 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
         totalSlippageCost += slippageCost;
         const collateral = shares * entryPrice;
         capital -= collateral;
+        chargeCommission(shares);
 
         positions.set(pe.symbol, {
           entryDate: date,
@@ -1201,9 +1274,12 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     // ─── Generate new entry signals ──────────────────────────────────────────
     // Adaptive: handled by sub-strategy mapping (CAUTION/CORRECTION→cash).
     // All other long strategies: block new entries in CAUTION/CORRECTION.
+    // `regime` here reuses the value already computed by resolveSub() above —
+    // calling detectRegimeForDate twice was 2x work AND double-counted
+    // regimeStats for non-adaptive strategies (resolveSub increments once,
+    // then this block incremented again).
     const cashToday = isAdaptive && !sub.def;
-    const regime = detectRegimeForDate(spyByDate, date, mergedParams.strictRegime !== false);
-    if (!isAdaptive) regimeStats[regime]++;
+    const regime = sub.regime;
     const regimeBlocked = !isAdaptive && !isShort && (regime === 'CAUTION' || regime === 'CORRECTION');
     if (!cashToday && !regimeBlocked && positions.size < maxPositions) {
       const todayStrategy = sub.key;
@@ -1317,6 +1393,7 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
 
           const collateral = shares * entryPrice;
           capital -= collateral;
+          chargeCommission(shares);
 
           positions.set(stock.symbol, {
             entryDate: date,
@@ -1377,6 +1454,8 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     if ([...positions.keys()].every(sym => lastValidPrice[sym])) break;
   }
 
+  let eopClosedAny = false;
+  let eopSlippageCost = 0;
   for (const [symbol, pos] of positions) {
     const stock = lastStockMap[symbol];
     const rawExitPrice = stock?.price || lastValidPrice[symbol] || pos.entryPrice;
@@ -1384,6 +1463,9 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     const exitPrice = posIsShort
       ? applySlippage(rawExitPrice, exec.exitSlippageBps, 'buy')
       : applySlippage(rawExitPrice, exec.exitSlippageBps, 'sell');
+    const slippageCost = Math.abs(rawExitPrice - exitPrice) * pos.shares;
+    totalSlippageCost += slippageCost;
+    eopSlippageCost  += slippageCost;
     const pnl = posIsShort
       ? (pos.entryPrice - exitPrice) * pos.shares
       : (exitPrice - pos.entryPrice) * pos.shares;
@@ -1391,6 +1473,8 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       ? ((pos.entryPrice / exitPrice) - 1) * 100
       : ((exitPrice / pos.entryPrice) - 1) * 100;
     capital += pos.collateral + pnl;
+    const eopCommission = chargeCommission(pos.shares);
+    eopClosedAny = true;
 
     trades.push({
       symbol, side: posIsShort ? 'short' : 'long',
@@ -1398,6 +1482,8 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       entryPrice: pos.entryPrice, exitPrice: +exitPrice.toFixed(2),
       shares: pos.shares, pnl: +pnl.toFixed(2), pnlPct: +pnlPct.toFixed(2),
       atrPct: pos.entryStock.atr_pct || null,
+      slippageCost: +slippageCost.toFixed(2),
+      commissionCost: +eopCommission.toFixed(2),
       holdingDays: dates.slice(dates.indexOf(pos.entryDate)).length,
       exitReason: 'end_of_period',
       entryRS: pos.entryStock.rs_rank, exitRS: stock?.rs_rank || null,
@@ -1406,6 +1492,15 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     });
 
     if (pnl > 0) totalWins++; else totalLosses++;
+  }
+  positions.clear();
+
+  // Final equity-curve point: reflects the post-EOP-close cash. Without
+  // this, finalEquity used the LAST in-loop mark-to-market value, which
+  // ignored exit slippage and commissions paid at EOP — small overstatement
+  // of total return for any backtest that ended with open positions.
+  if (eopClosedAny && equityCurve.length > 0) {
+    equityCurve[equityCurve.length - 1] = { date: lastDate, equity: +capital.toFixed(2), positions: 0 };
   }
 
   // ─── Calculate Stats ─────────────────────────────────────────────────────
@@ -1441,8 +1536,14 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       }, 0) / trades.length).toFixed(2)
     : 0;
 
-  // Sharpe ratio approximation (daily returns)
+  // Sharpe ratio approximation (daily returns).
+  // First daily return is day 0 EOD vs initial capital — without this seed,
+  // dropping the synthetic day-0 point above would silently exclude the
+  // first day's return from Sharpe calc.
   const dailyReturns = [];
+  if (equityCurve.length > 0) {
+    dailyReturns.push((equityCurve[0].equity / initialCapital) - 1);
+  }
   for (let i = 1; i < equityCurve.length; i++) {
     dailyReturns.push((equityCurve[i].equity / equityCurve[i - 1].equity) - 1);
   }
@@ -1552,6 +1653,40 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
 
   let replayId = null;
   if (persistResult) {
+    // Persist enough of the result blob that the history "VIEW" button can
+    // reconstruct the SAME panels a fresh run shows — previously the blob
+    // omitted executionCosts / regimeBreakdown / regimeDayCounts / side, so
+    // viewing a replay from history silently dropped 4 panels and showed
+    // any short replay with side='long' (the UI default fallback).
+    const persistBlob = {
+      trades, equityCurve, exitReasons, spyBenchmark, macroContext, significance,
+      side: isShort ? 'short' : 'long',
+      regimeBreakdown: regimePerf,
+      regimeDayCounts: regimeStats,
+      performance: {
+        calmarRatio: Number.isFinite(calmar) ? +calmar.toFixed(3) : null,
+        calmarRatioInfinite: !Number.isFinite(calmar) && totalReturn > 0 && maxDD === 0,
+      },
+      executionCosts: {
+        totalSlippage: +totalSlippageCost.toFixed(2),
+        slippageAsReturnDrag: +(totalSlippageCost / initialCapital * 100).toFixed(3),
+        totalCommission: +totalCommissionCost.toFixed(2),
+        commissionAsReturnDrag: +(totalCommissionCost / initialCapital * 100).toFixed(3),
+        commissionPerShare,
+        skippedGaps, skippedSurvivorship, skippedNextDay,
+        entrySlippageBps: exec.entrySlippageBps,
+        exitSlippageBps:  exec.exitSlippageBps,
+        maxGapPct:        exec.maxGapPct,
+        nextDayEntry:     exec.nextDayEntry,
+        nextDayOpenGapBps:      exec.nextDayOpenGapBps,
+        cashDragAnnualBps:      exec.cashDragAnnualBps,
+        dividendYieldAnnualBps: exec.dividendYieldAnnualBps,
+        totalCashInterest: +totalCashInterest.toFixed(2),
+        totalDividends:    +totalDividends.toFixed(2),
+        cashInterestAsReturnBoost: +(totalCashInterest / initialCapital * 100).toFixed(3),
+        dividendsAsReturnBoost:    +(totalDividends   / initialCapital * 100).toFixed(3),
+      },
+    };
     replayId = db().prepare(`
       INSERT INTO replay_results (strategy, params, start_date, end_date, initial_capital,
         final_equity, total_return, total_trades, win_rate, profit_factor, max_drawdown, sharpe_ratio, result)
@@ -1560,7 +1695,7 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       strategy, JSON.stringify(mergedParams), startDate, endDate, initialCapital,
       finalEquity, +totalReturn.toFixed(2), trades.length, +winRate.toFixed(1),
       profitFactor, +maxDD.toFixed(2), sharpe,
-      JSON.stringify({ trades, equityCurve, exitReasons, spyBenchmark, macroContext, significance, performance: { calmarRatio: Number.isFinite(calmar) ? +calmar.toFixed(3) : calmar } })
+      JSON.stringify(persistBlob)
     ).lastInsertRowid;
   }
 
@@ -1577,8 +1712,13 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
       maxDrawdown: +maxDD.toFixed(2),
       sharpeRatio: sharpe,
       // Phase 2.7: Calmar as a Sharpe-free pain-adjusted return ratio.
-      // Infinity on zero-drawdown winners — dashboards render as "∞".
-      calmarRatio: Number.isFinite(calmar) ? +calmar.toFixed(3) : calmar,
+      // Express's res.json serializes JS Infinity as `null`, so a separate
+      // boolean signals zero-drawdown winners — the UI renders ∞ when this
+      // is true. Without the flag, every infinite-Calmar run silently
+      // displayed as "N/A" because the UI's `=== Infinity` check never
+      // matched the post-serialization null.
+      calmarRatio: Number.isFinite(calmar) ? +calmar.toFixed(3) : null,
+      calmarRatioInfinite: !Number.isFinite(calmar) && totalReturn > 0 && maxDD === 0,
       profitFactor,
       alpha,
     },
@@ -1596,6 +1736,11 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     executionCosts: {
       totalSlippage: +totalSlippageCost.toFixed(2),
       slippageAsReturnDrag: +(totalSlippageCost / initialCapital * 100).toFixed(3),
+      // Per-share commission cost — defaults to 0 (most retail brokers).
+      // Surface even when zero so the UI can render the column predictably.
+      totalCommission: +totalCommissionCost.toFixed(2),
+      commissionAsReturnDrag: +(totalCommissionCost / initialCapital * 100).toFixed(3),
+      commissionPerShare,
       skippedGaps,
       skippedSurvivorship,
       skippedNextDay,
@@ -1674,6 +1819,10 @@ function runWalkForward({
   maxPositions = 10,
   initialCapital = 100000,
   execution = {},
+  // Forwarded to runReplay so the form-level Mode dropdown (swing/position)
+  // applies to walk-forward windows. Without this, the engine ran every
+  // window in default mode regardless of UI selection.
+  tradeMode,
 }) {
   const stratDef = BUILT_IN_STRATEGIES[strategy];
   if (!stratDef) throw new Error(`Unknown strategy: ${strategy}`);
@@ -1727,7 +1876,7 @@ function runWalkForward({
       let trainResult;
       try {
         trainResult = runReplay({
-          strategy, params,
+          strategy, tradeMode, params,
           startDate: w.trainStart, endDate: w.trainEnd,
           maxPositions, initialCapital, execution,
           persistResult: false,
@@ -1751,7 +1900,7 @@ function runWalkForward({
 
     // Apply the winning params to the held-out test window
     const testResult = runReplay({
-      strategy, params: best.params,
+      strategy, tradeMode, params: best.params,
       startDate: w.testStart, endDate: w.testEnd,
       maxPositions, initialCapital, execution,
       persistResult: false,
@@ -1825,6 +1974,28 @@ function runWalkForward({
     if (dd > maxDD) maxDD = dd;
   }
 
+  // OOS Sharpe — derived from the compounded per-window equity curve.
+  // Without this, both the engine response and the WF history table left
+  // sharpe undefined/null. Window-level returns aren't daily, so we
+  // annualize using sqrt(testWindowsPerYear) where testWindowsPerYear =
+  // 252 / testDays, matching how each window's totalReturn is generated.
+  const oosWindowReturns = [];
+  for (let i = 1; i < oosEquityCurve.length; i++) {
+    const prev = oosEquityCurve[i - 1].equity;
+    const cur  = oosEquityCurve[i].equity;
+    if (prev > 0) oosWindowReturns.push((cur / prev) - 1);
+  }
+  const oosAvgRet = oosWindowReturns.length
+    ? oosWindowReturns.reduce((a, b) => a + b, 0) / oosWindowReturns.length
+    : 0;
+  const oosStdRet = oosWindowReturns.length > 1
+    ? Math.sqrt(oosWindowReturns.reduce((a, r) => a + (r - oosAvgRet) ** 2, 0) / (oosWindowReturns.length - 1))
+    : 0;
+  const windowsPerYear = testDays > 0 ? 252 / testDays : 0;
+  const oosSharpe = oosStdRet > 0 && windowsPerYear > 0
+    ? +((oosAvgRet / oosStdRet) * Math.sqrt(windowsPerYear)).toFixed(2)
+    : 0;
+
   // Parameter stability — how often did each param combo win?
   const stability = {};
   for (const w of windowResults) {
@@ -1867,6 +2038,11 @@ function runWalkForward({
       finalEquity: +runEquity.toFixed(2),
       totalReturn: +finalReturn.toFixed(2),
       maxDrawdown: +maxDD.toFixed(2),
+      // OOS Sharpe is computed from the compounded per-window equity curve
+      // above. Previously the engine returned this as undefined and
+      // saveWFResult silently bound NULL into oos_sharpe — every WF history
+      // row showed an empty Sharpe column.
+      sharpeRatio: oosSharpe,
       profitFactor,
       tradeCount: allTestTrades.length,
       winRate: +winRate.toFixed(1),

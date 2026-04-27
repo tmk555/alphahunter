@@ -81,7 +81,7 @@ router.post('/replay/compare', (req, res) => {
 router.post('/replay/walk-forward', (req, res) => {
   try {
     const {
-      strategy, startDate, endDate,
+      strategy, tradeMode, startDate, endDate,
       trainDays, testDays, paramGrid,
       optimizeMetric, maxPositions, initialCapital, execution,
     } = req.body;
@@ -92,7 +92,8 @@ router.post('/replay/walk-forward', (req, res) => {
       return res.status(400).json({ error: 'paramGrid object required (e.g. { minRS: [70,80,90] })' });
     }
     const result = runWalkForward({
-      strategy, startDate, endDate,
+      strategy, tradeMode: tradeMode || undefined,
+      startDate, endDate,
       trainDays: trainDays || 120,
       testDays: testDays || 60,
       paramGrid,
