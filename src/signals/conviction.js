@@ -115,7 +115,24 @@ function calcConviction(stock, rsTrend, rotationModel, industryRotationModel = n
   // These are the earliest institutional breakouts — catching the MA turn.
   if (stg === 2 && stock.priorStage === 1) score += 10;
 
-  if (stock.earningsRisk)   score -= 15;
+  // Graduated earnings penalty (replaces flat −15 across the 14-day window).
+  // Old behavior buried good pre-earnings rallies under candidates without
+  // the flag, even though the stock was 14 days out and the swing-exit
+  // watcher would have closed the position 2 days before the print anyway.
+  // Now the demote scales with proximity:
+  //   8–14d  → −2   (pre-earnings momentum / drift OK to ride)
+  //   4–7d   → −6   (risk rising, slight demotion)
+  //   0–3d   → −15  (imminent gap — keep the hard demote)
+  // Negative daysToEarnings means we slipped past the print without the
+  // exit firing — treat as no penalty (it's history at that point).
+  if (stock.earningsRisk) {
+    const d = stock.daysToEarnings;
+    if (d != null && d >= 0) {
+      if (d <= 3)      score -= 15;
+      else if (d <= 7) score -= 6;
+      else             score -= 2;
+    }
+  }
   if (stock.distFromHigh > 0.15) score -= 10;
 
   const reasons = [];

@@ -65,7 +65,22 @@ function calcShortConviction(stock, rsTrend) {
   if (stock.volumeRatio >= 1.5 && stock.vsMA50 < -3) score += 5; // Heavy-volume breakdown
 
   // Penalties
-  if (stock.earningsRisk)                   score -= 10;  // Earnings can gap either way
+  // Graduated earnings penalty — mirrors the long-side graduation in
+  // src/signals/conviction.js but scaled to short's smaller base
+  // (longs were −15 max → shorts are −10 max, both at d≤3). Pre-print
+  // weakness is its own valid short setup, so a flat −10 across the
+  // whole 14-day window over-demoted breakdowns 8–14 days out.
+  //   8–14d → −1   (light demote, let breakdowns run)
+  //   4–7d  → −4   (risk rising)
+  //   0–3d  → −10  (imminent gap — keep the demote)
+  if (stock.earningsRisk) {
+    const d = stock.daysToEarnings;
+    if (d != null && d >= 0) {
+      if (d <= 3)      score -= 10;
+      else if (d <= 7) score -= 4;
+      else             score -= 1;
+    }
+  }
   if (stock.rsRank > 40)                    score -= 15;  // Not weak enough
 
   const reasons = [];
