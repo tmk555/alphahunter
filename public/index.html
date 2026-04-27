@@ -12340,34 +12340,39 @@ function ReplayTab() {
 
   useEffect(() => { loadAll(); }, []);
 
+  // Build the params object used by /api/replay/run, /api/replay/compare,
+  // and /api/replay/walk-forward. All three should honor the same form-level
+  // toggles (exit strategy, strict regime, factor signals); previously the
+  // logic was inline in runReplay only and the other two silently dropped
+  // the user's choices.
+  function buildParamsForStrategy(strategyKey) {
+    let params = {};
+    try { params = JSON.parse(form.params); } catch(_) {}
+    if (form.exitStrategy === 'full_in_scale_out') {
+      params.scaleOut = true;
+    } else if (form.exitStrategy === 'pyramid_auto') {
+      params.scaleOut = true;
+      params.pyramidEntry = true;
+    }
+    params.strictRegime = form.strictRegime !== false;
+    if (strategyKey === 'factor_combo') {
+      if (params.signals === undefined) params.signals = form.factorSignals || [];
+      if (params.minRS   === undefined) params.minRS   = form.factorMinRS || 85;
+    }
+    return params;
+  }
+  function buildExecution() {
+    const execution = {};
+    if (form.nextDayEntry === false) execution.nextDayEntry = false;
+    return execution;
+  }
+
   async function runReplay() {
     if (!form.strategy || !form.startDate || !form.endDate) return;
     setLoading(true); setError(''); setReplayError(''); setResult(null);
     try {
-      let params = {};
-      try { params = JSON.parse(form.params); } catch(_) {}
-      // Exit strategy → backend params
-      //   full_in_full_out  → no extras (lump-sum entry/exit)
-      //   full_in_scale_out → scaleOut (1/3 T1, 1/3 T2, trail runner)
-      //   pyramid_auto      → scaleOut + pyramidEntry (staggered 1/3 entries on confirmation)
-      if (form.exitStrategy === 'full_in_scale_out') {
-        params.scaleOut = true;
-      } else if (form.exitStrategy === 'pyramid_auto') {
-        params.scaleOut = true;
-        params.pyramidEntry = true;
-      }
-      // Regime strictness: strict (default) uses dist-day-aware detection matching
-      // live trading; unchecked uses simple SPY-vs-MA only (optimistic, legacy).
-      params.strictRegime = form.strictRegime !== false;
-      // Factor-combo: inject the checkbox-selected signals + minRS when this
-      // strategy is active. The params-JSON textarea can still override either
-      // by declaring `signals` / `minRS` explicitly.
-      if (form.strategy === 'factor_combo') {
-        if (params.signals === undefined) params.signals = form.factorSignals || [];
-        if (params.minRS === undefined)   params.minRS   = form.factorMinRS || 85;
-      }
-      const execution = {};
-      if (form.nextDayEntry === false) execution.nextDayEntry = false;  // Default is true; only override when unchecked
+      const params = buildParamsForStrategy(form.strategy);
+      const execution = buildExecution();
       const r = await api('/api/replay/run', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
@@ -12375,7 +12380,12 @@ function ReplayTab() {
           maxPositions: form.maxPositions, initialCapital: form.initialCapital, params, execution,
         }),
       });
-      setResult(r); loadAll();
+      setResult(r);
+      // Pre-select this fresh replay as the MC source so RUN MC uses it
+      // instead of a stale history pick. UX trap before this: every fresh
+      // run silently kept MC pointed at whatever was selected on first load.
+      if (r?.id) setMcForm(prev => ({ ...prev, selectedReplayId: r.id }));
+      loadAll();
     } catch(e) { setReplayError(e.message); }
     setLoading(false);
   }
@@ -12384,17 +12394,22 @@ function ReplayTab() {
     if (!form.startDate || !form.endDate) return;
     setLoading(true); setReplayError(''); setResult(null);
     try {
-      // Propagate the form-level Strict Regime toggle to every strategy's
-      // params so Compare All actually honors it. Previously params was {},
-      // which meant the engine always fell back to its default (strict) and
-      // unchecking the box had no effect on the cross-strategy table.
-      const strats = strategies.map(s=>({strategy:s.key, params:{ strictRegime: form.strictRegime !== false }}));
+      // Compare All now honors the same form toggles every other entry-point
+      // does — exit strategy (scaleOut/pyramidEntry), strict regime, and
+      // factor_combo's signals/minRS. Each strategy still gets its own
+      // params object so factor_combo's signal injection only fires on
+      // that one row.
+      const strats = strategies.map(s => ({
+        strategy: s.key,
+        params: buildParamsForStrategy(s.key),
+      }));
       const r = await api('/api/replay/compare', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
           strategies: strats, startDate: form.startDate, endDate: form.endDate,
           tradeMode: form.tradeMode || undefined,
           maxPositions: form.maxPositions, initialCapital: form.initialCapital,
+          execution: buildExecution(),
         }),
       });
       setResult(r); loadAll();
@@ -12403,6 +12418,7 @@ function ReplayTab() {
   }
 
   async function loadResult(id) {
+    setLoading(true); setError('');
     try {
       const r = await api(`/api/replay/${id}`);
       const stored = r.result || {};
@@ -12417,19 +12433,32 @@ function ReplayTab() {
       setResult({
         id: r.id,
         strategy: r.strategy,
-        params: JSON.parse(typeof r.params==='string'?r.params:'{}'),
+        // Side now comes from the persisted blob (engine started writing it
+        // alongside this UI fix). Falls back to 'long' for results saved by
+        // older engine builds — those won't have side in the blob and the
+        // dashboard label would otherwise read undefined.
+        side: stored.side || 'long',
+        params: typeof r.params === 'string' ? JSON.parse(r.params) : (r.params || {}),
         period: { startDate: r.start_date, endDate: r.end_date, tradingDays: stored.equityCurve?.length || 0 },
         performance: {
           initialCapital: r.initial_capital, finalEquity: r.final_equity,
           totalReturn: r.total_return, maxDrawdown: r.max_drawdown,
           sharpeRatio: r.sharpe_ratio, profitFactor: r.profit_factor, alpha,
           calmarRatio: stored.performance?.calmarRatio ?? null,
+          calmarRatioInfinite: !!stored.performance?.calmarRatioInfinite,
         },
         significance: stored.significance || null,
         benchmark: spyBm ? {
           spyReturn: spyBm.totalReturn, spyMaxDrawdown: spyBm.maxDrawdown,
           spySharpe: spyBm.sharpeRatio, outperformed: r.total_return > spyBm.totalReturn,
         } : null,
+        // Restored from persisted blob — without these the history "VIEW"
+        // path silently dropped four panels (execution model, regime days,
+        // per-regime performance) and the Side KPI defaulted to 'long' for
+        // every short-strategy result.
+        executionCosts: stored.executionCosts || null,
+        regimeDayCounts: stored.regimeDayCounts || null,
+        regimeBreakdown: stored.regimeBreakdown || null,
         trades: {
           total: r.total_trades, wins: winningTrades.length, losses: losingTrades.length,
           winRate: r.win_rate, avgWin, avgLoss, avgR, exitReasons: stored.exitReasons || {},
@@ -12438,7 +12467,11 @@ function ReplayTab() {
         equityCurve: stored.equityCurve || [],
         macroContext: stored.macroContext || null,
       });
+      // Scroll the result into view — long history tables otherwise leave
+      // the "VIEW" click looking like a no-op even when the result loaded.
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch(e) { setError(e.message); }
+    setLoading(false);
   }
 
   async function runWalkForward() {
@@ -12448,14 +12481,21 @@ function ReplayTab() {
       let paramGrid = {};
       try { paramGrid = JSON.parse(wfForm.paramGrid); }
       catch(_) { setWfError('Invalid paramGrid JSON'); setLoading(false); return; }
+      // Walk-forward now honors the same form toggles as Run Replay — Mode
+      // dropdown (swing/position), Strict Regime, Exit Strategy, Next-Day
+      // Entry, and factor_combo signals (via per-window params override
+      // when the strategy is factor_combo). Previously WF silently ignored
+      // these and ran every window in defaults.
       const r = await api('/api/replay/walk-forward', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
           strategy: form.strategy,
+          tradeMode: form.tradeMode || undefined,
           startDate: form.startDate, endDate: form.endDate,
           trainDays: +wfForm.trainDays, testDays: +wfForm.testDays,
           paramGrid, optimizeMetric: wfForm.optimizeMetric,
           maxPositions: form.maxPositions, initialCapital: form.initialCapital,
+          execution: buildExecution(),
         }),
       });
       setWfResult(r); loadAll();
@@ -12471,11 +12511,21 @@ function ReplayTab() {
     }
     setLoading(true); setMcError(''); setMcResult(null);
     try {
+      // Derive MC base capital from the source replay, NOT the form's
+      // current Initial Capital field. The simulation compares baseline
+      // path equity vs MC distribution paths — both must run with the
+      // same starting capital or the percentile rank is meaningless.
+      // Falls back to the form value only when we can't resolve the
+      // source replay's capital (e.g. very old DB rows missing it).
+      let baseCapital = form.initialCapital;
+      const sourceFromHistory = history.find(h => h.id === replayId);
+      if (sourceFromHistory?.initial_capital) baseCapital = sourceFromHistory.initial_capital;
+      else if (result?.id === replayId && result?.performance?.initialCapital) baseCapital = result.performance.initialCapital;
       const r = await api('/api/replay/monte-carlo', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
           replayId, iterations: +mcForm.iterations, method: mcForm.method,
-          positionFraction: +mcForm.positionFraction, initialCapital: form.initialCapital,
+          positionFraction: +mcForm.positionFraction, initialCapital: +baseCapital || 100000,
         }),
       });
       setMcResult(r); loadAll();
@@ -12514,6 +12564,15 @@ function ReplayTab() {
 
   return (
     <div>
+      {/* Generic-error banner — backfill failures, range-load failures, and
+          history-view fetch failures all set this state. Without rendering
+          it, every one of those paths failed silently to the user. */}
+      {error && (
+        <div className="panel" style={{background:'rgba(255,61,87,0.08)',border:'1px solid var(--red)',borderRadius:4,padding:'8px 12px',marginBottom:10,fontSize:12,color:'var(--red)',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <span>⚠ {error}</span>
+          <button onClick={()=>setError('')} style={{background:'transparent',border:'1px solid var(--red)',borderRadius:3,padding:'2px 8px',color:'var(--red)',fontSize:10,cursor:'pointer',fontFamily:'var(--font-mono)'}}>DISMISS</button>
+        </div>
+      )}
       <div className="panel">
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
           <div>
@@ -12617,7 +12676,7 @@ function ReplayTab() {
             {[
               {k:'full_in_full_out',  l:'Full→Full',   c:'var(--amber)', t:'Single bracket: full size enters at signal, entire position exits at T1 (or stop). Simplest.'},
               {k:'full_in_scale_out', l:'Full→Scale',  c:'var(--green)', t:'Full entry at signal, exit in 3 tranches: ⅓ T1 (2×ATR), ⅓ T2 (3.5×ATR), trail final ⅓ on 50MA break.'},
-              {k:'pyramid_auto',      l:'🔺 Pyramid',  c:'var(--cyan)',  t:'Staggered ⅓-⅓-⅓ entry (pilot at signal, add1 at +0.5×ATR, add2 at +1×ATR) with same 3-tier exit ladder. Matches live pyramid-plan trading.'},
+              {k:'pyramid_auto',      l:'🔺 Pyramid',  c:'var(--cyan)',  t:'Staggered ⅓-⅓-⅓ entry (pilot at signal, add1 at +2%, add2 at +4%) with the same 3-tier exit ladder. Adds require volume_ratio ≥ 1.1 and pay full entry slippage. Matches live pyramid-plan trading.'},
             ].map(opt => (
               <button key={opt.k} title={opt.t}
                 onClick={() => setForm({...form, exitStrategy: opt.k})}
@@ -12727,7 +12786,7 @@ function ReplayTab() {
               ['Profit Factor', result.performance.profitFactor, result.performance.profitFactor>=1.5?'var(--green)':'var(--text)'],
               ['Max Drawdown', result.performance.maxDrawdown+'%', 'var(--red)'],
               ['Sharpe Ratio', result.performance.sharpeRatio, result.performance.sharpeRatio>=1?'var(--green)':'var(--text3)'],
-              ['Calmar Ratio', result.performance.calmarRatio!=null?(result.performance.calmarRatio===Infinity?'\u221E':result.performance.calmarRatio):'N/A',
+              ['Calmar Ratio', result.performance.calmarRatioInfinite ? '\u221E' : (result.performance.calmarRatio != null ? result.performance.calmarRatio : 'N/A'),
                 result.performance.calmarRatio>1?'var(--green)':result.performance.calmarRatio>0?'var(--text)':'var(--red)'],
               ['Alpha vs SPY', result.performance.alpha!=null?(result.performance.alpha>0?'+':'')+result.performance.alpha+'%':'N/A', result.performance.alpha>0?'var(--green)':result.performance.alpha<0?'var(--red)':'var(--text3)'],
               ['Significance', result.significance?result.significance.verdict.replace(/_/g,' ').toUpperCase():'N/A',
@@ -12746,14 +12805,17 @@ function ReplayTab() {
             <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:10}}>
               <div style={{display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
                 <span style={{fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1,color:result.significance.isSignificant?'var(--green)':'var(--red)'}}>STATISTICAL SIGNIFICANCE</span>
-                <span style={{fontSize:11,color:'var(--text2)'}}>p-value: <strong style={{color:result.significance.pValue<0.05?'var(--green)':'var(--red)'}}>{result.significance.pValue<0.001?'<0.001':result.significance.pValue?.toFixed(3)}</strong></span>
-                <span style={{fontSize:11,color:'var(--text2)'}}>t-stat: <strong>{result.significance.tStat?.toFixed(2)}</strong></span>
-                <span style={{fontSize:11,color:'var(--text2)'}}>n={result.significance.sampleSize}</span>
-                {result.significance.bootstrapMeanReturn && (
-                  <span style={{fontSize:11,color:'var(--text2)'}}>Mean CI: [{result.significance.bootstrapMeanReturn.lower?.toFixed(2)}%, {result.significance.bootstrapMeanReturn.upper?.toFixed(2)}%]</span>
+                {/* p/t/n cells null-coalesce so a partial significance
+                    block (e.g. bootstrap skipped because n<10) doesn't
+                    print the literal string "undefined" into the panel. */}
+                <span style={{fontSize:11,color:'var(--text2)'}}>p-value: <strong style={{color:(result.significance.pValue ?? 1)<0.05?'var(--green)':'var(--red)'}}>{result.significance.pValue == null ? '—' : result.significance.pValue<0.001?'<0.001':result.significance.pValue.toFixed(3)}</strong></span>
+                <span style={{fontSize:11,color:'var(--text2)'}}>t-stat: <strong>{result.significance.tStat == null ? '—' : result.significance.tStat.toFixed(2)}</strong></span>
+                <span style={{fontSize:11,color:'var(--text2)'}}>n={result.significance.sampleSize ?? '—'}</span>
+                {result.significance.bootstrapMeanReturn && result.significance.bootstrapMeanReturn.lower != null && (
+                  <span style={{fontSize:11,color:'var(--text2)'}}>Mean CI: [{result.significance.bootstrapMeanReturn.lower.toFixed(2)}%, {result.significance.bootstrapMeanReturn.upper?.toFixed(2)}%]</span>
                 )}
-                {result.significance.bootstrapWinRate && (
-                  <span style={{fontSize:11,color:'var(--text2)'}}>WR CI: [{result.significance.bootstrapWinRate.lower?.toFixed(1)}%, {result.significance.bootstrapWinRate.upper?.toFixed(1)}%]</span>
+                {result.significance.bootstrapWinRate && result.significance.bootstrapWinRate.lower != null && (
+                  <span style={{fontSize:11,color:'var(--text2)'}}>WR CI: [{result.significance.bootstrapWinRate.lower.toFixed(1)}%, {result.significance.bootstrapWinRate.upper?.toFixed(1)}%]</span>
                 )}
                 <span style={{fontSize:10,color:'var(--text3)'}}>{result.significance.reason}</span>
               </div>
@@ -13649,7 +13711,7 @@ function ReplayTab() {
                   <td style={{color:pctColor(h.baseline_return),fontWeight:700}}>{h.baseline_return!=null?((h.baseline_return>0?'+':'')+h.baseline_return+'%'):'—'}</td>
                   <td style={{color:pctColor(h.median_return),fontWeight:600}}>{h.median_return!=null?((h.median_return>0?'+':'')+h.median_return+'%'):'—'}</td>
                   <td style={{color:h.profitable_pct>=50?'var(--green)':'var(--red)',fontWeight:600}}>{h.profitable_pct!=null?(h.profitable_pct+'%'):'—'}</td>
-                  <td><button onClick={async()=>{try{const r=await fetch('/api/replay/mc/'+h.id);const d=await r.json();setMcResult(d.result||d);}catch(e){console.error(e);}}} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 10px',color:'var(--amber)',fontSize:10,cursor:'pointer'}}>VIEW</button></td>
+                  <td><button onClick={async()=>{try{const d=await api('/api/replay/mc/'+h.id);setMcResult(d.result||d);window.scrollTo({top:0,behavior:'smooth'});}catch(e){setMcError('Load MC #'+h.id+' failed: '+e.message);}}} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 10px',color:'var(--amber)',fontSize:10,cursor:'pointer'}}>VIEW</button></td>
                 </tr>
               ))}
             </tbody>
