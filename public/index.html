@@ -1320,10 +1320,20 @@ function App() {
   // Delegated click: any .td-ticker span anywhere → navigate to Scanner + auto-expand.
   // Works across all tabs AND within the RS tab's own sub-tables (RS history,
   // sector/industry history) so the main scanner row is always the destination.
+  //
+  // Opt-out: any ancestor with `data-no-nav="true"` short-circuits the
+  // delegation. Industries / Sectors tab ETF rows use this so a click on
+  // SMH or LIT opens the in-tab drill panel (rows have their own onClick
+  // for setSelInd2/setSelSector) instead of bouncing to Scanner with a
+  // "not in universe" toast — those are ETFs, not stocks, and aren't
+  // tracked in SECTOR_MAP. The drill panel's INNER stock rows do NOT
+  // carry the opt-out, so clicking a constituent stock still navigates
+  // correctly.
   useEffect(() => {
     function handleTickerClick(e) {
       const el = e.target.closest('.td-ticker');
       if (!el) return;
+      if (el.closest('[data-no-nav="true"]')) return;
       const ticker = (el.textContent || '').trim().toUpperCase();
       if (ticker && /^[A-Z]{1,6}$/.test(ticker)) {
         e.preventDefault();
@@ -3060,6 +3070,7 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
                 return (
                 <tr key={s.symbol}
                   onClick={()=>setSelSector(ss=>ss===s.symbol?null:s.symbol)}
+                  data-no-nav="true"
                   style={{cursor:'pointer',background:selSector===s.symbol?'rgba(240,165,0,0.08)':isFocused?'rgba(0,230,118,0.04)':'',
                           borderLeft:isFocused?'2px solid var(--green)':selSector===s.symbol?'2px solid var(--amber)':''}}>
                   <td className="muted">{i+1}</td>
@@ -3239,6 +3250,7 @@ function IndustriesTab({ selectedSectors, setSelectedSectors }) {
             <tbody>
               {sortData(filtered).map((e,i) => (
                 <tr key={e.symbol} onClick={()=>setSelInd2(si=>si===e.symbol?null:e.symbol)}
+                  data-no-nav="true"
                   style={{cursor:'pointer', background:selInd2===e.symbol?'var(--bg3)':''}}>
                   <td className="muted">{i+1}</td>
                   <td><RSBar rs={e.rsRank}/></td>
