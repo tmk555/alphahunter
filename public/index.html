@@ -3422,8 +3422,44 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
 
     setExpandedTicker(scannerTarget);
 
-    // Retry up to ~1.6s because filter relaxation → re-render happens async.
-    // Bails on first successful scroll OR after the cap. No flicker on success.
+    // Pre-fix: when the user clicked a ticker from the Industries-tab drill
+    // BEFORE the Scanner tab's rsData had loaded, the scrollIntoView retry
+    // gave up after 1.6s and clearScannerTarget() ran — leaving the user on
+    // the Scanner tab with no expanded row. The target was lost.
+    //
+    // Now we hold the target across the loading window. The effect's deps
+    // include `rsLoaded`, so when the data finally arrives the effect
+    // re-fires and the lookup retries. Three outcomes:
+    //
+    //   A. Data still loading (rsLoaded=false): set expandedTicker so the
+    //      panel will render the moment the row appears, but DON'T start
+    //      the timeout-based scroll loop yet. Effect re-fires when
+    //      rsLoaded flips true.
+    //
+    //   B. Data loaded, target found in rsData: scroll-into-view loop runs
+    //      (extended from 1.6s → 2.4s for slow renders).
+    //
+    //   C. Data loaded but target NOT in rsData: surface a toast — the
+    //      ticker isn't in the user's universe (common for Industry-ETF
+    //      drill rows that fall outside SECTOR_MAP). Old behavior was
+    //      silent failure with no clue to the user.
+    if (!rsLoaded) {
+      // Scenario A — wait. Effect will re-run when rsLoaded changes.
+      return;
+    }
+    if (!target) {
+      // Scenario C — ticker isn't in the active scanner universe.
+      window.showToast?.(
+        `${targetUpper} not in scanner universe`,
+        'This stock isn\'t in your active scanner universe — likely outside the tracked SECTOR_MAP. The Scanner tab can\'t auto-expand a row that isn\'t there. Add it via universe management if you want it scanned.',
+        true
+      );
+      clearScannerTarget();
+      return;
+    }
+
+    // Scenario B — target IS in rsData; retry scrollIntoView through the
+    // re-render cycle. Bumped cap 8 → 12 (2.4s) for slow renders.
     let attempts = 0;
     const interval = setInterval(() => {
       attempts++;
@@ -3442,14 +3478,14 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
         }, 1800);
         clearInterval(interval);
         clearScannerTarget();
-      } else if (attempts >= 8) {
+      } else if (attempts >= 12) {
         clearInterval(interval);
         clearScannerTarget();
       }
     }, 200);
 
     return () => clearInterval(interval);
-  }, [scannerTarget]);
+  }, [scannerTarget, rsLoaded]);
 
   // Strategy entry criteria (matches replay engine evaluateEntry)
   const strategyEntryFilters = {
