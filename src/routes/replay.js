@@ -24,6 +24,7 @@ const { runBackfill } = require('../signals/backfill');
 const { runInstitutionalBackfill } = require('../signals/backfillInstitutional');
 const { runEarningsDriftBackfill } = require('../signals/backfillEarningsDrift');
 const { runRevisionsBackfill } = require('../signals/backfillRevisions');
+const { startJob, getJob, listJobs, cancelJob } = require('../signals/replay-jobs');
 const { FULL_UNIVERSE } = require('../../universe');
 
 // ─── Available strategies ─────────────────────────────────────────────────
@@ -265,6 +266,110 @@ router.get('/replay/mc/:id', (req, res) => {
     const result = getMCResult(+req.params.id);
     if (!result) return res.status(404).json({ error: 'MC result not found' });
     res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Background-job control surface ──────────────────────────────────────
+// POST /replay/jobs        body: { kind, body }   → 202 + { jobId, status }
+// GET  /replay/jobs/:id                            → full job state
+// GET  /replay/jobs                                → recent jobs list
+// DELETE /replay/jobs/:id                          → cancel hint
+//
+// `kind` selects which engine call to run; `body` is the same shape that
+// kind's synchronous endpoint would take. The synchronous endpoints
+// (/replay/run, /replay/compare, /replay/walk-forward, /replay/monte-carlo)
+// remain available for scripts/tests that prefer the simpler request/response
+// model. The UI uses the job model so backtests survive tab switches and
+// page reloads.
+
+const JOB_KINDS = {
+  run: (body) => {
+    const { strategy, tradeMode, params, startDate, endDate, maxPositions, initialCapital, execution, indexName } = body || {};
+    if (!strategy || !startDate || !endDate) throw new Error('strategy, startDate, and endDate required');
+    return runReplay({
+      strategy, tradeMode: tradeMode || undefined, params, startDate, endDate,
+      maxPositions: maxPositions || 10,
+      initialCapital: initialCapital || 100000,
+      execution: execution || {},
+      indexName: indexName || 'SP500',
+    });
+  },
+  compare: (body) => {
+    const { strategies, startDate, endDate, maxPositions, initialCapital, tradeMode } = body || {};
+    if (!strategies || !startDate || !endDate) throw new Error('strategies[], startDate, and endDate required');
+    return compareStrategies({
+      strategies, startDate, endDate, tradeMode: tradeMode || undefined,
+      maxPositions: maxPositions || 10,
+      initialCapital: initialCapital || 100000,
+    });
+  },
+  'walk-forward': (body) => {
+    const { strategy, tradeMode, startDate, endDate, trainDays, testDays, paramGrid, optimizeMetric, maxPositions, initialCapital, execution } = body || {};
+    if (!strategy || !startDate || !endDate) throw new Error('strategy, startDate, and endDate required');
+    if (!paramGrid || typeof paramGrid !== 'object') throw new Error('paramGrid object required');
+    const result = runWalkForward({
+      strategy, tradeMode: tradeMode || undefined,
+      startDate, endDate,
+      trainDays: trainDays || 120, testDays: testDays || 60,
+      paramGrid, optimizeMetric: optimizeMetric || 'sharpeRatio',
+      maxPositions: maxPositions || 10,
+      initialCapital: initialCapital || 100000,
+      execution: execution || {},
+    });
+    try {
+      result.config = { ...result.config, startDate, endDate };
+      result.id = saveWFResult(result);
+    } catch (_) {}
+    return result;
+  },
+  'monte-carlo': (body) => {
+    const { replayId, trades, iterations, method, positionFraction, initialCapital } = body || {};
+    if (replayId == null && (!trades || !trades.length)) throw new Error('replayId or trades[] required');
+    const result = runMonteCarlo({
+      replayId: replayId != null ? +replayId : null,
+      trades: trades || null,
+      iterations: iterations || 1000,
+      method: method || 'permutation',
+      positionFraction: positionFraction != null ? +positionFraction : 0.10,
+      initialCapital: initialCapital || 100000,
+    });
+    try { result.id = saveMCResult(replayId, result); } catch (_) {}
+    return result;
+  },
+};
+
+router.post('/replay/jobs', (req, res) => {
+  try {
+    const { kind, body } = req.body || {};
+    if (!kind || !JOB_KINDS[kind]) {
+      return res.status(400).json({ error: `kind must be one of: ${Object.keys(JOB_KINDS).join(', ')}` });
+    }
+    const runner = JOB_KINDS[kind];
+    const job = startJob(kind, body || {}, () => runner(body || {}));
+    res.status(202).json({ id: job.id, kind: job.kind, status: job.status, startedAt: job.startedAt });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.get('/replay/jobs', (req, res) => {
+  try {
+    const { limit = 20 } = req.query;
+    res.json({ jobs: listJobs(+limit) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/replay/jobs/:id', (req, res) => {
+  try {
+    const job = getJob(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found (server may have restarted, or job pruned)' });
+    res.json(job);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete('/replay/jobs/:id', (req, res) => {
+  try {
+    const ok = cancelJob(req.params.id);
+    if (!ok) return res.status(404).json({ error: 'Job not found' });
+    res.json({ ok: true, cancelled: req.params.id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

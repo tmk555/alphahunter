@@ -368,10 +368,113 @@ async function api(path, opts = {}) {
     if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || `HTTP ${r.status}`); }
     return r.json();
   } catch (e) {
-    if (e.name === 'AbortError') throw new Error(`Request timeout after ${Math.round(timeoutMs/1000)}s — try again`);
+    // Abort-detection has to handle three browser dialects:
+    //   • Chrome/Firefox: e.name === 'AbortError'
+    //   • Safari:         e.name === 'AbortError' but e.message is "Fetch is aborted"
+    //                     (sometimes surfaced via DOMException with code === 20)
+    //   • Some older Safari builds: name === 'TypeError' with the same message.
+    // The previous code only matched on e.name, which let Safari's literal
+    // "Fetch is aborted" string leak to the user instead of the friendlier
+    // "Request timeout after Ns" message.
+    const looksAborted =
+      e?.name === 'AbortError' ||
+      e?.code === 20 ||
+      /aborted|aborterror/i.test(e?.message || '');
+    if (looksAborted) throw new Error(`Request timeout after ${Math.round(timeoutMs/1000)}s — try again`);
     throw e;
   } finally {
     clearTimeout(tid);
+  }
+}
+
+// ─── Replay background-job helper ───────────────────────────────────────
+// Runs a long replay-tab call as a server-side background job. The fetch
+// itself is short (just submit + poll), so tab switches, page reloads, and
+// brief network blips can't kill it the way they killed the old long-held
+// fetch.
+//
+// Lifecycle:
+//   1. POST /api/replay/jobs           → returns { id, status: 'running' }
+//   2. localStorage[REPLAY_JOBS_KEY]   → records active job ids by kind
+//   3. Poll /api/replay/jobs/:id every POLL_MS until status !== 'running'
+//   4. Resolve with job.result, or reject with job.error
+//
+// Callers pass `{ kind, body, onUpdate, signal }`:
+//   - kind:    'run' | 'compare' | 'walk-forward' | 'monte-carlo'
+//   - body:    same shape the synchronous endpoint expected
+//   - onUpdate(job): optional progress callback (fires every poll tick)
+//   - signal:  optional AbortSignal to stop polling client-side; the
+//              server-side job keeps running but we stop watching
+//
+// Resumption: callers can also pass `{ resumeJobId }` to attach to an
+// existing job (recovered from localStorage on tab remount or page reload).
+const REPLAY_JOBS_KEY = 'alphahunter:replay-jobs';
+
+function readActiveReplayJobs() {
+  try { return JSON.parse(localStorage.getItem(REPLAY_JOBS_KEY) || '{}'); }
+  catch (_) { return {}; }
+}
+
+function writeActiveReplayJob(kind, jobId) {
+  const cur = readActiveReplayJobs();
+  if (jobId) cur[kind] = jobId; else delete cur[kind];
+  try { localStorage.setItem(REPLAY_JOBS_KEY, JSON.stringify(cur)); } catch (_) {}
+}
+
+// Per-kind AbortController so a fresh runReplayJob() call can supersede the
+// previous poll loop for the same kind. Without this, clicking "RUN REPLAY"
+// twice in a row left the old poll running; when the old job finished it
+// overwrote the new job's pending result. Module-scope (not per-component)
+// so resumption across mount cycles still cooperates with the same map.
+const _replayJobAborters = new Map(); // kind → AbortController
+
+async function runReplayJob({ kind, body, onUpdate, signal, resumeJobId }) {
+  // Supersede any previous in-flight poll for this kind. The server-side
+  // job continues regardless — we just stop watching.
+  const prev = _replayJobAborters.get(kind);
+  if (prev) prev.abort();
+  const ctrl = new AbortController();
+  _replayJobAborters.set(kind, ctrl);
+  // Honor the caller's external abort signal too (rare — most callers don't pass one).
+  if (signal) signal.addEventListener('abort', () => ctrl.abort(), { once: true });
+
+  let jobId = resumeJobId;
+  if (!jobId) {
+    const submit = await api('/api/replay/jobs', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ kind, body }),
+    });
+    jobId = submit.id;
+    writeActiveReplayJob(kind, jobId);
+    onUpdate?.({ id: jobId, kind, status: 'running', startedAt: submit.startedAt });
+  }
+
+  const POLL_MS = 2000;
+  try {
+    while (true) {
+      if (ctrl.signal.aborted) throw new Error('Polling superseded');
+      let job;
+      try {
+        job = await api(`/api/replay/jobs/${jobId}`);
+      } catch (e) {
+        // Server restart wipes the in-memory job map → 404. Clear the stale
+        // localStorage entry so the next attempt starts a fresh job.
+        if (/not found/i.test(e.message)) {
+          writeActiveReplayJob(kind, null);
+          throw new Error(`Job ${jobId} no longer available (server restarted?). Try again.`);
+        }
+        throw e;
+      }
+      onUpdate?.(job);
+      if (job.status === 'done')      { writeActiveReplayJob(kind, null); return job.result; }
+      if (job.status === 'error')     { writeActiveReplayJob(kind, null); throw new Error(job.error || 'Job failed'); }
+      if (job.status === 'cancelled') { writeActiveReplayJob(kind, null); throw new Error('Job cancelled'); }
+      await new Promise(r => setTimeout(r, POLL_MS));
+    }
+  } finally {
+    // Only clear the aborter if WE'RE still the active one (a newer call
+    // may have replaced us — don't stomp its slot).
+    if (_replayJobAborters.get(kind) === ctrl) _replayJobAborters.delete(kind);
   }
 }
 
@@ -12333,6 +12436,12 @@ function ReplayTab() {
   const [bfForm, setBfForm] = useState({ lookbackDays:2500 });
   const [bfResult, setBfResult] = useState(null);
   const [bfLoading, setBfLoading] = useState(false);
+  // Live job status keyed by kind — populated by the runReplayJob onUpdate
+  // callback every poll tick. Drives the "JOB RUNNING — elapsed Ns" badge
+  // so the user can see a backtest is making progress on the server even
+  // when the page-level button looks idle (e.g. they navigated away and
+  // back, and the resume effect kicked in).
+  const [jobStatus, setJobStatus] = useState({});
   const datesInitialized = React.useRef(false);
 
   async function loadAll() {
@@ -12377,6 +12486,24 @@ function ReplayTab() {
 
   useEffect(() => { loadAll(); }, []);
 
+  // Resume any in-flight backtest jobs on tab mount (and on page reload).
+  // Without this, navigating away from Replay tab unmounted the component
+  // and the user lost track of the running job — even though the server
+  // was still working on it. localStorage records the active jobId per
+  // kind; on remount we pick each one up and render its result when done.
+  // Server-restart wipes the in-memory job map, so a 404 from the poller
+  // cleanly clears the localStorage entry.
+  useEffect(() => {
+    const active = readActiveReplayJobs();
+    if (active.run)             runReplay({          resumeJobId: active.run });
+    if (active.compare)         runCompare({         resumeJobId: active.compare });
+    if (active['walk-forward']) runWalkForward({     resumeJobId: active['walk-forward'] });
+    if (active['monte-carlo'])  runMonteCarlo({      resumeJobId: active['monte-carlo'] });
+    // Intentional: only run on mount — these helpers read the latest form
+    // refs internally, so we don't want a re-trigger every form keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Build the params object used by /api/replay/run, /api/replay/compare,
   // and /api/replay/walk-forward. All three should honor the same form-level
   // toggles (exit strategy, strict regime, factor signals); previously the
@@ -12404,60 +12531,59 @@ function ReplayTab() {
     return execution;
   }
 
-  async function runReplay() {
-    if (!form.strategy || !form.startDate || !form.endDate) return;
+  // Background-job wrappers around the legacy run* functions. Each replay
+  // now submits a job to the server, polls until done, and renders the
+  // result. The fetch lifetime is short (just submit + per-poll), so tab
+  // switches, page reloads, and brief network blips no longer kill an
+  // in-flight backtest. localStorage tracks the active jobId per kind so
+  // the next mount (or reload) picks up where we left off.
+  async function runReplay({ resumeJobId } = {}) {
+    if (!resumeJobId && (!form.strategy || !form.startDate || !form.endDate)) return;
     setLoading(true); setError(''); setReplayError(''); setResult(null);
     try {
       const params = buildParamsForStrategy(form.strategy);
       const execution = buildExecution();
-      const r = await api('/api/replay/run', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          strategy: form.strategy, tradeMode: form.tradeMode || undefined, startDate: form.startDate, endDate: form.endDate,
+      const r = await runReplayJob({
+        kind: 'run',
+        resumeJobId,
+        body: {
+          strategy: form.strategy, tradeMode: form.tradeMode || undefined,
+          startDate: form.startDate, endDate: form.endDate,
           maxPositions: form.maxPositions, initialCapital: form.initialCapital, params, execution,
-        }),
+        },
+        onUpdate: (j) => setJobStatus(prev => ({ ...prev, run: j })),
       });
       setResult(r);
-      // Pre-select this fresh replay as the MC source so RUN MC uses it
-      // instead of a stale history pick. UX trap before this: every fresh
-      // run silently kept MC pointed at whatever was selected on first load.
       if (r?.id) setMcForm(prev => ({ ...prev, selectedReplayId: r.id }));
       loadAll();
     } catch(e) { setReplayError(e.message); }
     setLoading(false);
+    setJobStatus(prev => ({ ...prev, run: null }));
   }
 
-  async function runCompare() {
-    if (!form.startDate || !form.endDate) return;
+  async function runCompare({ resumeJobId } = {}) {
+    if (!resumeJobId && (!form.startDate || !form.endDate)) return;
     setLoading(true); setReplayError(''); setResult(null);
     try {
-      // Compare All now honors the same form toggles every other entry-point
-      // does — exit strategy (scaleOut/pyramidEntry), strict regime, and
-      // factor_combo's signals/minRS. Each strategy still gets its own
-      // params object so factor_combo's signal injection only fires on
-      // that one row.
       const strats = strategies.map(s => ({
         strategy: s.key,
         params: buildParamsForStrategy(s.key),
       }));
-      // Compare All runs ~10 strategies sequentially on the server. Each
-      // single-strategy run can take seconds on a multi-year window, so the
-      // 45s default api() timeout was being blown for any range >~2 years.
-      // Bumped to 5 minutes — well above worst-case backtest duration on
-      // the full 2016→2026 window.
-      const r = await api('/api/replay/compare', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        timeout: 5 * 60 * 1000,
-        body: JSON.stringify({
+      const r = await runReplayJob({
+        kind: 'compare',
+        resumeJobId,
+        body: {
           strategies: strats, startDate: form.startDate, endDate: form.endDate,
           tradeMode: form.tradeMode || undefined,
           maxPositions: form.maxPositions, initialCapital: form.initialCapital,
           execution: buildExecution(),
-        }),
+        },
+        onUpdate: (j) => setJobStatus(prev => ({ ...prev, compare: j })),
       });
       setResult(r); loadAll();
     } catch(e) { setReplayError(e.message); }
     setLoading(false);
+    setJobStatus(prev => ({ ...prev, compare: null }));
   }
 
   async function loadResult(id) {
@@ -12517,26 +12643,19 @@ function ReplayTab() {
     setLoading(false);
   }
 
-  async function runWalkForward() {
-    if (!form.strategy || !form.startDate || !form.endDate) return;
+  async function runWalkForward({ resumeJobId } = {}) {
+    if (!resumeJobId && (!form.strategy || !form.startDate || !form.endDate)) return;
     setLoading(true); setWfError(''); setWfResult(null);
     try {
       let paramGrid = {};
-      try { paramGrid = JSON.parse(wfForm.paramGrid); }
-      catch(_) { setWfError('Invalid paramGrid JSON'); setLoading(false); return; }
-      // Walk-forward now honors the same form toggles as Run Replay — Mode
-      // dropdown (swing/position), Strict Regime, Exit Strategy, Next-Day
-      // Entry, and factor_combo signals (via per-window params override
-      // when the strategy is factor_combo). Previously WF silently ignored
-      // these and ran every window in defaults.
-      // Walk-forward is the longest call path in the tab — runs combos ×
-      // windows simulations (capped at 256 combos). On a full 2016→2026
-      // range that's hundreds of replays. Bumped to 10 minutes; the
-      // engine's internal cap on combos is what really bounds the work.
-      const r = await api('/api/replay/walk-forward', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        timeout: 10 * 60 * 1000,
-        body: JSON.stringify({
+      if (!resumeJobId) {
+        try { paramGrid = JSON.parse(wfForm.paramGrid); }
+        catch(_) { setWfError('Invalid paramGrid JSON'); setLoading(false); return; }
+      }
+      const r = await runReplayJob({
+        kind: 'walk-forward',
+        resumeJobId,
+        body: {
           strategy: form.strategy,
           tradeMode: form.tradeMode || undefined,
           startDate: form.startDate, endDate: form.endDate,
@@ -12544,41 +12663,54 @@ function ReplayTab() {
           paramGrid, optimizeMetric: wfForm.optimizeMetric,
           maxPositions: form.maxPositions, initialCapital: form.initialCapital,
           execution: buildExecution(),
-        }),
+        },
+        onUpdate: (j) => setJobStatus(prev => ({ ...prev, ['walk-forward']: j })),
       });
       setWfResult(r); loadAll();
     } catch(e) { setWfError(e.message); }
     setLoading(false);
+    setJobStatus(prev => ({ ...prev, ['walk-forward']: null }));
   }
 
-  async function runMonteCarlo() {
-    const replayId = mcForm.selectedReplayId || result?.id || history[0]?.id;
-    if (!replayId) {
-      setMcError('Select or run a backtest first to feed Monte Carlo');
-      return;
+  async function runMonteCarlo({ resumeJobId } = {}) {
+    if (!resumeJobId) {
+      const replayId = mcForm.selectedReplayId || result?.id || history[0]?.id;
+      if (!replayId) {
+        setMcError('Select or run a backtest first to feed Monte Carlo');
+        return;
+      }
+      setLoading(true); setMcError(''); setMcResult(null);
+      try {
+        // Derive MC base capital from the source replay, NOT the form's
+        // current Initial Capital field. The simulation compares baseline
+        // path equity vs MC distribution paths — both must run with the
+        // same starting capital or the percentile rank is meaningless.
+        let baseCapital = form.initialCapital;
+        const sourceFromHistory = history.find(h => h.id === replayId);
+        if (sourceFromHistory?.initial_capital) baseCapital = sourceFromHistory.initial_capital;
+        else if (result?.id === replayId && result?.performance?.initialCapital) baseCapital = result.performance.initialCapital;
+        const r = await runReplayJob({
+          kind: 'monte-carlo',
+          body: {
+            replayId, iterations: +mcForm.iterations, method: mcForm.method,
+            positionFraction: +mcForm.positionFraction, initialCapital: +baseCapital || 100000,
+          },
+          onUpdate: (j) => setJobStatus(prev => ({ ...prev, ['monte-carlo']: j })),
+        });
+        setMcResult(r); loadAll();
+      } catch(e) { setMcError(e.message); }
+    } else {
+      setLoading(true); setMcError(''); setMcResult(null);
+      try {
+        const r = await runReplayJob({
+          kind: 'monte-carlo', resumeJobId,
+          onUpdate: (j) => setJobStatus(prev => ({ ...prev, ['monte-carlo']: j })),
+        });
+        setMcResult(r); loadAll();
+      } catch(e) { setMcError(e.message); }
     }
-    setLoading(true); setMcError(''); setMcResult(null);
-    try {
-      // Derive MC base capital from the source replay, NOT the form's
-      // current Initial Capital field. The simulation compares baseline
-      // path equity vs MC distribution paths — both must run with the
-      // same starting capital or the percentile rank is meaningless.
-      // Falls back to the form value only when we can't resolve the
-      // source replay's capital (e.g. very old DB rows missing it).
-      let baseCapital = form.initialCapital;
-      const sourceFromHistory = history.find(h => h.id === replayId);
-      if (sourceFromHistory?.initial_capital) baseCapital = sourceFromHistory.initial_capital;
-      else if (result?.id === replayId && result?.performance?.initialCapital) baseCapital = result.performance.initialCapital;
-      const r = await api('/api/replay/monte-carlo', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          replayId, iterations: +mcForm.iterations, method: mcForm.method,
-          positionFraction: +mcForm.positionFraction, initialCapital: +baseCapital || 100000,
-        }),
-      });
-      setMcResult(r); loadAll();
-    } catch(e) { setMcError(e.message); }
     setLoading(false);
+    setJobStatus(prev => ({ ...prev, ['monte-carlo']: null }));
   }
 
   async function runBackfill() {
@@ -12623,6 +12755,28 @@ function ReplayTab() {
         <div className="panel" style={{background:'rgba(255,61,87,0.08)',border:'1px solid var(--red)',borderRadius:4,padding:'8px 12px',marginBottom:10,fontSize:12,color:'var(--red)',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
           <span>⚠ {error}</span>
           <button onClick={()=>setError('')} style={{background:'transparent',border:'1px solid var(--red)',borderRadius:3,padding:'2px 8px',color:'var(--red)',fontSize:10,cursor:'pointer',fontFamily:'var(--font-mono)'}}>DISMISS</button>
+        </div>
+      )}
+      {/* Active server-side job badge — surfaces the fact that one (or
+          more) backtest jobs are currently running on the server, even if
+          the user just navigated back to this tab. Without this, a long
+          Compare All / Walk-Forward looks like nothing is happening
+          because the buttons are idle and the relevant result panel is
+          empty until the job completes. The badge shows live elapsed
+          time so the user can tell whether to wait or kick off a new run. */}
+      {Object.values(jobStatus).some(j => j && j.status === 'running') && (
+        <div className="panel" style={{background:'rgba(0,180,255,0.08)',border:'1px solid var(--cyan)',borderRadius:4,padding:'8px 12px',marginBottom:10,fontSize:12,color:'var(--cyan)',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
+          <span style={{fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:1}}>⏳ JOB{Object.values(jobStatus).filter(j=>j?.status==='running').length>1?'S':''} RUNNING</span>
+          {Object.entries(jobStatus).filter(([,j]) => j?.status === 'running').map(([kind, j]) => (
+            <span key={kind} style={{fontSize:11,color:'var(--text2)'}}>
+              <strong style={{color:'var(--cyan)'}}>{kind}</strong>
+              {' · '}
+              {Math.max(0, Math.round(((Date.now() - (j.startedAt||Date.now()))/1000)))}s elapsed
+              {' · '}
+              <span style={{color:'var(--text3)'}}>id #{j.id}</span>
+            </span>
+          ))}
+          <span style={{fontSize:10,color:'var(--text3)',marginLeft:'auto'}}>Server-side — safe to switch tabs / reload</span>
         </div>
       )}
       <div className="panel">
