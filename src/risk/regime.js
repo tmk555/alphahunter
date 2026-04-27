@@ -261,10 +261,19 @@ async function getMarketRegime() {
 
       const bs = breadthOverlay?.score;
       if (typeof bs === 'number') {
+        // Tightened mid-band threshold: was `< 60` → `-1 tier`, which
+        // suppressed pure-O'Neil FULL deployment any time breadth landed
+        // in the borderline-healthy 55–59 zone. Now only triggers when
+        // breadth is genuinely cool (< 55). Severe (< 30) and weak (< 50)
+        // bands unchanged.
+        //   0–29   → −3 tiers (severe — internals broken)
+        //   30–49  → −2 tiers (weak — clear deterioration)
+        //   50–54  → −1 tier  (mixed — soft caution)
+        //   55+    → no modulation (trust the O'Neil read)
         let n = 0;
         if (bs < 30) n = 3;
         else if (bs < 50) n = 2;
-        else if (bs < 60) n = 1;  // 51 (MIXED) softens ramp by one tier
+        else if (bs < 55) n = 1;
         if (n > 0) {
           downshiftReasons.push(`breadth ${bs}/100 (-${n})`);
           if (currentIdx >= 0) currentIdx = Math.max(0, currentIdx - n);
