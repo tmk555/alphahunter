@@ -388,10 +388,10 @@ registerJobType('pyramid_watch', {
 // ─── 10. Equity Snapshot — Daily portfolio alpha tracking ──────────────────
 
 registerJobType('equity_snapshot', {
-  description: 'Record daily equity snapshot for portfolio alpha tracking (TWR, Sharpe, SPY-relative)',
-  defaultConfig: {},
-  handler: async () => {
-    const { recordEquitySnapshot } = require('../risk/alpha-tracker');
+  description: 'Record portfolio equity snapshot for alpha tracking (TWR, Sharpe, SPY-relative). Use mode:safety_weekly for Sunday backfill.',
+  defaultConfig: { mode: 'daily' },
+  handler: async (config = {}) => {
+    const { recordEquitySnapshot, lastTradingDayOnOrBefore } = require('../risk/alpha-tracker');
     const alpaca = require('../broker/alpaca');
 
     let equity, cashFlow = 0, spyClose, openPositions = 0, heatPct = 0;
@@ -428,8 +428,49 @@ registerJobType('equity_snapshot', {
       heatPct = heatRow ? +heatRow.value : 0;
     } catch (_) {}
 
+    // ── Safety-weekly mode ──────────────────────────────────────────────
+    // Weekend-firing safety net to fill in a missed Friday snapshot. User
+    // requested: "schedule recording a snapshot on a weekly basis, run it
+    // if it wasn't run in a week or weekend whichever comes first." The
+    // existing daily cron is weekday-only (cron 1-5) AND blocked on
+    // weekends by the alpha-tracker trading-day guard, so a long server
+    // outage spanning Friday → Monday could lose Friday's snapshot
+    // entirely. This mode:
+    //
+    //   1. Computes the most recent past trading day (Friday on a weekend)
+    //   2. Skips if equity_snapshots already has a row for that date —
+    //      no-op when the daily cron already captured Friday at 4:45 PM
+    //   3. Otherwise records the snapshot dated to that trading day,
+    //      using current broker.equity (markets were closed since Fri
+    //      close so equity is stable). dateOverride bypasses the
+    //      trading-day guard.
+    if (config.mode === 'safety_weekly') {
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      const targetDate = lastTradingDayOnOrBefore(today);
+      const existing = db().prepare(
+        'SELECT date FROM equity_snapshots WHERE date = ?'
+      ).get(targetDate);
+      if (existing) {
+        return {
+          mode: 'safety_weekly',
+          targetDate,
+          skipped: true,
+          reason: 'snapshot already exists for last trading day',
+        };
+      }
+      const snapshot = recordEquitySnapshot(equity, cashFlow, spyClose, openPositions, heatPct, { dateOverride: targetDate });
+      return {
+        mode: 'safety_weekly',
+        targetDate,
+        backfilled: true,
+        date: snapshot.date,
+        equity, spyClose, openPositions, heatPct,
+      };
+    }
+
+    // Default daily mode
     const snapshot = recordEquitySnapshot(equity, cashFlow, spyClose, openPositions, heatPct);
-    return { date: snapshot.date, equity, spyClose, openPositions, heatPct };
+    return { date: snapshot.date, equity, spyClose, openPositions, heatPct, ...(snapshot.skipped ? { skipped: snapshot.skipped, reason: snapshot.reason } : {}) };
   },
 });
 
@@ -579,66 +620,14 @@ registerJobType('scale_in_check', {
   },
 });
 
-// ─── Equity Snapshot — Automated daily portfolio equity recording ──────────
-// Records portfolio equity for alpha tracking (TWR, Sharpe, Sortino, SPY Alpha).
-// Calculates equity from account size + open position P&L, fetches SPY for benchmark.
-
-registerJobType('equity_snapshot', {
-  description: 'Record daily portfolio equity snapshot for alpha performance tracking (TWR, Sharpe, Sortino)',
-  defaultConfig: {},
-  handler: async () => {
-    const { recordEquitySnapshot } = require('../risk/alpha-tracker');
-    const { getConfig, getPortfolioHeat } = require('../risk/portfolio');
-    const { getQuotes } = require('../data/providers/manager');
-
-    const config = getConfig();
-    const accountSize = config.accountSize || 100000;
-
-    // Get open trades and calculate equity
-    const openTrades = db().prepare(
-      'SELECT symbol, side, entry_price, shares, remaining_shares FROM trades WHERE exit_date IS NULL'
-    ).all();
-
-    // Fetch current prices for open positions + SPY
-    const symbols = [...new Set(openTrades.map(t => t.symbol).concat('SPY'))];
-    const quotes = await getQuotes(symbols);
-    const priceMap = {};
-    for (const q of quotes) {
-      priceMap[q.symbol || q.ticker] = q.price || q.regularMarketPrice;
-    }
-
-    // Calculate open P&L
-    let openPnl = 0;
-    for (const t of openTrades) {
-      const currentPrice = priceMap[t.symbol] || t.entry_price;
-      const shares = t.remaining_shares || t.shares || 0;
-      const pnl = (currentPrice - t.entry_price) * shares * (t.side === 'short' ? -1 : 1);
-      openPnl += pnl;
-    }
-
-    const equity = +(accountSize + openPnl).toFixed(2);
-    const spyClose = priceMap['SPY'] || null;
-
-    // Get portfolio heat
-    let heatPct = 0;
-    try {
-      const heat = getPortfolioHeat();
-      heatPct = heat?.heatPct || 0;
-    } catch (_) {}
-
-    const snapshot = recordEquitySnapshot(equity, 0, spyClose, openTrades.length, heatPct);
-
-    return {
-      date: marketDate(),
-      equity,
-      spyClose,
-      openPositions: openTrades.length,
-      openPnl: +openPnl.toFixed(2),
-      heatPct,
-      snapshot,
-    };
-  },
-});
+// (NOTE: a second registerJobType('equity_snapshot', …) block lived here
+// previously — synthetic-equity calc that overwrote the broker-equity
+// handler at line ~390. Removed in the same commit that adds the weekly
+// safety-net cron, since the broker-equity path is the authoritative
+// source for portfolio alpha tracking. See src/risk/alpha-tracker.js for
+// the actual recordEquitySnapshot logic, which now also accepts an
+// optional `dateOverride` so the weekly safety-net cron can record a
+// last-trading-day-dated row when it fires on a Sunday.)
 
 // ─── Revision Scan — Daily earnings estimate snapshot ──────────────────────
 // Fetches analyst estimates for the universe stocks and stores snapshots.
@@ -976,6 +965,27 @@ const DEFAULT_JOBS = [
     job_type: 'equity_snapshot',
     cron_expression: '45 16 * * 1-5',  // 4:45 PM server local, weekdays
     config: {},
+  },
+
+  // Weekly safety net — fires Sunday 6 PM. If the daily eod cron missed
+  // Friday's snapshot (server outage, deploy gap, app offline through the
+  // close), this job backfills a Friday-dated row using current broker
+  // equity (markets have been closed all weekend → equity is stable). The
+  // handler's `mode: 'safety_weekly'` config does an existence check first
+  // and no-ops when Friday already has a row, so this is harmless to run
+  // every week.
+  //
+  // Combined with the catch-up runner's weekly rule (fire if 7d elapsed
+  // OR Monday boundary crossed since last_run, whichever comes first), a
+  // server that's offline through the weekend will still record Friday's
+  // snapshot when it boots Monday morning. Closes the gap-on-the-equity-
+  // curve risk the user flagged.
+  {
+    name: 'equity_snapshot_safety_weekly',
+    description: 'Sunday safety-net: backfill last Friday\'s equity snapshot if daily cron missed it',
+    job_type: 'equity_snapshot',
+    cron_expression: '0 18 * * 0',  // 6:00 PM server local, Sunday
+    config: { mode: 'safety_weekly' },
   },
 
   // Portfolio reconcile with broker — catches any drift between the local

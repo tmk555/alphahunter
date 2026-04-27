@@ -237,14 +237,32 @@ function calculateMaxDrawdownDuration(snapshots) {
 
 // ─── Record Daily Equity Snapshot ────────────────────────────────────────────
 
+// Last US-equity trading day on or before the given date (server local).
+// Saturday/Sunday roll back to Friday; trading day passes through. Does NOT
+// account for market holidays — same scope decision as scanner.js / catchup.
+function lastTradingDayOnOrBefore(dateStr) {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
+  const d = new Date(dateStr + 'T12:00:00Z');
+  let dow = d.getUTCDay();
+  while (dow === 0 || dow === 6) {
+    d.setUTCDate(d.getUTCDate() - 1);
+    dow = d.getUTCDay();
+  }
+  return d.toISOString().slice(0, 10);
+}
+
 function recordEquitySnapshot(equity, cashFlow = 0, spyClose = null, openPositions = 0, heatPct = 0, opts = {}) {
-  const date = marketDate();
-  // Trading-day guard: refuse to write weekend rows. Markets are closed,
-  // equity hasn't moved, and the duplicate row pollutes TWR / drawdown /
-  // Sharpe inputs. The manual "Record Snapshot" button hits this guard;
-  // the equity_snapshot_eod cron is naturally weekday-only via dow gate.
-  // Pass `{ force: true }` from a backfill script if you need to bypass.
-  if (!opts.force && !isTradingDay(date)) {
+  // Date selection rules:
+  //   • Default: today's NY-time date (marketDate()), then guard against
+  //     Sat/Sun via isTradingDay (skipped, no row written).
+  //   • opts.dateOverride: caller specifies the date — used by the weekly
+  //     safety-net cron to record a Friday-dated row when it fires on a
+  //     Sunday. Skips the trading-day guard since the override is already
+  //     a trading day by construction (lastTradingDayOnOrBefore).
+  //   • opts.force: bypass the trading-day guard for backfill scripts that
+  //     intentionally need a weekend-dated row.
+  const date = opts.dateOverride || marketDate();
+  if (!opts.force && !opts.dateOverride && !isTradingDay(date)) {
     return { skipped: true, reason: 'non-trading-day', date };
   }
   db().prepare(`
@@ -352,4 +370,7 @@ module.exports = {
   getEquitySnapshots,
   computePeriodReturn,
   generateAlphaReport,
+  // Helpers used by the equity_snapshot job's safety_weekly mode
+  isTradingDay,
+  lastTradingDayOnOrBefore,
 };
