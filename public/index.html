@@ -3792,6 +3792,7 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
           <input type="text" value={searchQuery}
             onChange={e=>setSearchQuery(e.target.value)}
             placeholder="Search ticker or name…"
+            autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off"
             style={{width:'100%',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',padding:'7px 32px 7px 10px',fontSize:12,fontFamily:'var(--font-mono)',outline:'none',transition:'border-color 0.15s',boxSizing:'border-box'}}
             onFocus={e=>{e.target.style.borderColor='var(--cyan)'}}
             onBlur={e=>{e.target.style.borderColor='var(--border)'}}/>
@@ -7299,6 +7300,7 @@ function IntradayTimingSection() {
           <div>
             <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Symbol</label>
             <input type="text" value={symbol} onChange={e=>setSymbol(e.target.value.toUpperCase())} placeholder="AAPL"
+              autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off"
               onKeyDown={e=>e.key==='Enter'&&checkTiming()}
               style={{width:120,padding:'6px 8px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
           </div>
@@ -7474,6 +7476,7 @@ function ConditionalEntriesSection() {
               <div>
                 <label style={{fontSize:10,color:'var(--text3)',display:'block',marginBottom:3}}>Symbol</label>
                 <input type="text" value={form.symbol} onChange={e=>setForm({...form,symbol:e.target.value.toUpperCase()})} placeholder="AAPL"
+                  autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off"
                   style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)'}}/>
               </div>
               <div>
@@ -9768,6 +9771,7 @@ function PortfolioTab() {
                   onChange={e=>setSizeTicker(e.target.value.toUpperCase())}
                   onKeyDown={e=>{ if (e.key==='Enter') fetchLivePrice(); }}
                   placeholder="AAPL"
+                  autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off"
                   style={{width:110,padding:'6px 8px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:13,fontFamily:'var(--font-mono)',textTransform:'uppercase'}}/>
               </div>
               <button className="btn" onClick={fetchLivePrice} disabled={!sizeTicker || sizeQuoteLoading}
@@ -10148,6 +10152,7 @@ function TradeJournalTab() {
               value={search}
               onChange={e => { setSearch(e.target.value); setPage(0); }}
               placeholder="Search symbol…"
+              autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off"
               style={{padding:'6px 10px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:12,fontFamily:'var(--font-mono)',minWidth:160}} />
             <span style={{fontSize:11,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>
               {_total} {_isPartials ? 'event' : 'row'}{_total===1?'':'s'}{_q?` matching "${_q}"`:''}
@@ -11659,6 +11664,7 @@ function OptionsHedgeSection() {
     <div>
       <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:12,flexWrap:'wrap'}}>
         <input value={symbol} onChange={e=>setSymbol(e.target.value)} placeholder="Symbol (e.g. AAPL)"
+          autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off"
           style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,padding:'7px 12px',color:'var(--text)',fontSize:12,fontFamily:'var(--font-mono)',width:120}}
           onKeyDown={e => e.key==='Enter' && loadChain()} />
         <button className="btn btn-sm btn-primary" onClick={loadChain} disabled={loading||!symbol}>Load Chain</button>
@@ -13792,6 +13798,7 @@ function UniverseTrackingSection() {
               placeholder="Filter ticker..."
               value={filterText}
               onChange={e => setFilterText(e.target.value.toUpperCase())}
+              autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off"
               style={{padding:'4px 8px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)',width:140}}
             />
           </div>
