@@ -54,6 +54,27 @@ function supportsSymbol(symbol) {
   return true;
 }
 
+// ─── Symbol-format translation ─────────────────────────────────────────────
+// Yahoo encodes class shares with a hyphen (BRK-B, BF-B); Alpaca uses a dot
+// (BRK.B, BF.B). Without translation, every class-share request 400s with
+// "invalid symbol: BRK-B" and gets retried/circuit-broken even though the
+// symbol is perfectly valid on the Alpaca side.
+//
+// Crypto pairs are already filtered upstream by supportsSymbol, so the only
+// hyphens reaching here are class-share indicators. The translation is
+// surgical: a single trailing letter share class. Anything else passes
+// through unchanged.
+function toAlpacaSymbol(symbol) {
+  if (!symbol) return symbol;
+  // Match `<TICKER>-<SHARE_CLASS>` where share class is a single letter
+  // (Berkshire Hathaway B, Brown-Forman B, Liberty Media tracking shares).
+  // Multi-letter or numeric suffixes are NOT class indicators — leave them
+  // alone so we don't mangle real ticker conventions in the future.
+  const m = /^([A-Z]+)-([A-Z])$/i.exec(symbol);
+  if (m) return `${m[1].toUpperCase()}.${m[2].toUpperCase()}`;
+  return symbol;
+}
+
 function headers() {
   const { key, secret } = getConfig();
   return {
@@ -177,9 +198,11 @@ async function alpacaDailyBars(symbol, { start, end, adjustment = 'split', limit
   const { feed } = getConfig();
   const allBars = [];
   let pageToken = null;
+  // Translate Yahoo class-share format to Alpaca's. Caller may have either.
+  const apiSymbol = toAlpacaSymbol(symbol);
 
   do {
-    const data = await alpacaRequest(`/v2/stocks/${encodeURIComponent(symbol)}/bars`, {
+    const data = await alpacaRequest(`/v2/stocks/${encodeURIComponent(apiSymbol)}/bars`, {
       timeframe: '1Day',
       start,
       end,
@@ -248,20 +271,28 @@ async function alpacaQuote(symbols) {
   if (!Array.isArray(symbols)) symbols = [symbols];
   const results = [];
 
+  // Translate Yahoo-format class-share inputs (BRK-B → BRK.B) for the
+  // batch request. We keep both forms so the response — keyed by Alpaca's
+  // dot form — can be looked up while the result still carries the
+  // caller's original symbol convention.
+  const apiSymbols = symbols.map(toAlpacaSymbol);
+
   // Batch endpoint: /v2/stocks/quotes/latest?symbols=A,B,C  (free tier)
   // Also grab latest bars for OHLCV fields.
   try {
     const [quotesResp, barsResp] = await Promise.all([
-      alpacaRequest(`/v2/stocks/quotes/latest`, { symbols: symbols.join(','), feed: getConfig().feed }),
-      alpacaRequest(`/v2/stocks/bars/latest`,   { symbols: symbols.join(','), feed: getConfig().feed }),
+      alpacaRequest(`/v2/stocks/quotes/latest`, { symbols: apiSymbols.join(','), feed: getConfig().feed }),
+      alpacaRequest(`/v2/stocks/bars/latest`,   { symbols: apiSymbols.join(','), feed: getConfig().feed }),
     ]);
 
     const quoteMap = quotesResp?.quotes || {};
     const barMap   = barsResp?.bars     || {};
 
-    for (const sym of symbols) {
-      const q = quoteMap[sym];
-      const b = barMap[sym];
+    for (let i = 0; i < symbols.length; i++) {
+      const sym       = symbols[i];      // original (Yahoo-style) symbol
+      const apiSym    = apiSymbols[i];   // Alpaca-format key in the response maps
+      const q = quoteMap[apiSym];
+      const b = barMap[apiSym];
       if (!q && !b) continue;
       // Prefer bar close (real trade) over quote midpoint when available
       const price = b?.c ?? ((q?.bp + q?.ap) / 2) ?? null;

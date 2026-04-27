@@ -5611,6 +5611,11 @@ function MarketPulseTab() {
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
                 <span style={{fontSize:10,color:bWarning.color,fontWeight:700,letterSpacing:1}}>
                   PENDING STOP ADJUSTMENTS ({bWarning.pendingAdjustments.length})
+                  {bWarning.skippedAdjustments?.length > 0 && (
+                    <span style={{color:'var(--text3)',fontWeight:400,marginLeft:8}}>
+                      · {bWarning.skippedAdjustments.length} skipped (see below)
+                    </span>
+                  )}
                 </span>
                 <button className="btn btn-sm" disabled={bwApplying}
                   style={{background:bWarning.color+'30',color:bWarning.color,border:`1px solid ${bWarning.color}50`,fontSize:10}}
@@ -5623,7 +5628,11 @@ function MarketPulseTab() {
                       // rest of the app — native alert() blocks the UI thread
                       // and feels jarring against the rest of the toast UX.
                       const n = r.applied?.applied || 0;
-                      window.showToast?.('Stops Tightened', `Applied ${n} stop adjustment${n === 1 ? '' : 's'}`);
+                      const skipN = r.skipped?.length || 0;
+                      const msg = skipN > 0
+                        ? `Applied ${n} · ${skipN} skipped (see Skipped panel)`
+                        : `Applied ${n} stop adjustment${n === 1 ? '' : 's'}`;
+                      window.showToast?.('Stops Tightened', msg);
                       load();
                     } catch(e){ window.showToast?.('Error', e.message, true); }
                     setBwApplying(false);
@@ -5641,6 +5650,34 @@ function MarketPulseTab() {
                       <td style={{color:'var(--red)'}}>${a.currentStop?.toFixed(2)}</td>
                       <td style={{color:'var(--amber)',fontWeight:700}}>${a.newStop?.toFixed(2)}</td>
                       <td style={{fontSize:10,color:'var(--text3)'}}>{a.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Skipped positions — surface the trades the tightening rules
+              couldn't act on so the user can fix the underlying issue
+              (no stop set, missing entry price) instead of wondering why
+              "Apply Stop Tightening" only moved some positions. */}
+          {bWarning.skippedAdjustments?.length > 0 && (
+            <div style={{marginTop:12,padding:'10px 12px',background:'rgba(0,0,0,0.15)',border:'1px dashed var(--border)',borderRadius:5}}>
+              <div style={{fontSize:10,color:'var(--text3)',fontWeight:700,letterSpacing:1,marginBottom:8}}>
+                SKIPPED POSITIONS ({bWarning.skippedAdjustments.length}) · {bWarning.label || 'BREADTH'} tightening rules didn't act on these
+              </div>
+              <table className="data-table" style={{fontSize:11}}>
+                <thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>Current Stop</th><th>Why</th></tr></thead>
+                <tbody>
+                  {bWarning.skippedAdjustments.map((s,i) => (
+                    <tr key={i}>
+                      <td><span className="td-ticker">{s.symbol}</span></td>
+                      <td style={{fontSize:10,color:'var(--text3)'}}>{s.side || '—'}</td>
+                      <td>{s.entryPrice != null ? '$'+s.entryPrice.toFixed(2) : '—'}</td>
+                      <td style={{color:s.currentStop != null ? 'var(--text2)' : 'var(--red)'}}>
+                        {s.currentStop != null ? '$'+s.currentStop.toFixed(2) : 'no stop'}
+                      </td>
+                      <td style={{fontSize:10,color:'var(--text3)'}}>{s.reason}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -138,8 +138,12 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
   router.get('/breadth/early-warning', (req, res) => {
     try {
       const warning = evaluateBreadthWarning();
-      const { adjustments, actions } = computeStopAdjustments(warning.label);
-      res.json({ ...warning, pendingAdjustments: adjustments, actions });
+      // `skipped` surfaces open positions the tightening rules couldn't act
+      // on (no stop set, no entry, already-tighter, etc.) so the UI can
+      // explain why "Apply Stop Tightening" sometimes touches fewer
+      // positions than the user has open.
+      const { adjustments, skipped, actions } = computeStopAdjustments(warning.label);
+      res.json({ ...warning, pendingAdjustments: adjustments, skippedAdjustments: skipped, actions });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

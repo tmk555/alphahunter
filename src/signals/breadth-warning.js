@@ -140,21 +140,36 @@ function evaluateBreadthWarning() {
 // Does NOT mutate the database — caller decides whether to apply.
 
 function computeStopAdjustments(warningLevel) {
-  if (!warningLevel || warningLevel === 'NONE') return { adjustments: [], actions: [] };
+  if (!warningLevel || warningLevel === 'NONE') return { adjustments: [], skipped: [], actions: [] };
 
   const trades = db().prepare(
     'SELECT * FROM trades WHERE exit_date IS NULL'
   ).all();
 
-  if (!trades.length) return { adjustments: [], actions: [] };
+  if (!trades.length) return { adjustments: [], skipped: [], actions: [] };
 
   const adjustments = [];
+  // Trades that the rules wouldn't / couldn't tighten — surfaced so the
+  // user can see WHICH positions weren't acted on and why. Previously these
+  // were silently dropped, leading to "did not tighten all positions"
+  // confusion when the row count in PENDING ADJUSTMENTS was less than the
+  // open-position count.
+  const skipped = [];
 
   for (const trade of trades) {
     const entry = trade.entry_price;
     const currentStop = trade.stop_price;
     const isShort = trade.side === 'short';
-    if (!entry || !currentStop) continue;
+    if (!entry || !currentStop) {
+      skipped.push({
+        tradeId: trade.id, symbol: trade.symbol, side: trade.side,
+        entryPrice: entry || null, currentStop: currentStop || null,
+        reason: !entry
+          ? 'No entry price recorded — set manually before tightening'
+          : 'No stop price set — needs a stop before tightening rules apply',
+      });
+      continue;
+    }
 
     // Determine if position is profitable (use current stop vs entry as proxy)
     // A stop above entry (for long) means we've already moved to breakeven or better
@@ -199,14 +214,30 @@ function computeStopAdjustments(warningLevel) {
     }
     // CAUTION: no stop changes, only sizing reduction
 
-    if (newStop === null) continue;
+    if (newStop === null) {
+      skipped.push({
+        tradeId: trade.id, symbol: trade.symbol, side: trade.side,
+        entryPrice: entry, currentStop,
+        reason: warningLevel === 'CAUTION'
+          ? 'CAUTION level only reduces new sizing — open stops left in place'
+          : 'No tightening rule matched this position',
+      });
+      continue;
+    }
 
     // Safety: only tighten, never loosen stops
     const isTighter = isShort
       ? newStop < currentStop
       : newStop > currentStop;
 
-    if (!isTighter) continue;
+    if (!isTighter) {
+      skipped.push({
+        tradeId: trade.id, symbol: trade.symbol, side: trade.side,
+        entryPrice: entry, currentStop, candidateStop: +newStop.toFixed(2),
+        reason: 'Current stop is already tighter than the rule would set',
+      });
+      continue;
+    }
 
     adjustments.push({
       tradeId: trade.id,
@@ -224,6 +255,7 @@ function computeStopAdjustments(warningLevel) {
 
   return {
     adjustments,
+    skipped,
     actions: warningLevel === 'CRITICAL'
       ? ['tighten_all_stops', 'halt_new_entries', 'evaluate_hedges']
       : warningLevel === 'WARNING'
@@ -313,22 +345,23 @@ async function runBreadthEarlyWarning({ autoApply = false } = {}) {
   const warning = evaluateBreadthWarning();
 
   if (warning.level === 0) {
-    return { warning, adjustments: null, applied: false };
+    return { warning, adjustments: null, skipped: [], applied: false };
   }
 
-  const { adjustments, actions } = computeStopAdjustments(warning.label);
+  const { adjustments, skipped, actions } = computeStopAdjustments(warning.label);
 
   let applyResult = null;
   if (autoApply && adjustments.length > 0) {
     applyResult = await applyStopAdjustments(adjustments);
-    console.log(`  Breadth Early Warning [${warning.label}]: Applied ${applyResult.applied} local, ${applyResult.brokerPatched} broker legs (${applyResult.brokerFailed} failed)`);
+    console.log(`  Breadth Early Warning [${warning.label}]: Applied ${applyResult.applied} local, ${applyResult.brokerPatched} broker legs (${applyResult.brokerFailed} failed) · ${skipped.length} skipped`);
   } else if (adjustments.length > 0) {
-    console.log(`  Breadth Early Warning [${warning.label}]: ${adjustments.length} stop adjustment(s) pending (auto-apply disabled)`);
+    console.log(`  Breadth Early Warning [${warning.label}]: ${adjustments.length} stop adjustment(s) pending (auto-apply disabled), ${skipped.length} skipped`);
   }
 
   return {
     warning,
     adjustments,
+    skipped,
     actions,
     applied: applyResult,
   };

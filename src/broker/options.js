@@ -272,9 +272,21 @@ function generateExpirations() {
 
 // ─── Stock Price Fetcher (for synthetic data) ──────────────────────────────
 
+// Yahoo class-share format (BRK-B) → Alpaca's (BRK.B). Same translation as
+// in src/data/providers/alpaca.js — duplicated here because options.js
+// hits the Alpaca data API directly via dataRequest(), not through the
+// data-provider layer where the symbol normalization lives.
+function toAlpacaSymbol(symbol) {
+  if (!symbol) return symbol;
+  const m = /^([A-Z]+)-([A-Z])$/i.exec(symbol);
+  if (m) return `${m[1].toUpperCase()}.${m[2].toUpperCase()}`;
+  return symbol;
+}
+
 async function getStockPrice(symbol) {
+  const apiSymbol = toAlpacaSymbol(symbol);
   try {
-    const data = await dataRequest(`/v2/stocks/${encodeURIComponent(symbol)}/quotes/latest`);
+    const data = await dataRequest(`/v2/stocks/${encodeURIComponent(apiSymbol)}/quotes/latest`);
     if (data && data.quote) {
       return (data.quote.ap + data.quote.bp) / 2; // midpoint of bid/ask
     }
@@ -282,7 +294,7 @@ async function getStockPrice(symbol) {
 
   // Try trades endpoint
   try {
-    const data = await dataRequest(`/v2/stocks/${encodeURIComponent(symbol)}/trades/latest`);
+    const data = await dataRequest(`/v2/stocks/${encodeURIComponent(apiSymbol)}/trades/latest`);
     if (data && data.trade) return data.trade.p;
   } catch (_) { /* fall through */ }
 
