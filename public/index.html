@@ -14625,15 +14625,76 @@ function BreadthSection() {
                 </div>
               </div>
             </div>
-            {/* Component breakdown — compact horizontal pills */}
-            {data.composite.components?.length > 0 && (
+            {/* Component breakdown — compact horizontal pills.
+                Each pill is hover-explainable: tooltip describes what the
+                component measures, what the current value is, what the
+                scoring tiers are, and where in src/signals/breadth.js the
+                math lives. Pre-fix the pills showed only "name + score/weight"
+                with no way for the user to know whether 0/20 was a real
+                signal or a stale-data artifact. */}
+            {data.composite.components?.length > 0 && (() => {
+              // Build per-component explainer text. Source of truth for the
+              // scoring formulas: src/signals/breadth.js
+              // computeCompositeBreadthScore() — keep these descriptions in
+              // lockstep if the formulas change.
+              const componentTooltips = {
+                '% Above 50MA':
+                  'COMPONENT: % of universe stocks above their 50-day moving average.\n' +
+                  'INPUT: rs_snapshots WHERE vs_ma50 > 0 / total stocks * 100\n' +
+                  'WHY IT MATTERS: Broad participation. SPY can rise on a few mega-caps while most stocks bleed; this catches that.\n' +
+                  'SCORING (max 25 pts):\n' +
+                  '  >70% → 25 (healthy broad rally)\n' +
+                  '  50-70% → 15 + (val−50)×0.5 (mixed)\n' +
+                  '  30-50% → 5 + (val−30)×0.5 (weakening)\n' +
+                  '  <30% → val × 0.17 (broken)',
+                '% Above 200MA':
+                  'COMPONENT: % of universe stocks above their 200-day moving average.\n' +
+                  'INPUT: rs_snapshots WHERE vs_ma200 > 0 / total * 100\n' +
+                  'WHY IT MATTERS: Long-term/structural breadth. Slower than 50MA but more meaningful — stocks below 200MA are in long-term downtrends regardless of recent bounces.\n' +
+                  'SCORING (max 15 pts):\n' +
+                  '  >65% → 15\n' +
+                  '  45-65% → 8 + (val−45)×0.35\n' +
+                  '  <45% → val × 0.18',
+                'Highs/Lows Ratio':
+                  'COMPONENT: New highs / new lows ratio (momentum breadth).\n' +
+                  'INPUT: rs_snapshots WHERE rs_line_new_high=1 (highs proxy) ÷ rs_snapshots WHERE stage=4 AND rs_rank≤20 (lows proxy).\n' +
+                  'WHY IT MATTERS: Are leaders making fresh highs? Or are laggards making fresh lows? Diverging from price = late-cycle warning.\n' +
+                  'SCORING (max 20 pts):\n' +
+                  '  ≥3 → 20 (highs dominate, momentum strong)\n' +
+                  '  1.5-3 → 12 + (val−1.5)×5.3\n' +
+                  '  0.5-1.5 → (val−0.5)×12\n' +
+                  '  <0.5 → 0 (lows dominating; bear-tape warning)\n' +
+                  '⚠ A 0/20 reading WITH active dist days = real warning. A 0/20 reading where rs_snapshots has many NULL rs_line_new_high values = stale-data artifact (compute ran before rs_scan finished).',
+                'A/D Ratio':
+                  'COMPONENT: Daily advancing / declining ratio.\n' +
+                  'INPUT: stocks where today_close > yesterday_close ÷ stocks where today_close < yesterday_close (real price A/D, not a momentum proxy — see breadth.js:55-87).\n' +
+                  'WHY IT MATTERS: McClellan-style daily breadth. Confirms whether the day was broadly up or narrowly up.\n' +
+                  'SCORING (max 15 pts):\n' +
+                  '  ≥2.0 → 15\n' +
+                  '  1.0-2.0 → 8 + (val−1)×7\n' +
+                  '  <1.0 → val × 8',
+                'VIX Structure':
+                  'COMPONENT: VIX level relative to its 20-day average (term-structure proxy).\n' +
+                  'INPUT: live ^VIX quote vs 20d mean of ^VIX history\n' +
+                  'WHY IT MATTERS: Contango (VIX < avg) = calm/complacent. Backwardation (VIX >> avg) = fear/panic. Spike-and-fade is the actionable transition.\n' +
+                  'SCORING (max 15 pts): bucketed by signal — calm/normal/elevated/fear (see assessVIXTermStructure in breadth.js).',
+                'Credit Spread':
+                  'COMPONENT: HYG/LQD ratio trend (junk-vs-investment-grade credit).\n' +
+                  'INPUT: HYG and LQD price ratio + recent direction\n' +
+                  'WHY IT MATTERS: Credit market leads equity by days/weeks. Tightening spreads (rising HYG/LQD) = risk-on. Widening = flight to quality, often precedes equity weakness.\n' +
+                  'SCORING (max 10 pts): tightening / stable / widening tiers.',
+              };
+              return (
               <div style={{marginTop:12,paddingTop:10,borderTop:'1px solid var(--border)',display:'flex',flexWrap:'wrap',gap:8,alignItems:'center'}}>
                 <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginRight:4}}>COMPONENTS:</span>
                 {data.composite.components.map(c => {
                   const pct = Math.round(c.score / c.weight * 100);
                   const bar = scoreColor(pct);
+                  const tip = (componentTooltips[c.name] || `${c.name}: ${c.score}/${c.weight} (${pct}%)`)
+                    + `\n\nCURRENT: value=${typeof c.value === 'number' ? c.value.toFixed(2) : c.value}, score=${c.score}/${c.weight} (${pct}%)`;
                   return (
-                    <div key={c.name} style={{display:'flex',alignItems:'center',gap:4,padding:'3px 8px',background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)'}}>
+                    <div key={c.name} title={tip}
+                      style={{display:'flex',alignItems:'center',gap:4,padding:'3px 8px',background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)',cursor:'help'}}>
                       <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{c.name}</span>
                       <div style={{width:30,height:4,background:'var(--bg)',borderRadius:2,overflow:'hidden'}}>
                         <div style={{width:`${pct}%`,height:'100%',background:bar,borderRadius:2}}/>
@@ -14647,7 +14708,8 @@ function BreadthSection() {
                   );
                 })}
               </div>
-            )}
+              );
+            })()}
           </div>
 
           {/* ── COMPOSITE BREADTH TREND CHART (period-selectable) ── */}
