@@ -1563,6 +1563,20 @@ function App() {
 
       {/* CONTENT */}
       <div id="main">
+        {/* GLOBAL SCANNER WARMING-UP BANNER — shown on every tab while
+            App's auto-scan is in flight. Pre-fix this banner only rendered
+            inside TradeSetupsTab, so a user who landed on Sectors / Macro /
+            RS / etc. during the 30-60s warmup saw empty tables with no
+            indication that data was on the way. Lifted here so every tab
+            inherits the same loading affordance from one source of truth. */}
+        {rsLoading && !rsLoaded && (
+          <div style={{padding:'10px 14px',background:'rgba(0,212,255,0.10)',border:'1px solid rgba(0,212,255,0.35)',borderRadius:5,marginBottom:12,display:'flex',alignItems:'center',gap:10}}>
+            <span style={{display:'inline-block',width:10,height:10,borderRadius:'50%',background:'var(--cyan)',animation:'pulse 1.5s ease-in-out infinite'}}/>
+            <span style={{fontSize:12,color:'var(--text2)'}}>
+              Scanner warming up — fetching quotes/patterns/stage/volume for the universe (~363 stocks, ~30–60s). Tab data populates once it finishes.
+            </span>
+          </div>
+        )}
         {tab==='pulse'      && <MarketPulseTab />}
         {tab==='macro'      && <MacroTab />}
         {tab==='sectors'    && <SectorsTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
@@ -4482,15 +4496,9 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
 
   return (
     <div>
-      {/* ── SCANNER LOADING BANNER ── shown while App's auto-scan is in flight */}
-      {rsLoading && !rsLoaded && (
-        <div style={{padding:'10px 14px',background:'rgba(0,212,255,0.10)',border:'1px solid rgba(0,212,255,0.35)',borderRadius:5,marginBottom:12,display:'flex',alignItems:'center',gap:10}}>
-          <span style={{display:'inline-block',width:10,height:10,borderRadius:'50%',background:'var(--cyan)',animation:'pulse 1.5s ease-in-out infinite'}}/>
-          <span style={{fontSize:12,color:'var(--text2)'}}>
-            Scanner warming up — fetching quotes/patterns/stage/volume for the universe (~363 stocks, ~30–60s). Setups appear once it finishes.
-          </span>
-        </div>
-      )}
+      {/* Scanner warming-up banner now lives at App-level inside #main so it
+          renders on every tab during the auto-scan, not just Setups. See
+          public/index.html in the App component just above the tab router. */}
       {/* ── REGIME GATE ── */}
       {noLongs && (
         <div style={{padding:'16px 20px',background:'rgba(255,61,87,0.12)',border:'2px solid rgba(255,61,87,0.5)',borderRadius:6,marginBottom:14}}>
