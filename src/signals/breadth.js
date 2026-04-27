@@ -27,7 +27,7 @@ const TTL_BREADTH = 5 * 60 * 1000; // 5 min cache
 // Uses stored rs_snapshots to calculate breadth without additional API calls.
 // This gives us historical breadth for backtesting AND current breadth for live.
 
-function computeBreadthFromSnapshots(date) {
+function computeBreadthFromSnapshots(date, opts = {}) {
   const snapshots = db().prepare(`
     SELECT symbol, price, vs_ma50, vs_ma200, rs_rank, swing_momentum, stage,
            volume_ratio, rs_line_new_high, vcp_forming
@@ -38,6 +38,47 @@ function computeBreadthFromSnapshots(date) {
   if (snapshots.length < 20) return null;
 
   const total = snapshots.length;
+
+  // ── Data-quality gate ─────────────────────────────────────────────────
+  // The breadth job (4:50 PM weekdays) runs 20 min after rs_scan_daily
+  // (4:30 PM). When rs_scan is slow OR a manual /api/rs-scan call earlier
+  // wrote partial rows (rs_rank only — see store.js:saveHistory), most
+  // stocks have NULL rs_line_new_high and NULL stage. The filters below
+  // (`s.rs_line_new_high` truthy, `s.stage === 4`) silently treat NULL as
+  // 0, so newHighs / newLows / stage% all collapse to garbage zeros.
+  //
+  // Once persisted, the c308835 idempotency guard locks the bad row in
+  // place forever. User saw H/L ratio stuck at 0/20 across 4 days
+  // (04-20 → 04-24) because of exactly this — the rows show new_highs=0
+  // even though current rs_snapshots for those dates has 11-20 stocks
+  // with rs_line_new_high=1.
+  //
+  // Gate: refuse to compute if >20% of rows are missing the rich fields
+  // that breadth math needs. We check `stage` and `vs_ma50` because those
+  // are stored as actual NULL when the row was inserted via the partial
+  // /api/rs-scan path (saveHistory in store.js writes only rs_rank).
+  //
+  // We do NOT check rs_line_new_high — scanner.js coerces missing values
+  // via `r.rsLineNewHigh ? 1 : 0` so the field is stored as 0 not NULL,
+  // which makes it useless as a partial-data signal. `stage` and `vs_ma50`
+  // use `r.stage ?? null` and `r.vsMA50 ?? null` and DO reach NULL when
+  // the row was a partial write — that's our reliable indicator.
+  //
+  // Caller can opt out via { ignoreDataQualityGate: true } for backfill
+  // scripts that intentionally process partial historical data.
+  const completeStage = snapshots.filter(s => s.stage !== null && s.stage !== undefined).length;
+  const completeMa50  = snapshots.filter(s => s.vs_ma50 !== null && s.vs_ma50 !== undefined).length;
+  const minComplete = Math.min(completeStage, completeMa50);
+  const completenessPct = +(minComplete / total * 100).toFixed(1);
+  if (!opts.ignoreDataQualityGate && completenessPct < 80) {
+    return {
+      error: 'data-quality-gate',
+      reason: `rs_snapshots for ${date} is only ${completenessPct}% complete (stage+vs_ma50). Likely cause: rs_scan_daily hasn't filled rich fields yet, or a partial /api/rs-scan call left only rs_rank populated. Refusing to compute breadth against partial data — would silently produce H/L ratio = 0 and lock it in via idempotency.`,
+      date,
+      total,
+      completenessPct,
+    };
+  }
 
   // 1. % above 50MA / 200MA
   const above50 = snapshots.filter(s => s.vs_ma50 > 0).length;
@@ -634,8 +675,40 @@ async function getFullBreadthDashboard(quotes) {
 
   if (!latestDate) return { error: 'No snapshot data available' };
 
-  // Core breadth
-  const breadth = computeBreadthFromSnapshots(latestDate);
+  // Core breadth — refuses partial data via the data-quality gate.
+  // When gated, we walk back to the most recent date with complete data
+  // so the dashboard still renders SOMETHING useful (yesterday's
+  // composite) rather than a blank panel. The UI's stale-snapshot
+  // badge already warns the user when the served date isn't today.
+  let breadth = computeBreadthFromSnapshots(latestDate);
+  let dataQualityWarning = null;
+  if (breadth?.error === 'data-quality-gate') {
+    dataQualityWarning = {
+      latestDate,
+      completenessPct: breadth.completenessPct,
+      reason: breadth.reason,
+    };
+    // Walk back up to 5 trading days looking for complete rs_snapshots.
+    const fallbackDates = db().prepare(
+      `SELECT DISTINCT date FROM rs_snapshots WHERE type = 'stock' AND date < ? ORDER BY date DESC LIMIT 5`
+    ).all(latestDate).map(r => r.date);
+    breadth = null;
+    for (const fbDate of fallbackDates) {
+      const candidate = computeBreadthFromSnapshots(fbDate);
+      if (candidate && !candidate.error) {
+        breadth = candidate;
+        dataQualityWarning.servedDate = fbDate;
+        break;
+      }
+    }
+    if (!breadth) {
+      return {
+        error: 'No complete rs_snapshots data in the last 5 trading days. rs_scan_daily likely hasn\'t run successfully — check scheduler logs.',
+        latestDate,
+        completenessPct: dataQualityWarning.completenessPct,
+      };
+    }
+  }
 
   // McClellan oscillator
   const mcclellan = computeMcClellanOscillator(60);
@@ -670,8 +743,11 @@ async function getFullBreadthDashboard(quotes) {
   // Divergence detection
   const divergence = detectBreadthDivergence(60);
 
-  // Save snapshot (including McClellan data when available)
-  if (breadth) {
+  // Save snapshot — only persist for the actual `breadth.date` (which may
+  // be a fallback date when latestDate's data was incomplete). Avoids
+  // overwriting a complete prior-day row with the same data, and avoids
+  // creating a partial-data row for the latest date.
+  if (breadth && !dataQualityWarning) {
     saveBreadthSnapshot(latestDate, {
       ...breadth,
       compositeScore: composite.score,
@@ -683,6 +759,8 @@ async function getFullBreadthDashboard(quotes) {
 
   const dashboard = {
     date: latestDate,
+    servedDate: breadth?.date || latestDate,  // may differ from `date` when fallback fired
+    dataQualityWarning,                        // null when input was complete
     breadth,
     composite,
     mcclellan,
