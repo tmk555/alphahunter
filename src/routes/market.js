@@ -332,4 +332,23 @@ router.get('/quotes', async (req, res) => {
   }
 });
 
+// ─── Stock Brief — context drawer payload ───────────────────────────────
+//
+// GET /api/stock/:symbol/brief
+//
+// Aggregates Yahoo quote, profile, recommendation trend, earnings track
+// record, and headline news (with a local catalyst classifier) into a
+// single payload. No paid AI keys; 6h cached on the server.
+router.get('/stock/:symbol/brief', async (req, res) => {
+  try {
+    const sym = String(req.params.symbol || '').toUpperCase().trim();
+    if (!sym) return res.status(400).json({ error: 'symbol required' });
+    const { getStockBrief } = require('../signals/stock-brief');
+    const brief = await getStockBrief(sym);
+    res.json(brief);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;

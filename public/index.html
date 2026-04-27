@@ -1682,6 +1682,20 @@ function App() {
                 : 'Initial scan — fetching ~363 universe stocks with RS ranks, patterns, stage, volume. Normally auto-runs on app load.'}>
             {rsLoading ? '⟳ SCANNING...' : '↻ REFRESH ALL'}
           </button>
+          {/* Stock Brief — keyless context drawer for any ticker. Opens from
+              any tab; no LLM API used (Yahoo + local catalyst classifier). */}
+          <input
+            placeholder="📋 Brief: ticker"
+            title="Open the stock-brief side panel for any ticker"
+            autoCorrect="off" autoCapitalize="characters" spellCheck={false}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                const sym = e.target.value.trim().toUpperCase();
+                if (sym) { window.openStockBrief?.(sym); e.target.value = ''; }
+              }
+            }}
+            style={{padding:'7px 10px',width:140,background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)',letterSpacing:0.5,outline:'none'}}
+          />
           <button
             onClick={async()=>{await fetch('/api/auth/logout',{method:'POST',credentials:'same-origin'});window.location.href='/';}}
             style={{padding:'7px 12px',background:'transparent',border:'1px solid var(--border)',borderRadius:4,color:'var(--text3)',cursor:'pointer',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:600,letterSpacing:1}}
@@ -1693,6 +1707,9 @@ function App() {
 
       {/* GLOBAL TRADING GUIDE — visible on every tab, collapsed by default */}
       {guideOpen && <GlobalTradingGuide onClose={()=>setGuideOpen(false)}/>}
+
+      {/* STOCK BRIEF DRAWER — global, opened by any tab via window.openStockBrief */}
+      <StockBriefDrawer/>
 
       {/* TABS */}
       <div id="tabs-row">
@@ -1757,6 +1774,248 @@ function App() {
 }
 
 // ─── GLOBAL TRADING GUIDE (header panel — visible on every tab) ────────────────
+// ─── Stock Brief Drawer — global, opens for any ticker on any tab ────
+//
+// Self-contained component: state lives inside, opens via the global
+// window.openStockBrief(symbol) callback (set on mount). Closes on Esc
+// or backdrop click. Fetches /api/stock/:symbol/brief on each open
+// (server-side cached 6h), so reopening the same ticker is fast.
+//
+// No LLM API used — payload is assembled from Yahoo's keyless endpoints
+// + a local keyword classifier. See src/signals/stock-brief.js.
+function StockBriefDrawer() {
+  const [symbol, setSymbol] = useState(null);
+  const [data, setData]     = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr]       = useState('');
+
+  useEffect(() => {
+    window.openStockBrief = (sym) => {
+      const s = (sym || '').toString().toUpperCase().trim();
+      if (!s) return;
+      setSymbol(s); setData(null); setErr(''); setLoading(true);
+      api(`/api/stock/${encodeURIComponent(s)}/brief`)
+        .then(d => { setData(d); setLoading(false); })
+        .catch(e => { setErr(e.message); setLoading(false); });
+    };
+    const onKey = (e) => { if (e.key === 'Escape') setSymbol(null); };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      delete window.openStockBrief;
+      document.removeEventListener('keydown', onKey);
+    };
+  }, []);
+
+  if (!symbol) return null;
+
+  const close = () => { setSymbol(null); setData(null); setErr(''); };
+
+  // Catalyst tag color → matches sentiment in the classifier
+  const tagColor = (sentiment) =>
+    sentiment === 'bull' ? 'var(--green)' :
+    sentiment === 'bear' ? 'var(--red)'   :
+    'var(--amber)';
+
+  const fmtAge = (iso) => {
+    if (!iso) return '';
+    const ageMs = Date.now() - new Date(iso).getTime();
+    const hr = Math.floor(ageMs / 3600000);
+    if (hr < 1) return `${Math.floor(ageMs/60000)}m`;
+    if (hr < 24) return `${hr}h`;
+    return `${Math.floor(hr/24)}d`;
+  };
+
+  const h = data?.header;
+  const a = data?.analyst;
+  const news = data?.news || [];
+  const earnings = data?.earningsTrack || [];
+  const catalysts = data?.catalystCounts || {};
+  const upPct = h?.dayChangePct;
+
+  return (
+    <div onClick={close} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',zIndex:9000,display:'flex',justifyContent:'flex-end'}}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{width:'min(560px,92vw)',height:'100vh',background:'var(--bg2)',borderLeft:'1px solid var(--border)',overflowY:'auto',padding:18,boxShadow:'-12px 0 32px rgba(0,0,0,0.45)'}}>
+        {/* Header */}
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
+          <div>
+            <div style={{fontSize:9,color:'var(--text3)',letterSpacing:2,fontFamily:'var(--font-mono)'}}>STOCK BRIEF</div>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:22,fontWeight:800,color:'var(--text)',marginTop:2}}>{symbol}</div>
+            {h?.longName && h.longName !== symbol && (
+              <div style={{fontSize:11,color:'var(--text2)',marginTop:2}}>{h.longName}</div>
+            )}
+            {(h?.sector || h?.industry) && (
+              <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>
+                {h?.sector || '—'}{h?.industry ? ` · ${h.industry}` : ''}
+              </div>
+            )}
+          </div>
+          <button onClick={close} title="Close (Esc)"
+            style={{background:'transparent',border:'1px solid var(--border)',borderRadius:3,padding:'4px 10px',color:'var(--text3)',fontSize:12,cursor:'pointer'}}>✕</button>
+        </div>
+
+        {loading && <div style={{padding:20,color:'var(--text3)',fontSize:12}}>Loading brief…</div>}
+        {err && (
+          <div style={{padding:'10px 12px',background:'rgba(255,61,87,0.08)',border:'1px solid var(--red)',borderRadius:4,color:'var(--red)',fontSize:11,marginBottom:10}}>
+            ⚠ {err}
+          </div>
+        )}
+        {!loading && !err && data && (
+          <>
+            {/* Price + change + 52w bar */}
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:12}}>
+              <div style={{display:'flex',alignItems:'baseline',gap:10,marginBottom:6,flexWrap:'wrap'}}>
+                <span style={{fontSize:24,fontWeight:800,fontFamily:'var(--font-mono)',color:'var(--text)'}}>
+                  {h?.price != null ? '$'+(+h.price).toFixed(2) : '—'}
+                </span>
+                {upPct != null && (
+                  <span style={{fontSize:14,fontWeight:700,fontFamily:'var(--font-mono)',color:upPct>0?'var(--green)':upPct<0?'var(--red)':'var(--text3)'}}>
+                    {upPct>0?'+':''}{upPct.toFixed(2)}%
+                  </span>
+                )}
+                {h?.dayChange != null && (
+                  <span style={{fontSize:11,color:'var(--text3)'}}>
+                    {h.dayChange>0?'+':''}{h.dayChange.toFixed(2)} today
+                  </span>
+                )}
+              </div>
+              {/* 52w range bar */}
+              {h?.fiftyTwoWeekHigh && h?.fiftyTwoWeekLow && h?.price != null && (() => {
+                const lo = h.fiftyTwoWeekLow, hi = h.fiftyTwoWeekHigh;
+                const pct = Math.min(100, Math.max(0, (h.price - lo) / (hi - lo) * 100));
+                return (
+                  <div>
+                    <div style={{position:'relative',height:6,background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3}}>
+                      <div style={{position:'absolute',left:`${pct}%`,top:-2,width:2,height:10,background:'var(--cyan)'}}/>
+                    </div>
+                    <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)',marginTop:3}}>
+                      <span>52w low ${lo.toFixed(2)}</span>
+                      <span>{h.pctOff52wHigh != null ? `${h.pctOff52wHigh.toFixed(1)}% off high` : ''}</span>
+                      <span>${hi.toFixed(2)} 52w high</span>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Catalyst summary chips */}
+            {Object.keys(catalysts).length > 0 && (
+              <div style={{marginBottom:12}}>
+                <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>CATALYSTS (last {news.length} headlines)</div>
+                <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
+                  {Object.entries(catalysts).sort((a,b)=>b[1]-a[1]).map(([tag,cnt]) => {
+                    const sample = news.find(n => (n.tags||[]).some(t=>t.tag===tag));
+                    const sent = sample?.tags.find(t=>t.tag===tag)?.sentiment || 'neutral';
+                    const color = tagColor(sent);
+                    return (
+                      <span key={tag} title={`${cnt} headline${cnt>1?'s':''} matched ${tag}`}
+                        style={{fontSize:10,padding:'3px 8px',background:color+'18',border:`1px solid ${color}50`,borderRadius:3,color,fontFamily:'var(--font-mono)',letterSpacing:0.5}}>
+                        {tag.replace(/_/g,' ')} <strong>{cnt}</strong>
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Analyst panel */}
+            {a && (a.bullishSharePct != null || a.recentChanges?.length) && (
+              <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:12}}>
+                <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>
+                  ANALYST CONSENSUS{a.numAnalysts != null ? ` · ${a.numAnalysts} analysts` : ''}
+                </div>
+                <div style={{display:'flex',gap:14,fontSize:12,marginBottom:8,flexWrap:'wrap'}}>
+                  {a.bullishSharePct != null && (
+                    <span>Bullish: <strong style={{color:a.bullishSharePct>=60?'var(--green)':a.bullishSharePct>=40?'var(--amber)':'var(--red)'}}>{a.bullishSharePct}%</strong></span>
+                  )}
+                  {a.bullishDelta30d != null && (
+                    <span>30d: <strong style={{color:a.bullishDelta30d>0?'var(--green)':a.bullishDelta30d<0?'var(--red)':'var(--text3)'}}>{a.bullishDelta30d>0?'+':''}{a.bullishDelta30d}pp</strong></span>
+                  )}
+                  {a.recommendationKey && <span style={{textTransform:'uppercase',color:'var(--cyan)',fontFamily:'var(--font-mono)',fontWeight:700}}>{a.recommendationKey.replace(/_/g,' ')}</span>}
+                  {a.meanTargetPrice != null && h?.price != null && (
+                    <span>Target ${a.meanTargetPrice.toFixed(2)} <span style={{color:a.meanTargetPrice>h.price?'var(--green)':'var(--red)'}}>({((a.meanTargetPrice/h.price-1)*100).toFixed(1)}%)</span></span>
+                  )}
+                </div>
+                {a.recentChanges?.length > 0 && (
+                  <div style={{maxHeight:120,overflowY:'auto'}}>
+                    <table className="data-table" style={{fontSize:10}}>
+                      <tbody>
+                        {a.recentChanges.slice(0,8).map((c,i)=>(
+                          <tr key={i}>
+                            <td style={{color:'var(--text3)'}}>{c.date || '—'}</td>
+                            <td style={{fontWeight:600}}>{c.firm}</td>
+                            <td style={{color:c.action==='up'?'var(--green)':c.action==='down'?'var(--red)':'var(--text3)'}}>
+                              {c.action || '—'}
+                            </td>
+                            <td>{c.fromGrade ? `${c.fromGrade} → ${c.toGrade}` : c.toGrade}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Earnings track record */}
+            {earnings.length > 0 && (
+              <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:12}}>
+                <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>EARNINGS TRACK RECORD (last {earnings.length}q)</div>
+                <table className="data-table" style={{fontSize:11}}>
+                  <thead><tr><th>Quarter</th><th>Estimate</th><th>Actual</th><th>Surprise</th></tr></thead>
+                  <tbody>
+                    {earnings.map((q,i) => (
+                      <tr key={i}>
+                        <td style={{color:'var(--text3)'}}>{q.date || '—'}</td>
+                        <td>{q.estimate != null ? q.estimate.toFixed(2) : '—'}</td>
+                        <td style={{fontWeight:600}}>{q.actual != null ? q.actual.toFixed(2) : '—'}</td>
+                        <td style={{color:q.beat?'var(--green)':q.surprise<0?'var(--red)':'var(--text3)',fontFamily:'var(--font-mono)'}}>
+                          {q.surprisePct != null ? (q.surprisePct>0?'+':'')+(q.surprisePct*100).toFixed(1)+'%' : (q.beat ? 'beat' : '—')}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* News list */}
+            <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:12}}>
+              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>NEWS (last {news.length})</div>
+              {news.length === 0 ? (
+                <div style={{fontSize:11,color:'var(--text3)'}}>No recent news in Yahoo's feed.</div>
+              ) : (
+                news.map((n,i) => (
+                  <div key={i} style={{padding:'8px 0',borderTop:i>0?'1px solid var(--border)':'none'}}>
+                    <a href={n.link} target="_blank" rel="noopener noreferrer"
+                      style={{color:'var(--text)',fontSize:12,textDecoration:'none',fontWeight:500,lineHeight:1.4,display:'block'}}>
+                      {n.title}
+                    </a>
+                    <div style={{display:'flex',gap:8,alignItems:'center',marginTop:4,flexWrap:'wrap'}}>
+                      <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>
+                        {n.publisher || '—'} · {fmtAge(n.published)}
+                      </span>
+                      {(n.tags || []).map((t,j) => (
+                        <span key={j} style={{fontSize:9,padding:'1px 6px',background:tagColor(t.sentiment)+'18',color:tagColor(t.sentiment),border:`1px solid ${tagColor(t.sentiment)}40`,borderRadius:3,fontFamily:'var(--font-mono)'}}>
+                          {t.tag.replace(/_/g,' ')}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div style={{fontSize:9,color:'var(--text3)',textAlign:'center',marginTop:8}}>
+              Sourced from Yahoo Finance · classified locally · cached 6h · no AI API used
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function GlobalTradingGuide({ onClose }) {
   const [section, setSection] = useState('workflow');
   const sections = [
