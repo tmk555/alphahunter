@@ -13130,6 +13130,93 @@ function ReplayTab() {
           {/* Macro Context (FRED) — true macro backdrop of the replay window */}
           <MacroContextCard ctx={result.macroContext} />
 
+          {/* ─── Equity curve vs SPY ──────────────────────────────────────
+              Single-replay results carry result.equityCurve (~100 points,
+              downsampled by the engine) and result.benchmark.spyEquityCurve
+              when SPY snapshots cover the window. Walk-Forward had this
+              chart already but single replays didn't — making it hard to
+              eyeball drawdown timing or whether the strategy was tracking
+              SPY versus diverging in either direction. */}
+          {result.equityCurve && result.equityCurve.length >= 2 && (() => {
+            const strat = result.equityCurve;
+            const spy   = result.benchmark?.spyEquityCurve || [];
+            const initial = result.performance?.initialCapital || strat[0]?.equity || 100000;
+            // SPY benchmark curve from runReplay is normalized to 100000 —
+            // rescale to the strategy's initial capital so they overlay
+            // honestly when the user passed a different initialCapital.
+            const spyScaled = spy.map(p => ({ date: p.date, equity: +(initial * (p.equity / 100000)).toFixed(2) }));
+
+            const chartW = 760, chartH = 220;
+            const padL = 56, padR = 18, padT = 14, padB = 26;
+            const drawW = chartW - padL - padR;
+            const drawH = chartH - padT - padB;
+
+            const allVals = [...strat.map(p => p.equity), ...spyScaled.map(p => p.equity), initial];
+            const minV = Math.min(...allVals) * 0.98;
+            const maxV = Math.max(...allVals) * 1.02;
+            const rangeV = maxV - minV || 1;
+
+            const t0 = Date.parse(strat[0].date);
+            const t1 = Date.parse(strat[strat.length - 1].date);
+            const rangeT = (t1 - t0) || 1;
+            const toX = d => padL + ((Date.parse(d) - t0) / rangeT) * drawW;
+            const toY = v => padT + drawH - ((v - minV) / rangeV) * drawH;
+
+            const stratPts = strat.map(p => `${toX(p.date).toFixed(1)},${toY(p.equity).toFixed(1)}`).join(' ');
+            const spyPts   = spyScaled.map(p => `${toX(p.date).toFixed(1)},${toY(p.equity).toFixed(1)}`).join(' ');
+
+            const lastStrat = strat[strat.length - 1];
+            const lastSpy   = spyScaled[spyScaled.length - 1];
+            const fmtK = v => '$' + Math.round(v/1000) + 'k';
+
+            return (
+              <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:16}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8,flexWrap:'wrap',gap:8}}>
+                  <div style={{fontSize:10,color:'var(--cyan)',fontFamily:'var(--font-mono)',letterSpacing:1}}>EQUITY CURVE</div>
+                  <div style={{display:'flex',gap:16,fontSize:10,fontFamily:'var(--font-mono)',color:'var(--text2)'}}>
+                    <span>
+                      <span style={{display:'inline-block',width:14,height:2,background:'var(--cyan)',verticalAlign:'middle',marginRight:6}}></span>
+                      Strategy {fmtK(lastStrat.equity)} ({(((lastStrat.equity/initial)-1)*100).toFixed(1)}%)
+                    </span>
+                    {spyScaled.length > 0 && lastSpy && (
+                      <span>
+                        <span style={{display:'inline-block',width:14,height:0,verticalAlign:'middle',marginRight:6,borderTop:'2px dashed var(--text3)'}}></span>
+                        SPY {fmtK(lastSpy.equity)} ({(((lastSpy.equity/initial)-1)*100).toFixed(1)}%)
+                      </span>
+                    )}
+                    <span style={{color:'var(--text3)'}}>base {fmtK(initial)}</span>
+                  </div>
+                </div>
+                <svg viewBox={`0 0 ${chartW} ${chartH}`} style={{width:'100%',height:chartH}}>
+                  {[0, 0.25, 0.5, 0.75, 1].map(f => {
+                    const v = minV + (1 - f) * rangeV;
+                    const y = padT + f * drawH;
+                    return (
+                      <g key={f}>
+                        <line x1={padL} y1={y} x2={padL+drawW} y2={y} stroke="var(--border)" strokeWidth="0.5" strokeDasharray="3,3"/>
+                        <text x={padL-4} y={y+3} fill="var(--text3)" fontSize="9" textAnchor="end" fontFamily="var(--font-mono)">{fmtK(v)}</text>
+                      </g>
+                    );
+                  })}
+                  {(() => {
+                    const yBase = toY(initial);
+                    return <line x1={padL} y1={yBase} x2={padL+drawW} y2={yBase} stroke="var(--text3)" strokeWidth="1" strokeDasharray="2,4" opacity="0.6"/>;
+                  })()}
+                  {spyScaled.length > 0 && (
+                    <polyline points={spyPts} fill="none" stroke="var(--text3)" strokeWidth="1.5" strokeDasharray="4,3" opacity="0.75"/>
+                  )}
+                  <polyline points={stratPts} fill="none" stroke="var(--cyan)" strokeWidth="2.2"/>
+                  {Array.from({length: 6}).map((_,k) => {
+                    const t = t0 + (k / 5) * rangeT;
+                    const x = padL + (k / 5) * drawW;
+                    const label = new Date(t).toISOString().slice(0,7);
+                    return <text key={k} x={x} y={chartH-6} fill="var(--text3)" fontSize="9" textAnchor="middle" fontFamily="var(--font-mono)">{label}</text>;
+                  })}
+                </svg>
+              </div>
+            );
+          })()}
+
           {/* Trade summary */}
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
             <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
@@ -13759,7 +13846,18 @@ function ReplayTab() {
                   <td>{h.oos_sharpe}</td>
                   <td>{h.oos_trades}</td>
                   <td style={{color:pctColor(h.alpha),fontWeight:600}}>{h.alpha!=null?((h.alpha>0?'+':'')+h.alpha+'%'):'—'}</td>
-                  <td><button onClick={async()=>{try{const d=await api('/api/replay/wf/'+h.id);setWfResult(d);window.scrollTo({top:0,behavior:'smooth'});}catch(e){setWfError('Load WF #'+h.id+' failed: '+e.message);}}} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 10px',color:'var(--amber)',fontSize:10,cursor:'pointer'}}>VIEW</button></td>
+                  <td style={{whiteSpace:'nowrap'}}>
+                    <button onClick={async()=>{try{const d=await api('/api/replay/wf/'+h.id);setWfResult(d);window.scrollTo({top:0,behavior:'smooth'});}catch(e){setWfError('Load WF #'+h.id+' failed: '+e.message);}}} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 10px',color:'var(--amber)',fontSize:10,cursor:'pointer',marginRight:4}}>VIEW</button>
+                    <button onClick={async()=>{
+                      if (!confirm(`Delete walk-forward result #${h.id}? This cannot be undone.`)) return;
+                      try {
+                        await api('/api/replay/wf/'+h.id, { method:'DELETE' });
+                        if (wfResult?.id === h.id) setWfResult(null);
+                        loadAll();
+                      } catch(e) { setWfError('Delete WF #'+h.id+' failed: '+e.message); }
+                    }} title="Delete this walk-forward result"
+                      style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 8px',color:'var(--red)',fontSize:10,cursor:'pointer'}}>✕</button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -13917,7 +14015,17 @@ function ReplayTab() {
                   <td style={{color:pctColor(h.baseline_return),fontWeight:700}}>{h.baseline_return!=null?((h.baseline_return>0?'+':'')+h.baseline_return+'%'):'—'}</td>
                   <td style={{color:pctColor(h.median_return),fontWeight:600}}>{h.median_return!=null?((h.median_return>0?'+':'')+h.median_return+'%'):'—'}</td>
                   <td style={{color:h.profitable_pct>=50?'var(--green)':'var(--red)',fontWeight:600}}>{h.profitable_pct!=null?(h.profitable_pct+'%'):'—'}</td>
-                  <td><button onClick={async()=>{try{const d=await api('/api/replay/mc/'+h.id);setMcResult(d.result||d);window.scrollTo({top:0,behavior:'smooth'});}catch(e){setMcError('Load MC #'+h.id+' failed: '+e.message);}}} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 10px',color:'var(--amber)',fontSize:10,cursor:'pointer'}}>VIEW</button></td>
+                  <td style={{whiteSpace:'nowrap'}}>
+                    <button onClick={async()=>{try{const d=await api('/api/replay/mc/'+h.id);setMcResult(d.result||d);window.scrollTo({top:0,behavior:'smooth'});}catch(e){setMcError('Load MC #'+h.id+' failed: '+e.message);}}} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 10px',color:'var(--amber)',fontSize:10,cursor:'pointer',marginRight:4}}>VIEW</button>
+                    <button onClick={async()=>{
+                      if (!confirm(`Delete Monte Carlo result #${h.id}? This cannot be undone.`)) return;
+                      try {
+                        await api('/api/replay/mc/'+h.id, { method:'DELETE' });
+                        loadAll();
+                      } catch(e) { setMcError('Delete MC #'+h.id+' failed: '+e.message); }
+                    }} title="Delete this Monte Carlo result"
+                      style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 8px',color:'var(--red)',fontSize:10,cursor:'pointer'}}>✕</button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -13943,7 +14051,20 @@ function ReplayTab() {
                   <td>{h.win_rate}%</td>
                   <td>{h.sharpe_ratio}</td>
                   <td>{h.total_trades}</td>
-                  <td><button onClick={()=>loadResult(h.id)} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 10px',color:'var(--amber)',fontSize:10,cursor:'pointer'}}>VIEW</button></td>
+                  <td style={{whiteSpace:'nowrap'}}>
+                    <button onClick={()=>loadResult(h.id)} style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 10px',color:'var(--amber)',fontSize:10,cursor:'pointer',marginRight:4}}>VIEW</button>
+                    <button onClick={async()=>{
+                      if (!confirm(`Delete replay #${h.id} (${h.strategy})? This cannot be undone.`)) return;
+                      try {
+                        await api('/api/replay/'+h.id, { method:'DELETE' });
+                        if (result?.id === h.id) setResult(null);
+                        // Also clear MC selection if it pointed at this row
+                        if (mcForm.selectedReplayId === h.id) setMcForm(p => ({...p, selectedReplayId: null}));
+                        loadAll();
+                      } catch(e) { setError('Delete replay #'+h.id+' failed: '+e.message); }
+                    }} title="Delete this replay (and free up MC source if selected)"
+                      style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 8px',color:'var(--red)',fontSize:10,cursor:'pointer'}}>✕</button>
+                  </td>
                 </tr>
               ))}
             </tbody>

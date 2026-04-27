@@ -389,6 +389,24 @@ router.get('/replay/wf/:id', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Delete a WF result. UI's REPLAY-history table grew unbounded before this
+// because there was no way to prune from the dashboard.
+router.delete('/replay/wf/:id', (req, res) => {
+  try {
+    const { deleteWFResult } = require('../signals/replay');
+    deleteWFResult(+req.params.id);
+    res.json({ ok: true, deleted: +req.params.id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete('/replay/mc/:id', (req, res) => {
+  try {
+    const { deleteMCResult } = require('../signals/replay');
+    deleteMCResult(+req.params.id);
+    res.json({ ok: true, deleted: +req.params.id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Get specific replay result ───────────────────────────────────────────
 router.get('/replay/:id', (req, res) => {
   try {

@@ -2398,6 +2398,10 @@ function getMCResult(id) {
   return { ...row, result: JSON.parse(row.result) };
 }
 
+function deleteMCResult(id) {
+  db().prepare('DELETE FROM mc_results WHERE id = ?').run(id);
+}
+
 // ─── Walk-Forward Persistence ────────────────────────────────────────────
 
 function saveWFResult(wfResult) {
@@ -2438,6 +2442,10 @@ function getWFResult(id) {
   return { ...payload, id: row.id, savedAt: row.created_at };
 }
 
+function deleteWFResult(id) {
+  db().prepare('DELETE FROM wf_results WHERE id = ?').run(id);
+}
+
 module.exports = {
   BUILT_IN_STRATEGIES,
   getAvailableDateRange,
@@ -2452,7 +2460,9 @@ module.exports = {
   saveMCResult,
   getMCHistory,
   getMCResult,
+  deleteMCResult,
   saveWFResult,
   getWFHistory,
   getWFResult,
+  deleteWFResult,
 };
