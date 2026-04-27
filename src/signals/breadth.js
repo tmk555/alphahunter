@@ -412,9 +412,30 @@ function computeCompositeBreadthScore(breadthData, vixStructure, creditSpread) {
         components.push({ name: '% Above 200MA', value: v, score: +s.toFixed(1), weight: 15 });
       }
       if (last.new_highs != null && last.new_lows != null) {
-        const ratio = last.new_lows > 0 ? last.new_highs / last.new_lows : (last.new_highs > 0 ? 10 : 1);
+        // Match the live-recompute branch above: use 5-day rolling average
+        // to keep this row consistent with the Market Pulse warning panel,
+        // which also reads breadth_snapshots history. Falls back to
+        // single-day when fewer than 2 rows exist.
+        let ratio;
+        let labelSuffix = '';
+        try {
+          const recent = db().prepare(`
+            SELECT new_highs, new_lows FROM breadth_snapshots
+            ORDER BY date DESC LIMIT 5
+          `).all();
+          if (recent.length >= 2) {
+            const avgH = recent.reduce((s, r) => s + (r.new_highs || 0), 0) / recent.length;
+            const avgL = recent.reduce((s, r) => s + (r.new_lows  || 0), 0) / recent.length;
+            ratio = avgL > 0 ? +(avgH / avgL).toFixed(2) : (avgH > 0 ? 10 : 1);
+            labelSuffix = recent.length >= 5 ? ' (5d avg)' : ` (${recent.length}d avg)`;
+          } else {
+            ratio = last.new_lows > 0 ? last.new_highs / last.new_lows : (last.new_highs > 0 ? 10 : 1);
+          }
+        } catch (_) {
+          ratio = last.new_lows > 0 ? last.new_highs / last.new_lows : (last.new_highs > 0 ? 10 : 1);
+        }
         const s = Math.min(20, Math.max(0, ratio >= 3 ? 20 : ratio >= 1.5 ? 12 + (ratio-1.5)*5.3 : ratio >= 0.5 ? (ratio-0.5)*12 : 0));
-        components.push({ name: 'Highs/Lows Ratio', value: +ratio.toFixed(1), score: +s.toFixed(1), weight: 20 });
+        components.push({ name: 'Highs/Lows Ratio' + labelSuffix, value: +ratio.toFixed(2), score: +s.toFixed(1), weight: 20 });
       }
       if (last.ad_ratio != null) {
         const v = last.ad_ratio;
@@ -452,15 +473,35 @@ function computeCompositeBreadthScore(breadthData, vixStructure, creditSpread) {
   score += ma200Score;
   components.push({ name: '% Above 200MA', value: breadthData.pctAbove200MA, score: +ma200Score.toFixed(1), weight: 15 });
 
-  // 3. New highs vs lows (20% weight) — momentum breadth
+  // 3. New highs vs lows (20% weight) — momentum breadth.
+  // Use the 5-day rolling average to match what evaluateBreadthWarning
+  // surfaces on the Market Pulse panel. Single-day H/L is too noisy and
+  // produced confusing inconsistencies — Market Pulse showed 0.28 (5-day
+  // avg) while Analytics showed 0.1 (today only) under the same label.
+  // The rolling avg falls back to single-day when fewer than 5 prior
+  // breadth_snapshots rows exist.
+  let hlForScoring = breadthData.hlRatio;
+  let hlLabelSuffix = '';
+  try {
+    const recent = db().prepare(`
+      SELECT new_highs, new_lows FROM breadth_snapshots
+      ORDER BY date DESC LIMIT 5
+    `).all();
+    if (recent.length >= 2) {
+      const avgH = recent.reduce((s, r) => s + (r.new_highs || 0), 0) / recent.length;
+      const avgL = recent.reduce((s, r) => s + (r.new_lows  || 0), 0) / recent.length;
+      hlForScoring = avgL > 0 ? +(avgH / avgL).toFixed(2) : (avgH > 0 ? 99 : 1);
+      hlLabelSuffix = recent.length >= 5 ? ' (5d avg)' : ` (${recent.length}d avg)`;
+    }
+  } catch (_) { /* table missing or recompute path — fall back to single-day */ }
   const hlScore = Math.min(20, Math.max(0,
-    breadthData.hlRatio >= 3 ? 20 :
-    breadthData.hlRatio >= 1.5 ? 12 + (breadthData.hlRatio - 1.5) * 5.3 :
-    breadthData.hlRatio >= 0.5 ? (breadthData.hlRatio - 0.5) * 12 :
+    hlForScoring >= 3 ? 20 :
+    hlForScoring >= 1.5 ? 12 + (hlForScoring - 1.5) * 5.3 :
+    hlForScoring >= 0.5 ? (hlForScoring - 0.5) * 12 :
     0
   ));
   score += hlScore;
-  components.push({ name: 'Highs/Lows Ratio', value: breadthData.hlRatio, score: +hlScore.toFixed(1), weight: 20 });
+  components.push({ name: 'Highs/Lows Ratio' + hlLabelSuffix, value: hlForScoring, score: +hlScore.toFixed(1), weight: 20 });
 
   // 4. A/D ratio (15% weight)
   const adScore = Math.min(15, Math.max(0,
