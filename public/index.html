@@ -9083,6 +9083,51 @@ function AlphaPerformanceSection() {
             </div>
           )}
 
+          {/* Stale-SPY diagnostic: any snapshot whose spy_close matches the
+              prior snapshot's exactly. This is the smoking-gun for snapshots
+              recorded with a stale Yahoo SPY quote (pre-market, weekend
+              backfill served Friday's close). Each match silently zeroes
+              SPY's return for that day in the alpha calculation, so the
+              SPY-relative number drifts by exactly that day's true SPY move.
+              Showing this list lets the user re-record the affected days
+              once a fresh quote is available. */}
+          {(() => {
+            const pts = curve?.points || [];
+            if (pts.length < 2) return null;
+            const stale = [];
+            for (let i = 1; i < pts.length; i++) {
+              const a = pts[i - 1].spy_close;
+              const b = pts[i].spy_close;
+              if (a != null && b != null && Math.abs(a - b) < 1e-4) {
+                stale.push({ date: pts[i].date, prevDate: pts[i - 1].date, spy: b });
+              }
+            }
+            if (stale.length === 0) return null;
+            return (
+              <div style={{padding:'8px 12px',background:'rgba(255,61,87,0.08)',borderRadius:4,border:'1px solid rgba(255,61,87,0.25)',marginBottom:10,fontSize:11,color:'var(--text2)'}}>
+                <div style={{color:'var(--red)',fontWeight:700,marginBottom:4,fontFamily:'var(--font-mono)',letterSpacing:1}}>
+                  ⚠ STALE-SPY DETECTED ({stale.length})
+                </div>
+                <div style={{lineHeight:1.5,marginBottom:6}}>
+                  These snapshot rows have a SPY close exactly matching the prior trading day's value — likely a stale Yahoo quote (pre-market, weekend safety-net, or off-hours fetch). SPY-alpha for these days is understated/overstated by exactly that day's true SPY move.
+                </div>
+                <div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:6}}>
+                  {stale.map((s, i) => (
+                    <span key={i} title={`${s.date}: spy_close=${s.spy} matches ${s.prevDate} exactly`}
+                      style={{fontSize:10,fontFamily:'var(--font-mono)',padding:'1px 7px',
+                        background:'rgba(255,61,87,0.12)',border:'1px solid rgba(255,61,87,0.35)',
+                        borderRadius:3,color:'var(--red)',letterSpacing:0.5}}>
+                      {s.date} · {s.spy?.toFixed(2)}
+                    </span>
+                  ))}
+                </div>
+                <div style={{fontSize:10,color:'var(--text3)'}}>
+                  Fix: wait until the next post-close fetch returns a fresh SPY, then re-record the snapshot for that date (or let the next daily 4:45 PM cron overwrite it). The safety-net job now refuses to backfill when SPY is detected stale.
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Equity Curve SVG */}
           {curve?.points?.length > 1 && (() => {
             const pts = curve.points;

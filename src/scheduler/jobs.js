@@ -458,6 +458,33 @@ registerJobType('equity_snapshot', {
           reason: 'snapshot already exists for last trading day',
         };
       }
+      // ── Stale-SPY guard ───────────────────────────────────────────────
+      // The safety-net runs on weekends. Yahoo's SPY quote on a weekend
+      // returns Friday's close — same as the prior trading day's close.
+      // Recording with that "stale" SPY makes the SPY-relative alpha
+      // calculation wrong by ~Monday's actual SPY move once the next
+      // snapshot lands. Refuse to record and flag it so the user is
+      // never told a backfill happened with bogus baseline data.
+      // Compare against the most recent snapshot's spy_close — if they
+      // match exactly, the live quote is yesterday's data.
+      try {
+        const lastSnap = db().prepare(
+          'SELECT spy_close FROM equity_snapshots ORDER BY date DESC LIMIT 1'
+        ).get();
+        if (
+          spyClose != null && lastSnap?.spy_close != null
+          && Math.abs(spyClose - lastSnap.spy_close) < 1e-4
+        ) {
+          return {
+            mode: 'safety_weekly',
+            targetDate,
+            skipped: true,
+            reason: `stale SPY: live quote ${spyClose} matches prior snapshot exactly. Yahoo likely served Friday's close on a weekend fetch — refusing to record a backfill that would corrupt SPY-alpha math.`,
+            spyClose,
+            priorSpyClose: lastSnap.spy_close,
+          };
+        }
+      } catch (_) { /* fail-open if check itself errors */ }
       const snapshot = recordEquitySnapshot(equity, cashFlow, spyClose, openPositions, heatPct, { dateOverride: targetDate });
       return {
         mode: 'safety_weekly',
