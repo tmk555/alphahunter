@@ -9,6 +9,18 @@ function marketDate() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 }
 
+// Same trading-day check we use in scanner.js — keeps weekend rows out of
+// equity_snapshots. Pre-fix the user clicked "Record Snapshot" on a Saturday
+// and it stored a row with date=2026-04-25 that duplicated Friday's
+// $101,214.77 (markets were closed, so equity hadn't moved). That weekend
+// row then polluted TWR/drawdown/Sharpe inputs as a "real" data point.
+function isTradingDay(dateStr) {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return true; // fail-open
+  const d = new Date(dateStr + 'T12:00:00Z');
+  const dow = d.getUTCDay();
+  return dow !== 0 && dow !== 6;
+}
+
 // ─── Time-Weighted Return (TWR) ─────────────────────────────────────────────
 // Sub-period linking: eliminates the effect of deposits/withdrawals.
 // Each sub-period ends at a cash flow event; the overall return is the
@@ -225,8 +237,16 @@ function calculateMaxDrawdownDuration(snapshots) {
 
 // ─── Record Daily Equity Snapshot ────────────────────────────────────────────
 
-function recordEquitySnapshot(equity, cashFlow = 0, spyClose = null, openPositions = 0, heatPct = 0) {
+function recordEquitySnapshot(equity, cashFlow = 0, spyClose = null, openPositions = 0, heatPct = 0, opts = {}) {
   const date = marketDate();
+  // Trading-day guard: refuse to write weekend rows. Markets are closed,
+  // equity hasn't moved, and the duplicate row pollutes TWR / drawdown /
+  // Sharpe inputs. The manual "Record Snapshot" button hits this guard;
+  // the equity_snapshot_eod cron is naturally weekday-only via dow gate.
+  // Pass `{ force: true }` from a backfill script if you need to bypass.
+  if (!opts.force && !isTradingDay(date)) {
+    return { skipped: true, reason: 'non-trading-day', date };
+  }
   db().prepare(`
     INSERT OR REPLACE INTO equity_snapshots (date, equity, cash_flow, spy_close, open_positions, total_heat_pct)
     VALUES (?, ?, ?, ?, ?, ?)

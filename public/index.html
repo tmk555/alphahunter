@@ -8909,28 +8909,33 @@ function AlphaPerformanceSection() {
   async function recordSnapshot() {
     setSnapping(true); setError('');
     try {
-      // Auto-calculate equity from portfolio status + account config
+      // Prefer LIVE broker equity (Alpaca account.equity) over the synthetic
+      // calc — broker equity already reflects realized P&L from closed
+      // trades, cash deposits/withdrawals, and unrealized P&L of every open
+      // position priced at the broker's last mark. Pre-fix this function
+      // computed `accountSize + openPnl` which silently dropped realized
+      // gains and treated `accountSize` as a stable cash baseline (it's not).
       const status = await api('/api/portfolio/status').catch(()=>null);
       const config = await api('/api/portfolio/config').catch(()=>null);
       const accountSize = config?.accountSize || 100000;
 
-      // Get open positions market value
+      // Get open positions for the heatPct + position-count fields, plus a
+      // synthetic-equity fallback if broker equity is unreachable.
       const trades = await api('/api/trades?status=open').catch(()=>({trades:[]}));
       const openTrades = trades?.trades || [];
-      let positionValue = 0;
-      for (const t of openTrades) {
-        positionValue += (t.current_price || t.entry_price || 0) * (t.remaining_shares || t.shares || 0);
-      }
-      // Equity = account size (cash) + position value - cost basis of open positions
-      // Simplified: just use account size adjusted for open P&L
       const openPnl = openTrades.reduce((sum, t) => {
         const price = t.current_price || t.entry_price || 0;
         const shares = t.remaining_shares || t.shares || 0;
         return sum + (price - (t.entry_price || 0)) * shares * (t.side === 'short' ? -1 : 1);
       }, 0);
-      const equity = +(accountSize + openPnl).toFixed(2);
 
-      await api('/api/portfolio/equity-snapshot', {
+      const brokerEquity = status?.broker?.equity;
+      const usingBroker = Number.isFinite(brokerEquity) && brokerEquity > 0;
+      const equity = usingBroker
+        ? +brokerEquity.toFixed(2)
+        : +(accountSize + openPnl).toFixed(2);
+
+      const r = await api('/api/portfolio/equity-snapshot', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
@@ -8940,6 +8945,17 @@ function AlphaPerformanceSection() {
           heatPct: status?.heat?.heatPct || 0,  // source of truth — matches src/risk/portfolio.js
         }),
       });
+      // Backend may refuse weekend writes (trading-day guard in
+      // recordEquitySnapshot) — surface that to the user instead of
+      // silently letting them think a snapshot was recorded.
+      if (r?.skipped) {
+        setError(`Snapshot skipped — ${r.reason} (${r.date}). Markets are closed; equity won't have moved since the last trading day.`);
+      } else if (!usingBroker) {
+        // Snapshot stored, but using the synthetic calc — note this so the
+        // user knows the equity history is approximate, not real-account.
+        window.showToast?.('Snapshot recorded',
+          'Broker equity unreachable — used synthetic equity (account size + open P&L). Connect Alpaca for real equity tracking.');
+      }
       load();
     } catch(e) { setError(e.message); }
     setSnapping(false);
@@ -8984,11 +9000,30 @@ function AlphaPerformanceSection() {
             ))}
           </div>
 
-          {data.snapshotCount <= 1 && (
+          {/* Empty-state messaging by snapshot tier:
+              0       → onboard the user, ask them to click Record Snapshot
+              1       → "1 recorded — record another tomorrow"
+              2-30    → "X recorded — Sharpe/Sortino need 31+ for the rolling
+                         30-day window (Y more trading days)". This is the
+                         tier that previously rendered nothing — the user saw
+                         "—" for Sharpe/Sortino with no idea why.
+              31+     → no message; metrics render normally
+              The 31 threshold matches src/risk/alpha-tracker.js:62 where
+              calculateRollingSharpe returns [] until snapshots.length ≥
+              windowDays + 1. */}
+          {data.snapshotCount === 0 && (
             <div style={{padding:'8px 12px',background:'rgba(240,165,0,0.08)',borderRadius:4,border:'1px solid rgba(240,165,0,0.2)',marginBottom:10,fontSize:11,color:'var(--amber)'}}>
-              {data.snapshotCount === 0
-                ? 'Click "Record Snapshot" to save today\'s portfolio equity. Record daily to build an equity curve and track Sharpe/Sortino/Alpha.'
-                : `${data.snapshotCount} snapshot recorded. Sharpe and Sortino need 2+ daily snapshots to calculate. Record another tomorrow.`}
+              Click "Record Snapshot" to save today's portfolio equity. Record daily to build an equity curve and track Sharpe/Sortino/Alpha.
+            </div>
+          )}
+          {data.snapshotCount === 1 && (
+            <div style={{padding:'8px 12px',background:'rgba(240,165,0,0.08)',borderRadius:4,border:'1px solid rgba(240,165,0,0.2)',marginBottom:10,fontSize:11,color:'var(--amber)'}}>
+              1 snapshot recorded. Sharpe and Sortino need 31+ daily snapshots (rolling 30-day window). Record another tomorrow — at this rate it'll take ~6 weeks of trading days.
+            </div>
+          )}
+          {data.snapshotCount >= 2 && data.snapshotCount < 31 && (data.sharpe == null || data.sortino == null) && (
+            <div style={{padding:'8px 12px',background:'rgba(240,165,0,0.08)',borderRadius:4,border:'1px solid rgba(240,165,0,0.2)',marginBottom:10,fontSize:11,color:'var(--amber)'}}>
+              {data.snapshotCount} snapshots recorded ({data.firstDate} → {data.lastDate}). Sharpe and Sortino are computed from a rolling 30-day window — need {31 - data.snapshotCount} more trading-day snapshot{31 - data.snapshotCount === 1 ? '' : 's'} before the rolling math kicks in. TWR, drawdown, and SPY-alpha are accurate now.
             </div>
           )}
 
