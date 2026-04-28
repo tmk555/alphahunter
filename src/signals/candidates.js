@@ -5,7 +5,15 @@
 // restrictive — on a normal day almost nothing qualifies. Now volume surge
 // or proximity to high are additive, not both required.
 function isSwingCandidate(s) {
-  const rsRising = s.rsTrend?.direction === 'rising' || s.rsTrend?.vs1m > 3;
+  // rsRising blind-spot fix: a stock pinned at RS 95+ can't show "rising"
+  // because there's no headroom left in the percentile (it's already
+  // beating 95% of the universe). Treat RS ≥ 90 as already-leading and
+  // accept it the same way as a stock whose rank is climbing. Without
+  // this, names like MU at RS 98 / momentum 99 / SEPA 8/8 were silently
+  // excluded from Swing setups because their rsTrend reads "flat".
+  const rsRising = s.rsTrend?.direction === 'rising'
+                || s.rsTrend?.vs1m > 3
+                || s.rsRank >= 90;
   if (s.rsRank < 70 || !rsRising || (s.swingMomentum || 0) < 50 || (s.vsMA50 || 0) <= 0) return false;
 
   // Must meet at least ONE of: volume surge, near high, or very strong momentum
