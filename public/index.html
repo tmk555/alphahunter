@@ -13295,6 +13295,17 @@ function ReplayTab() {
   const [result, setResult]         = useState(null);
   const [wfResult, setWfResult]     = useState(null);
   const [mcResult, setMcResult]     = useState(null);
+  // Auto-sweep result state. The sweep runs as a server-side background
+  // job (kind='sweep') so it survives tab navigation and page reloads
+  // — same pattern as the other replay-tab job types.
+  const [sweepResult, setSweepResult] = useState(null);
+  const [sweepError,  setSweepError]  = useState('');
+  const [sweepConfig, setSweepConfig] = useState({
+    shortRate: 35, longRate: 18,    // tax rates as %
+    topK: 10,
+    runWalkForward: false,
+    runMonteCarlo: false,
+  });
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState('');       // generic/shared
   const [replayError, setReplayError] = useState('');     // Replay section
@@ -13371,6 +13382,7 @@ function ReplayTab() {
     if (active.compare)         runCompare({         resumeJobId: active.compare });
     if (active['walk-forward']) runWalkForward({     resumeJobId: active['walk-forward'] });
     if (active['monte-carlo'])  runMonteCarlo({      resumeJobId: active['monte-carlo'] });
+    if (active.sweep)           runSweep({           resumeJobId: active.sweep });
     // Intentional: only run on mount — these helpers read the latest form
     // refs internally, so we don't want a re-trigger every form keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -13583,6 +13595,35 @@ function ReplayTab() {
     }
     setLoading(false);
     setJobStatus(prev => ({ ...prev, ['monte-carlo']: null }));
+  }
+
+  // Auto-Sweep — fires off the exhaustive per-strategy sweep as a
+  // background job. Same model as runReplay/runCompare: uses runReplayJob
+  // so the JOB RUNNING badge stays visible across tab navigations and
+  // server-side polling shows live progress (X/Y combos · N outperforming).
+  async function runSweep({ resumeJobId } = {}) {
+    if (!resumeJobId && (!form.startDate || !form.endDate)) return;
+    setLoading(true); setError(''); setSweepError(''); setSweepResult(null);
+    try {
+      const r = await runReplayJob({
+        kind: 'sweep',
+        resumeJobId,
+        body: {
+          startDate: form.startDate, endDate: form.endDate,
+          maxPositions: form.maxPositions, initialCapital: form.initialCapital,
+          execution: buildExecution(),
+          taxRates: { short: (sweepConfig.shortRate || 35) / 100, long: (sweepConfig.longRate || 18) / 100 },
+          topK: sweepConfig.topK || 10,
+          runWalkForward: !!sweepConfig.runWalkForward,
+          runMonteCarlo:  !!sweepConfig.runMonteCarlo,
+        },
+        onUpdate: (j) => setJobStatus(prev => ({ ...prev, sweep: j })),
+      });
+      setSweepResult(r);
+      loadAll();
+    } catch(e) { setSweepError(e.message); }
+    setLoading(false);
+    setJobStatus(prev => ({ ...prev, sweep: null }));
   }
 
   async function runBackfill() {
@@ -13827,13 +13868,45 @@ function ReplayTab() {
         {/* Strategy params override */}
         <textarea placeholder='Params override JSON (optional)' value={form.params} onChange={e=>setForm({...form,params:e.target.value})} rows={2} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 10px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)',marginBottom:10,resize:'vertical'}}/>
 
-        <div style={{display:'flex',gap:8}}>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
           <button className="load-btn" onClick={runReplay} disabled={loading} style={{fontSize:10,padding:'6px 18px'}}>{loading?'RUNNING...':'RUN REPLAY'}</button>
           <button className="load-btn" onClick={runCompare} disabled={loading} style={{fontSize:10,padding:'6px 18px',background:'var(--cyan)'}}>{loading?'...':'COMPARE ALL'}</button>
+          <button className="load-btn" onClick={runSweep} disabled={loading}
+            title="Exhaustive per-strategy parameter sweep × Custom / Swing / Position flavors. Tax-adjusted alpha vs SPY long-term hold is the primary sort key. Server-side — survives tab navigation. Runs ~5-15 min depending on date range and deep-dive options."
+            style={{fontSize:10,padding:'6px 18px',background:'var(--violet, #9d4edd)',color:'#fff'}}>{loading?'...':'🤖 AUTO-SWEEP'}</button>
+
+          {/* Sweep config — inline so the user sees the levers without a modal */}
+          <span style={{fontSize:9,color:'var(--text3)',marginLeft:4,fontFamily:'var(--font-mono)',letterSpacing:1}}>SHORT-TERM TAX %</span>
+          <input type="number" min={0} max={50} value={sweepConfig.shortRate}
+            onChange={e => setSweepConfig(c => ({ ...c, shortRate: +e.target.value }))}
+            title="Federal + state ordinary-income rate applied to gains held ≤ 365 days (most of these strategies)"
+            style={{width:48,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'4px 6px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)',letterSpacing:1}}>LONG-TERM TAX %</span>
+          <input type="number" min={0} max={40} value={sweepConfig.longRate}
+            onChange={e => setSweepConfig(c => ({ ...c, longRate: +e.target.value }))}
+            title="Federal + state long-term cap-gains rate applied to SPY buy-and-hold benchmark"
+            style={{width:44,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'4px 6px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)',letterSpacing:1}}>TOP-K</span>
+          <input type="number" min={1} max={50} value={sweepConfig.topK}
+            onChange={e => setSweepConfig(c => ({ ...c, topK: +e.target.value }))}
+            style={{width:42,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'4px 6px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          <label style={{display:'flex',alignItems:'center',gap:4,fontSize:10,color:'var(--text2)',cursor:'pointer'}}>
+            <input type="checkbox" checked={sweepConfig.runWalkForward} onChange={e => setSweepConfig(c => ({ ...c, runWalkForward: e.target.checked }))}/>
+            <span title="Walk-forward optimization on each top-K survivor — adds significant runtime">+ Walk-Forward</span>
+          </label>
+          <label style={{display:'flex',alignItems:'center',gap:4,fontSize:10,color:'var(--text2)',cursor:'pointer'}}>
+            <input type="checkbox" checked={sweepConfig.runMonteCarlo} onChange={e => setSweepConfig(c => ({ ...c, runMonteCarlo: e.target.checked }))}/>
+            <span title="Monte Carlo on each top-K survivor — re-runs the trade list 1000 times in random order">+ Monte Carlo</span>
+          </label>
         </div>
         {replayError && (
           <div style={{marginTop:10,background:'rgba(255,61,87,0.1)',border:'1px solid var(--red)',borderRadius:4,padding:'8px 12px',fontSize:12,color:'var(--red)'}}>
             ⚠ {replayError}
+          </div>
+        )}
+        {sweepError && (
+          <div style={{marginTop:10,background:'rgba(255,61,87,0.1)',border:'1px solid var(--red)',borderRadius:4,padding:'8px 12px',fontSize:12,color:'var(--red)'}}>
+            ⚠ Sweep: {sweepError}
           </div>
         )}
       </div>
@@ -14147,6 +14220,182 @@ function ReplayTab() {
           )}
         </div>
       )}
+
+      {/* ─── AUTO-SWEEP RESULTS ───────────────────────────────────────
+          Exhaustive per-strategy combo evaluation, ranked by AFTER-TAX
+          alpha vs SPY long-term hold. Three-flavor breakdown (Custom /
+          Swing / Position) shows which trading style won the most combos
+          and the best single-combo alpha per flavor. Top-K survivors get
+          their full param breakdown + optional WF/MC deep-dive when
+          those toggles were on. */}
+      {sweepResult && sweepResult.summary && (() => {
+        const s = sweepResult.summary;
+        const fs = s.flavorStats || {};
+        const tax = s.taxRates;
+        const csv = () => {
+          const headers = ['rank','strategy','flavor','tradeMode','exit','strictRegime','params','totalReturn','spyReturn','preTaxAlpha','stratNetAfterTax','spyNetAfterTax','afterTaxAlpha','maxDrawdown','sharpeRatio','profitFactor','trades','winRate'];
+          const rows = [headers.join(',')];
+          (sweepResult.results || []).forEach((r, i) => {
+            const cells = [
+              i+1,
+              r.strategy,
+              r.flavor,
+              r.tradeMode || '',
+              r.exit,
+              r.strictRegime,
+              JSON.stringify(r.params).replace(/,/g, ';'),
+              r.totalReturn, r.spyReturn, r.preTaxAlpha,
+              r.stratNetAfterTax, r.spyNetAfterTax, r.afterTaxAlpha,
+              r.maxDrawdown, r.sharpeRatio, r.profitFactor, r.trades, r.winRate,
+            ];
+            rows.push(cells.join(','));
+          });
+          const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = `sweep-${form.startDate}-to-${form.endDate}.csv`;
+          a.click();
+          URL.revokeObjectURL(url);
+        };
+        return (
+          <div className="panel">
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12,flexWrap:'wrap',gap:8}}>
+              <div>
+                <div className="panel-title">🤖 <span>AUTO-SWEEP</span> RESULTS</div>
+                <div style={{fontSize:11,color:'var(--text3)',marginTop:2,fontFamily:'var(--font-mono)'}}>
+                  {s.totalCombos} combos · {s.successful} valid · {s.outperformingPreTax} beat SPY pre-tax · <strong style={{color:s.outperformingAfterTax>0?'var(--green)':'var(--red)'}}>{s.outperformingAfterTax} beat SPY AFTER-TAX</strong>
+                  {' '}· tax: short {Math.round(tax.short*100)}% / long {Math.round(tax.long*100)}%
+                </div>
+              </div>
+              <button onClick={csv}
+                style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'4px 12px',color:'var(--cyan)',fontSize:10,cursor:'pointer',fontFamily:'var(--font-mono)',letterSpacing:1}}>
+                ↓ EXPORT CSV
+              </button>
+            </div>
+
+            {/* Flavor breakdown — answers "swing vs position vs custom" */}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:10,marginBottom:14}}>
+              {['Custom','Swing','Position'].map(name => {
+                const f = fs[name] || { count: 0 };
+                if (!f.count) return (
+                  <div key={name} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:'10px 12px',opacity:0.5}}>
+                    <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>{name.toUpperCase()}</div>
+                    <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>no combos</div>
+                  </div>
+                );
+                const beat = f.outperformingAfterTax || 0;
+                const pct  = f.count > 0 ? Math.round(beat / f.count * 100) : 0;
+                const color = beat > 0 ? 'var(--green)' : 'var(--red)';
+                return (
+                  <div key={name} style={{background:'var(--bg3)',border:`1px solid ${color}30`,borderLeft:`3px solid ${color}`,borderRadius:4,padding:'10px 12px'}}>
+                    <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>{name.toUpperCase()}</div>
+                    <div style={{fontSize:13,fontFamily:'var(--font-mono)',fontWeight:700,color,marginTop:3}}>
+                      {beat}/{f.count} beat SPY ({pct}%)
+                    </div>
+                    <div style={{fontSize:10,color:'var(--text2)',marginTop:3,fontFamily:'var(--font-mono)'}}>
+                      best after-tax alpha: <strong style={{color: f.bestAfterTaxAlpha > 0 ? 'var(--green)' : 'var(--red)'}}>{f.bestAfterTaxAlpha != null ? `${f.bestAfterTaxAlpha>0?'+':''}${f.bestAfterTaxAlpha}%` : '—'}</strong>
+                    </div>
+                    {f.bestRow && (
+                      <div style={{fontSize:9,color:'var(--text3)',marginTop:3,fontFamily:'var(--font-mono)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}
+                        title={`${f.bestRow.strategy} · ${f.bestRow.exit} · ${f.bestRow.strictRegime?'strict':'lenient'}\n${f.bestRow.paramsString}`}>
+                      → {f.bestRow.strategyName || f.bestRow.strategy}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Top-K table — main answer */}
+            <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>
+              TOP {Math.min(sweepResult.topK?.length || 0, 25)} BY AFTER-TAX ALPHA · CLICK PARAMS FOR FULL DETAIL
+            </div>
+            <div style={{maxHeight:380,overflowY:'auto'}}>
+              <table className="data-table" style={{fontSize:11}}>
+                <thead><tr>
+                  <th>#</th><th>Strategy</th><th>Flavor</th><th>Exit</th><th>Reg</th>
+                  <th style={{textAlign:'right'}}>Return</th>
+                  <th style={{textAlign:'right'}}>SPY</th>
+                  <th style={{textAlign:'right'}}>Pre-Tax α</th>
+                  <th style={{textAlign:'right'}}>After-Tax α</th>
+                  <th style={{textAlign:'right'}}>MaxDD</th>
+                  <th style={{textAlign:'right'}}>Sharpe</th>
+                  <th style={{textAlign:'right'}}>Trades</th>
+                  <th>Params</th>
+                </tr></thead>
+                <tbody>
+                  {(sweepResult.results || []).slice(0, 25).map((r, i) => {
+                    const flavorColor = r.flavor === 'Position' ? 'var(--cyan)' : r.flavor === 'Swing' ? 'var(--amber)' : 'var(--text2)';
+                    const atxColor = r.afterTaxAlpha > 0 ? 'var(--green)' : 'var(--red)';
+                    return (
+                      <tr key={i} style={r.afterTaxAlpha > 0 ? { background: 'rgba(0,230,118,0.04)' } : undefined}>
+                        <td style={{fontFamily:'var(--font-mono)',color:i<3?'var(--amber)':'var(--text3)',fontWeight:700}}>{i+1}</td>
+                        <td style={{fontWeight:600,color:'var(--cyan)'}}>{r.strategyName || r.strategy}</td>
+                        <td style={{color:flavorColor,fontFamily:'var(--font-mono)',fontSize:10,fontWeight:700}}>{r.flavor}</td>
+                        <td style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text3)'}}>{r.exit.replace(/_/g, '/')}</td>
+                        <td style={{fontFamily:'var(--font-mono)',fontSize:10,color:r.strictRegime?'var(--cyan)':'var(--amber)'}}>{r.strictRegime?'STR':'len'}</td>
+                        <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:r.totalReturn>=0?'var(--green)':'var(--red)'}}>{r.totalReturn>0?'+':''}{r.totalReturn}%</td>
+                        <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--text3)'}}>{r.spyReturn>0?'+':''}{r.spyReturn}%</td>
+                        <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:(r.preTaxAlpha||0)>0?'var(--green)':'var(--red)'}}>{r.preTaxAlpha!=null?(r.preTaxAlpha>0?'+':'')+r.preTaxAlpha+'%':'—'}</td>
+                        <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:atxColor,fontWeight:700}}>{r.afterTaxAlpha!=null?(r.afterTaxAlpha>0?'+':'')+r.afterTaxAlpha+'%':'—'}</td>
+                        <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--red)'}}>{r.maxDrawdown}%</td>
+                        <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:r.sharpeRatio>=1?'var(--green)':'var(--text)'}}>{r.sharpeRatio}</td>
+                        <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text3)'}}>{r.trades}</td>
+                        <td style={{fontFamily:'var(--font-mono)',fontSize:9,color:'var(--text3)',maxWidth:280,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={r.paramsString}>{r.paramsString}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Deep-dive (WF + MC) on top-K, if user enabled them */}
+            {sweepResult.topKDeepDive?.length > 0 && (
+              <div style={{marginTop:14,borderTop:'1px solid var(--border)',paddingTop:12}}>
+                <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>
+                  TOP-{sweepResult.topKDeepDive.length} DEEP-DIVE — Walk-Forward + Monte Carlo
+                </div>
+                <div style={{maxHeight:280,overflowY:'auto'}}>
+                  <table className="data-table" style={{fontSize:10}}>
+                    <thead><tr>
+                      <th>#</th><th>Strategy</th><th>Flavor</th>
+                      <th title="Out-of-sample return from walk-forward">WF OOS Ret</th>
+                      <th>WF Sharpe</th>
+                      <th title="Parameter stability — % of windows that picked the same winning params">Param Stab</th>
+                      <th title="Monte Carlo 95th-percentile max drawdown">MC p95 DD</th>
+                      <th title="Monte Carlo: % of permutations that ended profitable">MC %Profitable</th>
+                    </tr></thead>
+                    <tbody>
+                      {sweepResult.topKDeepDive.map((d, i) => (
+                        <tr key={i}>
+                          <td style={{color:'var(--amber)',fontWeight:700}}>{d.rank}</td>
+                          <td style={{color:'var(--cyan)',fontWeight:600}}>{d.strategy}</td>
+                          <td style={{color:d.flavor==='Position'?'var(--cyan)':d.flavor==='Swing'?'var(--amber)':'var(--text2)',fontFamily:'var(--font-mono)'}}>{d.flavor}</td>
+                          <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:(d.walkForward?.oosReturn||0)>=0?'var(--green)':'var(--red)'}}>
+                            {d.walkForward?.oosReturn != null ? (d.walkForward.oosReturn>0?'+':'') + d.walkForward.oosReturn + '%' : (d.walkForwardError ? '⚠' : '—')}
+                          </td>
+                          <td style={{textAlign:'right',fontFamily:'var(--font-mono)'}}>{d.walkForward?.oosSharpe ?? '—'}</td>
+                          <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:(d.walkForward?.paramStability||0)>=50?'var(--green)':'var(--amber)'}}>
+                            {d.walkForward?.paramStability != null ? d.walkForward.paramStability + '%' : '—'}
+                          </td>
+                          <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--red)'}}>{d.monteCarlo?.p95MaxDD != null ? d.monteCarlo.p95MaxDD + '%' : '—'}</td>
+                          <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:(d.monteCarlo?.profitablePct||0)>=50?'var(--green)':'var(--red)'}}>
+                            {d.monteCarlo?.profitablePct != null ? d.monteCarlo.profitablePct + '%' : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            <div style={{fontSize:9,color:'var(--text3)',marginTop:10,lineHeight:1.5}}>
+              After-tax math: strategy gains taxed at short-term rate ({Math.round(tax.short*100)}%), SPY gains taxed at long-term rate ({Math.round(tax.long*100)}%). Losses untaxed (simplified — real tax loss carryforwards not modeled). Slippage, dividend accrual, cash drag, and gap filters are all baked into the pre-tax engine output.
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Comparison results */}
       {result && result.comparisons && (

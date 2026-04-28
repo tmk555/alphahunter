@@ -25,6 +25,7 @@ const { runInstitutionalBackfill } = require('../signals/backfillInstitutional')
 const { runEarningsDriftBackfill } = require('../signals/backfillEarningsDrift');
 const { runRevisionsBackfill } = require('../signals/backfillRevisions');
 const { startJob, getJob, listJobs, cancelJob } = require('../signals/replay-jobs');
+const { runSweep, STRATEGY_GRIDS, DEFAULT_SHORT_TERM_RATE, DEFAULT_LONG_TERM_RATE } = require('../signals/replay-sweep');
 const { FULL_UNIVERSE } = require('../../universe');
 
 // ─── Available strategies ─────────────────────────────────────────────────
@@ -336,6 +337,34 @@ const JOB_KINDS = {
     try { result.id = saveMCResult(replayId, result); } catch (_) {}
     return result;
   },
+  // Auto-Sweep — exhaustive per-strategy combo evaluation with after-tax
+  // alpha vs SPY long-term hold as the primary sort key. Long-running
+  // (~5-15 min depending on date range and whether WF/MC deep-dive is
+  // enabled). Reports progress via setProgress so the UI's JOB RUNNING
+  // badge shows live "X/Y combos · N outperforming SPY" status.
+  sweep: (body, setProgress) => {
+    const {
+      strategies, startDate, endDate,
+      maxPositions, initialCapital, execution,
+      taxRates, topK, runWalkForward: doWF, runMonteCarlo: doMC,
+    } = body || {};
+    if (!startDate || !endDate) throw new Error('startDate and endDate required');
+    return runSweep({
+      strategies: strategies && strategies.length ? strategies : Object.keys(STRATEGY_GRIDS),
+      startDate, endDate,
+      maxPositions: maxPositions || 5,
+      initialCapital: initialCapital || 100_000,
+      execution: execution || {},
+      taxRates: {
+        short: (taxRates?.short ?? DEFAULT_SHORT_TERM_RATE),
+        long:  (taxRates?.long  ?? DEFAULT_LONG_TERM_RATE),
+      },
+      topK: topK || 10,
+      runWalkForward: !!doWF,
+      runMonteCarlo:  !!doMC,
+      onProgress: setProgress,
+    });
+  },
 };
 
 router.post('/replay/jobs', (req, res) => {
@@ -345,7 +374,9 @@ router.post('/replay/jobs', (req, res) => {
       return res.status(400).json({ error: `kind must be one of: ${Object.keys(JOB_KINDS).join(', ')}` });
     }
     const runner = JOB_KINDS[kind];
-    const job = startJob(kind, body || {}, () => runner(body || {}));
+    // Pass setProgress through to the runner — the sweep kind uses it to
+    // report live progress; other kinds ignore it (extra arg).
+    const job = startJob(kind, body || {}, (setProgress) => runner(body || {}, setProgress));
     res.status(202).json({ id: job.id, kind: job.kind, status: job.status, startedAt: job.startedAt });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });

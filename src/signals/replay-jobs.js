@@ -65,14 +65,24 @@ function startJob(kind, params, runFn) {
     error: null,
     startedAt: Date.now(),
     finishedAt: null,
+    // Optional progress object the runner may populate via setProgress()
+    // during a long sweep (e.g. { done, total, current, ... }). Polled
+    // by the UI to drive the JOB RUNNING badge's live status text.
+    progress: null,
   };
   jobs.set(id, job);
+  // Runner gets a setProgress(obj) helper. Anything passed gets merged
+  // into job.progress; null clears it.
+  const setProgress = (obj) => {
+    if (obj == null) job.progress = null;
+    else job.progress = { ...(job.progress || {}), ...obj, ts: Date.now() };
+  };
   // setImmediate so the caller's response is sent before the work begins —
   // otherwise the POST that creates the job would block on the work and
   // we'd lose the whole point of background execution.
   setImmediate(async () => {
     try {
-      const r = await runFn();
+      const r = await runFn(setProgress);
       job.result = r;
       job.status = 'done';
     } catch (e) {
