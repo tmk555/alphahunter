@@ -13324,6 +13324,12 @@ function ReplayTab() {
   // History panel collapse state — start collapsed so the active mode's
   // workflow doesn't have history below it competing for attention.
   const [historyCollapsed, setHistoryCollapsed] = useState(true);
+  // Per-table sort state for the three history tables — Replay / WF / MC.
+  // Default sorted by recency (created_at desc) which matches the
+  // server-side ORDER BY. Click any header to flip.
+  const replayHistSort = useSortTable('created_at', -1);
+  const wfHistSort     = useSortTable('created_at', -1);
+  const mcHistSort     = useSortTable('created_at', -1);
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState('');       // generic/shared
   const [replayError, setReplayError] = useState('');     // Replay section
@@ -15220,10 +15226,18 @@ function ReplayTab() {
           <div className="panel-title">📜 <span>WALK-FORWARD</span> HISTORY</div>
           <table className="data-table" style={{marginTop:10}}>
             <thead><tr>
-              <th>Date</th><th>Strategy</th><th>Period</th><th>OOS Return</th><th>Win Rate</th><th>Sharpe</th><th>Trades</th><th>Alpha</th><th></th>
+              <wfHistSort.SH k="created_at" label="Date"/>
+              <wfHistSort.SH k="strategy" label="Strategy"/>
+              <th>Period</th>
+              <wfHistSort.SH k="oos_return" label="OOS Return"/>
+              <wfHistSort.SH k="oos_win_rate" label="Win Rate"/>
+              <wfHistSort.SH k="oos_sharpe" label="Sharpe"/>
+              <wfHistSort.SH k="oos_trades" label="Trades"/>
+              <wfHistSort.SH k="alpha" label="Alpha"/>
+              <th></th>
             </tr></thead>
             <tbody>
-              {wfHistory.map(h=>(
+              {wfHistSort.sortData(wfHistory).map(h=>(
                 <tr key={h.id}>
                   <td style={{fontSize:11,color:'var(--text3)'}}>{h.created_at?.slice(0,10)}</td>
                   <td style={{fontWeight:600,color:'var(--cyan)'}}>{h.strategy}</td>
@@ -15393,10 +15407,18 @@ function ReplayTab() {
           <div className="panel-title">📜 <span>MONTE CARLO</span> HISTORY</div>
           <table className="data-table" style={{marginTop:10}}>
             <thead><tr>
-              <th>Date</th><th>Strategy</th><th>Method</th><th>Iters</th><th>Trades</th><th>Baseline</th><th>Median</th><th>Profitable</th><th></th>
+              <mcHistSort.SH k="created_at" label="Date"/>
+              <mcHistSort.SH k="strategy" label="Strategy"/>
+              <mcHistSort.SH k="method" label="Method"/>
+              <mcHistSort.SH k="iterations" label="Iters"/>
+              <mcHistSort.SH k="trade_count" label="Trades"/>
+              <mcHistSort.SH k="baseline_return" label="Baseline"/>
+              <mcHistSort.SH k="median_return" label="Median"/>
+              <mcHistSort.SH k="profitable_pct" label="Profitable"/>
+              <th></th>
             </tr></thead>
             <tbody>
-              {mcHistory.map(h=>(
+              {mcHistSort.sortData(mcHistory).map(h=>(
                 <tr key={h.id}>
                   <td style={{fontSize:11,color:'var(--text3)'}}>{h.created_at?.slice(0,10)}</td>
                   <td style={{fontWeight:600,color:'var(--cyan)'}}>{h.strategy||'replay#'+h.replay_id}</td>
@@ -15430,10 +15452,17 @@ function ReplayTab() {
           <div className="panel-title">📜 <span>REPLAY</span> HISTORY</div>
           <table className="data-table" style={{marginTop:10}}>
             <thead><tr>
-              <th>Date</th><th>Strategy</th><th>Period</th><th>Return</th><th>Win Rate</th><th>Sharpe</th><th>Trades</th><th></th>
+              <replayHistSort.SH k="created_at" label="Date"/>
+              <replayHistSort.SH k="strategy" label="Strategy"/>
+              <th>Period</th>
+              <replayHistSort.SH k="total_return" label="Return"/>
+              <replayHistSort.SH k="win_rate" label="Win Rate"/>
+              <replayHistSort.SH k="sharpe_ratio" label="Sharpe"/>
+              <replayHistSort.SH k="total_trades" label="Trades"/>
+              <th></th>
             </tr></thead>
             <tbody>
-              {history.map(h=>(
+              {replayHistSort.sortData(history).map(h=>(
                 <tr key={h.id}>
                   <td style={{fontSize:11,color:'var(--text3)'}}>{h.created_at?.slice(0,10)}</td>
                   <td style={{fontWeight:600,color:'var(--cyan)'}}>{h.strategy}</td>
