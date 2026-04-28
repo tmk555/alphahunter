@@ -13406,6 +13406,23 @@ function ReplayTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Sweep coverage preview — fetched whenever the user is on the sweep
+  // mode tab or changes the slippage / random-sample axes. Cheap call
+  // (no engine work, just combo-count math) so re-fetching on every
+  // toggle is fine.
+  useEffect(() => {
+    if (replayMode !== 'sweep') return;
+    api('/api/replay/sweep/preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        slippageSweep: !!sweepConfig.slippageSweep,
+        randomSamples: sweepConfig.randomSamples || 0,
+      }),
+    })
+      .then(p => setSweepPreview(p))
+      .catch(_ => setSweepPreview(null));
+  }, [replayMode, sweepConfig.slippageSweep, sweepConfig.randomSamples]);
+
   // Build the params object used by /api/replay/run, /api/replay/compare,
   // and /api/replay/walk-forward. All three should honor the same form-level
   // toggles (exit strategy, strict regime, factor signals); previously the
@@ -13634,6 +13651,9 @@ function ReplayTab() {
           topK: sweepConfig.topK || 10,
           runWalkForward: !!sweepConfig.runWalkForward,
           runMonteCarlo:  !!sweepConfig.runMonteCarlo,
+          mcIterations:   sweepConfig.mcIterations || 1000,
+          randomSamples:  sweepConfig.randomSamples || 0,
+          slippageSweep:  !!sweepConfig.slippageSweep,
         },
         onUpdate: (j) => setJobStatus(prev => ({ ...prev, sweep: j })),
       });
@@ -14468,6 +14488,44 @@ function ReplayTab() {
                 );
               })}
             </div>
+
+            {/* Best by strategy — answers "what's each strategy's
+                ceiling on this window?" without a single winning
+                strategy dominating the top-25. */}
+            {s.bestByStrategy?.length > 0 && (
+              <div style={{marginBottom:14}}>
+                <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>
+                  BEST BY STRATEGY ({s.bestByStrategy.length}) — each strategy's top configuration
+                </div>
+                <table className="data-table" style={{fontSize:11}}>
+                  <thead><tr>
+                    <th>Strategy</th><th>Flavor</th>
+                    <th style={{textAlign:'right'}}>Return</th>
+                    <th style={{textAlign:'right'}}>SPY</th>
+                    <th style={{textAlign:'right'}}>After-Tax α</th>
+                    <th style={{textAlign:'right'}}>Trades</th>
+                    <th>Params</th>
+                  </tr></thead>
+                  <tbody>
+                    {s.bestByStrategy.map((r, i) => {
+                      const flavorColor = r.flavor === 'Position' ? 'var(--cyan)' : r.flavor === 'Swing' ? 'var(--amber)' : 'var(--text2)';
+                      const atxColor = r.afterTaxAlpha > 0 ? 'var(--green)' : 'var(--red)';
+                      return (
+                        <tr key={i} style={r.afterTaxAlpha > 0 ? { background: 'rgba(0,230,118,0.04)' } : undefined}>
+                          <td style={{fontWeight:600,color:'var(--cyan)'}}>{r.strategyName || r.strategy}</td>
+                          <td style={{color:flavorColor,fontFamily:'var(--font-mono)',fontSize:10,fontWeight:700}}>{r.flavor}</td>
+                          <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:r.totalReturn>=0?'var(--green)':'var(--red)'}}>{r.totalReturn>0?'+':''}{r.totalReturn}%</td>
+                          <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--text3)'}}>{r.spyReturn>0?'+':''}{r.spyReturn}%</td>
+                          <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:atxColor,fontWeight:700}}>{r.afterTaxAlpha!=null?(r.afterTaxAlpha>0?'+':'')+r.afterTaxAlpha+'%':'—'}</td>
+                          <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text3)'}}>{r.trades}</td>
+                          <td style={{fontFamily:'var(--font-mono)',fontSize:9,color:'var(--text3)',maxWidth:280,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={r.paramsString}>{r.paramsString}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             {/* Top-K table — main answer */}
             <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>

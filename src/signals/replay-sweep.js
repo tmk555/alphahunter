@@ -313,6 +313,9 @@ async function runSweep(opts = {}) {
     topK = 10,
     runWalkForward: doWF = false,
     runMonteCarlo: doMC = false,
+    mcIterations = 1000,
+    randomSamples = 0,
+    slippageSweep = false,
     onProgress,
   } = opts;
   if (!startDate || !endDate) throw new Error('startDate and endDate required');
@@ -367,6 +370,46 @@ async function runSweep(opts = {}) {
     }
     if (queue.length >= HARD_CAP_TOTAL_COMBOS) break;
   }
+
+  // Random parameter sampling — adds N entries with parameters drawn
+  // uniformly from each strategy's axis ranges. Catches interpolated
+  // regions the discrete grid would miss (e.g. minRS=83 between 80 and
+  // 85). Each random sample uses Custom flavor and full exit/regime
+  // sweep would explode the count, so use one default exit + sweep regime.
+  if (randomSamples > 0) {
+    for (let s = 0; s < randomSamples; s++) {
+      const strat = strategies[Math.floor(Math.random() * strategies.length)];
+      const grid = STRATEGY_GRIDS[strat];
+      if (!grid) continue;
+      const sample = {};
+      for (const [k, vals] of Object.entries(grid)) {
+        if (k === '_signalSet' || !Array.isArray(vals)) continue;
+        sample[k] = vals[Math.floor(Math.random() * vals.length)];
+      }
+      // Special-case factor_combo signal sets
+      if (grid._signalSet) sample.signals = grid._signalSet[Math.floor(Math.random() * grid._signalSet.length)];
+      for (const sr of STRICT_REGIME_VARIANTS) {
+        queue.push({ strategy: strat, comboParams: sample, exit: 'pyramid_auto', strictRegime: sr, tradeMode: null, _isRandom: true });
+      }
+    }
+  }
+
+  // Slippage axis — re-runs each combo with 3 entry-slippage levels
+  // (5/10/20 bps) so the user sees how brittle a strategy is to
+  // execution costs. Triples combo count — opt-in via slippageSweep.
+  let executionVariants = [{ ...execution }];
+  if (slippageSweep) {
+    executionVariants = [5, 10, 20].map(bps => ({ ...execution, entrySlippageBps: bps, exitSlippageBps: Math.max(2, Math.round(bps / 2)) }));
+    // Multiply the queue: each combo × 3 slippage levels
+    const expanded = [];
+    for (const q of queue) {
+      for (let i = 0; i < executionVariants.length; i++) {
+        expanded.push({ ...q, _slippageBps: executionVariants[i].entrySlippageBps, _executionVariant: executionVariants[i] });
+      }
+    }
+    queue.length = 0; queue.push(...expanded);
+  }
+
   if (queue.length > HARD_CAP_TOTAL_COMBOS) queue.length = HARD_CAP_TOTAL_COMBOS;
 
   const total = queue.length;
@@ -377,8 +420,16 @@ async function runSweep(opts = {}) {
     const q = queue[i];
     const r = evaluateOneCombo({
       ...q,
-      startDate, endDate, maxPositions, initialCapital, execution, taxRates,
+      startDate, endDate, maxPositions, initialCapital,
+      // Slippage-axis combos carry their own execution variant; otherwise
+      // use the global execution opts.
+      execution: q._executionVariant || execution,
+      taxRates,
     });
+    // Decorate with axis-tag metadata so the UI can show what made each
+    // combo distinct.
+    if (q._slippageBps != null) r.slippageBps = q._slippageBps;
+    if (q._isRandom) r.fromRandomSample = true;
     results.push(r);
     if (r.afterTaxAlpha != null && r.afterTaxAlpha > 0) outperforming++;
     if (onProgress && (i % 5 === 0 || i === total - 1)) {
@@ -428,11 +479,18 @@ async function runSweep(opts = {}) {
             wfGrid.stopATR = [t.params.stopATR || 1.5, (t.params.stopATR || 1.5) + 0.5];
             wfGrid.targetATR = [t.params.targetATR || 3.0, (t.params.targetATR || 3.0) + 1.0];
           }
+          // Auto-size WF train/test from the actual date range so a
+          // 6-month sweep doesn't waste WF on a single window. Aim for
+          // 60% train / 40% test split with at least 3 windows.
+          const spanDays = Math.max(1, Math.round((Date.parse(endDate) - Date.parse(startDate)) / 86400000));
+          const tradingDays = Math.max(1, Math.round(spanDays * 252 / 365));
+          const wfTrainDays = Math.max(40, Math.min(180, Math.round(tradingDays * 0.6)));
+          const wfTestDays  = Math.max(20, Math.min(90,  Math.round(tradingDays * 0.2)));
           const wf = runWalkForward({
             strategy: t.strategy,
             tradeMode: t.tradeMode || undefined,
             startDate, endDate,
-            trainDays: 120, testDays: 60,
+            trainDays: wfTrainDays, testDays: wfTestDays,
             paramGrid: wfGrid, optimizeMetric: 'sharpeRatio',
             maxPositions, initialCapital, execution,
           });
@@ -462,7 +520,7 @@ async function runSweep(opts = {}) {
           if (re.tradeLog?.length >= 5) {
             const mc = runMonteCarlo({
               trades: re.tradeLog,
-              iterations: 1000,
+              iterations: mcIterations,
               method: 'permutation',
               positionFraction: 0.10,
               initialCapital,
@@ -510,6 +568,18 @@ async function runSweep(opts = {}) {
     };
   }
 
+  // Best-per-strategy mini-table — one row per strategy showing its best
+  // configuration. Direct answer to "what's each strategy's ceiling on
+  // this window?" instead of the top-25 being dominated by 5 variants of
+  // a single winning strategy.
+  const bestByStrategy = {};
+  for (const r of valid) {
+    const cur = bestByStrategy[r.strategy];
+    if (!cur || r.afterTaxAlpha > cur.afterTaxAlpha) bestByStrategy[r.strategy] = r;
+  }
+  const bestByStrategyList = Object.values(bestByStrategy)
+    .sort((a, b) => b.afterTaxAlpha - a.afterTaxAlpha);
+
   const summary = {
     totalCombos: total,
     successful: valid.length,
@@ -520,8 +590,11 @@ async function runSweep(opts = {}) {
     bestAfterTaxAlpha: valid.length ? valid[0].afterTaxAlpha : null,
     bestEntry: valid[0] || null,
     flavorStats,
+    bestByStrategy: bestByStrategyList,
     taxRates,
-    deepDive: doWF || doMC ? { topK: top.length, ranWF: doWF, ranMC: doMC } : null,
+    slippageSweep,
+    randomSamples,
+    deepDive: doWF || doMC ? { topK: top.length, ranWF: doWF, ranMC: doMC, mcIterations: doMC ? mcIterations : null } : null,
   };
 
   return {
@@ -540,8 +613,57 @@ async function runSweep(opts = {}) {
   };
 }
 
+// ─── Coverage preview (cheap — no engine calls) ──────────────────────────
+// Returns the combo count + breakdown the UI shows BEFORE the user clicks
+// START so they know what they're committing to ("1,350 combos · ~9 min").
+//
+// estimatedSec = combos × avgPerComboMs / 1000. avgPerComboMs is a rough
+// constant calibrated from real sweeps (~50ms on a fresh server). The UI
+// rounds up to the nearest minute and displays it as a hint.
+const AVG_MS_PER_COMBO = 80;       // includes yield overhead
+
+function previewSweep(opts = {}) {
+  const {
+    strategies = Object.keys(STRATEGY_GRIDS),
+    slippageSweep = false,
+    randomSamples = 0,
+  } = opts;
+  const perStrategyCounts = {};
+  let total = 0;
+  for (const strategy of strategies) {
+    if (!STRATEGY_GRIDS[strategy]) continue;
+    const stratDef = BUILT_IN_STRATEGIES[strategy];
+    const isShort = stratDef?.side === 'short';
+    let combos = expandStrategyGrid(strategy);
+    if (combos.length > MAX_COMBOS_PER_STRATEGY) combos = combos.slice(0, MAX_COMBOS_PER_STRATEGY);
+    let stratTotal = 0;
+    for (const combo of combos) {
+      // Custom flavor: 3 exits × 2 regime
+      stratTotal += EXIT_VARIANTS.length * STRICT_REGIME_VARIANTS.length;
+      // Swing: 2 regime
+      stratTotal += STRICT_REGIME_VARIANTS.length;
+      // Position: 2 regime, but only for long strategies
+      if (!isShort) stratTotal += STRICT_REGIME_VARIANTS.length;
+    }
+    perStrategyCounts[strategy] = stratTotal;
+    total += stratTotal;
+  }
+  if (slippageSweep) total *= 3;       // 3 slippage levels per combo
+  if (randomSamples > 0) total += randomSamples * STRICT_REGIME_VARIANTS.length;  // random samples × regime
+  if (total > HARD_CAP_TOTAL_COMBOS) total = HARD_CAP_TOTAL_COMBOS;
+  return {
+    totalCombos: total,
+    perStrategyCounts,
+    strategies,
+    slippageSweep,
+    randomSamples,
+    estimatedSec: Math.round(total * AVG_MS_PER_COMBO / 1000),
+  };
+}
+
 module.exports = {
   runSweep,
+  previewSweep,
   STRATEGY_GRIDS,
   EXIT_VARIANTS,
   STRICT_REGIME_VARIANTS,

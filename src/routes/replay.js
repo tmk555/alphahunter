@@ -25,7 +25,7 @@ const { runInstitutionalBackfill } = require('../signals/backfillInstitutional')
 const { runEarningsDriftBackfill } = require('../signals/backfillEarningsDrift');
 const { runRevisionsBackfill } = require('../signals/backfillRevisions');
 const { startJob, getJob, listJobs, cancelJob } = require('../signals/replay-jobs');
-const { runSweep, STRATEGY_GRIDS, DEFAULT_SHORT_TERM_RATE, DEFAULT_LONG_TERM_RATE } = require('../signals/replay-sweep');
+const { runSweep, previewSweep, STRATEGY_GRIDS, DEFAULT_SHORT_TERM_RATE, DEFAULT_LONG_TERM_RATE } = require('../signals/replay-sweep');
 const { FULL_UNIVERSE } = require('../../universe');
 
 // ─── Available strategies ─────────────────────────────────────────────────
@@ -347,6 +347,7 @@ const JOB_KINDS = {
       strategies, startDate, endDate,
       maxPositions, initialCapital, execution,
       taxRates, topK, runWalkForward: doWF, runMonteCarlo: doMC,
+      mcIterations, randomSamples, slippageSweep,
     } = body || {};
     if (!startDate || !endDate) throw new Error('startDate and endDate required');
     return runSweep({
@@ -362,6 +363,9 @@ const JOB_KINDS = {
       topK: topK || 10,
       runWalkForward: !!doWF,
       runMonteCarlo:  !!doMC,
+      mcIterations:   +mcIterations  || 1000,
+      randomSamples:  +randomSamples || 0,
+      slippageSweep:  !!slippageSweep,
       onProgress: setProgress,
     });
   },
@@ -402,6 +406,19 @@ router.delete('/replay/jobs/:id', (req, res) => {
     if (!ok) return res.status(404).json({ error: 'Job not found' });
     res.json({ ok: true, cancelled: req.params.id });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Sweep coverage preview — cheap (no engine calls) so the UI can show
+// "1,350 combos · ~9 min" before the user clicks START.
+router.post('/replay/sweep/preview', (req, res) => {
+  try {
+    const { strategies, slippageSweep, randomSamples } = req.body || {};
+    res.json(previewSweep({
+      strategies: strategies && strategies.length ? strategies : Object.keys(STRATEGY_GRIDS),
+      slippageSweep: !!slippageSweep,
+      randomSamples: +randomSamples || 0,
+    }));
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // ─── Walk-Forward history & view ─────────────────────────────────────────
