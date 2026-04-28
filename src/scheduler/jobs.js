@@ -495,7 +495,34 @@ registerJobType('equity_snapshot', {
       };
     }
 
-    // Default daily mode
+    // Default daily mode.
+    // Stale-SPY guard, extended from the safety_weekly path: when this
+    // handler runs in pre-market (e.g. via scheduler catchup at server
+    // start before 9:30 AM ET), Yahoo's `regularMarketPrice` for SPY
+    // still returns the prior trading day's close. Recording with that
+    // value silently zeroes out today's SPY-relative alpha until the
+    // 4:45 PM cron overwrites it. Refuse to record when the live SPY
+    // quote matches the most recent snapshot exactly — wait for a
+    // post-open fetch instead.
+    try {
+      const lastSnap = db().prepare(
+        'SELECT date, spy_close FROM equity_snapshots ORDER BY date DESC LIMIT 1'
+      ).get();
+      if (
+        spyClose != null && lastSnap?.spy_close != null
+        && Math.abs(spyClose - lastSnap.spy_close) < 1e-4
+      ) {
+        return {
+          mode: 'daily',
+          skipped: true,
+          reason: `stale SPY: live quote ${spyClose} matches ${lastSnap.date}'s snapshot exactly. Likely pre-market fetch — refusing to record today's snapshot until SPY moves (next post-open / 4:45 PM cron will overwrite).`,
+          spyClose,
+          priorDate: lastSnap.date,
+          priorSpyClose: lastSnap.spy_close,
+        };
+      }
+    } catch (_) { /* fail-open if check itself errors */ }
+
     const snapshot = recordEquitySnapshot(equity, cashFlow, spyClose, openPositions, heatPct);
     return { date: snapshot.date, equity, spyClose, openPositions, heatPct, ...(snapshot.skipped ? { skipped: snapshot.skipped, reason: snapshot.reason } : {}) };
   },
