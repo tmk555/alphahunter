@@ -435,15 +435,45 @@ async function runReplayJob({ kind, body, onUpdate, signal, resumeJobId }) {
   if (prev) prev.abort();
   const ctrl = new AbortController();
   _replayJobAborters.set(kind, ctrl);
-  // Honor the caller's external abort signal too (rare — most callers don't pass one).
   if (signal) signal.addEventListener('abort', () => ctrl.abort(), { once: true });
+
+  // The job runs in the background server-side; the client just submits +
+  // polls. Both calls should be resilient: a transient network hiccup or a
+  // tab-throttled fetch must NEVER surface as "Request timeout after 45s"
+  // because the actual job is still running. The submit retries up to 3
+  // times; each poll retries on the spot. Only true terminal states
+  // (done/error/cancelled) or an explicit caller-side abort end the loop.
+  async function withRetry(callFn, { tries = 3, label = 'request' } = {}) {
+    let lastErr;
+    for (let i = 0; i < tries; i++) {
+      if (ctrl.signal.aborted) throw new Error('Polling superseded');
+      try { return await callFn(); }
+      catch (e) {
+        lastErr = e;
+        // 404 is terminal (server restart wiped the job map) — propagate.
+        if (/not found/i.test(e?.message || '')) throw e;
+        const isTimeoutOrNet = /timeout|aborted|network|fetch failed|failed to fetch/i.test(e?.message || '');
+        if (!isTimeoutOrNet) throw e;
+        // Exponential backoff: 1s, 2s, 4s. Job is still running server-side.
+        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, i)));
+      }
+    }
+    throw new Error(`${label} failed after ${tries} retries: ${lastErr?.message || 'unknown'}`);
+  }
 
   let jobId = resumeJobId;
   if (!jobId) {
-    const submit = await api('/api/replay/jobs', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ kind, body }),
-    });
+    const submit = await withRetry(
+      () => api('/api/replay/jobs', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ kind, body }),
+        // Long ceiling for the submit. setImmediate-deferred on the server
+        // so it's normally ~instant, but if the box is overloaded (parallel
+        // backfill running) the request can queue.
+        timeout: 5 * 60 * 1000,
+      }),
+      { label: 'submit job' }
+    );
     jobId = submit.id;
     writeActiveReplayJob(kind, jobId);
     onUpdate?.({ id: jobId, kind, status: 'running', startedAt: submit.startedAt });
@@ -455,13 +485,24 @@ async function runReplayJob({ kind, body, onUpdate, signal, resumeJobId }) {
       if (ctrl.signal.aborted) throw new Error('Polling superseded');
       let job;
       try {
-        job = await api(`/api/replay/jobs/${jobId}`);
+        // Each poll: 60s ceiling, but on timeout/network we just keep
+        // looping. The job continues regardless and we'll catch it on
+        // the next tick.
+        job = await api(`/api/replay/jobs/${jobId}`, { timeout: 60_000 });
       } catch (e) {
-        // Server restart wipes the in-memory job map → 404. Clear the stale
-        // localStorage entry so the next attempt starts a fresh job.
         if (/not found/i.test(e.message)) {
+          // Server restart wiped the in-memory job map → terminal.
           writeActiveReplayJob(kind, null);
           throw new Error(`Job ${jobId} no longer available (server restarted?). Try again.`);
+        }
+        const isTimeoutOrNet = /timeout|aborted|network|fetch failed|failed to fetch/i.test(e?.message || '');
+        if (isTimeoutOrNet) {
+          // Silently retry — surface a heartbeat to the UI so the user
+          // sees we're still alive. This is the path that produced the
+          // user-visible "Request timeout after 45s" before this fix.
+          onUpdate?.({ id: jobId, kind, status: 'running', warning: 'poll retry' });
+          await new Promise(r => setTimeout(r, POLL_MS));
+          continue;
         }
         throw e;
       }
@@ -472,8 +513,6 @@ async function runReplayJob({ kind, body, onUpdate, signal, resumeJobId }) {
       await new Promise(r => setTimeout(r, POLL_MS));
     }
   } finally {
-    // Only clear the aborter if WE'RE still the active one (a newer call
-    // may have replaced us — don't stomp its slot).
     if (_replayJobAborters.get(kind) === ctrl) _replayJobAborters.delete(kind);
   }
 }
