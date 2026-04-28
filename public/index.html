@@ -13678,18 +13678,54 @@ function ReplayTab() {
           empty until the job completes. The badge shows live elapsed
           time so the user can tell whether to wait or kick off a new run. */}
       {Object.values(jobStatus).some(j => j && j.status === 'running') && (
-        <div className="panel" style={{background:'rgba(0,180,255,0.08)',border:'1px solid var(--cyan)',borderRadius:4,padding:'8px 12px',marginBottom:10,fontSize:12,color:'var(--cyan)',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
-          <span style={{fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:1}}>⏳ JOB{Object.values(jobStatus).filter(j=>j?.status==='running').length>1?'S':''} RUNNING</span>
-          {Object.entries(jobStatus).filter(([,j]) => j?.status === 'running').map(([kind, j]) => (
-            <span key={kind} style={{fontSize:11,color:'var(--text2)'}}>
-              <strong style={{color:'var(--cyan)'}}>{kind}</strong>
-              {' · '}
-              {Math.max(0, Math.round(((Date.now() - (j.startedAt||Date.now()))/1000)))}s elapsed
-              {' · '}
-              <span style={{color:'var(--text3)'}}>id #{j.id}</span>
-            </span>
-          ))}
-          <span style={{fontSize:10,color:'var(--text3)',marginLeft:'auto'}}>Server-side — safe to switch tabs / reload</span>
+        <div className="panel" style={{background:'rgba(0,180,255,0.08)',border:'1px solid var(--cyan)',borderRadius:4,padding:'10px 12px',marginBottom:10,fontSize:12,color:'var(--cyan)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',marginBottom:4}}>
+            <span style={{fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:1}}>⏳ JOB{Object.values(jobStatus).filter(j=>j?.status==='running').length>1?'S':''} RUNNING</span>
+            <span style={{fontSize:10,color:'var(--text3)',marginLeft:'auto'}}>Server-side — safe to switch tabs / reload</span>
+          </div>
+          {Object.entries(jobStatus).filter(([,j]) => j?.status === 'running').map(([kind, j]) => {
+            const elapsed = Math.max(0, Math.round(((Date.now() - (j.startedAt||Date.now()))/1000)));
+            const p = j.progress;
+            const pctDone = p && p.total ? (p.done / p.total) : null;
+            // ETA from current pace — only meaningful once we've done enough
+            // combos to estimate per-combo cost. <2% progress is too noisy.
+            const eta = (pctDone != null && pctDone > 0.02 && pctDone < 1)
+              ? Math.round(elapsed * (1 - pctDone) / pctDone)
+              : null;
+            return (
+              <div key={kind} style={{padding:'4px 0'}}>
+                <div style={{display:'flex',gap:14,fontSize:11,color:'var(--text2)',flexWrap:'wrap',alignItems:'center'}}>
+                  <strong style={{color:'var(--cyan)'}}>{kind}</strong>
+                  <span>{elapsed}s elapsed{eta != null ? ` · ~${eta}s remaining` : ''}</span>
+                  {p && p.total > 0 && (
+                    <span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--text)'}}>
+                      {p.done}/{p.total}
+                      {p.outperforming != null && (
+                        <span style={{color: p.outperforming > 0 ? 'var(--green)' : 'var(--text3)',fontWeight:400}}>
+                          {' · '}{p.outperforming} beating SPY so far
+                        </span>
+                      )}
+                    </span>
+                  )}
+                  <span style={{color:'var(--text3)',fontSize:10}}>id #{j.id}</span>
+                </div>
+                {p && (p.current || p.phase) && (
+                  <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)',marginTop:2}}>
+                    {p.phase ? `phase: ${p.phase} · ` : ''}{p.current || ''}
+                  </div>
+                )}
+                {/* Progress bar — visual proof the job is making progress.
+                    Only renders for jobs that report progress (sweep does;
+                    single replay/compare/walk-forward currently don't, so
+                    they keep the elapsed-only display). */}
+                {pctDone != null && (
+                  <div style={{position:'relative',height:5,background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,marginTop:6,overflow:'hidden'}}>
+                    <div style={{position:'absolute',left:0,top:0,bottom:0,width:`${(pctDone*100).toFixed(1)}%`,background:'var(--cyan)',transition:'width 1s linear'}}/>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
       <div className="panel">
