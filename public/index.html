@@ -13305,7 +13305,25 @@ function ReplayTab() {
     topK: 10,
     runWalkForward: false,
     runMonteCarlo: false,
+    mcIterations: 1000,
+    randomSamples: 0,
+    slippageSweep: false,
   });
+  // Replay tab is now organized into mode tabs instead of a long linear
+  // scroll. Each mode renders its form + result; non-active modes are
+  // hidden via display:none so state (in-flight jobs, results, form
+  // values) survives mode switches without remount.
+  const [replayMode, setReplayMode] = useState('single');
+  // Single-replay result panel sub-tabs: Overview / Trades / Regime / Macro.
+  const [singleResultSubTab, setSingleResultSubTab] = useState('overview');
+  // Compare result panel sub-tabs.
+  const [compareSubTab, setCompareSubTab] = useState('table');
+  // Sweep coverage preview — populated by /api/replay/sweep/preview before
+  // the user actually clicks START so they see "1,350 combos · ~9 min".
+  const [sweepPreview, setSweepPreview] = useState(null);
+  // History panel collapse state — start collapsed so the active mode's
+  // workflow doesn't have history below it competing for attention.
+  const [historyCollapsed, setHistoryCollapsed] = useState(true);
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState('');       // generic/shared
   const [replayError, setReplayError] = useState('');     // Replay section
@@ -13723,11 +13741,65 @@ function ReplayTab() {
                     <div style={{position:'absolute',left:0,top:0,bottom:0,width:`${(pctDone*100).toFixed(1)}%`,background:'var(--cyan)',transition:'width 1s linear'}}/>
                   </div>
                 )}
+                {/* Cancel button — soft cancel via DELETE /api/replay/jobs/:id.
+                    Server marks the job as cancelled; the in-flight engine
+                    call finishes (we can't abort sync engine work) but no
+                    further iteration runs. The user gets escape from a
+                    runaway 30-min sweep. */}
+                <div style={{marginTop:6}}>
+                  <button onClick={async () => {
+                    if (!confirm(`Cancel running ${kind} job? Current step will finish but no further iteration runs.`)) return;
+                    try {
+                      await api(`/api/replay/jobs/${j.id}`, { method: 'DELETE' });
+                    } catch (e) { setError(`Cancel failed: ${e.message}`); }
+                  }} style={{padding:'2px 10px',background:'transparent',border:'1px solid var(--red)',borderRadius:3,color:'var(--red)',fontSize:9,cursor:'pointer',fontFamily:'var(--font-mono)',letterSpacing:1}}>
+                    ⏹ ABORT
+                  </button>
+                </div>
               </div>
             );
           })}
         </div>
       )}
+
+      {/* ─── Mode tab strip ─────────────────────────────────────────
+          Replaces the old vertical scroll (single → compare → sweep →
+          WF → MC → history all stacked) with a single visible workflow.
+          Non-active modes are unmounted from the DOM — but their result
+          state is preserved in component-level state vars (result,
+          sweepResult, wfResult, mcResult), so switching back shows the
+          last result for that mode without re-running. */}
+      <div className="panel" style={{padding:'10px 12px',marginBottom:10}}>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+          <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginRight:6}}>MODE</span>
+          {[
+            { k:'single',  l:'▶ Single Run', tip:'Run one strategy with one parameter set against the date range. The base case.' },
+            { k:'compare', l:'⚔ Compare',    tip:'Run all 10 built-in strategies head-to-head over the same window.' },
+            { k:'sweep',   l:'🤖 Auto-Sweep ★', tip:'RECOMMENDED. Test every meaningful (strategy × params × flavor) combination, ranked by AFTER-TAX alpha vs SPY long-term hold. The "do everything" entry point.' },
+            { k:'wf',      l:'🔄 Walk-Forward', tip:'Sweep params on rolling train windows, validate on next held-out test slice. Reveals overfitting.' },
+            { k:'mc',      l:'🎲 Monte Carlo',  tip:'Resample a previous replay\'s trades to see how much was edge vs ordering luck.' },
+          ].map(m => (
+            <button key={m.k} onClick={() => setReplayMode(m.k)} title={m.tip}
+              style={{
+                padding:'7px 14px',
+                background: replayMode===m.k ? (m.k==='sweep' ? 'var(--violet, #9d4edd)' : 'var(--cyan)') : 'var(--bg3)',
+                border: `1px solid ${replayMode===m.k ? (m.k==='sweep' ? 'var(--violet, #9d4edd)' : 'var(--cyan)') : 'var(--border)'}`,
+                borderRadius:4,
+                color: replayMode===m.k ? '#000' : 'var(--text2)',
+                cursor:'pointer',
+                fontSize:11, fontWeight:700, fontFamily:'var(--font-mono)', letterSpacing:1,
+              }}>
+              {m.l}
+            </button>
+          ))}
+          <button onClick={() => setHistoryCollapsed(c => !c)}
+            title="Toggle history panels (Replay / WF / MC)"
+            style={{marginLeft:'auto',padding:'7px 14px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text3)',cursor:'pointer',fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1}}>
+            {historyCollapsed ? '▸' : '▾'} HISTORY
+          </button>
+        </div>
+      </div>
+
       <div className="panel">
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
           <div>
@@ -13904,37 +13976,92 @@ function ReplayTab() {
         {/* Strategy params override */}
         <textarea placeholder='Params override JSON (optional)' value={form.params} onChange={e=>setForm({...form,params:e.target.value})} rows={2} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 10px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)',marginBottom:10,resize:'vertical'}}/>
 
-        <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
-          <button className="load-btn" onClick={runReplay} disabled={loading} style={{fontSize:10,padding:'6px 18px'}}>{loading?'RUNNING...':'RUN REPLAY'}</button>
-          <button className="load-btn" onClick={runCompare} disabled={loading} style={{fontSize:10,padding:'6px 18px',background:'var(--cyan)'}}>{loading?'...':'COMPARE ALL'}</button>
-          <button className="load-btn" onClick={runSweep} disabled={loading}
-            title="Exhaustive per-strategy parameter sweep × Custom / Swing / Position flavors. Tax-adjusted alpha vs SPY long-term hold is the primary sort key. Server-side — survives tab navigation. Runs ~5-15 min depending on date range and deep-dive options."
-            style={{fontSize:10,padding:'6px 18px',background:'var(--violet, #9d4edd)',color:'#fff'}}>{loading?'...':'🤖 AUTO-SWEEP'}</button>
+        {/* Per-mode run controls. Per-mode loading state replaces the
+            shared `loading` flag — clicking RUN REPLAY no longer disables
+            COMPARE ALL on a different mode. Each mode reads its own
+            jobStatus[kind].status. */}
+        {replayMode === 'single' && (
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+            {(() => { const isRun = jobStatus.run?.status === 'running'; return (
+              <button className="load-btn" onClick={runReplay} disabled={isRun} style={{fontSize:10,padding:'6px 18px'}}>{isRun?'RUNNING…':'▶ RUN REPLAY'}</button>
+            ); })()}
+          </div>
+        )}
+        {replayMode === 'compare' && (
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+            {(() => { const isRun = jobStatus.compare?.status === 'running'; return (
+              <button className="load-btn" onClick={runCompare} disabled={isRun} style={{fontSize:10,padding:'6px 18px',background:'var(--cyan)'}}>{isRun?'COMPARING…':'⚔ COMPARE ALL STRATEGIES'}</button>
+            ); })()}
+          </div>
+        )}
+        {replayMode === 'sweep' && (
+          <div>
+            {/* Coverage preview — populated by /api/replay/sweep/preview */}
+            {sweepPreview && (
+              <div style={{padding:'8px 10px',marginBottom:8,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,fontSize:11,color:'var(--text2)',fontFamily:'var(--font-mono)'}}>
+                <span style={{color:'var(--violet, #9d4edd)',fontWeight:700,letterSpacing:1}}>COVERAGE PREVIEW</span>
+                {' · '}
+                <strong style={{color:'var(--text)'}}>{sweepPreview.totalCombos.toLocaleString()}</strong> combos
+                {' · '}{sweepPreview.strategies?.length || 0} strategies × ~{Math.round(sweepPreview.totalCombos / Math.max(1, (sweepPreview.strategies?.length || 1)))} each
+                {sweepPreview.estimatedSec != null && (
+                  <span style={{marginLeft:8,color:'var(--text3)'}}>
+                    estimated runtime: ~{sweepPreview.estimatedSec < 60 ? sweepPreview.estimatedSec+'s' : Math.round(sweepPreview.estimatedSec/60)+' min'}
+                  </span>
+                )}
+              </div>
+            )}
+            <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+              {(() => { const isRun = jobStatus.sweep?.status === 'running'; return (
+                <button className="load-btn" onClick={runSweep} disabled={isRun}
+                  title="Exhaustive per-strategy parameter sweep × Custom / Swing / Position flavors. Tax-adjusted alpha vs SPY long-term hold is the primary sort key. Server-side — survives tab navigation."
+                  style={{fontSize:10,padding:'6px 18px',background:'var(--violet, #9d4edd)',color:'#fff'}}>{isRun?'SWEEPING…':'🤖 AUTO-SWEEP'}</button>
+              ); })()}
 
-          {/* Sweep config — inline so the user sees the levers without a modal */}
-          <span style={{fontSize:9,color:'var(--text3)',marginLeft:4,fontFamily:'var(--font-mono)',letterSpacing:1}}>SHORT-TERM TAX %</span>
-          <input type="number" min={0} max={50} value={sweepConfig.shortRate}
-            onChange={e => setSweepConfig(c => ({ ...c, shortRate: +e.target.value }))}
-            title="Federal + state ordinary-income rate applied to gains held ≤ 365 days (most of these strategies)"
-            style={{width:48,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'4px 6px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
-          <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)',letterSpacing:1}}>LONG-TERM TAX %</span>
-          <input type="number" min={0} max={40} value={sweepConfig.longRate}
-            onChange={e => setSweepConfig(c => ({ ...c, longRate: +e.target.value }))}
-            title="Federal + state long-term cap-gains rate applied to SPY buy-and-hold benchmark"
-            style={{width:44,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'4px 6px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
-          <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)',letterSpacing:1}}>TOP-K</span>
-          <input type="number" min={1} max={50} value={sweepConfig.topK}
-            onChange={e => setSweepConfig(c => ({ ...c, topK: +e.target.value }))}
-            style={{width:42,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'4px 6px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
-          <label style={{display:'flex',alignItems:'center',gap:4,fontSize:10,color:'var(--text2)',cursor:'pointer'}}>
-            <input type="checkbox" checked={sweepConfig.runWalkForward} onChange={e => setSweepConfig(c => ({ ...c, runWalkForward: e.target.checked }))}/>
-            <span title="Walk-forward optimization on each top-K survivor — adds significant runtime">+ Walk-Forward</span>
-          </label>
-          <label style={{display:'flex',alignItems:'center',gap:4,fontSize:10,color:'var(--text2)',cursor:'pointer'}}>
-            <input type="checkbox" checked={sweepConfig.runMonteCarlo} onChange={e => setSweepConfig(c => ({ ...c, runMonteCarlo: e.target.checked }))}/>
-            <span title="Monte Carlo on each top-K survivor — re-runs the trade list 1000 times in random order">+ Monte Carlo</span>
-          </label>
-        </div>
+              {/* Sweep config — inline so the user sees the levers without a modal */}
+              <span style={{fontSize:9,color:'var(--text3)',marginLeft:4,fontFamily:'var(--font-mono)',letterSpacing:1}}>SHORT-TERM TAX %</span>
+              <input type="number" min={0} max={50} value={sweepConfig.shortRate}
+                onChange={e => setSweepConfig(c => ({ ...c, shortRate: +e.target.value }))}
+                title="Federal + state ordinary-income rate applied to gains held ≤ 365 days (most of these strategies)"
+                style={{width:48,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'4px 6px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+              <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)',letterSpacing:1}}>LONG-TERM TAX %</span>
+              <input type="number" min={0} max={40} value={sweepConfig.longRate}
+                onChange={e => setSweepConfig(c => ({ ...c, longRate: +e.target.value }))}
+                title="Federal + state long-term cap-gains rate applied to SPY buy-and-hold benchmark"
+                style={{width:44,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'4px 6px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+              <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)',letterSpacing:1}}>TOP-K</span>
+              <input type="number" min={1} max={50} value={sweepConfig.topK}
+                onChange={e => setSweepConfig(c => ({ ...c, topK: +e.target.value }))}
+                style={{width:42,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'4px 6px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+              <label style={{display:'flex',alignItems:'center',gap:4,fontSize:10,color:'var(--text2)',cursor:'pointer'}}>
+                <input type="checkbox" checked={sweepConfig.runWalkForward} onChange={e => setSweepConfig(c => ({ ...c, runWalkForward: e.target.checked }))}/>
+                <span title="Walk-forward optimization on each top-K survivor — adds significant runtime">+ Walk-Forward</span>
+              </label>
+              <label style={{display:'flex',alignItems:'center',gap:4,fontSize:10,color:'var(--text2)',cursor:'pointer'}}>
+                <input type="checkbox" checked={sweepConfig.runMonteCarlo} onChange={e => setSweepConfig(c => ({ ...c, runMonteCarlo: e.target.checked }))}/>
+                <span title="Monte Carlo on each top-K survivor — re-runs the trade list 1000 times in random order">+ Monte Carlo</span>
+              </label>
+              {sweepConfig.runMonteCarlo && (
+                <>
+                  <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)',letterSpacing:1}}>MC ITER</span>
+                  <input type="number" min={100} max={5000} step={100} value={sweepConfig.mcIterations}
+                    onChange={e => setSweepConfig(c => ({ ...c, mcIterations: +e.target.value }))}
+                    style={{width:54,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'4px 6px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+                </>
+              )}
+              <label style={{display:'flex',alignItems:'center',gap:4,fontSize:10,color:'var(--text2)',cursor:'pointer'}}
+                title="Test 3 entry-slippage levels (5/10/20 bps) per combo to see how brittle each strategy is to execution costs. Triples combo count.">
+                <input type="checkbox" checked={sweepConfig.slippageSweep} onChange={e => setSweepConfig(c => ({ ...c, slippageSweep: e.target.checked }))}/>
+                <span>+ Slippage axis (3×)</span>
+              </label>
+              <label style={{display:'flex',alignItems:'center',gap:4,fontSize:10,color:'var(--text2)',cursor:'pointer'}}
+                title="Add N random parameter samples (uniform draws within each axis range) to the curated grid. Catches interpolated regions the discrete grid would miss.">
+                <input type="checkbox" checked={(sweepConfig.randomSamples || 0) > 0}
+                  onChange={e => setSweepConfig(c => ({ ...c, randomSamples: e.target.checked ? 50 : 0 }))}/>
+                <span>+ Random samples (50)</span>
+              </label>
+            </div>
+          </div>
+        )}
         {replayError && (
           <div style={{marginTop:10,background:'rgba(255,61,87,0.1)',border:'1px solid var(--red)',borderRadius:4,padding:'8px 12px',fontSize:12,color:'var(--red)'}}>
             ⚠ {replayError}
@@ -13948,7 +14075,7 @@ function ReplayTab() {
       </div>
 
       {/* ─── Replay Results (right after controls) ─────────────────── */}
-      {result && !result.comparisons && result.performance && (
+      {replayMode === 'single' && result && !result.comparisons && result.performance && (
         <div className="panel">
           <div className="panel-title">📈 <span>{result.strategy||result.strategyKey}</span> RESULTS</div>
           <div style={{fontSize:11,color:'var(--text3)',marginBottom:12,fontFamily:'var(--font-mono)',display:'flex',gap:12,flexWrap:'wrap',alignItems:'center'}}>
@@ -14264,7 +14391,7 @@ function ReplayTab() {
           and the best single-combo alpha per flavor. Top-K survivors get
           their full param breakdown + optional WF/MC deep-dive when
           those toggles were on. */}
-      {sweepResult && sweepResult.summary && (() => {
+      {replayMode === 'sweep' && sweepResult && sweepResult.summary && (() => {
         const s = sweepResult.summary;
         const fs = s.flavorStats || {};
         const tax = s.taxRates;
@@ -14434,7 +14561,7 @@ function ReplayTab() {
       })()}
 
       {/* Comparison results */}
-      {result && result.comparisons && (
+      {replayMode === 'compare' && result && result.comparisons && (
         <div className="panel">
           <div className="panel-title">⚔️ <span>STRATEGY</span> COMPARISON</div>
           <div style={{fontSize:11,color:'var(--text3)',marginBottom:12,fontFamily:'var(--font-mono)'}}>
@@ -14539,6 +14666,8 @@ function ReplayTab() {
       )}
 
       {/* ─── Walk-Forward Optimization Controls ─────────────────────── */}
+      {replayMode === 'wf' && (
+      <React.Fragment>
       <div className="panel">
         <div className="panel-title">🔄 <span>WALK-FORWARD</span> OPTIMIZATION</div>
         <div className="panel-sub" style={{marginBottom:10}}>Sweep params on rolling train windows, validate on the next held-out test slice. Reveals overfitting and parameter stability — pure out-of-sample.</div>
@@ -14983,9 +15112,11 @@ function ReplayTab() {
           </div>
         </div>
       )}
+      </React.Fragment>
+      )}
 
       {/* ─── Walk-Forward History ──────────────────────────────────── */}
-      {wfHistory.length > 0 && (
+      {!historyCollapsed && wfHistory.length > 0 && (
         <div className="panel">
           <div className="panel-title">📜 <span>WALK-FORWARD</span> HISTORY</div>
           <table className="data-table" style={{marginTop:10}}>
@@ -15023,6 +15154,8 @@ function ReplayTab() {
       )}
 
       {/* ─── Monte Carlo Controls ────────────────────────────────────── */}
+      {replayMode === 'mc' && (
+      <React.Fragment>
       <div className="panel">
         <div className="panel-title">🎲 <span>MONTE CARLO</span> SIMULATION</div>
         <div className="panel-sub" style={{marginBottom:10}}>Resample a replay's trades to see how much of the result was edge vs. luck. Permutation reorders the same trades; bootstrap samples with replacement.</div>
@@ -15152,9 +15285,11 @@ function ReplayTab() {
           </div>
         </div>
       )}
+      </React.Fragment>
+      )}
 
       {/* ─── Monte Carlo History ────────────────────────────────────── */}
-      {mcHistory.length > 0 && (
+      {!historyCollapsed && mcHistory.length > 0 && (
         <div className="panel">
           <div className="panel-title">📜 <span>MONTE CARLO</span> HISTORY</div>
           <table className="data-table" style={{marginTop:10}}>
@@ -15191,7 +15326,7 @@ function ReplayTab() {
       )}
 
       {/* Past replays */}
-      {history.length > 0 && (
+      {!historyCollapsed && history.length > 0 && (
         <div className="panel">
           <div className="panel-title">📜 <span>REPLAY</span> HISTORY</div>
           <table className="data-table" style={{marginTop:10}}>
