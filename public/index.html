@@ -5721,6 +5721,12 @@ function MarketPulseTab() {
   const [upEarnErr, setUpEarnErr] = useState(null);
   const [upEarnLoading, setUpEarnLoading] = useState(false);
   const [upEarnDays, setUpEarnDays] = useState(7);
+  // Upcoming US economic events (NFP, CPI, FOMC, etc.) — same UX shape as
+  // the earnings panel. Static-schedule based so no paid API; the calendar
+  // is in src/signals/economic-calendar.js.
+  const [econEvents, setEconEvents] = useState(null);
+  const [econErr, setEconErr] = useState(null);
+  const [econDays, setEconDays] = useState(14);
   // Background-poll error state — surfaces when the 60s auto-refresh below
   // can't reach /api/macro|fear-greed|breadth. Without this, a multi-minute
   // outage left the tab quietly displaying stale data with no visible signal,
@@ -5785,6 +5791,17 @@ function MarketPulseTab() {
   useEffect(() => { load(); }, []);
   // Reload upcoming earnings whenever the day window changes.
   useEffect(() => { loadUpEarnings(upEarnDays); }, [upEarnDays]);
+  // Same for economic events. Lighter call (static schedule), so we
+  // refresh on every day-window change without throttling.
+  useEffect(() => {
+    (async () => {
+      setEconErr(null);
+      try {
+        const d = await api('/api/market/economic-events?days=' + (econDays || 14));
+        setEconEvents(d);
+      } catch (e) { setEconErr(e.message); setEconEvents(null); }
+    })();
+  }, [econDays]);
   // Auto-refresh macro/regime/F&G every 60s so prices on this tab stay live.
   // Matches the backend TTL_QUOTE (60s) so a refresh will always re-hit upstream.
   // Earnings are 6h-cached so no need to include them in the fast poll.
@@ -6417,6 +6434,112 @@ function MarketPulseTab() {
               </div>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* ─── UPCOMING ECONOMIC EVENTS ──────────────────────────────────
+          Static schedule of high-signal US releases (NFP, CPI, PCE,
+          FOMC, ISM, etc.) so the user can see binary-event risk in the
+          coming days. Shape mirrors the Earnings panel — same purpose
+          (avoid sizing into a print) but for macro tape movers instead
+          of single-name earnings. */}
+      <div className="panel" style={{padding:'14px 16px', marginBottom:14}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10,flexWrap:'wrap',gap:8}}>
+          <div>
+            <div className="panel-title" style={{marginBottom:0,display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+              <span>UPCOMING ECONOMIC EVENTS</span><span>— next {econDays} days</span>
+            </div>
+            <div className="panel-sub" style={{marginTop:2}}>
+              High-signal US prints + Fed-published FOMC dates. Static schedule — no API key. Use it to clip risk before NFP / CPI / FOMC.
+            </div>
+          </div>
+          <div style={{display:'flex',gap:4}}>
+            {[7,14,30].map(d => (
+              <button key={d} onClick={()=>setEconDays(d)}
+                style={{padding:'4px 10px',background:econDays===d?'var(--cyan)':'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:econDays===d?'#000':'var(--text2)',fontSize:10,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:1,cursor:'pointer'}}>
+                {d}D
+              </button>
+            ))}
+          </div>
+        </div>
+        {econErr && (
+          <div style={{fontSize:11,color:'var(--red)',padding:'8px 0'}}>Failed to load: {econErr}</div>
+        )}
+        {!econErr && !econEvents && (
+          <div style={{fontSize:11,color:'var(--text3)',padding:'8px 0'}}>Loading…</div>
+        )}
+        {econEvents && econEvents.events.length === 0 && (
+          <div style={{fontSize:11,color:'var(--text3)',padding:'8px 0'}}>No high-signal events in this window.</div>
+        )}
+        {econEvents && econEvents.events.length > 0 && (() => {
+          // Color + label by category
+          const catMeta = {
+            monetary_policy: { color:'var(--red)',    chip:'FOMC'      },
+            inflation:       { color:'var(--amber)',  chip:'INFLATION' },
+            jobs:            { color:'var(--cyan)',   chip:'JOBS'      },
+            growth:          { color:'var(--green)',  chip:'GROWTH'    },
+            sentiment:       { color:'var(--text2)',  chip:'SENTIMENT' },
+          };
+          const impMeta = {
+            high:   { color:'var(--red)',   label:'HIGH'   },
+            medium: { color:'var(--amber)', label:'MED'    },
+            low:    { color:'var(--text3)', label:'LOW'    },
+          };
+          const fmtDate = (s) => {
+            try {
+              const d = new Date(s + 'T12:00:00Z');
+              return d.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', timeZone:'UTC' });
+            } catch(_) { return s; }
+          };
+          // Group by date for visual blocks
+          const byDate = new Map();
+          for (const e of econEvents.events) {
+            if (!byDate.has(e.date)) byDate.set(e.date, []);
+            byDate.get(e.date).push(e);
+          }
+          return (
+            <table className="data-table" style={{width:'100%',fontSize:11}}>
+              <thead><tr>
+                <th style={{textAlign:'left'}}>Date</th>
+                <th style={{textAlign:'right'}}>In</th>
+                <th style={{textAlign:'left'}}>Event</th>
+                <th style={{textAlign:'left'}}>Time</th>
+                <th style={{textAlign:'left'}}>Category</th>
+                <th style={{textAlign:'left'}}>Imp.</th>
+              </tr></thead>
+              <tbody>
+                {[...byDate.entries()].map(([date, evts]) => evts.map((e, i) => {
+                  const cm = catMeta[e.category] || { color:'var(--text3)', chip:e.category };
+                  const im = impMeta[e.importance] || impMeta.low;
+                  const isFirstOfDay = i === 0;
+                  return (
+                    <tr key={`${date}-${i}`} style={isFirstOfDay ? { borderTop:'1px solid var(--border)' } : undefined}
+                      title={e.note}>
+                      <td style={{fontFamily:'var(--font-mono)',fontSize:11}}>{isFirstOfDay ? `${e.dayOfWeek} ${fmtDate(e.date)}` : ''}</td>
+                      <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color: e.daysOut<=1 ? 'var(--red)' : e.daysOut<=3 ? 'var(--amber)' : 'var(--text2)'}}>
+                        {isFirstOfDay ? (e.daysOut === 0 ? 'TODAY' : e.daysOut === 1 ? '1d' : e.daysOut + 'd') : ''}
+                      </td>
+                      <td style={{fontWeight:e.importance==='high'?700:500}}>{e.name}</td>
+                      <td style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text3)'}}>{e.time || ''}</td>
+                      <td>
+                        <span style={{fontSize:9,padding:'1px 7px',background:cm.color+'18',color:cm.color,border:`1px solid ${cm.color}40`,borderRadius:2,fontWeight:700,letterSpacing:1,fontFamily:'var(--font-mono)'}}>
+                          {cm.chip}
+                        </span>
+                      </td>
+                      <td>
+                        <span style={{fontSize:9,padding:'1px 6px',background:im.color+'18',color:im.color,border:`1px solid ${im.color}40`,borderRadius:2,fontWeight:700,letterSpacing:1,fontFamily:'var(--font-mono)'}}>
+                          {im.label}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                }))}
+              </tbody>
+            </table>
+          );
+        })()}
+        <div style={{fontSize:9,color:'var(--text3)',marginTop:6,lineHeight:1.5}}>
+          Source: BLS / BEA / Fed published schedules. FOMC dates explicit; recurring events (NFP, CPI, ISM) computed from cadence. Tooltip shows the trader-relevant note for each event.
         </div>
       </div>
 
@@ -15643,6 +15766,12 @@ function BreadthSection() {
   const [backfilling, setBackfilling] = useState(false);
   const [breadthRange, setBreadthRange] = useState('3M');
   const [mcRange, setMcRange] = useState('3M');
+  // Cursor-tracking tooltip state for each chart on this tab. `null` when
+  // the cursor is outside; otherwise the index into the chart's points
+  // array. Same pattern as MacroTab's fredHoverIdx.
+  const [breadthHoverIdx, setBreadthHoverIdx] = useState(null);
+  const [mcHoverIdx,      setMcHoverIdx]      = useState(null);
+  const [sumHoverIdx,     setSumHoverIdx]     = useState(null);
   const [historyData, setHistoryData] = useState([]);
   // Per-range McClellan snapshot — the landing-page /api/breadth call
   // hardcodes a 60-day window, so changing the timeframe chips has to
@@ -15902,7 +16031,17 @@ function BreadthSection() {
                     </div>
                   </div>
                 </div>
-                <svg viewBox={`0 0 ${chart.width} ${chart.height}`} style={{width:'100%',height:chart.height}}>
+                <svg viewBox={`0 0 ${chart.width} ${chart.height}`} style={{width:'100%',height:chart.height,cursor:'crosshair'}}
+                     onMouseMove={(e) => {
+                       const rect = e.currentTarget.getBoundingClientRect();
+                       const xv = ((e.clientX - rect.left) / rect.width) * chart.width;
+                       if (xv < chart.padL || xv > chart.padL + chart.drawW) { setBreadthHoverIdx(null); return; }
+                       // Approximate index from x — works for any toX implementation.
+                       const stepX = chart.drawW / Math.max(scorePoints.length - 1, 1);
+                       const idx = Math.max(0, Math.min(scorePoints.length - 1, Math.round((xv - chart.padL) / stepX)));
+                       setBreadthHoverIdx(idx);
+                     }}
+                     onMouseLeave={() => setBreadthHoverIdx(null)}>
                   {/* Zone backgrounds */}
                   {zones.map(z => (
                     <rect key={z.y1} x={chart.padL} y={chart.toY(z.y2)} width={chart.drawW} height={chart.toY(z.y1)-chart.toY(z.y2)} fill={z.fill}/>
@@ -15925,6 +16064,28 @@ function BreadthSection() {
                     const d = scorePoints[i]?.date || '';
                     return <text key={i} x={chart.toX(i)} y={chart.height-2} fill="var(--text3)" fontSize="8" textAnchor="middle" fontFamily="var(--font-mono)">{d.slice(5)}</text>;
                   })}
+                  {/* Crosshair + tooltip */}
+                  {breadthHoverIdx != null && breadthHoverIdx < scorePoints.length && (() => {
+                    const i = breadthHoverIdx;
+                    const x = chart.toX(i);
+                    const sv = scorePoints[i]?.value;
+                    const mv = ma50Points[i]?.value;
+                    const W = 152, H = 48;
+                    const flip = x > chart.padL + chart.drawW - W - 8;
+                    const tx = flip ? x - W - 8 : x + 8;
+                    const ty = chart.padT + 4;
+                    return (
+                      <g pointerEvents="none">
+                        <line x1={x} y1={chart.padT} x2={x} y2={chart.padT + chart.drawH} stroke="var(--text2)" strokeWidth="0.6" strokeDasharray="2,3" opacity="0.7"/>
+                        {sv != null && <circle cx={x} cy={chart.toY(sv)} r="3.5" fill={scoreColor(last)} stroke="var(--bg)" strokeWidth="1.2"/>}
+                        {mv != null && <circle cx={x} cy={chart.toY(mv)} r="2.5" fill="rgba(0,212,255,0.7)" stroke="var(--bg)" strokeWidth="1"/>}
+                        <rect x={tx} y={ty} width={W} height={H} fill="var(--bg)" stroke="var(--border2)" strokeWidth="0.8" rx="3"/>
+                        <text x={tx + 6} y={ty + 13} fill="var(--text3)" fontSize="9" fontFamily="var(--font-mono)">{scorePoints[i]?.date || ''}</text>
+                        <text x={tx + 6}      y={ty + 27} fill={scoreColor(last)} fontSize="10" fontFamily="var(--font-mono)" fontWeight="700">Composite {sv ?? '—'}</text>
+                        <text x={tx + 6}      y={ty + 41} fill="rgba(0,212,255,0.9)" fontSize="10" fontFamily="var(--font-mono)">% &gt; 50MA  {mv != null ? mv.toFixed(0)+'%' : '—'}</text>
+                      </g>
+                    );
+                  })()}
                 </svg>
                 <div style={{display:'flex',gap:16,justifyContent:'center',marginTop:4}}>
                   <span style={{fontSize:9,color:'var(--text3)'}}><span style={{display:'inline-block',width:16,height:2,background:scoreColor(last),verticalAlign:'middle',marginRight:4,borderRadius:1}}></span>Composite Score</span>
@@ -16056,7 +16217,16 @@ function BreadthSection() {
                 {oscChart && (
                   <div style={{marginBottom:12}}>
                     <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>OSCILLATOR</div>
-                    <svg viewBox={`0 0 ${oscChart.width} ${oscChart.height}`} style={{width:'100%',height:oscChart.height}}>
+                    <svg viewBox={`0 0 ${oscChart.width} ${oscChart.height}`} style={{width:'100%',height:oscChart.height,cursor:'crosshair'}}
+                         onMouseMove={(e) => {
+                           const rect = e.currentTarget.getBoundingClientRect();
+                           const xv = ((e.clientX - rect.left) / rect.width) * oscChart.width;
+                           if (xv < oscChart.padL || xv > oscChart.padL + oscChart.drawW) { setMcHoverIdx(null); return; }
+                           const stepX = oscChart.drawW / Math.max(oscPoints.length - 1, 1);
+                           const idx = Math.max(0, Math.min(oscPoints.length - 1, Math.round((xv - oscChart.padL) / stepX)));
+                           setMcHoverIdx(idx);
+                         }}
+                         onMouseLeave={() => setMcHoverIdx(null)}>
                       {/* Zero line */}
                       <line x1={oscChart.padL} y1={oscChart.toY(0)} x2={oscChart.padL+oscChart.drawW} y2={oscChart.toY(0)}
                         stroke="var(--text3)" strokeWidth="0.8" strokeDasharray="4,3" opacity="0.5"/>
@@ -16099,6 +16269,29 @@ function BreadthSection() {
                         const d = oscPoints[i]?.date || '';
                         return <text key={i} x={oscChart.toX(i)} y={oscChart.height-2} fill="var(--text3)" fontSize="8" textAnchor="middle" fontFamily="var(--font-mono)">{d.slice(5)}</text>;
                       })}
+                      {/* Crosshair + tooltip */}
+                      {mcHoverIdx != null && mcHoverIdx < oscPoints.length && (() => {
+                        const i = mcHoverIdx;
+                        const p = oscPoints[i];
+                        const x = oscChart.toX(i);
+                        const y = p?.value != null ? oscChart.toY(p.value) : null;
+                        const W = 132, H = 38;
+                        const flip = x > oscChart.padL + oscChart.drawW - W - 8;
+                        const tx = flip ? x - W - 8 : x + 8;
+                        const ty = oscChart.padT + 4;
+                        const col = p?.value >= 0 ? 'var(--green)' : 'var(--red)';
+                        return (
+                          <g pointerEvents="none">
+                            <line x1={x} y1={oscChart.padT} x2={x} y2={oscChart.padT + oscChart.drawH} stroke="var(--text2)" strokeWidth="0.6" strokeDasharray="2,3" opacity="0.7"/>
+                            {y != null && <circle cx={x} cy={y} r="3.5" fill={col} stroke="var(--bg)" strokeWidth="1.2"/>}
+                            <rect x={tx} y={ty} width={W} height={H} fill="var(--bg)" stroke="var(--border2)" strokeWidth="0.8" rx="3"/>
+                            <text x={tx + 6} y={ty + 14} fill="var(--text3)" fontSize="9" fontFamily="var(--font-mono)">{p?.date || ''}</text>
+                            <text x={tx + 6} y={ty + 30} fill={col} fontSize="11" fontFamily="var(--font-mono)" fontWeight="700">
+                              {p?.value != null ? (p.value > 0 ? '+' : '') + (+p.value).toFixed(1) : '—'}
+                            </text>
+                          </g>
+                        );
+                      })()}
                     </svg>
                   </div>
                 )}
@@ -16107,7 +16300,16 @@ function BreadthSection() {
                 {sumChart && (
                   <div>
                     <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6}}>SUMMATION INDEX</div>
-                    <svg viewBox={`0 0 ${sumChart.width} ${sumChart.height}`} style={{width:'100%',height:sumChart.height}}>
+                    <svg viewBox={`0 0 ${sumChart.width} ${sumChart.height}`} style={{width:'100%',height:sumChart.height,cursor:'crosshair'}}
+                         onMouseMove={(e) => {
+                           const rect = e.currentTarget.getBoundingClientRect();
+                           const xv = ((e.clientX - rect.left) / rect.width) * sumChart.width;
+                           if (xv < sumChart.padL || xv > sumChart.padL + sumChart.drawW) { setSumHoverIdx(null); return; }
+                           const stepX = sumChart.drawW / Math.max(sumPoints.length - 1, 1);
+                           const idx = Math.max(0, Math.min(sumPoints.length - 1, Math.round((xv - sumChart.padL) / stepX)));
+                           setSumHoverIdx(idx);
+                         }}
+                         onMouseLeave={() => setSumHoverIdx(null)}>
                       {/* Zero line */}
                       <line x1={sumChart.padL} y1={sumChart.toY(0)} x2={sumChart.padL+sumChart.drawW} y2={sumChart.toY(0)}
                         stroke="var(--text3)" strokeWidth="0.8" strokeDasharray="4,3" opacity="0.5"/>
@@ -16142,6 +16344,29 @@ function BreadthSection() {
                         const d = sumPoints[i]?.date || '';
                         return <text key={i} x={sumChart.toX(i)} y={sumChart.height-2} fill="var(--text3)" fontSize="8" textAnchor="middle" fontFamily="var(--font-mono)">{d.slice(5)}</text>;
                       })}
+                      {/* Crosshair + tooltip */}
+                      {sumHoverIdx != null && sumHoverIdx < sumPoints.length && (() => {
+                        const i = sumHoverIdx;
+                        const p = sumPoints[i];
+                        const x = sumChart.toX(i);
+                        const y = p?.value != null ? sumChart.toY(p.value) : null;
+                        const W = 132, H = 38;
+                        const flip = x > sumChart.padL + sumChart.drawW - W - 8;
+                        const tx = flip ? x - W - 8 : x + 8;
+                        const ty = sumChart.padT + 4;
+                        const col = p?.value >= 0 ? 'var(--green)' : 'var(--red)';
+                        return (
+                          <g pointerEvents="none">
+                            <line x1={x} y1={sumChart.padT} x2={x} y2={sumChart.padT + sumChart.drawH} stroke="var(--text2)" strokeWidth="0.6" strokeDasharray="2,3" opacity="0.7"/>
+                            {y != null && <circle cx={x} cy={y} r="3.5" fill={col} stroke="var(--bg)" strokeWidth="1.2"/>}
+                            <rect x={tx} y={ty} width={W} height={H} fill="var(--bg)" stroke="var(--border2)" strokeWidth="0.8" rx="3"/>
+                            <text x={tx + 6} y={ty + 14} fill="var(--text3)" fontSize="9" fontFamily="var(--font-mono)">{p?.date || ''}</text>
+                            <text x={tx + 6} y={ty + 30} fill={col} fontSize="11" fontFamily="var(--font-mono)" fontWeight="700">
+                              {p?.value != null ? (p.value > 0 ? '+' : '') + Math.round(p.value) : '—'}
+                            </text>
+                          </g>
+                        );
+                      })()}
                     </svg>
                     <div style={{display:'flex',gap:16,justifyContent:'center',marginTop:4}}>
                       <span style={{fontSize:9,color:'var(--text3)'}}><span style={{display:'inline-block',width:16,height:2,background:summation>=0?'var(--green)':'var(--red)',verticalAlign:'middle',marginRight:4,borderRadius:1}}></span>Summation Index</span>

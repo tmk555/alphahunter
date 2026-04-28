@@ -351,4 +351,24 @@ router.get('/stock/:symbol/brief', async (req, res) => {
   }
 });
 
+// ─── Upcoming US economic events (next N days) ─────────────────────────
+//
+// GET /api/market/economic-events?days=14
+//
+// Static schedule + Fed-published FOMC dates. No paid API. Surfaces NFP,
+// CPI, PCE, FOMC, ISM, Retail Sales, etc. so the user can avoid sizing
+// into a known binary print or clip risk before a high-importance event.
+router.get('/market/economic-events', (req, res) => {
+  try {
+    const days = Math.max(1, Math.min(60, parseInt(req.query.days) || 14));
+    const today = new Date().toISOString().slice(0, 10);
+    const end = new Date(Date.now() + days * 86400_000).toISOString().slice(0, 10);
+    const { getUpcomingEvents } = require('../signals/economic-calendar');
+    const events = getUpcomingEvents(today, end);
+    res.json({ events, count: events.length, days, fromDate: today, toDate: end });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
