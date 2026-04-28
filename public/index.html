@@ -11162,14 +11162,38 @@ function SchedulerTab() {
   const [selectedJob, setSelectedJob] = useState(null);
   const [jobHistory, setJobHistory]   = useState([]);
   const [form, setForm] = useState({ name:'', description:'', job_type:'', cron_expression:'', config:'{}', enabled:true });
-  // Track which groups are currently running a bulk "Run All" so we can
-  // disable that group's button (prevents double-fire) and the group name
-  // above each section shows a spinner.
-  const [runningGroups, setRunningGroups] = useState(new Set());
+  // Active group runs keyed by group name → live run status from the
+  // server. Each entry shape:
+  //   { runId, status, total, done, failed, current?, label }
+  // Populated when runGroup() submits a new run AND on tab remount (the
+  // resume effect rehydrates from localStorage so navigating away and
+  // back picks the run back up). When status flips to a terminal state
+  // we clear the entry — but the GROUP REMAINS marked busy for the
+  // duration of the actual server-side iteration.
+  const [groupRuns, setGroupRuns] = useState({});
+  const runningGroups = new Set(
+    Object.entries(groupRuns)
+      .filter(([, r]) => r && r.status === 'running')
+      .map(([g]) => g)
+  );
   // Collapse state per group. Defaults: everything expanded — but letting
   // a user collapse "Cleanup" when they don't care is a big win on a screen
   // with 20+ jobs.
   const [collapsedGroups, setCollapsedGroups] = useState(new Set());
+
+  // localStorage layout:
+  //   alphahunter:scheduler-runs → { "<groupName>": "<runId>", ... }
+  // One active run per group is the convention enforced by runGroup().
+  const SCHED_RUNS_KEY = 'alphahunter:scheduler-runs';
+  function readActiveSchedRuns() {
+    try { return JSON.parse(localStorage.getItem(SCHED_RUNS_KEY) || '{}'); }
+    catch (_) { return {}; }
+  }
+  function writeActiveSchedRun(groupName, runId) {
+    const cur = readActiveSchedRuns();
+    if (runId) cur[groupName] = runId; else delete cur[groupName];
+    try { localStorage.setItem(SCHED_RUNS_KEY, JSON.stringify(cur)); } catch (_) {}
+  }
 
   async function loadAll() {
     setLoading(true); setError('');
@@ -11186,6 +11210,22 @@ function SchedulerTab() {
   }
 
   useEffect(() => { loadAll(); }, []);
+
+  // Resume any active group runs on Settings-tab mount. Without this,
+  // navigating to a different tab and back showed all groups as idle
+  // even when the server-side loop was still iterating. localStorage
+  // persists the runId per group; the resume effect rehydrates the
+  // poll loop. Server-restart 404s clear the stale entry inside
+  // pollSchedulerRun, so a stale localStorage row self-heals.
+  useEffect(() => {
+    const active = readActiveSchedRuns();
+    for (const [groupName, runId] of Object.entries(active)) {
+      if (runId) runGroup(groupName, { resumeRunId: runId });
+    }
+    // Intentional: only on mount. runGroup itself reads the latest jobs
+    // state via closure when it needs to.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function seedDefaults() {
     try {
@@ -11228,33 +11268,94 @@ function SchedulerTab() {
     } catch(e) { setError(e.message); }
   }
 
-  // Fire every ENABLED job in a group sequentially. We go serial (not parallel)
-  // because some handlers — rs_scan, deep_scan — take 1-3 min and share the
-  // provider quota; kicking them off simultaneously risks rate-limit 429s
-  // against Yahoo/FMP/Finnhub. One-at-a-time keeps the cascade well-behaved
-  // and makes the per-job error clearly attributable if any leg fails.
-  async function runGroup(groupName) {
-    const targets = jobs.filter(j => groupForJobType(j.job_type) === groupName && j.enabled);
-    if (!targets.length) {
-      setError(`No enabled jobs in "${groupName}" to run.`);
-      return;
-    }
-    setError('');
-    setRunningGroups(prev => { const n = new Set(prev); n.add(groupName); return n; });
-    const failures = [];
-    for (const j of targets) {
+  // Poll a server-side run until it terminates. Survives Settings-tab
+  // unmount: even if the user navigates away mid-poll, the next mount's
+  // resume effect picks the same runId out of localStorage and continues
+  // tracking it. Resilient to transient network errors (silently retries
+  // — the server-side loop keeps running regardless).
+  async function pollSchedulerRun(runId, groupName, opts = {}) {
+    const POLL_MS = 2000;
+    const aborter = opts.aborter || null;
+    while (true) {
+      if (aborter?.signal?.aborted) return null;
+      let run;
       try {
-        const r = await api(`/api/scheduler/jobs/${j.id}/run`, { method: 'POST' });
-        if (r && r.error) failures.push(`${j.name}: ${r.error}`);
+        run = await api(`/api/scheduler/runs/${runId}`, { timeout: 60_000 });
       } catch (e) {
-        failures.push(`${j.name}: ${e.message}`);
+        if (/not found/i.test(e.message)) {
+          // Server restart / pruned. Clear stale localStorage so the next
+          // click starts fresh.
+          writeActiveSchedRun(groupName, null);
+          setGroupRuns(prev => { const n = { ...prev }; delete n[groupName]; return n; });
+          throw new Error(`Run ${runId} no longer available (server restarted?). Try again.`);
+        }
+        const transient = /timeout|aborted|network|fetch failed|failed to fetch/i.test(e.message || '');
+        if (transient) { await new Promise(r => setTimeout(r, POLL_MS)); continue; }
+        throw e;
       }
+      setGroupRuns(prev => ({ ...prev, [groupName]: run }));
+      if (run.status !== 'running') {
+        writeActiveSchedRun(groupName, null);
+        return run;
+      }
+      await new Promise(r => setTimeout(r, POLL_MS));
     }
-    setRunningGroups(prev => { const n = new Set(prev); n.delete(groupName); return n; });
-    if (failures.length) {
-      setError(`Ran ${targets.length - failures.length}/${targets.length} in "${groupName}". Failures:\n• ${failures.join('\n• ')}`);
+  }
+
+  // Fire every ENABLED job in a group sequentially — server-side. Previously
+  // runGroup looped per-job fetches from this React component; navigating
+  // away unmounted it and the user lost the visual "running" badge even
+  // though the work continued. Now we POST a single /scheduler/runs and
+  // poll it. localStorage persistence + resume effect mean tab navigation
+  // and even full page reloads keep tracking the run.
+  async function runGroup(groupName, opts = {}) {
+    let runId = opts.resumeRunId;
+    if (!runId) {
+      const targets = jobs.filter(j => groupForJobType(j.job_type) === groupName && j.enabled);
+      if (!targets.length) {
+        setError(`No enabled jobs in "${groupName}" to run.`);
+        return;
+      }
+      setError('');
+      try {
+        const submit = await api('/api/scheduler/runs', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobIds: targets.map(t => t.id), label: groupName }),
+        });
+        runId = submit.id;
+        writeActiveSchedRun(groupName, runId);
+        setGroupRuns(prev => ({ ...prev, [groupName]: { ...submit, runId } }));
+      } catch (e) {
+        setError(`Failed to start "${groupName}" run: ${e.message}`);
+        return;
+      }
+    } else {
+      // Resuming — show "running" immediately while the first poll lands.
+      setGroupRuns(prev => ({ ...prev, [groupName]: { runId, status: 'running' } }));
     }
-    loadAll();
+
+    try {
+      const final = await pollSchedulerRun(runId, groupName);
+      if (final) {
+        const failures = (final.results || []).filter(r => !r.ok);
+        if (failures.length) {
+          setError(`Ran ${final.done}/${final.total} in "${groupName}". Failures:\n• ${failures.map(f => `${f.name}: ${f.error}`).join('\n• ')}`);
+        }
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      // Clear the visual entry on terminal status — keeps the UI from
+      // showing stale "5/8 done" badges after a completed run.
+      setGroupRuns(prev => {
+        const cur = prev[groupName];
+        if (!cur || cur.status === 'running') return prev;
+        const n = { ...prev };
+        delete n[groupName];
+        return n;
+      });
+      loadAll();
+    }
   }
 
   function toggleGroupCollapsed(groupName) {
@@ -11443,10 +11544,24 @@ function SchedulerTab() {
                         <span style={{fontSize:10,color:'var(--text3)',flex:1,fontFamily:'var(--font-sans)'}}>
                           {group.desc}
                         </span>
+                        {/* Progress badge — visible only while a server-side
+                            run for this group is in flight. Persists across
+                            tab navigations because groupRuns state is
+                            rehydrated by the resume effect on mount. */}
+                        {isRunning && groupRuns[group.name] && (() => {
+                          const r = groupRuns[group.name];
+                          const cur = r.current;
+                          return (
+                            <span title={cur ? `Running: ${cur.name}` : 'Working…'}
+                              style={{fontSize:10,fontFamily:'var(--font-mono)',color:'var(--cyan)',padding:'2px 8px',background:'rgba(0,180,255,0.08)',border:'1px solid rgba(0,180,255,0.35)',borderRadius:3,letterSpacing:0.5}}>
+                              {r.done || 0}/{r.total || 0}{r.failed ? ` · ${r.failed} ✗` : ''}{cur ? ` · ${cur.name}` : ''}
+                            </span>
+                          );
+                        })()}
                         <button
                           onClick={() => runGroup(group.name)}
                           disabled={isRunning || enabledCount === 0}
-                          title={enabledCount === 0 ? 'No enabled jobs in this group' : `Run all ${enabledCount} enabled job(s) sequentially`}
+                          title={enabledCount === 0 ? 'No enabled jobs in this group' : `Run all ${enabledCount} enabled job(s) sequentially. Server-side — survives tab navigation and page reloads.`}
                           style={{
                             padding:'4px 12px',
                             background: isRunning ? 'rgba(240,165,0,0.08)' : `rgba(240,165,0,${enabledCount === 0 ? 0.04 : 0.15})`,

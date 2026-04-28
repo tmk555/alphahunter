@@ -9,6 +9,7 @@ const {
   getJobHistory, getRecentHistory, clearHistory,
 } = require('../scheduler/engine');
 const { seedDefaultJobs, DEFAULT_JOBS } = require('../scheduler/jobs');
+const { startRun, getRun, listRuns, cancelRun } = require('../scheduler/scheduler-runs');
 const { getDB } = require('../data/database');
 
 // Legacy job names that were created by an earlier hard-coded seed list in
@@ -99,6 +100,50 @@ router.post('/scheduler/jobs/:id/run', async (req, res) => {
   try {
     const result = await runJobNow(+req.params.id);
     res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Multi-job run (background, survives tab navigation) ──────────────────
+//
+// POST /scheduler/runs   body: { jobIds:[...], label? }   → 202 + { id }
+// GET  /scheduler/runs/:id                                → full progress
+// GET  /scheduler/runs                                    → recent runs list
+// DELETE /scheduler/runs/:id                              → soft-cancel
+//
+// The Settings UI calls this when the user clicks "Run Group" / "Run All".
+// Server-side iteration through the job ids means navigating away from the
+// Settings tab no longer kills the run — the UI just polls for status.
+
+router.post('/scheduler/runs', (req, res) => {
+  try {
+    const { jobIds, label } = req.body || {};
+    const ids = Array.isArray(jobIds) ? jobIds.map(n => +n).filter(Number.isFinite) : [];
+    if (!ids.length) return res.status(400).json({ error: 'jobIds[] required' });
+    const run = startRun({ jobIds: ids, label: label || 'Custom group' });
+    res.status(202).json({ id: run.id, label: run.label, status: run.status, total: run.total, startedAt: run.startedAt });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.get('/scheduler/runs', (req, res) => {
+  try {
+    const { limit = 20 } = req.query;
+    res.json({ runs: listRuns(+limit) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/scheduler/runs/:id', (req, res) => {
+  try {
+    const run = getRun(req.params.id);
+    if (!run) return res.status(404).json({ error: 'Run not found (server may have restarted, or run pruned)' });
+    res.json(run);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete('/scheduler/runs/:id', (req, res) => {
+  try {
+    const ok = cancelRun(req.params.id);
+    if (!ok) return res.status(404).json({ error: 'Run not found' });
+    res.json({ ok: true, cancelled: req.params.id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
