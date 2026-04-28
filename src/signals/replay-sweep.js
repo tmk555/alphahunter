@@ -390,12 +390,14 @@ async function runSweep(opts = {}) {
         current: `${q.strategy} · ${flavor} · ${q.strictRegime ? 'strict' : 'lenient'}`,
       });
     }
-    // Yield to the event loop AFTER EVERY combo. runReplay is synchronous
-    // CPU work; without a yield per combo, node-cron's 1-second poll can
-    // miss its tick (you'll see the "missed execution" warning) and
-    // /api/replay/jobs/:id polling stalls. setImmediate is microseconds —
-    // the cumulative overhead across a 2700-combo sweep is < 100ms total.
-    await new Promise(r => setImmediate(r));
+    // Yield to the event loop every 5 combos. node-cron's missed-tick
+    // threshold is ~1 second; with replays running ~50-100ms each, a
+    // 5-combo batch is ~250-500ms — comfortably under the threshold.
+    // Yielding every combo (1×) was 5× slower because every setImmediate
+    // gives ALL queued macrotasks a turn (including unrelated incoming
+    // requests). Yielding every 10× let cron miss a tick. Five is the
+    // sweet spot: cron stays on schedule AND the sweep stays fast.
+    if (i % 5 === 4) await new Promise(r => setImmediate(r));
   }
 
   // Sort by after-tax alpha (primary) then pre-tax alpha (tiebreaker)
