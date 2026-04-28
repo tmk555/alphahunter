@@ -35,6 +35,13 @@ const MACRO_SYMBOLS = [
   {t:'^VIX3M',n:'VIX 3M'},{t:'^VIX6M',n:'VIX 6M'},
   {t:'TLT',n:'20yr Bond'},{t:'GLD',n:'Gold'},
   {t:'UUP',n:'US Dollar'},{t:'USO',n:'Crude Oil'},{t:'^TNX',n:'10Y Yield'},{t:'^IRX',n:'3M Yield'},
+  // Broad commodities proxy (CRB-equivalent) and industrial-commodity
+  // proxy (copper futures — closest free stand-in for the JOC-ECRI / JOCCI
+  // industrial-price index, which is paywalled). Both feed the
+  // Commodities-vs-Yields panel that overlays them on 10Y rates so the
+  // user can read the inflation/growth regime at a glance.
+  {t:'DBC',  n:'CRB / Commodities'},
+  {t:'HG=F', n:'Copper (Industrial)'},
 ];
 
 // Extra symbols fetched for macro overlay sparklines only (not shown as tiles)

@@ -6925,6 +6925,23 @@ function MacroTab() {
   const [snapshot,  setSnapshot]  = useState(null);
   const [loading,   setLoading]   = useState(false);
   const [error,     setError]     = useState('');
+  // Cursor-tracking tooltip state for the FRED chart. `hoverIdx` is the
+  // index into series.points the cursor is currently nearest to. `null`
+  // when the cursor is outside the chart. Driven by onMouseMove handler
+  // below; the rendered crosshair + tooltip read it back. Same pattern
+  // is reused by the Commodities-vs-Yields panel.
+  const [fredHoverIdx, setFredHoverIdx] = useState(null);
+  // Commodities vs Yields panel — DBC (broad CRB proxy), HG=F (copper /
+  // industrial-commodity / "JOCCI" proxy), ^TNX (10Y yield). The actual
+  // JOCCI / JOC-ECRI Industrial Price Index is paywalled, so copper
+  // futures stand in: industrial demand + interest-rate environment is
+  // the same regime read either way (rising commodities + rising yields
+  // = reflation; falling commodities + rising yields = stagflation
+  // pressure; etc.). Sourced from /api/macro live + history.
+  const [commodityRates, setCommodityRates] = useState(null);
+  const [crHover, setCrHover] = useState(null);
+  // Range for the new panel — independent of the FRED panel's range.
+  const [crRange, setCrRange] = useState('6M');
   // VIX term structure (^VIX / ^VIX3M / ^VIX6M) sourced from the live Yahoo
   // feed via /api/macro — not FRED. Fetched alongside the FRED snapshot so
   // the Macro tab's top strip has both the historical (FRED) and live
@@ -6996,6 +7013,19 @@ function MacroTab() {
               vix_history:   vix.history || [],
               vix3m_history: vix3m?.history || [],
               vix6m_history: vix6m?.history || [],
+            });
+          }
+          // Commodities vs Rates — pull DBC, HG=F, ^TNX. /api/macro returns
+          // up to 252 trading-day history per symbol; we slice to the
+          // panel's selected range below at render time.
+          const dbc  = liveMacro.macro.find(r => r.symbol === 'DBC');
+          const hg   = liveMacro.macro.find(r => r.symbol === 'HG=F');
+          const tnx  = liveMacro.macro.find(r => r.symbol === '^TNX');
+          if (dbc || hg || tnx) {
+            setCommodityRates({
+              dbc: { price: dbc?.price ?? null, chg1d: dbc?.chg1d ?? null, history: dbc?.history || [], name: 'CRB / Commodities (DBC)' },
+              hg:  { price: hg?.price  ?? null, chg1d: hg?.chg1d  ?? null, history: hg?.history  || [], name: 'Industrial / Copper (HG=F)' },
+              tnx: { price: tnx?.price ?? null, chg1d: tnx?.chg1d ?? null, history: tnx?.history || [], name: '10Y Yield (^TNX)' },
             });
           }
         }
@@ -7157,6 +7187,193 @@ function MacroTab() {
         </div>
       )}
 
+      {/* ── Commodities vs Yields ─────────────────────────────────────
+          Industrial commodities (copper / DBC) and broad commodities
+          plotted alongside the 10Y yield. The trend regime they describe
+          together is the canonical "where are we in the inflation /
+          growth cycle" read:
+            • Both rising  = reflation (growth + inflation accelerating)
+            • Commodities up, yields flat = supply-driven inflation
+            • Commodities down, yields up = stagflation pressure
+            • Both falling = deflationary slowdown
+          JOCCI / JOC-ECRI Industrial Price Index is paywalled, so HG=F
+          (copper futures) is the closest free industrial-commodity
+          stand-in. DBC stands in for the CRB index. */}
+      {commodityRates && (commodityRates.dbc.history.length > 1 || commodityRates.hg.history.length > 1) && (() => {
+        // Range slice — number of trailing closes to keep
+        const rangeBars = { '1M':22, '3M':66, '6M':132, '1Y':252 }[crRange] || 132;
+        // Synthesize dates by walking back trading days (skip weekends).
+        // Yahoo serves up to 252 trading-day closes; we don't get exact
+        // calendar dates so this is approximate but accurate at the year
+        // boundary. The cursor tooltip displays this date.
+        function synthesizeDates(n) {
+          const out = [];
+          const d = new Date();
+          while (out.length < n) {
+            const dow = d.getUTCDay();
+            if (dow !== 0 && dow !== 6) out.push(d.toISOString().slice(0, 10));
+            d.setUTCDate(d.getUTCDate() - 1);
+          }
+          return out.reverse();
+        }
+        const sliceTail = (arr, n) => (arr.length > n ? arr.slice(-n) : arr.slice());
+        const dbcRaw = sliceTail(commodityRates.dbc.history, rangeBars);
+        const hgRaw  = sliceTail(commodityRates.hg.history,  rangeBars);
+        const tnxRaw = sliceTail(commodityRates.tnx.history, rangeBars);
+        // Align to common length so the cursor index maps to the same bar
+        // across all three series.
+        const len = Math.min(dbcRaw.length, hgRaw.length, tnxRaw.length);
+        if (len < 2) return null;
+        const dbc = dbcRaw.slice(-len);
+        const hg  = hgRaw.slice(-len);
+        const tnx = tnxRaw.slice(-len);
+        const dates = synthesizeDates(len);
+
+        // Normalize each series to its starting value (rebased % change)
+        // so all three fit cleanly on a single y-axis.
+        const norm = (arr) => {
+          const base = arr[0] || 1;
+          return arr.map(v => ((v / base) - 1) * 100);
+        };
+        const dbcN = norm(dbc), hgN = norm(hg), tnxN = norm(tnx);
+
+        const chartW = 900, chartH = 240, padL = 50, padR = 60, padT = 12, padB = 22;
+        const drawW = chartW - padL - padR, drawH = chartH - padT - padB;
+        const allVals = [...dbcN, ...hgN, ...tnxN].filter(v => Number.isFinite(v));
+        const minV = Math.min(...allVals);
+        const maxV = Math.max(...allVals);
+        const span = (maxV - minV) || 1;
+        const yMin = minV - span * 0.05;
+        const yMax = maxV + span * 0.05;
+        const rangeV = yMax - yMin;
+        const stepX = drawW / Math.max(len - 1, 1);
+        const toY = v => padT + drawH - ((v - yMin) / rangeV * drawH);
+        const ptStr = arr => arr.map((v, i) => `${(padL + i*stepX).toFixed(1)},${toY(v).toFixed(1)}`).join(' ');
+
+        function onMove(e) {
+          const svg = e.currentTarget;
+          const rect = svg.getBoundingClientRect();
+          const xViewBox = ((e.clientX - rect.left) / rect.width) * chartW;
+          if (xViewBox < padL || xViewBox > padL + drawW) { setCrHover(null); return; }
+          const idx = Math.max(0, Math.min(len - 1, Math.round((xViewBox - padL) / stepX)));
+          setCrHover(idx);
+        }
+
+        const hov = crHover;
+        const hovX = hov != null ? padL + hov*stepX : null;
+        const fmtPct = v => (v == null || !Number.isFinite(v)) ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+
+        // Tick dates — 6 evenly spaced
+        const tickIdx = Array.from({ length: 6 }, (_, k) => Math.floor(k * (len - 1) / 5));
+
+        const SERIES = [
+          { key:'dbc', label:'CRB / DBC',         color:'var(--amber)', vals:dbcN, raw:dbc, fmt:v=>`$${v?.toFixed(2)}` },
+          { key:'hg',  label:'Copper (HG=F)',     color:'var(--cyan)',  vals:hgN,  raw:hg,  fmt:v=>`$${v?.toFixed(3)}` },
+          { key:'tnx', label:'10Y Yield (^TNX)',  color:'var(--green)', vals:tnxN, raw:tnx, fmt:v=>`${v?.toFixed(2)}` },
+        ];
+
+        return (
+          <div className="panel" style={{marginBottom:14}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10,flexWrap:'wrap',gap:8}}>
+              <div>
+                <div className="panel-title">Commodities <span>vs Yields</span></div>
+                <div className="panel-sub">
+                  Broad commodities (DBC) + industrial commodities (Copper / HG=F) overlaid on the 10Y Treasury yield.
+                  Read together for the inflation/growth regime. Both up = reflation; commodities up, yields flat = supply-driven inflation; commodities down, yields up = stagflation pressure; both down = deflationary slowdown.
+                  All three series are <strong>rebased to % change since {dates[0]}</strong> so they share one axis.
+                  <span style={{color:'var(--text3)'}}> Note: JOCCI / JOC-ECRI Industrial Price Index is paywalled — copper futures (HG=F) is the closest free industrial-commodity proxy.</span>
+                </div>
+              </div>
+              <div style={{display:'flex',gap:4}}>
+                {['1M','3M','6M','1Y'].map(r => (
+                  <button key={r} onClick={() => setCrRange(r)}
+                    style={{padding:'5px 10px',background:crRange===r?'var(--cyan)':'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:crRange===r?'#000':'var(--text2)',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:1,cursor:'pointer'}}>{r}</button>
+                ))}
+              </div>
+            </div>
+
+            {/* Headline tiles — current price + 1d change for each series */}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:10,marginBottom:10}}>
+              {SERIES.map(s => {
+                const cur = commodityRates[s.key];
+                if (!cur) return null;
+                const pctTotal = s.vals[s.vals.length-1] - s.vals[0];
+                return (
+                  <div key={s.key} style={{background:'var(--bg3)',border:`1px solid ${s.color}40`,borderLeft:`3px solid ${s.color}`,borderRadius:4,padding:'8px 12px'}}>
+                    <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>{s.label}</div>
+                    <div style={{fontSize:15,fontFamily:'var(--font-mono)',fontWeight:700,color:s.color,marginTop:3}}>{s.fmt(cur.price)}</div>
+                    <div style={{fontSize:10,fontFamily:'var(--font-mono)',color:'var(--text3)',marginTop:2}}>
+                      1d: <span style={{color:cur.chg1d>=0?'var(--green)':'var(--red)'}}>{cur.chg1d!=null?`${cur.chg1d>=0?'+':''}${cur.chg1d.toFixed(2)}%`:'—'}</span>
+                      {'  ·  '}
+                      {crRange}: <span style={{color:pctTotal>=0?'var(--green)':'var(--red)'}}>{fmtPct(pctTotal)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <svg viewBox={`0 0 ${chartW} ${chartH}`} style={{width:'100%',height:chartH,cursor:'crosshair'}}
+                 onMouseMove={onMove} onMouseLeave={() => setCrHover(null)}>
+              {/* Gridlines */}
+              {[0,0.25,0.5,0.75,1].map(f => {
+                const v = yMin + (1 - f)*rangeV;
+                const y = padT + f*drawH;
+                return (
+                  <g key={f}>
+                    <line x1={padL} y1={y} x2={padL+drawW} y2={y} stroke="var(--border)" strokeWidth="0.5" strokeDasharray="3,3"/>
+                    <text x={padL-4} y={y+3} fill="var(--text3)" fontSize="9" textAnchor="end" fontFamily="var(--font-mono)">{fmtPct(v)}</text>
+                  </g>
+                );
+              })}
+              {/* Zero line — rebase baseline */}
+              {(() => { const y0 = toY(0); return <line x1={padL} y1={y0} x2={padL+drawW} y2={y0} stroke="var(--text3)" strokeWidth="1" strokeDasharray="2,4" opacity="0.55"/>; })()}
+              {/* Three series lines */}
+              {SERIES.map(s => (
+                <polyline key={s.key} points={ptStr(s.vals)} fill="none" stroke={s.color} strokeWidth="1.6"/>
+              ))}
+              {/* X-axis date ticks */}
+              {tickIdx.map((i,k) => {
+                const x = padL + i*stepX;
+                const date = dates[i] || '';
+                const fmt = rangeBars <= 66 ? d => d.slice(5) : d => d.slice(0, 7);
+                return <text key={k} x={x} y={chartH-6} fill="var(--text3)" fontSize="9" textAnchor="middle" fontFamily="var(--font-mono)">{fmt(date)}</text>;
+              })}
+              {/* Crosshair + tooltip */}
+              {hov != null && hovX != null && (
+                <g pointerEvents="none">
+                  <line x1={hovX} y1={padT} x2={hovX} y2={padT+drawH} stroke="var(--text2)" strokeWidth="0.6" strokeDasharray="2,3" opacity="0.6"/>
+                  {SERIES.map(s => {
+                    const v = s.vals[hov];
+                    const y = v != null ? toY(v) : null;
+                    return y != null ? <circle key={s.key} cx={hovX} cy={y} r="3.2" fill={s.color} stroke="var(--bg)" strokeWidth="1.2"/> : null;
+                  })}
+                  {(() => {
+                    const W = 180, H = 78;
+                    const flip = hovX > padL + drawW - W - 8;
+                    const tx = flip ? hovX - W - 8 : hovX + 8;
+                    const ty = padT + 4;
+                    return (
+                      <g>
+                        <rect x={tx} y={ty} width={W} height={H} fill="var(--bg)" stroke="var(--border2)" strokeWidth="0.8" rx="3"/>
+                        <text x={tx + 6} y={ty + 14} fill="var(--text3)" fontSize="9" fontFamily="var(--font-mono)">{dates[hov]}</text>
+                        {SERIES.map((s, i) => (
+                          <g key={s.key}>
+                            <text x={tx + 6}      y={ty + 30 + i*16} fill={s.color}     fontSize="9" fontFamily="var(--font-mono)">{s.label}</text>
+                            <text x={tx + W - 6}  y={ty + 30 + i*16} fill="var(--text)" fontSize="10" fontFamily="var(--font-mono)" textAnchor="end" fontWeight="700">
+                              {s.fmt(s.raw[hov])} <tspan fill={s.vals[hov]>=0?'var(--green)':'var(--red)'}>{fmtPct(s.vals[hov])}</tspan>
+                            </text>
+                          </g>
+                        ))}
+                      </g>
+                    );
+                  })()}
+                </g>
+              )}
+            </svg>
+          </div>
+        );
+      })()}
+
       {/* Snapshot bar — macro landscape at a glance */}
       <div className="panel" style={{marginBottom:14}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10,flexWrap:'wrap',gap:8}}>
@@ -7236,17 +7453,33 @@ function MacroTab() {
 
         {chart && (() => {
           const { chartW, chartH, padL, padR, padT, padB, drawW, drawH, yMin, yMax, rangeV, stepX, toY, pts, lastV, points } = chart;
-          // 4 horizontal gridlines (quartiles of the padded range)
           const gridFractions = [0, 0.25, 0.5, 0.75, 1];
-          // Pick evenly-spaced x-axis tick dates (6 labels)
           const tickIdx = [];
           const tickCount = 6;
           for (let i = 0; i < tickCount; i++) {
             tickIdx.push(Math.floor(i * (points.length - 1) / (tickCount - 1)));
           }
+
+          // Cursor → series index. SVG uses viewBox so we convert clientX
+          // through the bounding rect to viewBox space, then snap to the
+          // nearest data point.
+          function onMove(e) {
+            const svg = e.currentTarget;
+            const rect = svg.getBoundingClientRect();
+            const xViewBox = ((e.clientX - rect.left) / rect.width) * chartW;
+            if (xViewBox < padL || xViewBox > padL + drawW) { setFredHoverIdx(null); return; }
+            const idx = Math.max(0, Math.min(points.length - 1, Math.round((xViewBox - padL) / stepX)));
+            setFredHoverIdx(idx);
+          }
+
+          const hov = fredHoverIdx;
+          const hovPoint = hov != null ? points[hov] : null;
+          const hovX = hov != null ? padL + hov * stepX : null;
+          const hovY = hovPoint?.value != null ? toY(hovPoint.value) : null;
+
           return (
-            <svg viewBox={`0 0 ${chartW} ${chartH}`} style={{width:'100%',height:chartH}}>
-              {/* Gridlines + y-axis labels */}
+            <svg viewBox={`0 0 ${chartW} ${chartH}`} style={{width:'100%',height:chartH,cursor:'crosshair'}}
+                 onMouseMove={onMove} onMouseLeave={() => setFredHoverIdx(null)}>
               {gridFractions.map(f => {
                 const v = yMin + (1 - f) * rangeV;
                 const y = padT + f * drawH;
@@ -7259,31 +7492,23 @@ function MacroTab() {
                   </g>
                 );
               })}
-              {/* Zero line for spread series (only when range straddles 0) */}
               {showZeroLine && (() => {
                 const y0 = toY(0);
                 return <line x1={padL} y1={y0} x2={padL+drawW} y2={y0} stroke="var(--red)" strokeWidth="1" strokeDasharray="4,3" opacity="0.6"/>;
               })()}
-              {/* Series line */}
               <polyline points={pts} fill="none" stroke="var(--cyan)" strokeWidth="1.8"/>
-              {/* Last-value marker */}
               {(() => {
                 const lastX = padL + (points.length-1)*stepX;
                 const lastY = toY(lastV);
                 return <circle cx={lastX} cy={lastY} r="3" fill="var(--cyan)" stroke="var(--bg)" strokeWidth="1.5"/>;
               })()}
-              {/* X-axis date labels — format adapts to the selected range.
-                  Short spans show MM-DD (readable day-level), mid spans show
-                  YYYY-MM, and multi-year spans show YYYY only. */}
               {(() => {
                 const first = points[0]?.date, last = points[points.length-1]?.date;
                 let spanDays = 0;
-                if (first && last) {
-                  spanDays = Math.max(1, Math.round((new Date(last) - new Date(first)) / (86400*1000)));
-                }
-                const fmt = spanDays <= 180 ? d => d.slice(5)       // MM-DD
-                          : spanDays <= 365*2 ? d => d.slice(0,7)   // YYYY-MM
-                          : d => d.slice(0,4);                      // YYYY
+                if (first && last) spanDays = Math.max(1, Math.round((new Date(last) - new Date(first)) / (86400*1000)));
+                const fmt = spanDays <= 180 ? d => d.slice(5)
+                          : spanDays <= 365*2 ? d => d.slice(0,7)
+                          : d => d.slice(0,4);
                 return tickIdx.map((i,k) => {
                   const x = padL + i*stepX;
                   const date = points[i]?.date || '';
@@ -7294,6 +7519,30 @@ function MacroTab() {
                   );
                 });
               })()}
+
+              {/* Cursor crosshair + value bubble */}
+              {hovPoint && hovX != null && (
+                <g pointerEvents="none">
+                  <line x1={hovX} y1={padT} x2={hovX} y2={padT+drawH} stroke="var(--text2)" strokeWidth="0.6" strokeDasharray="2,3" opacity="0.6"/>
+                  {hovY != null && <circle cx={hovX} cy={hovY} r="3.5" fill="var(--amber)" stroke="var(--bg)" strokeWidth="1.5"/>}
+                  {/* Tooltip — flip side when near right edge so it doesn't clip */}
+                  {(() => {
+                    const W = 132, H = 38;
+                    const flip = hovX > padL + drawW - W - 8;
+                    const tx = flip ? hovX - W - 8 : hovX + 8;
+                    const ty = padT + 4;
+                    return (
+                      <g>
+                        <rect x={tx} y={ty} width={W} height={H} fill="var(--bg)" stroke="var(--border2)" strokeWidth="0.8" rx="3"/>
+                        <text x={tx + 6} y={ty + 14} fill="var(--text3)" fontSize="9" fontFamily="var(--font-mono)">{hovPoint.date}</text>
+                        <text x={tx + 6} y={ty + 30} fill="var(--amber)" fontSize="11" fontFamily="var(--font-mono)" fontWeight="700">
+                          {hovPoint.value != null ? meta.fmt(hovPoint.value) : '—'}
+                        </text>
+                      </g>
+                    );
+                  })()}
+                </g>
+              )}
             </svg>
           );
         })()}
