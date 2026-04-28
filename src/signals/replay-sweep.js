@@ -390,10 +390,12 @@ async function runSweep(opts = {}) {
         current: `${q.strategy} · ${flavor} · ${q.strictRegime ? 'strict' : 'lenient'}`,
       });
     }
-    // Yield back to the event loop occasionally so the route's poll
-    // handler can serve status checks without blocking on a long
-    // synchronous run. Every 10 combos.
-    if (i % 10 === 9) await new Promise(r => setImmediate(r));
+    // Yield to the event loop AFTER EVERY combo. runReplay is synchronous
+    // CPU work; without a yield per combo, node-cron's 1-second poll can
+    // miss its tick (you'll see the "missed execution" warning) and
+    // /api/replay/jobs/:id polling stalls. setImmediate is microseconds —
+    // the cumulative overhead across a 2700-combo sweep is < 100ms total.
+    await new Promise(r => setImmediate(r));
   }
 
   // Sort by after-tax alpha (primary) then pre-tax alpha (tiebreaker)
@@ -477,7 +479,13 @@ async function runSweep(opts = {}) {
       }
 
       topKDeepDive.push(dive);
-      await new Promise(r => setImmediate(r));   // yield
+      // Yield BEFORE the next deep-dive iteration too. WF runs combos ×
+      // windows of synchronous replays internally; without a yield here
+      // the deep-dive phase can lock the event loop for minutes per
+      // top-K entry — far worse than the main sweep. Engine-level
+      // yielding inside runWalkForward would be an even better fix; for
+      // now this at least gives node-cron a tick between dives.
+      await new Promise(r => setImmediate(r));
     }
   }
 
