@@ -13430,7 +13430,17 @@ function ReplayTab() {
   // the user's choices.
   function buildParamsForStrategy(strategyKey) {
     let params = {};
-    try { params = JSON.parse(form.params); } catch(_) {}
+    // Validate JSON up-front. Previously a malformed textarea silently
+    // turned into an empty object, hiding what the user thought they
+    // set. Now invalid JSON throws — caller surfaces it as a visible
+    // error instead of running with default params.
+    if (form.params && form.params.trim() && form.params.trim() !== '{}') {
+      try { params = JSON.parse(form.params); }
+      catch (e) { throw new Error(`Invalid params JSON: ${e.message}`); }
+      if (typeof params !== 'object' || Array.isArray(params)) {
+        throw new Error('Params override must be a JSON object, e.g. { "minRS": 80 }');
+      }
+    }
     if (form.exitStrategy === 'full_in_scale_out') {
       params.scaleOut = true;
     } else if (form.exitStrategy === 'pyramid_auto') {
@@ -13853,7 +13863,17 @@ function ReplayTab() {
         <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr 1fr 1fr',gap:8,marginBottom:10}}>
           <div>
             <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:3}}>STRATEGY</div>
-            <select value={form.strategy} onChange={e=>setForm({...form,strategy:e.target.value,params:'{}'})} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'8px 10px',color:'var(--text)',fontSize:12}}>
+            <select value={form.strategy} onChange={e => {
+              const next = e.target.value;
+              // Reset factor-combo signal state when leaving factor_combo so
+              // the stale checkbox state doesn't survive into another strategy.
+              setForm({
+                ...form,
+                strategy: next,
+                params: '{}',
+                factorSignals: next === 'factor_combo' ? form.factorSignals : ['rs_strong','pattern'],
+              });
+            }} style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'8px 10px',color:'var(--text)',fontSize:12}}>
               {strategies.map(s=><option key={s.key} value={s.key}>{s.name}</option>)}
             </select>
           </div>
@@ -14111,7 +14131,25 @@ function ReplayTab() {
             </span>
           </div>
 
+          {/* Sub-tab strip — splits the single-replay result into 4 views
+              instead of 6+ stacked sections. State is preserved across
+              switches because the underlying `result` object doesn't move. */}
+          <div style={{display:'flex',gap:4,marginBottom:12,flexWrap:'wrap'}}>
+            {[
+              { k:'overview', l:'Overview',     tip:'KPI cards + statistical significance' },
+              { k:'perf',     l:'Performance',  tip:'SPY benchmark + execution costs + equity curve' },
+              { k:'trades',   l:'Trades',       tip:'Trade stats + full trade log + exit reasons' },
+              { k:'regime',   l:'Regime',       tip:'Regime day distribution + per-regime trade performance + macro context' },
+            ].map(t => (
+              <button key={t.k} onClick={() => setSingleResultSubTab(t.k)} title={t.tip}
+                style={{padding:'5px 12px',background:singleResultSubTab===t.k?'var(--cyan)':'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:singleResultSubTab===t.k?'#000':'var(--text2)',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:1,cursor:'pointer'}}>
+                {t.l}
+              </button>
+            ))}
+          </div>
+
           {/* KPI cards */}
+          {singleResultSubTab === 'overview' && (
           <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:10,marginBottom:10}}>
             {[
               ['Total Return', (result.performance.totalReturn>0?'+':'')+result.performance.totalReturn+'%', pctColor(result.performance.totalReturn)],
@@ -14133,9 +14171,10 @@ function ReplayTab() {
               </div>
             ))}
           </div>
+          )}
 
           {/* Statistical Significance Detail Bar */}
-          {result.significance && result.significance.verdict !== 'insufficient_sample' && (
+          {singleResultSubTab === 'overview' && result.significance && result.significance.verdict !== 'insufficient_sample' && (
             <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:10}}>
               <div style={{display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
                 <span style={{fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1,color:result.significance.isSignificant?'var(--green)':'var(--red)'}}>STATISTICAL SIGNIFICANCE</span>
@@ -14155,14 +14194,14 @@ function ReplayTab() {
               </div>
             </div>
           )}
-          {result.significance && result.significance.verdict === 'insufficient_sample' && (
+          {singleResultSubTab === 'overview' && result.significance && result.significance.verdict === 'insufficient_sample' && (
             <div style={{background:'rgba(255,171,0,0.05)',border:'1px solid rgba(255,171,0,0.2)',borderRadius:6,padding:12,marginBottom:10}}>
               <span style={{fontSize:11,color:'var(--amber)'}}>{result.significance.reason} (n={result.significance.sampleSize}, need {result.significance.minSampleForSignificance})</span>
             </div>
           )}
 
           {/* SPY Benchmark Comparison */}
-          {result.benchmark && (
+          {singleResultSubTab === 'perf' && result.benchmark && (
             <div style={{background:result.benchmark.outperformed?'rgba(0,230,118,0.05)':'rgba(255,61,87,0.05)',border:`1px solid ${result.benchmark.outperformed?'rgba(0,230,118,0.2)':'rgba(255,61,87,0.2)'}`,borderRadius:6,padding:12,marginBottom:10}}>
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
                 <div style={{display:'flex',alignItems:'center',gap:16}}>
@@ -14179,7 +14218,7 @@ function ReplayTab() {
           )}
 
           {/* Execution Costs */}
-          {result.executionCosts && (
+          {singleResultSubTab === 'perf' && result.executionCosts && (
             <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:16}}>
               <div style={{display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
                 <span style={{fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1,color:'var(--amber)'}}>EXECUTION MODEL</span>
@@ -14197,7 +14236,7 @@ function ReplayTab() {
           )}
 
           {/* Regime day distribution (how many days of the window spent in each regime) */}
-          {result.regimeDayCounts && (
+          {singleResultSubTab === 'regime' && result.regimeDayCounts && (
             <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:16}}>
               <div style={{display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
                 <span style={{fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1,color:'var(--cyan)'}}>REGIME DAYS</span>
@@ -14220,7 +14259,7 @@ function ReplayTab() {
           )}
 
           {/* Per-regime trade performance — segmentation of trades by entry-day regime */}
-          {result.regimeBreakdown && Object.values(result.regimeBreakdown).some(v => v.n > 0) && (
+          {singleResultSubTab === 'regime' && result.regimeBreakdown && Object.values(result.regimeBreakdown).some(v => v.n > 0) && (
             <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:16}}>
               <div style={{fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1,color:'var(--cyan)',marginBottom:8}}>🌡 PERFORMANCE BY ENTRY REGIME</div>
               <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8}}>
@@ -14256,7 +14295,7 @@ function ReplayTab() {
           )}
 
           {/* Macro Context (FRED) — true macro backdrop of the replay window */}
-          <MacroContextCard ctx={result.macroContext} />
+          {singleResultSubTab === 'regime' && (<MacroContextCard ctx={result.macroContext} />)}
 
           {/* ─── Equity curve vs SPY ──────────────────────────────────────
               Single-replay results carry result.equityCurve (~100 points,
@@ -14265,7 +14304,7 @@ function ReplayTab() {
               chart already but single replays didn't — making it hard to
               eyeball drawdown timing or whether the strategy was tracking
               SPY versus diverging in either direction. */}
-          {result.equityCurve && result.equityCurve.length >= 2 && (() => {
+          {singleResultSubTab === 'perf' && result.equityCurve && result.equityCurve.length >= 2 && (() => {
             const strat = result.equityCurve;
             const spy   = result.benchmark?.spyEquityCurve || [];
             const initial = result.performance?.initialCapital || strat[0]?.equity || 100000;
@@ -14346,6 +14385,7 @@ function ReplayTab() {
           })()}
 
           {/* Trade summary */}
+          {singleResultSubTab === 'trades' && (
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
             <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,padding:12}}>
               <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--amber)',letterSpacing:1,marginBottom:8}}>TRADE STATS</div>
@@ -14368,9 +14408,10 @@ function ReplayTab() {
               ))}
             </div>
           </div>
+          )}
 
           {/* Trade log */}
-          {result.tradeLog && result.tradeLog.length > 0 && (
+          {singleResultSubTab === 'trades' && result.tradeLog && result.tradeLog.length > 0 && (
             <div>
               <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text2)',letterSpacing:2,marginBottom:8}}>TRADE LOG ({result.tradeLog.length})</div>
               <div style={{maxHeight:300,overflowY:'auto'}}>
