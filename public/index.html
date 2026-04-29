@@ -532,27 +532,55 @@ async function runReplayJob({ kind, body, onUpdate, signal, resumeJobId }) {
 // map every 2s, fetches each job's server-side status, and renders a compact
 // summary. Clicking it routes back to Replay tab for the full progress view.
 function GlobalReplayJobsBadge({ onJump }) {
-  const [jobs, setJobs] = React.useState({}); // jobId → server job record
+  const [jobs, setJobs] = React.useState({}); // kind → server job record
+  // Persistent ref so a transient timeout / network blip doesn't blank the
+  // badge for a 2-second tick (the visible "flicker" the user complained
+  // about). We only mutate it on explicit terminal states or successful
+  // running-status reads, then commit to setJobs once per tick.
+  const lastJobsRef = React.useRef({});
   React.useEffect(() => {
     let alive = true;
     async function tick() {
       const active = readActiveReplayJobs();
       const ids = Object.entries(active); // [[kind, jobId], ...]
-      if (ids.length === 0) { if (alive) setJobs({}); return; }
-      const next = {};
+      if (ids.length === 0) {
+        lastJobsRef.current = {};
+        if (alive) setJobs({});
+        return;
+      }
+      // Start from the last-known state. Each kind in `active` will be
+      // updated below — if a fetch fails transiently, the kind stays at its
+      // previous value instead of being dropped.
+      const next = { ...lastJobsRef.current };
       await Promise.all(ids.map(async ([kind, jobId]) => {
         try {
           const j = await api(`/api/replay/jobs/${jobId}`, { timeout: 15_000 });
-          // Done/errored/cancelled jobs are dropped from the badge AND from
-          // localStorage so the next tick is clean. The full-view ReplayTab
-          // will render the result once the user navigates back.
-          if (j.status === 'running') next[kind] = j;
-          else writeActiveReplayJob(kind, null);
+          if (j.status === 'running') {
+            next[kind] = j;
+          } else {
+            // Terminal state: clear from badge AND from localStorage so the
+            // next tick is clean. ReplayTab renders the result if the user
+            // navigates back.
+            delete next[kind];
+            writeActiveReplayJob(kind, null);
+          }
         } catch (e) {
-          // 404 = server restart wiped the job map — clear the stale entry.
-          if (/not found/i.test(e?.message || '')) writeActiveReplayJob(kind, null);
+          // 404 from a server restart is terminal — wipe the entry. Anything
+          // else (timeout, network blip, intermittent 5xx) we KEEP the
+          // previous state so the badge doesn't blink off for a tick.
+          if (/not found/i.test(e?.message || '')) {
+            delete next[kind];
+            writeActiveReplayJob(kind, null);
+          }
+          // else: leave next[kind] at its previous value (or undefined if new)
         }
       }));
+      // Drop any kinds no longer in localStorage at all (e.g. cleared
+      // elsewhere). Keeps the badge consistent with the active set.
+      for (const k of Object.keys(next)) {
+        if (!active[k]) delete next[k];
+      }
+      lastJobsRef.current = next;
       if (alive) setJobs(next);
     }
     tick();
