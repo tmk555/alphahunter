@@ -340,8 +340,9 @@ const JOB_KINDS = {
   // Auto-Sweep — exhaustive per-strategy combo evaluation with after-tax
   // alpha vs SPY long-term hold as the primary sort key. Long-running
   // (~5-15 min depending on date range and whether WF/MC deep-dive is
-  // enabled). Reports progress via setProgress so the UI's JOB RUNNING
-  // badge shows live "X/Y combos · N outperforming SPY" status.
+  // enabled). Runs in a Worker thread so the main event loop stays
+  // responsive — without this, every other UI tab took seconds to load
+  // while a sweep was in flight, and node-cron missed scheduled ticks.
   sweep: (body, setProgress) => {
     const {
       strategies, startDate, endDate,
@@ -350,7 +351,7 @@ const JOB_KINDS = {
       mcIterations, randomSamples, slippageSweep,
     } = body || {};
     if (!startDate || !endDate) throw new Error('startDate and endDate required');
-    return runSweep({
+    return runInWorker('sweep', {
       strategies: strategies && strategies.length ? strategies : Object.keys(STRATEGY_GRIDS),
       startDate, endDate,
       maxPositions: maxPositions || 5,
@@ -366,10 +367,43 @@ const JOB_KINDS = {
       mcIterations:   +mcIterations  || 1000,
       randomSamples:  +randomSamples || 0,
       slippageSweep:  !!slippageSweep,
-      onProgress: setProgress,
-    });
+    }, setProgress);
   },
 };
+
+// ── Worker-thread runner ───────────────────────────────────────────────────
+// Spawns src/signals/replay-worker.js, forwards engine progress to the
+// caller's setProgress, resolves with the worker's final result. Live for
+// the duration of one engine run; the OS scheduler runs it on a separate
+// thread so the main event loop stays responsive even during a 30-minute
+// sweep. Cancellation: cancelJob can store/retrieve the Worker via the
+// job record's `_worker` field and call .terminate() — TODO once we wire
+// that into the cancel path.
+const { Worker } = require('worker_threads');
+const path = require('path');
+function runInWorker(kind, params, setProgress) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(
+      path.join(__dirname, '..', 'signals', 'replay-worker.js'),
+      { workerData: { kind, params } }
+    );
+    worker.on('message', msg => {
+      if (msg.type === 'progress') {
+        setProgress?.(msg.progress);
+      } else if (msg.type === 'done') {
+        resolve(msg.result);
+      } else if (msg.type === 'error') {
+        reject(new Error(msg.error));
+      }
+    });
+    worker.on('error', err => reject(err));
+    worker.on('exit', code => {
+      // If the worker exited without a 'done' or 'error' message and we
+      // haven't resolved yet, treat as a crash.
+      if (code !== 0) reject(new Error(`replay-worker exited with code ${code}`));
+    });
+  });
+}
 
 router.post('/replay/jobs', (req, res) => {
   try {
