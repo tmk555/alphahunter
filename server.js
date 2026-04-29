@@ -29,8 +29,13 @@ app.get('/login.html', (_, res) => res.sendFile(path.join(__dirname, 'public', '
 // Guard all other routes (skips if APP_PIN not set in .env)
 app.use(authGuard);
 
-// Disable caching for index.html so code changes load immediately on refresh
+// Disable caching for index.html so code changes load immediately on refresh.
+// `index: false` so express.static does NOT auto-serve public/index.html on
+// '/' requests — that bypassed our SPA fallback below, which prefers the
+// prebuilt index.dist.html when present. Without this, the inline-Babel
+// HTML kept getting served even when a built bundle existed.
 app.use(express.static(path.join(__dirname, 'public'), {
+  index: false,
   setHeaders: (res, filePath) => {
     if (filePath.endsWith('.html')) {
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
