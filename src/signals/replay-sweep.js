@@ -317,6 +317,17 @@ async function runSweep(opts = {}) {
     randomSamples = 0,
     slippageSweep = false,
     onProgress,
+    // ─── Resume support ─────────────────────────────────────────────────
+    // When set, runSweep skips queue construction and re-uses the supplied
+    // queue (so a non-deterministic random-sample run resumes with the
+    // SAME random combos) plus the partial results accumulator. Resume
+    // continues the loop at queue[results.length].
+    resumeFrom = null,            // { queue, results, outperforming, total }
+    // Called on each progress tick that crosses the N-combo threshold.
+    // Receives a checkpoint blob the caller can persist; on next start
+    // pass it via resumeFrom and runSweep continues where it left off.
+    onCheckpoint,
+    checkpointEveryN = 25,
   } = opts;
   if (!startDate || !endDate) throw new Error('startDate and endDate required');
 
@@ -412,18 +423,42 @@ async function runSweep(opts = {}) {
 
   if (queue.length > HARD_CAP_TOTAL_COMBOS) queue.length = HARD_CAP_TOTAL_COMBOS;
 
-  const total = queue.length;
-  const results = [];
-  let outperforming = 0;
+  // Resume: drop the freshly-built queue + accumulator and use what the
+  // caller persisted. The queue is reused (not regenerated) because the
+  // random-sample axis is non-deterministic — regenerating would skip
+  // DIFFERENT random combos than the original run.
+  let total, results, outperforming;
+  let startIdx = 0;
+  if (resumeFrom && Array.isArray(resumeFrom.queue) && Array.isArray(resumeFrom.results)) {
+    queue.length = 0;
+    queue.push(...resumeFrom.queue);
+    total = resumeFrom.total ?? queue.length;
+    results = resumeFrom.results.slice();
+    outperforming = +resumeFrom.outperforming || 0;
+    startIdx = results.length;  // continue at the next un-evaluated combo
+  } else {
+    total = queue.length;
+    results = [];
+    outperforming = 0;
+  }
 
   // Fire an immediate progress tick BEFORE the loop so the JOB RUNNING badge
-  // populates with done/total/outperforming right away. Pre-fix the badge
-  // showed only "elapsed Ns" for the first 1-4s of a sweep (until the first
-  // mod-5 combo hit), and the user thought their job was missing the
-  // done-count + beating-SPY fields.
-  if (onProgress) onProgress({ done: 0, total, outperforming: 0, current: 'starting…' });
+  // populates with done/total/outperforming right away. On resume, this
+  // shows the resumed state (e.g. 2400/2700, not 0/2700) so the user
+  // doesn't think the work was discarded.
+  if (onProgress) onProgress({
+    done: startIdx, total, outperforming,
+    current: startIdx > 0 ? `resumed from ${startIdx}/${total}…` : 'starting…',
+  });
 
-  for (let i = 0; i < total; i++) {
+  // Emit an initial checkpoint so the caller has the queue stored from
+  // step zero — without this a server crash before the first periodic
+  // checkpoint tick would lose the queue (random-sample combos lost).
+  if (onCheckpoint && !resumeFrom) {
+    onCheckpoint({ queue: queue.slice(), results: [], outperforming: 0, total });
+  }
+
+  for (let i = startIdx; i < total; i++) {
     const q = queue[i];
     const r = evaluateOneCombo({
       ...q,
@@ -451,6 +486,12 @@ async function runSweep(opts = {}) {
         outperforming,
         current: `${q.strategy} · ${flavor} · ${q.strictRegime ? 'strict' : 'lenient'}`,
       });
+    }
+    // Periodic checkpoint — every checkpointEveryN combos OR on the last
+    // combo. Persists results + outperforming so a crash mid-sweep can
+    // resume from the last checkpoint instead of starting over.
+    if (onCheckpoint && ((i + 1) % checkpointEveryN === 0 || i === total - 1)) {
+      onCheckpoint({ queue: queue.slice(), results: results.slice(), outperforming, total });
     }
     // Yield every combo. A single replay can take 200-800ms on heavy
     // strategies — even 5-combo batches blocked the event loop past

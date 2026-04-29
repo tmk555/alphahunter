@@ -54,10 +54,16 @@ async function main() {
     try { parentPort.postMessage({ type: 'progress', progress: p }); }
     catch (_) { /* parent gone — terminate path */ }
   };
+  // Forward sweep checkpoints (queue + partial results) so the parent can
+  // persist them to SQLite for crash-resume. Fires every N combos.
+  const onCheckpoint = (cp) => {
+    try { parentPort.postMessage({ type: 'checkpoint', checkpoint: cp }); }
+    catch (_) { /* parent gone */ }
+  };
 
   switch (kind) {
     case 'sweep':
-      return runSweep({ ...params, onProgress });
+      return runSweep({ ...params, onProgress, onCheckpoint });
     case 'walk-forward':
       return runWalkForward(params);
     case 'monte-carlo':

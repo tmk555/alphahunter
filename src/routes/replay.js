@@ -343,7 +343,7 @@ const JOB_KINDS = {
   // enabled). Runs in a Worker thread so the main event loop stays
   // responsive — without this, every other UI tab took seconds to load
   // while a sweep was in flight, and node-cron missed scheduled ticks.
-  sweep: (body, setProgress) => {
+  sweep: (body, setProgress, setCheckpoint, jobRecord) => {
     const {
       strategies, startDate, endDate,
       maxPositions, initialCapital, execution,
@@ -351,6 +351,10 @@ const JOB_KINDS = {
       mcIterations, randomSamples, slippageSweep,
     } = body || {};
     if (!startDate || !endDate) throw new Error('startDate and endDate required');
+    // Resume support: if the caller passed a checkpoint (via the
+    // /resume route), feed it through to the worker so the engine
+    // skips already-evaluated combos and continues at queue[done+1].
+    const resumeFrom = body?._resumeFrom || jobRecord?.checkpoint || null;
     return runInWorker('sweep', {
       strategies: strategies && strategies.length ? strategies : Object.keys(STRATEGY_GRIDS),
       startDate, endDate,
@@ -367,7 +371,8 @@ const JOB_KINDS = {
       mcIterations:   +mcIterations  || 1000,
       randomSamples:  +randomSamples || 0,
       slippageSweep:  !!slippageSweep,
-    }, setProgress);
+      resumeFrom,
+    }, setProgress, setCheckpoint);
   },
 };
 
@@ -381,7 +386,7 @@ const JOB_KINDS = {
 // that into the cancel path.
 const { Worker } = require('worker_threads');
 const path = require('path');
-function runInWorker(kind, params, setProgress) {
+function runInWorker(kind, params, setProgress, setCheckpoint) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(
       path.join(__dirname, '..', 'signals', 'replay-worker.js'),
@@ -390,6 +395,8 @@ function runInWorker(kind, params, setProgress) {
     worker.on('message', msg => {
       if (msg.type === 'progress') {
         setProgress?.(msg.progress);
+      } else if (msg.type === 'checkpoint') {
+        setCheckpoint?.(msg.checkpoint);
       } else if (msg.type === 'done') {
         resolve(msg.result);
       } else if (msg.type === 'error') {
@@ -412,11 +419,47 @@ router.post('/replay/jobs', (req, res) => {
       return res.status(400).json({ error: `kind must be one of: ${Object.keys(JOB_KINDS).join(', ')}` });
     }
     const runner = JOB_KINDS[kind];
-    // Pass setProgress through to the runner — the sweep kind uses it to
-    // report live progress; other kinds ignore it (extra arg).
-    const job = startJob(kind, body || {}, (setProgress) => runner(body || {}, setProgress));
+    // The runner gets setProgress + setCheckpoint (sweep uses both, others
+    // ignore the extras) and the live job record (so handlers can read
+    // job.checkpoint when resuming).
+    const job = startJob(kind, body || {},
+      (setProgress, setCheckpoint, jobRecord) =>
+        runner(body || {}, setProgress, setCheckpoint, jobRecord)
+    );
     res.status(202).json({ id: job.id, kind: job.kind, status: job.status, startedAt: job.startedAt });
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Resume an interrupted sweep from its last checkpoint. The new job is
+// started with status='running', original params PLUS the persisted
+// checkpoint blob (queue + partial results), and continues the engine
+// loop at the next un-evaluated combo. The original interrupted row
+// stays as historical breadcrumb (status='interrupted').
+router.post('/replay/jobs/:id/resume', (req, res) => {
+  try {
+    const old = getJob(req.params.id);
+    if (!old) return res.status(404).json({ error: 'Job not found' });
+    if (old.status !== 'interrupted') {
+      return res.status(400).json({ error: `Cannot resume job in status '${old.status}' (only 'interrupted')` });
+    }
+    if (old.kind !== 'sweep') {
+      return res.status(400).json({ error: `Resume only supported for kind='sweep' (got '${old.kind}')` });
+    }
+    if (!old.checkpoint || !Array.isArray(old.checkpoint.queue)) {
+      return res.status(400).json({ error: 'No checkpoint available to resume from (job interrupted before first checkpoint tick)' });
+    }
+    const runner = JOB_KINDS.sweep;
+    const body = { ...(old.params || {}), _resumeFrom: old.checkpoint };
+    const job = startJob('sweep', body,
+      (setProgress, setCheckpoint, jobRecord) =>
+        runner(body, setProgress, setCheckpoint, jobRecord)
+    );
+    res.status(202).json({
+      id: job.id, kind: job.kind, status: job.status, startedAt: job.startedAt,
+      resumedFrom: old.id, resumedAt: old.checkpoint.results?.length || 0,
+      total: old.checkpoint.total || 0,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 router.get('/replay/jobs', (req, res) => {

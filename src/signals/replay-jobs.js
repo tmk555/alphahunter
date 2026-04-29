@@ -56,10 +56,16 @@ function _ensureDb() {
         result       TEXT,
         error        TEXT,
         progress     TEXT,
+        checkpoint   TEXT,
         started_at   INTEGER NOT NULL,
         finished_at  INTEGER
       )
     `).run();
+    // Best-effort schema upgrade for existing installs — adds checkpoint
+    // column if the table predates this commit. Failures are swallowed
+    // (likely 'duplicate column' on already-migrated DBs).
+    try { _db.prepare(`ALTER TABLE replay_jobs_state ADD COLUMN checkpoint TEXT`).run(); }
+    catch (_) { /* already exists */ }
   } catch (_) { _db = null; }
   return _db;
 }
@@ -69,17 +75,19 @@ function _persist(job) {
   if (!db) return;
   try {
     db.prepare(`
-      INSERT INTO replay_jobs_state (id, kind, status, params, result, error, progress, started_at, finished_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO replay_jobs_state (id, kind, status, params, result, error, progress, checkpoint, started_at, finished_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         status=excluded.status, result=excluded.result, error=excluded.error,
-        progress=excluded.progress, finished_at=excluded.finished_at
+        progress=excluded.progress, checkpoint=excluded.checkpoint,
+        finished_at=excluded.finished_at
     `).run(
       job.id, job.kind, job.status,
       job.params ? JSON.stringify(job.params) : null,
       job.result ? JSON.stringify(job.result) : null,
       job.error || null,
       job.progress ? JSON.stringify(job.progress) : null,
+      job.checkpoint ? JSON.stringify(job.checkpoint) : null,
       job.startedAt, job.finishedAt
     );
   } catch (e) {
@@ -114,6 +122,7 @@ function loadPersistedJobs() {
         result: r.result ? JSON.parse(r.result) : null,
         error: r.error,
         progress: r.progress ? JSON.parse(r.progress) : null,
+        checkpoint: r.checkpoint ? JSON.parse(r.checkpoint) : null,
         startedAt: r.started_at, finishedAt: r.finished_at,
       });
       const numericId = +r.id;
@@ -186,14 +195,33 @@ function startJob(kind, params, runFn) {
       _persist(job);
     }
   };
+  // Checkpoint sink — sweep emits a serializable {queue, results,
+  // outperforming, total} blob every N combos. We stash it on the job
+  // and persist alongside progress so a crash/restart can resume.
+  // Stored separately from `result` (final value) and `progress`
+  // (transient UI state) — restoring an interrupted sweep needs the full
+  // accumulator.
+  job.checkpoint = null;
+  const setCheckpoint = (cp) => {
+    job.checkpoint = cp;
+    // Persist immediately — a checkpoint fires every 25 combos by default
+    // (~5-15 seconds), so this isn't hot-path enough to need throttling.
+    _persist(job);
+  };
   // setImmediate so the caller's response is sent before the work begins —
   // otherwise the POST that creates the job would block on the work and
   // we'd lose the whole point of background execution.
   setImmediate(async () => {
     try {
-      const r = await runFn(setProgress);
+      // Runner gets both setProgress and setCheckpoint helpers. setProgress
+      // drives the badge; setCheckpoint persists the resume blob (sweep
+      // only — other kinds ignore it).
+      const r = await runFn(setProgress, setCheckpoint, job);
       job.result = r;
       job.status = 'done';
+      // Clear checkpoint on success — no need to keep the queue+results
+      // accumulator around once we have the final result.
+      job.checkpoint = null;
     } catch (e) {
       job.error  = e?.message || String(e);
       job.status = 'error';
