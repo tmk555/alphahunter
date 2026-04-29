@@ -67,12 +67,29 @@ async function _cancelAndResubmit(leg, targetStop) {
 }
 
 // When the journal stop is at-or-above current price (long), the position
-// has ALREADY been breached. closePosition() = DELETE /v2/positions/<symbol>
-// — Alpaca cancels all open sell-side legs (held stops, TP limits) AND
-// submits a market sell for the entire qty in one call. Submitting our
-// own market sell instead fails with "insufficient qty" because TP limit
-// orders keep the qty locked. closePosition is the only reliable path.
-async function _marketCloseGap(symbol /*, qty, side */) {
+// has ALREADY been breached. The bracket's TP limits and any pending
+// market-sells from prior sync attempts can keep the qty locked; even
+// closePosition() fails with 'insufficient qty available' when there's
+// already a pending sell-side order for the full qty. So we explicitly
+// cancel every active sell-side order on the symbol first, give Alpaca
+// a beat to release the qty, then submit closePosition().
+async function _marketCloseGap(symbol) {
+  // Pull ALL recent orders, filter to active sell-side for this symbol.
+  let orders = [];
+  try { orders = await alpaca.getOrders({ status: 'all', limit: 500 }); }
+  catch (_) { /* fall through; closePosition still has its own internal cancel */ }
+  const ACTIVE = new Set(['new', 'accepted', 'held', 'pending_new',
+    'pending_replace', 'partially_filled', 'replaced']);
+  const toCancel = orders.filter(o =>
+    o.symbol === symbol && o.side === 'sell' && ACTIVE.has(o.status)
+  );
+  for (const o of toCancel) {
+    try { await alpaca.cancelOrder(o.id); } catch (_) { /* may already be gone */ }
+  }
+  // Brief settle delay so Alpaca's positions endpoint sees the qty freed
+  // before we submit the close. 1.2s is well below human-perceptible
+  // latency and matches Alpaca's own ~1s settlement cache.
+  if (toCancel.length) await new Promise(r => setTimeout(r, 1200));
   return alpaca.closePosition(symbol);
 }
 
