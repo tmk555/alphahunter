@@ -1791,8 +1791,7 @@ function App() {
   const TABS = [
     { id:'pulse',     label:'⚡ Market Pulse' },
     { id:'macro',     label:'📉 Macro' },
-    { id:'sectors',   label:'🔄 Sectors' },
-    { id:'industries',label:'🏭 Industries' },
+    { id:'rotation',  label:'🔄 Rotation' },
     { id:'rs',        label:'📊 Scanner' },
     { id:'setups',    label:'🎯 Trade Setups' },
     { id:'trades',    label:'💼 Trades', badge: tradesUrgent || null,
@@ -1931,8 +1930,7 @@ function App() {
         )}
         {tab==='pulse'      && <MarketPulseTab />}
         {tab==='macro'      && <MacroTab />}
-        {tab==='sectors'    && <SectorsTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
-        {tab==='industries' && <IndustriesTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
+        {tab==='rotation'   && <RotationTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
         {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} rsLoading={rsLoading} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} sigFilters={rsSigFilters} setSigFilters={setRsSigFilters} quickFilter={rsQuickFilter} setQuickFilter={setRsQuickFilter} scannerTarget={scannerTarget} clearScannerTarget={() => setScannerTarget(null)}/>}
         {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} rsLoading={rsLoading} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary} setupSigFilters={setupSigFilters} setSetupSigFilters={setSetupSigFilters} mode={setupMode} setMode={setSetupMode} sortBy={setupSortBy} setSortBy={setSetupSortBy} exitStrategy={setupExitStrategy} setExitStrategy={setSetupExitStrategy}/>}
         {tab==='hedge'      && <HedgeTab />}
@@ -3694,6 +3692,51 @@ function useSortTable(defaultKey, defaultDir = -1) {
 }
 
 // ─── SECTORS TAB ──────────────────────────────────────────────────────────────
+// ─── Rotation Tab — wraps Sectors / Industries with a level toggle ──────
+//
+// Pre-consolidation these were two top-level tabs with ~90% identical
+// content (RS rotation panels, sparklines, drill-into-constituents) at
+// different aggregation levels. Now: one tab, one toggle. The two
+// underlying components stay intact (no component refactor needed) — we
+// just route by level. selectedSectors state is shared so a sector
+// selection in Sectors view filters the Industries view consistently.
+function RotationTab({ selectedSectors, setSelectedSectors }) {
+  const [level, setLevel] = useState(() => {
+    try { return localStorage.getItem('alphahunter:rotation-level') || 'sectors'; }
+    catch (_) { return 'sectors'; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('alphahunter:rotation-level', level); } catch (_) {}
+  }, [level]);
+  const LEVELS = [
+    { k:'sectors',   label:'🔄 Sectors',   tip:'11 GICS sectors via SPDR ETFs (XLK, XLV, XLF, …). Coarsest rotation read.' },
+    { k:'industries',label:'🏭 Industries', tip:'~50 industry ETFs (SMH, ITA, KRE, …). Finer-grained rotation; better for spotting where leadership actually concentrates.' },
+  ];
+  return (
+    <div>
+      <div className="panel" style={{padding:'8px 10px',marginBottom:12}}>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+          <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginRight:6}}>LEVEL</span>
+          {LEVELS.map(L => (
+            <button key={L.k} onClick={() => setLevel(L.k)} title={L.tip}
+              style={{
+                padding:'5px 12px', fontSize:11, fontFamily:'var(--font-mono)',
+                fontWeight:700, letterSpacing:1,
+                background: level === L.k ? 'var(--cyan)' : 'transparent',
+                color: level === L.k ? '#000' : 'var(--text2)',
+                border: `1px solid ${level === L.k ? 'var(--cyan)' : 'var(--border2)'}`,
+                borderRadius:3, cursor:'pointer',
+              }}>{L.label}</button>
+          ))}
+        </div>
+      </div>
+      {level === 'sectors'
+        ? <SectorsTab    selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>
+        : <IndustriesTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
+    </div>
+  );
+}
+
 function SectorsTab({ selectedSectors, setSelectedSectors }) {
   const [data,    setData]   = useState([]);
   const [loading, setLoading] = useState(false);
