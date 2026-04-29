@@ -556,16 +556,68 @@ function applySlippage(price, bps, side) {
   return +(price * slipMultiplier).toFixed(4);
 }
 
-// ─── SPY Benchmark ────────────────────────────────────────────────────────
+// ─── Benchmark (SPY / QQQ / IWM / DIA / any ETF) ──────────────────────────
+//
+// Pre-fix this was hardcoded to SPY and read from rs_snapshots. The user
+// (correctly) pointed out that beating SPY in a tech-heavy decade is a
+// soft target — QQQ +480% over 2016-2026 vs SPY +229%, so a strategy
+// that "beats SPY" can lose hard to QQQ. Now the caller picks a symbol;
+// SPY still reads from rs_snapshots (back-compat); other symbols read
+// from a benchmark_prices cache table that's lazily populated from
+// Yahoo on first use. One Yahoo fetch per benchmark per server lifetime;
+// subsequent reads are SQLite-fast.
+function _ensureBenchmarkTable() {
+  db().prepare(`
+    CREATE TABLE IF NOT EXISTS benchmark_prices (
+      symbol TEXT NOT NULL,
+      date   TEXT NOT NULL,
+      close  REAL NOT NULL,
+      PRIMARY KEY (symbol, date)
+    )
+  `).run();
+}
 
-function calcSPYBenchmark(startDate, endDate) {
-  // Load SPY snapshots for the same period
-  const spySnaps = db().prepare(`
-    SELECT date, price FROM rs_snapshots
-    WHERE symbol = 'SPY' AND type = 'stock' AND date >= ? AND date <= ? AND price > 0
-    ORDER BY date
-  `).all(startDate, endDate);
+async function ensureBenchmarkLoaded(symbol) {
+  if (symbol === 'SPY') return;  // SPY already in rs_snapshots
+  _ensureBenchmarkTable();
+  const cnt = db().prepare(
+    'SELECT COUNT(*) AS c FROM benchmark_prices WHERE symbol = ?'
+  ).get(symbol)?.c || 0;
+  if (cnt > 100) return;  // cached enough — daily freshness comes from a cron we'll wire later
+  // Pull from Yahoo (long history). Failure is a hard error — caller
+  // needs to know the benchmark isn't available rather than silently
+  // returning null and producing meaningless alpha numbers.
+  const { yahooHistoryFull } = require('../data/providers/yahoo');
+  const bars = await yahooHistoryFull(symbol);
+  if (!Array.isArray(bars) || !bars.length) {
+    throw new Error(`Benchmark ${symbol}: Yahoo returned no history`);
+  }
+  const ins = db().prepare(`
+    INSERT OR REPLACE INTO benchmark_prices (symbol, date, close) VALUES (?, ?, ?)
+  `);
+  const tx = db().transaction((rows) => { for (const r of rows) ins.run(symbol, r.date.slice(0, 10), r.close); });
+  tx(bars.filter(b => b.close != null));
+}
 
+function calcBenchmark(startDate, endDate, symbol = 'SPY') {
+  let snaps;
+  if (symbol === 'SPY') {
+    snaps = db().prepare(`
+      SELECT date, price AS close FROM rs_snapshots
+      WHERE symbol = 'SPY' AND type = 'stock' AND date >= ? AND date <= ? AND price > 0
+      ORDER BY date
+    `).all(startDate, endDate);
+  } else {
+    snaps = db().prepare(`
+      SELECT date, close FROM benchmark_prices
+      WHERE symbol = ? AND date >= ? AND date <= ? AND close > 0
+      ORDER BY date
+    `).all(symbol, startDate, endDate);
+  }
+  if (snaps.length < 2) return null;
+  // Keep the rest of the function generic — variable named spySnaps below
+  // for diff hygiene; it's actually 'snaps' for whatever benchmark.
+  const spySnaps = snaps.map(s => ({ date: s.date, price: s.close }));
   if (spySnaps.length < 2) return null;
 
   const startPrice = spySnaps[0].price;
@@ -672,7 +724,7 @@ const MODE_OVERRIDES = {
   position: { holdDays: 40, stopATR: 2.5, targetATR: 7.0, scaleOut: true, target1ATR: 3.5, target2ATR: 7.0, pyramidEntry: true },
 };
 
-function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPositions = 10, initialCapital = 100000, execution = {}, persistResult = true, indexName = 'SP500' }) {
+function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPositions = 10, initialCapital = 100000, execution = {}, persistResult = true, indexName = 'SP500', benchmark = 'SPY' }) {
   const stratDef = BUILT_IN_STRATEGIES[strategy];
   if (!stratDef) throw new Error(`Unknown strategy: ${strategy}. Available: ${Object.keys(BUILT_IN_STRATEGIES).join(', ')}`);
 
@@ -1590,8 +1642,11 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     exitReasons[t.exitReason] = (exitReasons[t.exitReason] || 0) + 1;
   }
 
-  // ─── SPY Benchmark ─────────────────────────────────────────────────────────
-  const spyBenchmark = calcSPYBenchmark(startDate, endDate);
+  // ─── Benchmark (SPY by default; QQQ / IWM / DIA when caller picks) ──────
+  // Variable kept named spyBenchmark for diff hygiene with the rest of
+  // the function; the symbol it represents is whatever the caller asked
+  // for. The result.benchmark field below carries the symbol explicitly.
+  const spyBenchmark = calcBenchmark(startDate, endDate, benchmark);
   const alpha = spyBenchmark
     ? +(totalReturn - spyBenchmark.totalReturn).toFixed(2)
     : null;
@@ -1727,6 +1782,9 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     // `significance.isSignificant` and shows `significance.reason` on hover.
     significance,
     benchmark: spyBenchmark ? {
+      symbol: benchmark,
+      // Field names kept as `spy*` for back-compat with the existing UI;
+      // the `symbol` field disambiguates when benchmark != SPY.
       spyReturn: spyBenchmark.totalReturn,
       spyMaxDrawdown: spyBenchmark.maxDrawdown,
       spySharpe: spyBenchmark.sharpeRatio,
@@ -2018,7 +2076,7 @@ async function runWalkForward({
   // SPY benchmark over the *out-of-sample* span (first test start → last test end)
   const oosStart = windows[0].testStart;
   const oosEnd = windows[windows.length - 1].testEnd;
-  const spy = calcSPYBenchmark(oosStart, oosEnd);
+  const spy = calcBenchmark(oosStart, oosEnd, 'SPY');
   const alpha = spy ? +(finalReturn - spy.totalReturn).toFixed(2) : null;
 
   // Macro context across the OOS span (NOT the full train+test range — the
@@ -2462,6 +2520,8 @@ module.exports = {
   runWalkForward,
   runMonteCarlo,
   compareStrategies,
+  ensureBenchmarkLoaded,
+  calcBenchmark,
   getReplayHistory,
   getReplayResult,
   deleteReplayResult,

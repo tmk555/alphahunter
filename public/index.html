@@ -13505,6 +13505,7 @@ function ReplayTab() {
     mcIterations: 1000,
     randomSamples: 0,
     slippageSweep: false,
+    benchmark: 'SPY',               // SPY (default), QQQ (tech-heavy harder bar), IWM (small caps), DIA
   });
   // Replay tab is now organized into mode tabs instead of a long linear
   // scroll. Each mode renders its form + result; non-active modes are
@@ -13865,6 +13866,7 @@ function ReplayTab() {
           execution: buildExecution(),
           taxRates: { short: (sweepConfig.shortRate || 35) / 100, long: (sweepConfig.longRate || 18) / 100 },
           topK: sweepConfig.topK || 10,
+          benchmark: sweepConfig.benchmark || 'SPY',
           runWalkForward: !!sweepConfig.runWalkForward,
           runMonteCarlo:  !!sweepConfig.runMonteCarlo,
           mcIterations:   sweepConfig.mcIterations || 1000,
@@ -14281,6 +14283,16 @@ function ReplayTab() {
               <input type="number" min={1} max={50} value={sweepConfig.topK}
                 onChange={e => setSweepConfig(c => ({ ...c, topK: +e.target.value }))}
                 style={{width:42,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'4px 6px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+              <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)',letterSpacing:1}}
+                    title="The buy-and-hold benchmark every combo's alpha is measured against. SPY is the easy target in tech-heavy decades; QQQ is a much harder bar (+480% vs SPY +229% in 2016-2026). First QQQ run lazy-loads ~10 years of history from Yahoo (~2s).">BENCHMARK</span>
+              <select value={sweepConfig.benchmark || 'SPY'}
+                      onChange={e => setSweepConfig(c => ({ ...c, benchmark: e.target.value }))}
+                      style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'4px 6px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}>
+                <option value="SPY">SPY</option>
+                <option value="QQQ">QQQ</option>
+                <option value="IWM">IWM</option>
+                <option value="DIA">DIA</option>
+              </select>
               <label style={{display:'flex',alignItems:'center',gap:4,fontSize:10,color:'var(--text2)',cursor:'pointer'}}>
                 <input type="checkbox" checked={sweepConfig.runWalkForward} onChange={e => setSweepConfig(c => ({ ...c, runWalkForward: e.target.checked }))}/>
                 <span title="Walk-forward optimization on each top-K survivor — adds significant runtime">+ Walk-Forward</span>
@@ -14694,9 +14706,14 @@ function ReplayTab() {
           <div className="panel">
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12,flexWrap:'wrap',gap:8}}>
               <div>
-                <div className="panel-title">🤖 <span>AUTO-SWEEP</span> RESULTS</div>
+                <div className="panel-title">
+                  🤖 <span>AUTO-SWEEP</span> RESULTS
+                  <span style={{marginLeft:10,fontSize:10,padding:'2px 8px',background:'rgba(157,78,221,0.15)',border:'1px solid rgba(157,78,221,0.4)',borderRadius:3,color:'var(--violet, #c594ff)',letterSpacing:1,fontWeight:700,fontFamily:'var(--font-mono)'}}>
+                    vs {s.benchmark || 'SPY'}
+                  </span>
+                </div>
                 <div style={{fontSize:11,color:'var(--text3)',marginTop:2,fontFamily:'var(--font-mono)'}}>
-                  {s.totalCombos} combos · {s.successful} valid · {s.outperformingPreTax} beat SPY pre-tax · <strong style={{color:s.outperformingAfterTax>0?'var(--green)':'var(--red)'}}>{s.outperformingAfterTax} beat SPY AFTER-TAX</strong>
+                  {s.totalCombos} combos · {s.successful} valid · {s.outperformingPreTax} beat {s.benchmark || 'SPY'} pre-tax · <strong style={{color:s.outperformingAfterTax>0?'var(--green)':'var(--red)'}}>{s.outperformingAfterTax} beat {s.benchmark || 'SPY'} AFTER-TAX</strong>
                   {' '}· tax: short {Math.round(tax.short*100)}% / long {Math.round(tax.long*100)}%
                 </div>
               </div>

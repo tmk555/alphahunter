@@ -221,7 +221,7 @@ function buildParams(strategy, comboParams, exit, strictRegime, tradeMode) {
   return params;
 }
 
-function evaluateOneCombo({ strategy, comboParams, exit, strictRegime, tradeMode, startDate, endDate, maxPositions, initialCapital, execution, taxRates }) {
+function evaluateOneCombo({ strategy, comboParams, exit, strictRegime, tradeMode, startDate, endDate, maxPositions, initialCapital, execution, taxRates, benchmark }) {
   const params = buildParams(strategy, comboParams, exit, strictRegime, tradeMode);
   let result;
   try {
@@ -232,6 +232,7 @@ function evaluateOneCombo({ strategy, comboParams, exit, strictRegime, tradeMode
       startDate, endDate,
       maxPositions, initialCapital,
       execution,
+      benchmark: benchmark || 'SPY',
       persistResult: false,
     });
   } catch (e) {
@@ -316,6 +317,7 @@ async function runSweep(opts = {}) {
     mcIterations = 1000,
     randomSamples = 0,
     slippageSweep = false,
+    benchmark = 'SPY',
     onProgress,
     // ─── Resume support ─────────────────────────────────────────────────
     // When set, runSweep skips queue construction and re-uses the supplied
@@ -330,6 +332,17 @@ async function runSweep(opts = {}) {
     checkpointEveryN = 25,
   } = opts;
   if (!startDate || !endDate) throw new Error('startDate and endDate required');
+
+  // Pre-load the benchmark price history ONCE before the sweep. Without
+  // this, every combo's runReplay() would call calcBenchmark which would
+  // call ensureBenchmarkLoaded which would hit Yahoo — 5,000 Yahoo
+  // fetches per sweep. After the pre-load, all calls hit the local
+  // benchmark_prices SQLite table. SPY is in rs_snapshots so this is a
+  // no-op for the default benchmark.
+  if (benchmark && benchmark !== 'SPY') {
+    const { ensureBenchmarkLoaded } = require('./replay');
+    await ensureBenchmarkLoaded(benchmark);
+  }
 
   // Build the full list of (strategy, combo, exit, regime, tradeMode) tuples.
   // When tradeMode is 'swing' or 'position' the engine's MODE_OVERRIDES
@@ -466,7 +479,7 @@ async function runSweep(opts = {}) {
       // Slippage-axis combos carry their own execution variant; otherwise
       // use the global execution opts.
       execution: q._executionVariant || execution,
-      taxRates,
+      taxRates, benchmark,
     });
     // Decorate with axis-tag metadata so the UI can show what made each
     // combo distinct.
@@ -644,6 +657,7 @@ async function runSweep(opts = {}) {
     flavorStats,
     bestByStrategy: bestByStrategyList,
     taxRates,
+    benchmark,                // explicit so the UI labels SPY/QQQ/etc.
     slippageSweep,
     randomSamples,
     deepDive: doWF || doMC ? { topK: top.length, ranWF: doWF, ranMC: doMC, mcIterations: doMC ? mcIterations : null } : null,

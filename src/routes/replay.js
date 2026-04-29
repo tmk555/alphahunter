@@ -395,6 +395,7 @@ const JOB_KINDS = {
       maxPositions, initialCapital, execution,
       taxRates, topK, runWalkForward: doWF, runMonteCarlo: doMC,
       mcIterations, randomSamples, slippageSweep,
+      benchmark,
     } = body || {};
     if (!startDate || !endDate) throw new Error('startDate and endDate required');
     const resumeFrom = body?._resumeFrom || jobRecord?.checkpoint || null;
@@ -414,6 +415,7 @@ const JOB_KINDS = {
       mcIterations:   +mcIterations  || 1000,
       randomSamples:  +randomSamples || 0,
       slippageSweep:  !!slippageSweep,
+      benchmark:      benchmark || 'SPY',
       resumeFrom,
     }, setProgress, setCheckpoint, setWorker);
   },
