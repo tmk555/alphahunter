@@ -416,6 +416,13 @@ async function runSweep(opts = {}) {
   const results = [];
   let outperforming = 0;
 
+  // Fire an immediate progress tick BEFORE the loop so the JOB RUNNING badge
+  // populates with done/total/outperforming right away. Pre-fix the badge
+  // showed only "elapsed Ns" for the first 1-4s of a sweep (until the first
+  // mod-5 combo hit), and the user thought their job was missing the
+  // done-count + beating-SPY fields.
+  if (onProgress) onProgress({ done: 0, total, outperforming: 0, current: 'starting…' });
+
   for (let i = 0; i < total; i++) {
     const q = queue[i];
     const r = evaluateOneCombo({
@@ -432,7 +439,11 @@ async function runSweep(opts = {}) {
     if (q._isRandom) r.fromRandomSample = true;
     results.push(r);
     if (r.afterTaxAlpha != null && r.afterTaxAlpha > 0) outperforming++;
-    if (onProgress && (i % 5 === 0 || i === total - 1)) {
+    // Report progress on EVERY combo. Was every 5 — that staggered the
+    // badge's done/total updates and made the beating-SPY count tick in
+    // chunks of 5. With the per-combo yield (`setImmediate`) below the
+    // overhead of an extra setProgress call is negligible.
+    if (onProgress) {
       const flavor = q.tradeMode || 'custom';
       onProgress({
         done: i + 1,
