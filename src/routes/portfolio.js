@@ -1073,6 +1073,18 @@ module.exports = function(db) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // Manual trigger for journal→broker stop sync. Ensures every open journal
+  // row has a matching broker sell-stop at the journal's stop_price. Patches
+  // mismatched legs, creates new stops where none exist, never loosens.
+  // Same logic the broker_fills_sync cron runs every 15 min.
+  router.post('/portfolio/sync-broker-stops', async (req, res) => {
+    try {
+      const { syncJournalStopsToBroker } = require('../broker/stops-sync');
+      const result = await syncJournalStopsToBroker({ dryRun: !!req.body?.dryRun });
+      res.json(result);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   router.get('/portfolio/alpha/rolling', (req, res) => {
     try {
       const { calculateRollingSharpe, calculateRollingSortino, getEquitySnapshots } = require('../risk/alpha-tracker');

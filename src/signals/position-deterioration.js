@@ -188,10 +188,19 @@ async function applyDeteriorationTighten(alerts) {
     updateStmt.run(newTrailPct, reason, trade.id);
     tightened++;
 
-    // If trailing is already active, recompute the new stop RIGHT NOW so
-    // the broker leg matches the new tighter trail — don't wait for the
-    // scaling engine's next tick (could be hours away).
-    if (broker && trade.trailing_stop_active && trade.remaining_shares > 0) {
+    // Recompute the new stop RIGHT NOW and patch the broker leg so the
+    // alert the user gets ("trail tightened on TER") actually corresponds
+    // to a real broker stop change. Pre-fix this branch was gated on
+    // `trade.trailing_stop_active` — most rows had that flag 0, so the
+    // journal got tightened and the user's phone buzzed but the broker
+    // stop never moved. Net effect: positions sat at -4% to -7% with
+    // STOP VIOLATED in the journal while Alpaca's actual stop was still
+    // at the original wide level. Removing the gate fixes that. Even if
+    // the position has no broker stop yet (manual entry, reconciled
+    // orphan), the periodic syncJournalStopsToBroker job will create one
+    // — but on tight-trigger we still attempt the patch path so the user
+    // sees a same-tick action.
+    if (broker && trade.remaining_shares > 0) {
       try {
         // Fetch current price for a stop recompute
         const { getQuotes } = require('../data/providers/manager');

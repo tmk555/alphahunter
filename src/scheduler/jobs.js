@@ -177,10 +177,11 @@ registerJobType('portfolio_reconcile', {
 // ─── 5b. Broker Fills Sync — Pull filled orders into journal + slippage log ──
 
 registerJobType('broker_fills_sync', {
-  description: 'Sync Alpaca fills into trades journal; captures slippage in execution_log; reconciles zombie journal rows',
+  description: 'Sync Alpaca fills into trades journal; captures slippage in execution_log; reconciles zombie journal rows; syncs journal stops to broker',
   defaultConfig: {},
   handler: async () => {
     const { syncBrokerFills, reconcileZombieJournalRows } = require('../broker/fills-sync');
+    const { syncJournalStopsToBroker } = require('../broker/stops-sync');
     const result = await syncBrokerFills();
     // Self-healing pass for journal rows where Alpaca reports zero qty.
     // Without this, an externally-closed position (manual sell, fired
@@ -192,6 +193,18 @@ registerJobType('broker_fills_sync', {
     let zombie = { closed: [], skipped: [] };
     try { zombie = await reconcileZombieJournalRows(); }
     catch (e) { zombie = { closed: [], skipped: [{ reason: e.message }] }; }
+    // Stops sync — ensures every open journal row's stop_price is reflected
+    // in an actual broker sell-stop. Pre-fix the journal-side stop got
+    // tightened (regime downgrade, deterioration scan) but the broker leg
+    // never moved, leaving positions at "STOP VIOLATED" with no actual
+    // exit firing. Now runs on every fills-sync tick (every 15 min during
+    // market hours + EOD) so any drift self-heals within minutes.
+    let stopsSync = { plans: [] };
+    try { stopsSync = await syncJournalStopsToBroker(); }
+    catch (e) { stopsSync = { plans: [], error: e.message }; }
+    const stopsPatched = stopsSync.plans.filter(p => p.patched).length;
+    const stopsCreated = stopsSync.plans.filter(p => p.createdStopId).length;
+    const stopsFailed  = stopsSync.plans.filter(p => p.patchFailed || p.createError).length;
     return {
       synced: result.synced.length,
       exited: result.exited.length,
@@ -199,6 +212,12 @@ registerJobType('broker_fills_sync', {
       zombiesClosed: zombie.closed.length,
       zombiesSkipped: zombie.skipped.length,
       zombieDetail: zombie.closed.map(c => ({ symbol: c.symbol, tradeId: c.tradeId, exitPrice: c.exitPrice, source: c.source })),
+      stopsPatched, stopsCreated, stopsFailed,
+      stopsSyncDetail: stopsSync.plans.map(p => ({
+        symbol: p.symbol, action: p.reason, desiredStop: p.desiredStop,
+        coveredQty: p.coveredQty, brokerQty: p.brokerQty, uncovered: p.uncovered,
+        createdStopId: p.createdStopId, error: p.createError,
+      })),
     };
   },
 });
