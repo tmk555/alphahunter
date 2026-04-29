@@ -188,19 +188,35 @@ class MockBrokerAdapter extends BrokerAdapter {
     }
     const submitted = [];
     let totalQty = 0;
-    for (const t of params.tranches) {
-      const o = await this.submitBracketOrder({
-        symbol:               params.symbol,
-        qty:                  t.qty,
-        side:                 params.side,
-        entryType:            params.entryType,
-        entryLimitPrice:      params.entryLimitPrice,
-        stopPrice:            params.stopPrice,
-        takeProfitLimitPrice: t.takeProfitLimitPrice,
-        timeInForce:          params.timeInForce || 'gtc',
-      });
-      submitted.push({ label: t.label, order: o });
-      totalQty += t.qty;
+    for (let i = 0; i < params.tranches.length; i++) {
+      const t = params.tranches[i];
+      try {
+        const o = await this.submitBracketOrder({
+          symbol:               params.symbol,
+          qty:                  t.qty,
+          side:                 params.side,
+          entryType:            params.entryType,
+          entryLimitPrice:      params.entryLimitPrice,
+          stopPrice:            params.stopPrice,
+          takeProfitLimitPrice: t.takeProfitLimitPrice,
+          timeInForce:          params.timeInForce || 'gtc',
+        });
+        submitted.push({ label: t.label, order: o });
+        totalQty += t.qty;
+      } catch (e) {
+        // Mirror the Alpaca-adapter contract: on mid-loop failure, surface
+        // .partial[] so the caller knows which tranches succeeded and can
+        // clean them up. Without this, an externally-injected failure
+        // (e.g. Alpaca 422 on tranche 2 of 3) would leave the user with
+        // orphan tranches at the broker and no way to reconcile.
+        const err = new Error(
+          `submitMultiTrancheBracket: tranche ${i + 1}/${params.tranches.length} ` +
+          `(${t.label || 'unlabeled'}) failed: ${e.message}. ${submitted.length} ` +
+          `prior tranche(s) were submitted and may need manual cancellation.`
+        );
+        err.partial = submitted;
+        throw err;
+      }
     }
     return { tranches: submitted, totalQty };
   }
