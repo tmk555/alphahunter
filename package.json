@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
+    "build": "node scripts/build.js",
     "test": "node --test 'test/**/*.test.js'",
     "kill-ports": "lsof -ti :3000 -ti :3443 2>/dev/null | xargs kill 2>/dev/null; exit 0",
     "restart": "npm run kill-ports && npm install && npm start"
@@ -21,6 +22,7 @@
     "ws": "^8.20.0"
   },
   "devDependencies": {
+    "esbuild": "^0.28.0",
     "nodemon": "^3.0.2"
   }
 }

@@ -144,7 +144,21 @@ app.use('/api', pyramidPlansRoutes);
 app.use('/api', marketRoutes);
 
 // ─── SPA fallback ────────────────────────────────────────────────────────────
-app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+// Prefer the prebuilt bundle (public/index.dist.html + public/dist/app.js)
+// when present — page loads without the in-browser Babel transformer (saved
+// ~1-3s of cold-load time on a ~800KB file). Fall back to public/index.html
+// for dev iteration where you don't want to re-run `npm run build` after
+// every JSX edit. Compute once at boot, not per-request.
+const _fs = require('fs');
+const _DIST_HTML = path.join(__dirname, 'public', 'index.dist.html');
+const _RAW_HTML  = path.join(__dirname, 'public', 'index.html');
+const _ENTRY_HTML = _fs.existsSync(_DIST_HTML) ? _DIST_HTML : _RAW_HTML;
+if (_ENTRY_HTML === _DIST_HTML) {
+  console.log('   Serving prebuilt bundle (public/index.dist.html)');
+} else {
+  console.log('   Serving public/index.html (in-browser Babel — run "npm run build" for a faster load)');
+}
+app.get('*', (_, res) => res.sendFile(_ENTRY_HTML));
 
 // ─── Broker Monitor ─────────────────────────────────────────────────────────
 const { startStopMonitor } = require('./src/broker/monitor');
