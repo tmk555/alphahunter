@@ -1784,6 +1784,7 @@ function App() {
     { id:'trading',   label:'💼 Trading', badge: badgeCounts.positions || null },
     { id:'journal',   label:'📒 Journal', badge: badgeCounts.review || null, badgeWarn: !!badgeCounts.review },
     { id:'replay',    label:'🔁 Replay' },
+    { id:'paper',     label:'🧪 Paper' },
     { id:'edge',      label:'📈 Analytics' },
     { id:'telemetry', label:'📡 Edge Telemetry' },
     { id:'hedge',     label:'🛡 Hedge' },
@@ -1926,6 +1927,7 @@ function App() {
         {tab==='trading'    && <><PortfolioTab /><StrategiesSection /><ExecutionTab /></>}
         {tab==='journal'    && <><PerformanceTab /><TradeJournalTab /></>}
         {tab==='replay'     && <ReplayTab />}
+        {tab==='paper'      && <PaperTradesTab />}
         {tab==='edge'       && <EdgeDashboardTab />}
         {tab==='telemetry'  && <TelemetryTab />}
         {tab==='settings'   && <SettingsTab />}
@@ -13481,6 +13483,315 @@ function MacroContextCard({ ctx, title = 'MACRO CONTEXT (FRED)' }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Paper Trades Tab — discretionary watchlist + paper P&L ──────────────
+//
+// Lets the user practice the Minervini-style hybrid (judgment overlay on
+// systematic candidates) without committing capital. Flow:
+//   1. Scanner / Trade Setups flags candidates (existing infra)
+//   2. User clicks "+ PAPER" to stage one with entry/stop/targets/theme
+//   3. EOD cron auto-closes on stop / target2 hit (live quotes)
+//   4. Stats panel shows win-rate + avg R + expectancy after 30+ trades
+//
+// Three sections: stage-form (bottom), open positions (middle), closed
+// history with stats (top — that's where the answer lives).
+function PaperTradesTab() {
+  const [open, setOpen] = useState([]);
+  const [closed, setClosed] = useState([]);
+  const [stats, setStats] = useState(null);
+  const [themeFilter, setThemeFilter] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [stageForm, setStageForm] = useState({
+    symbol: '', themeTag: '', entryPrice: '', stopPrice: '',
+    target1Price: '', target2Price: '', shares: 100, notes: '',
+  });
+  const [closeForm, setCloseForm] = useState({});  // id → {exitPrice, exitReason}
+
+  async function load() {
+    setLoading(true); setError('');
+    try {
+      const params = themeFilter ? `?themeTag=${encodeURIComponent(themeFilter)}` : '';
+      const [o, c, s] = await Promise.all([
+        api(`/api/paper-trades?status=open${themeFilter ? '&themeTag=' + encodeURIComponent(themeFilter) : ''}`).catch(() => ({trades:[]})),
+        api(`/api/paper-trades?status=closed${themeFilter ? '&themeTag=' + encodeURIComponent(themeFilter) : ''}&limit=100`).catch(() => ({trades:[]})),
+        api(`/api/paper-trades/stats${params}`).catch(() => null),
+      ]);
+      setOpen(o.trades || []);
+      setClosed(c.trades || []);
+      setStats(s);
+    } catch (e) { setError(e.message); }
+    setLoading(false);
+  }
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [themeFilter]);
+
+  async function submitStage() {
+    setError('');
+    try {
+      const body = {
+        symbol: stageForm.symbol.trim().toUpperCase(),
+        themeTag: stageForm.themeTag.trim() || null,
+        entryPrice: +stageForm.entryPrice,
+        stopPrice:  +stageForm.stopPrice,
+        target1Price: stageForm.target1Price ? +stageForm.target1Price : null,
+        target2Price: stageForm.target2Price ? +stageForm.target2Price : null,
+        shares: +stageForm.shares || 100,
+        notes: stageForm.notes || null,
+        source: 'manual',
+      };
+      await api('/api/paper-trades', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      setStageForm(f => ({ ...f, symbol:'', entryPrice:'', stopPrice:'', target1Price:'', target2Price:'', notes:'' }));
+      await load();
+    } catch (e) { setError('Stage failed: ' + e.message); }
+  }
+  async function closeOne(id, exitPrice, reason = 'manual') {
+    if (!(exitPrice > 0)) return setError('Enter a positive exit price');
+    try {
+      await api(`/api/paper-trades/${id}/close`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ exitPrice, exitReason: reason }) });
+      await load();
+    } catch (e) { setError('Close failed: ' + e.message); }
+  }
+  async function cancelOne(id) {
+    if (!confirm(`Cancel paper trade #${id}? This marks it cancelled (not closed) so it doesn't count in win-rate stats.`)) return;
+    try {
+      await api(`/api/paper-trades/${id}/cancel`, { method:'POST', headers:{'Content-Type':'application/json'} });
+      await load();
+    } catch (e) { setError('Cancel failed: ' + e.message); }
+  }
+  async function checkNow() {
+    setLoading(true); setError('');
+    try {
+      const r = await api('/api/paper-trades/check', { method:'POST', headers:{'Content-Type':'application/json'} });
+      window.showToast?.('Paper-trade check', `${r.checked} checked · ${r.closed} auto-closed · ${r.updated} high-water updates`);
+      await load();
+    } catch (e) { setError('Check failed: ' + e.message); }
+    setLoading(false);
+  }
+
+  const verdictColor = stats?.expectancy >= 0.5 ? 'var(--green)'
+    : stats?.expectancy >= 0 ? 'var(--amber)' : 'var(--red)';
+  const verdictText = stats?.count == null || stats.count < 10 ? 'NEED ≥ 10 trades for verdict'
+    : stats.expectancy >= 0.5 ? 'POSITIVE EDGE — expectancy strong'
+    : stats.expectancy >= 0 ? 'BORDERLINE — keep tracking'
+    : 'NO EDGE — capital better elsewhere';
+
+  return (
+    <div>
+      {/* Header / verdict */}
+      <div className="panel" style={{marginBottom:14,padding:'14px 18px'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:10}}>
+          <div>
+            <div className="panel-title">🧪 <span>PAPER TRADES</span> — judgment-overlay practice</div>
+            <div style={{fontSize:11,color:'var(--text3)',marginTop:2,maxWidth:680,lineHeight:1.5}}>
+              Stage candidates from the scanner, hold to your judgment, let the EOD cron auto-close on stop/target2 hits.
+              After ≥30 trades, win-rate + expectancy answer "does the hybrid Minervini-style approach actually work for me?"
+              before you commit real capital.
+            </div>
+          </div>
+          <button className="load-btn" onClick={checkNow} disabled={loading}
+            title="Force the auto-close cron NOW instead of waiting for 4:15 PM. Closes any open trade whose live price has hit stop or target2."
+            style={{fontSize:10,padding:'6px 14px',background:'var(--cyan)',color:'#000'}}>
+            {loading ? 'CHECKING…' : '↻ CHECK NOW'}
+          </button>
+        </div>
+        {error && <div style={{marginTop:8,padding:'6px 10px',background:'rgba(255,61,87,0.08)',border:'1px solid var(--red)',borderRadius:4,color:'var(--red)',fontSize:11}}>⚠ {error}</div>}
+      </div>
+
+      {/* Stats / verdict bar */}
+      {stats && stats.count > 0 && (
+        <div className="panel" style={{marginBottom:14,padding:'14px 16px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:8,flexWrap:'wrap',gap:10}}>
+            <div className="panel-title" style={{fontSize:11}}>EDGE STATS{themeFilter ? ` · theme: ${themeFilter}` : ''}</div>
+            <div style={{fontSize:11,color:verdictColor,fontWeight:700,letterSpacing:1,fontFamily:'var(--font-mono)'}}>{verdictText}</div>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:10}}>
+            {[
+              { label: 'TRADES',     val: stats.count },
+              { label: 'WINS / LOSS', val: `${stats.wins} / ${stats.losses}` },
+              { label: 'WIN RATE',   val: stats.winRate != null ? (stats.winRate*100).toFixed(0) + '%' : '—',
+                color: stats.winRate >= 0.5 ? 'var(--green)' : stats.winRate >= 0.4 ? 'var(--amber)' : 'var(--red)' },
+              { label: 'AVG WIN R',  val: stats.avgWinR != null ? '+' + stats.avgWinR + 'R' : '—', color: 'var(--green)' },
+              { label: 'AVG LOSS R', val: stats.avgLossR != null ? stats.avgLossR + 'R' : '—',     color: 'var(--red)' },
+              { label: 'EXPECTANCY', val: stats.expectancy != null ? (stats.expectancy>0?'+':'') + stats.expectancy + 'R' : '—', color: verdictColor, big: true },
+              { label: 'TOTAL P&L',  val: (stats.totalPnlPct>0?'+':'') + stats.totalPnlPct + '%',
+                color: stats.totalPnlPct > 0 ? 'var(--green)' : 'var(--red)' },
+            ].map(s => (
+              <div key={s.label} style={{padding:'8px 10px',background:'var(--bg2)',borderRadius:4}}>
+                <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>{s.label}</div>
+                <div style={{fontSize: s.big ? 22 : 16,fontWeight:700,color:s.color || 'var(--text)',fontFamily:'var(--font-mono)',marginTop:2}}>{s.val}</div>
+              </div>
+            ))}
+          </div>
+          {/* Theme breakdown */}
+          {Object.keys(stats.themes || {}).length > 1 && (
+            <div style={{marginTop:14}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1,fontFamily:'var(--font-mono)',marginBottom:6}}>BY THEME</div>
+              <table className="data-table" style={{fontSize:11}}>
+                <thead><tr><th>Theme</th><th style={{textAlign:'right'}}>N</th><th style={{textAlign:'right'}}>Wins</th><th style={{textAlign:'right'}}>Win%</th><th style={{textAlign:'right'}}>Avg R</th><th></th></tr></thead>
+                <tbody>
+                  {Object.entries(stats.themes).map(([tag, t]) => (
+                    <tr key={tag}>
+                      <td style={{color:'var(--cyan)'}}>{tag}</td>
+                      <td style={{textAlign:'right',fontFamily:'var(--font-mono)'}}>{t.count}</td>
+                      <td style={{textAlign:'right',fontFamily:'var(--font-mono)'}}>{t.wins}</td>
+                      <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:t.winRate >= 0.5 ? 'var(--green)' : 'var(--text3)'}}>{(t.winRate*100).toFixed(0)}%</td>
+                      <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:t.avgR > 0 ? 'var(--green)' : 'var(--red)'}}>{t.avgR > 0 ? '+' : ''}{t.avgR}R</td>
+                      <td style={{textAlign:'right'}}>
+                        <button onClick={() => setThemeFilter(tag === '(untagged)' ? '' : tag)}
+                          style={{padding:'2px 8px',fontSize:9,fontFamily:'var(--font-mono)',background:'transparent',border:'1px solid var(--border2)',color:'var(--cyan)',borderRadius:3,cursor:'pointer'}}>
+                          FILTER
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {themeFilter && (
+                <button onClick={() => setThemeFilter('')}
+                  style={{marginTop:6,padding:'2px 10px',fontSize:9,fontFamily:'var(--font-mono)',background:'transparent',border:'1px solid var(--border2)',color:'var(--text3)',borderRadius:3,cursor:'pointer'}}>
+                  ✕ Clear theme filter
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Stage form */}
+      <div className="panel" style={{marginBottom:14,padding:'14px 16px'}}>
+        <div className="panel-title" style={{fontSize:11}}>+ NEW PAPER TRADE</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))',gap:8,fontSize:11}}>
+          {[
+            { k:'symbol', label:'SYMBOL', placeholder:'NVDA' },
+            { k:'themeTag', label:'THEME', placeholder:'AI plays' },
+            { k:'entryPrice', label:'ENTRY $', placeholder:'120.00', type:'number' },
+            { k:'stopPrice', label:'STOP $', placeholder:'112.00', type:'number' },
+            { k:'target1Price', label:'TGT1 $', placeholder:'140 (opt)', type:'number' },
+            { k:'target2Price', label:'TGT2 $', placeholder:'160 (opt)', type:'number' },
+            { k:'shares', label:'SHARES', placeholder:'100', type:'number' },
+          ].map(f => (
+            <label key={f.k} style={{display:'flex',flexDirection:'column',gap:3}}>
+              <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>{f.label}</span>
+              <input type={f.type || 'text'} placeholder={f.placeholder} value={stageForm[f.k] ?? ''}
+                onChange={e => setStageForm(s => ({ ...s, [f.k]: e.target.value }))}
+                style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+            </label>
+          ))}
+          <label style={{display:'flex',flexDirection:'column',gap:3,gridColumn:'span 2'}}>
+            <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>NOTES</span>
+            <input type="text" placeholder="thesis / setup details (optional)"
+              value={stageForm.notes} onChange={e => setStageForm(s => ({ ...s, notes: e.target.value }))}
+              style={{background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'6px 8px',color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)'}}/>
+          </label>
+        </div>
+        <div style={{marginTop:10}}>
+          <button onClick={submitStage}
+            disabled={!stageForm.symbol || !stageForm.entryPrice || !stageForm.stopPrice}
+            style={{padding:'6px 16px',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:1,background:'var(--cyan)',color:'#000',border:'none',borderRadius:3,cursor:'pointer'}}>
+            STAGE PAPER TRADE
+          </button>
+          <span style={{fontSize:10,color:'var(--text3)',marginLeft:10}}>
+            R = (entry − stop). Stop must be below entry. Target2 hit auto-closes; stop hit auto-closes; target1 is a manual scale-out decision.
+          </span>
+        </div>
+      </div>
+
+      {/* Open positions */}
+      <div className="panel" style={{marginBottom:14,padding:'14px 16px'}}>
+        <div className="panel-title" style={{fontSize:11}}>OPEN ({open.length})</div>
+        {open.length === 0 ? (
+          <div style={{fontSize:11,color:'var(--text3)'}}>No open paper trades. Stage one above to start tracking.</div>
+        ) : (
+          <table className="data-table" style={{fontSize:11}}>
+            <thead><tr>
+              <th>Symbol</th><th>Theme</th><th>Entry</th><th>Stop</th><th>T1</th><th>T2</th>
+              <th>Shares</th><th>R$</th><th>Days</th><th>MFE / MAE</th><th>Notes</th><th></th>
+            </tr></thead>
+            <tbody>
+              {open.map(t => {
+                const daysHeld = Math.floor((Date.now() - new Date(t.entry_date+'T00:00:00Z').getTime()) / 86400000);
+                const r$ = (t.entry_price - t.stop_price) * t.shares;
+                return (
+                  <tr key={t.id}>
+                    <td><span className="td-ticker" style={{color:'var(--cyan)',fontWeight:700}}>{t.symbol}</span></td>
+                    <td style={{fontSize:10,color:'var(--text3)'}}>{t.theme_tag || '—'}</td>
+                    <td style={{fontFamily:'var(--font-mono)'}}>${t.entry_price.toFixed(2)}</td>
+                    <td style={{fontFamily:'var(--font-mono)',color:'var(--red)'}}>${t.stop_price.toFixed(2)}</td>
+                    <td style={{fontFamily:'var(--font-mono)',color:'var(--green)'}}>{t.target1_price ? '$'+t.target1_price.toFixed(2) : '—'}</td>
+                    <td style={{fontFamily:'var(--font-mono)',color:'var(--green)'}}>{t.target2_price ? '$'+t.target2_price.toFixed(2) : '—'}</td>
+                    <td style={{fontFamily:'var(--font-mono)'}}>{t.shares}</td>
+                    <td style={{fontFamily:'var(--font-mono)',color:'var(--text3)'}}>${r$.toFixed(0)}</td>
+                    <td style={{fontFamily:'var(--font-mono)'}}>{daysHeld}d</td>
+                    <td style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text3)'}}
+                        title={`Max favorable excursion (high-water mark) / max adverse excursion (low-water). Tracks "left on table" if you exit early and "drawdown during hold" for stop discipline.`}>
+                      ${t.max_favorable?.toFixed(2)} / ${t.max_adverse?.toFixed(2)}
+                    </td>
+                    <td style={{fontSize:10,color:'var(--text3)',maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={t.notes}>
+                      {t.notes || '—'}
+                    </td>
+                    <td style={{display:'flex',gap:4}}>
+                      <input type="number" placeholder="exit$"
+                        value={closeForm[t.id]?.exitPrice ?? ''}
+                        onChange={e => setCloseForm(s => ({ ...s, [t.id]: { ...(s[t.id]||{}), exitPrice: +e.target.value } }))}
+                        style={{width:60,background:'var(--bg)',border:'1px solid var(--border2)',borderRadius:3,padding:'2px 6px',color:'var(--text)',fontSize:10,fontFamily:'var(--font-mono)'}}/>
+                      <button onClick={() => closeOne(t.id, closeForm[t.id]?.exitPrice)}
+                        disabled={!closeForm[t.id]?.exitPrice}
+                        style={{padding:'2px 8px',fontSize:9,fontFamily:'var(--font-mono)',background:'transparent',border:'1px solid var(--green)',color:'var(--green)',borderRadius:3,cursor:'pointer'}}>
+                        CLOSE
+                      </button>
+                      <button onClick={() => cancelOne(t.id)}
+                        style={{padding:'2px 8px',fontSize:9,fontFamily:'var(--font-mono)',background:'transparent',border:'1px solid var(--text3)',color:'var(--text3)',borderRadius:3,cursor:'pointer'}}>
+                        ✕
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Closed history */}
+      <div className="panel" style={{padding:'14px 16px'}}>
+        <div className="panel-title" style={{fontSize:11}}>CLOSED ({closed.length})</div>
+        {closed.length === 0 ? (
+          <div style={{fontSize:11,color:'var(--text3)'}}>No closed paper trades yet.</div>
+        ) : (
+          <table className="data-table" style={{fontSize:11}}>
+            <thead><tr>
+              <th>Symbol</th><th>Theme</th><th>Entry</th><th>Exit</th><th>Reason</th>
+              <th style={{textAlign:'right'}}>P&L %</th><th style={{textAlign:'right'}}>R</th>
+              <th>Held</th><th>Notes</th>
+            </tr></thead>
+            <tbody>
+              {closed.map(t => {
+                const days = t.exit_date && t.entry_date
+                  ? Math.floor((new Date(t.exit_date+'T00:00:00Z').getTime() - new Date(t.entry_date+'T00:00:00Z').getTime()) / 86400000)
+                  : null;
+                return (
+                  <tr key={t.id} style={t.r_multiple > 0 ? {background:'rgba(0,230,118,0.04)'} : undefined}>
+                    <td><span style={{color:'var(--cyan)',fontWeight:700}}>{t.symbol}</span></td>
+                    <td style={{fontSize:10,color:'var(--text3)'}}>{t.theme_tag || '—'}</td>
+                    <td style={{fontFamily:'var(--font-mono)'}}>${t.entry_price.toFixed(2)}</td>
+                    <td style={{fontFamily:'var(--font-mono)'}}>${t.exit_price?.toFixed(2)}</td>
+                    <td style={{fontSize:10,color: t.exit_reason === 'stop' ? 'var(--red)' : t.exit_reason?.startsWith('target') ? 'var(--green)' : 'var(--text3)'}}>{t.exit_reason || '—'}</td>
+                    <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:t.pnl_pct>=0?'var(--green)':'var(--red)'}}>{t.pnl_pct>0?'+':''}{t.pnl_pct}%</td>
+                    <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:t.r_multiple>0?'var(--green)':'var(--red)',fontWeight:700}}>{t.r_multiple > 0 ? '+' : ''}{t.r_multiple}R</td>
+                    <td style={{fontFamily:'var(--font-mono)',color:'var(--text3)'}}>{days != null ? days + 'd' : '—'}</td>
+                    <td style={{fontSize:10,color:'var(--text3)',maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={t.notes}>
+                      {t.notes || '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }

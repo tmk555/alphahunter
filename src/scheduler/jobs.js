@@ -944,6 +944,21 @@ registerJobType('swing_exit_check', {
 // open it has stale data and reads NONE for level when the tape was actually
 // deteriorating across Friday's close. This job runs post-RS-scan so the
 // composite reads the same-day rs_snapshots the scan just wrote.
+// ─── Paper-trade auto-close ────────────────────────────────────────────────
+// Sweeps open paper_trades, fetches live quotes, closes any whose intraday
+// low hit the stop or whose intraday high hit target2 (target1 is left as
+// a manual scale-out decision so the user practices the discipline part).
+// Also tracks max_favorable / max_adverse high-water marks so post-mortem
+// stats can show "left on table" and "max drawdown during hold".
+registerJobType('paper_trade_check', {
+  description: 'Auto-close paper trades on stop / target2 hit using live quotes',
+  defaultConfig: {},
+  handler: async () => {
+    const { autoCloseOnQuotes } = require('../risk/paper-trades');
+    return await autoCloseOnQuotes();
+  },
+});
+
 registerJobType('breadth_snapshot', {
   description: 'Persist daily breadth snapshot (composite + McClellan + divergence) for early-warning history',
   defaultConfig: {},
@@ -1139,6 +1154,17 @@ const DEFAULT_JOBS = [
     job_type: 'swing_exit_check',
     cron_expression: '45 15 * * 1-5',  // 3:45 PM server local, weekdays
     config: { swingLimitDays: 10, earningsWindowDays: 2, dryRun: false },
+  },
+
+  // Paper-trade auto-close — sweeps open paper positions on the daily
+  // post-close, closes any whose stop or target2 was hit, updates
+  // max-favorable / max-adverse high-water marks.
+  {
+    name: 'paper_trade_check_eod',
+    description: 'Auto-close paper trades on stop / target2 hit',
+    job_type: 'paper_trade_check',
+    cron_expression: '15 16 * * 1-5',  // 4:15 PM server local, weekdays
+    config: {},
   },
 
   // Broker fills sync — pulls filled orders into the trades journal and
