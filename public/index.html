@@ -480,11 +480,26 @@ async function runReplayJob({ kind, body, onUpdate, signal, resumeJobId }) {
   } else {
     // Resume path — the caller passed an existing jobId recovered from
     // localStorage on tab remount or page reload. Fire an immediate
-    // onUpdate so the JOB RUNNING badge appears NOW instead of waiting
-    // ~1-2s for the first poll to return. Without this, navigating away
-    // from Replay and back left the inner badge blank during the polling
-    // gap, making the user think their job had disappeared.
-    onUpdate?.({ id: jobId, kind, status: 'running' });
+    // FULL fetch so the JOB RUNNING badge populates with real
+    // startedAt + progress + checkpoint NOW, not partial fields. Pre-fix
+    // the badge briefly showed "0s elapsed · id #1" with no progress
+    // (the resume emitted only {id, kind, status:'running'}, then the
+    // first poll filled in the rest 100-200ms later). The global badge
+    // has its own ref-backed polling so it stayed populated; the inner
+    // ReplayTab badge looked broken during that gap.
+    try {
+      const initial = await api(`/api/replay/jobs/${jobId}`, { timeout: 15_000 });
+      onUpdate?.(initial);
+    } catch (e) {
+      // 404 = server restart wiped the in-memory job map → terminal.
+      if (/not found/i.test(e.message)) {
+        writeActiveReplayJob(kind, null);
+        throw new Error(`Job ${jobId} no longer available (server restarted?). Try again.`);
+      }
+      // Transient — fall through to the regular poll loop. Emit at
+      // least a stub so the badge has SOMETHING.
+      onUpdate?.({ id: jobId, kind, status: 'running' });
+    }
   }
 
   const POLL_MS = 2000;
