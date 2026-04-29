@@ -6081,8 +6081,23 @@ function MarketPulseTab() {
 
   if (loading) return <div className="panel"><Loader msg="Loading market pulse..."/></div>;
 
+  // ─── Section header — adds visible grouping to the long Market Pulse
+  // scroll. Pre-fix every panel sat at the same indent / weight, so the
+  // user couldn't tell at a glance which panels were action-oriented (act
+  // now), which were context (mood), which were forward-looking (events),
+  // and which were deep internals. Trader workflow is top-to-bottom:
+  // decide → check mood → see what's coming → drill into context.
+  const SectionHeader = ({ label, sub }) => (
+    <div style={{margin:'18px 0 10px',display:'flex',alignItems:'baseline',gap:10,flexWrap:'wrap'}}>
+      <div style={{fontFamily:'var(--font-mono)',fontSize:11,letterSpacing:3,color:'var(--text2)',fontWeight:700,textTransform:'uppercase'}}>{label}</div>
+      {sub && <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1}}>{sub}</div>}
+      <div style={{flex:1,height:1,background:'var(--border)'}}/>
+    </div>
+  );
+
   return (
     <div>
+      <SectionHeader label="Act Now" sub="regime stance · capacity · breadth alarms" />
       {/* REGIME BANNER — most prominent element on the page */}
       {regime && (
         <div style={{padding:'20px 24px',background:regime.color+'18',border:`2px solid ${regime.color}55`,borderRadius:8,marginBottom:18}}>
@@ -6341,13 +6356,8 @@ function MarketPulseTab() {
         </div>
       )}
 
+      <SectionHeader label="Sentiment & Event Risk" sub="crowd mood · binary events to clip risk around" />
       {/* ─── FEAR & GREED + UPCOMING EARNINGS ROW ─────────────────────────── */}
-      {/* Two sentiment/event-risk panels side-by-side. F&G is a contrarian-
-          bearish signal at sustained Extreme Greed and a contrarian-bullish
-          signal at sustained Extreme Fear — it's one of the cleanest
-          crowd-psychology gauges for tactical sizing. Earnings panel shows
-          binary-event risk for names we care about (holdings + mega-caps
-          + leaders) so the user has zero surprises this week. */}
       <div style={{display:'grid',gridTemplateColumns:'minmax(280px,1fr) minmax(420px,1.4fr)',gap:14,marginBottom:14}}>
         {/* FEAR & GREED */}
         <div className="panel" style={{padding:'14px 16px'}}>
@@ -6681,6 +6691,7 @@ function MarketPulseTab() {
         </div>
       </div>
 
+        <SectionHeader label="Market Internals" sub="macro overlay · who's leading vs lagging" />
         {/* v8: MACRO REGIME MODEL */}
         {regime?.macroOverlay && (
           <div className="panel" style={{borderColor: regime.macroOverlay.score < -2 ? 'rgba(255,61,87,0.3)' : regime.macroOverlay.score > 2 ? 'rgba(0,230,118,0.3)' : 'var(--border)'}}>
