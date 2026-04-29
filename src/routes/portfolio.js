@@ -1046,6 +1046,20 @@ module.exports = function(db) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // Manual trigger: scan equity_snapshots for stale-SPY rows (spy_close
+  // exactly matching prior trading day) and overwrite them with the real
+  // settled close from history. UI can call this when the diagnostic
+  // banner flags rows the daily-path guard couldn't prevent because they
+  // pre-date the guard. Safe to call anytime — idempotent and only writes
+  // when the historical close actually differs from the stored stale value.
+  router.post('/portfolio/correct-stale-spy', async (req, res) => {
+    try {
+      const { correctStaleSpyRows } = require('../risk/alpha-tracker');
+      const result = await correctStaleSpyRows();
+      res.json(result);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   router.get('/portfolio/alpha/rolling', (req, res) => {
     try {
       const { calculateRollingSharpe, calculateRollingSortino, getEquitySnapshots } = require('../risk/alpha-tracker');

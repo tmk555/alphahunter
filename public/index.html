@@ -10133,8 +10133,30 @@ function AlphaPerformanceSection() {
                     </span>
                   ))}
                 </div>
-                <div style={{fontSize:10,color:'var(--text3)'}}>
-                  Fix: wait until the next post-close fetch returns a fresh SPY, then re-record the snapshot for that date (or let the next daily 4:45 PM cron overwrite it). The safety-net job now refuses to backfill when SPY is detected stale.
+                <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
+                  <button onClick={async () => {
+                    try {
+                      const r = await api('/api/portfolio/correct-stale-spy', { method:'POST', headers:{'Content-Type':'application/json'} });
+                      const fixed = r.corrected?.length || 0;
+                      const failed = r.failed?.length || 0;
+                      window.showToast?.(
+                        fixed ? `Fixed ${fixed} stale SPY row${fixed>1?'s':''}` : 'No stale rows fixed',
+                        (r.corrected || []).map(c => `${c.date}: ${c.before} → ${c.after}`).join('\n') +
+                          (failed ? `\n\n${failed} failed: ${r.failed.map(f=>f.date+': '+f.error).join(', ')}` : ''),
+                        { isError: !fixed && failed > 0 }
+                      );
+                      // Trigger curve reload by bumping a key — caller's parent re-fetches.
+                      if (typeof window.reloadEquityCurve === 'function') window.reloadEquityCurve();
+                      else window.location.reload();
+                    } catch (e) {
+                      window.showToast?.('Stale-SPY fix failed', e.message || String(e), true);
+                    }
+                  }} style={{padding:'4px 12px',fontSize:10,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:1,background:'var(--red)',color:'#fff',border:'none',borderRadius:3,cursor:'pointer'}}>
+                    🔧 AUTO-CORRECT
+                  </button>
+                  <span style={{fontSize:10,color:'var(--text3)'}}>
+                    Re-fetches each affected date's actual SPY close from history and overwrites the stale value in-place.
+                  </span>
                 </div>
               </div>
             );

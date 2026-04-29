@@ -360,6 +360,89 @@ function _daysSinceYearStart() {
   return Math.floor((now - start) / (1000 * 60 * 60 * 24));
 }
 
+// ─── Stale-SPY auto-correct ────────────────────────────────────────────
+// Find equity_snapshot rows whose spy_close exactly matches the previous
+// trading day's spy_close (a fingerprint of a stale Yahoo quote — happens
+// when the snapshot was recorded pre-market or via the weekend safety-net
+// before the daily-path stale-SPY guard existed). For each such row,
+// re-fetch SPY's actual settled close from getHistoryFull (which returns
+// real OHLC bars, not the live quote) and update the row in-place.
+//
+// This is destructive-ish (overwrites spy_close), so we:
+//   - Only update when the historical close actually DIFFERS from the
+//     stale value (so a coincidental flat day stays as-is).
+//   - Log every correction with before/after values for audit.
+//   - Skip rows whose date is the most recent snapshot — the live cron
+//     hasn't had a chance to overwrite it yet.
+//
+// Returns { scanned, corrected: [{date, before, after}], failed: [{date, error}] }.
+async function correctStaleSpyRows() {
+  const _db = require('../db').db;
+  const { getHistoryFull } = require('../data/providers/manager');
+
+  const rows = _db().prepare(
+    'SELECT date, spy_close FROM equity_snapshots ORDER BY date'
+  ).all();
+
+  // Find adjacent-day spy_close ties — the stale fingerprint.
+  const stale = [];
+  for (let i = 1; i < rows.length; i++) {
+    const a = rows[i - 1].spy_close;
+    const b = rows[i].spy_close;
+    if (a != null && b != null && Math.abs(a - b) < 1e-4) {
+      stale.push({ date: rows[i].date, prevDate: rows[i - 1].date, currentSpy: b });
+    }
+  }
+
+  // Skip the very last row — if it's stale, the next live cron will fix it.
+  // Re-fetching it from history before settlement risks overwriting with
+  // an incomplete bar.
+  const lastDate = rows.length ? rows[rows.length - 1].date : null;
+  const fixable = stale.filter(s => s.date !== lastDate);
+
+  if (fixable.length === 0) {
+    return { scanned: rows.length, staleFound: stale.length, corrected: [], failed: [], skippedLastRow: stale.length - fixable.length };
+  }
+
+  // One history fetch covers all dates. Pull at least 60 bars so the deepest
+  // stale row is in range — minBars is a hint, not a hard cap.
+  let bars;
+  try {
+    bars = await getHistoryFull('SPY', { minBars: Math.max(60, fixable.length + 30) });
+  } catch (e) {
+    return { scanned: rows.length, staleFound: stale.length, corrected: [], failed: fixable.map(s => ({ date: s.date, error: `history fetch failed: ${e.message}` })) };
+  }
+  if (!Array.isArray(bars) || bars.length === 0) {
+    return { scanned: rows.length, staleFound: stale.length, corrected: [], failed: fixable.map(s => ({ date: s.date, error: 'no history bars returned' })) };
+  }
+
+  // Index by ISO date string for O(1) lookup.
+  const byDate = {};
+  for (const b of bars) {
+    const d = (b.date || '').slice(0, 10);
+    if (d && b.close != null) byDate[d] = b.close;
+  }
+
+  const update = _db().prepare('UPDATE equity_snapshots SET spy_close = ? WHERE date = ?');
+  const corrected = [];
+  const failed = [];
+  for (const s of fixable) {
+    const real = byDate[s.date];
+    if (real == null) {
+      failed.push({ date: s.date, error: `no historical bar for ${s.date}` });
+      continue;
+    }
+    if (Math.abs(real - s.currentSpy) < 1e-4) {
+      // Coincidence — actual close matches the prior day too. Leave as-is.
+      continue;
+    }
+    update.run(real, s.date);
+    corrected.push({ date: s.date, before: s.currentSpy, after: real });
+  }
+
+  return { scanned: rows.length, staleFound: stale.length, corrected, failed, skippedLastRow: stale.length - fixable.length };
+}
+
 module.exports = {
   calculateTWR,
   calculateRollingSharpe,
@@ -373,4 +456,5 @@ module.exports = {
   // Helpers used by the equity_snapshot job's safety_weekly mode
   isTradingDay,
   lastTradingDayOnOrBefore,
+  correctStaleSpyRows,
 };
