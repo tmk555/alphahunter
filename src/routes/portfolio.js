@@ -126,21 +126,59 @@ module.exports = function(db) {
       const drawdown = getDrawdownStatus(liveEquity);
       const regime = await getMarketRegime();
 
-      // Position-count telemetry (distinct symbols — multi-tranche positions
-      // are ONE logical position). The cap is ramp-tier-aware; callers surface
-      // this to the UI so the trader sees "5/7 positions used" at a glance.
-      const distinctSymbols = new Set(openPositions.map(p => p.symbol)).size;
+      // Position-count telemetry. Broker = source of truth: pre-fix this
+      // counted distinct symbols in the JOURNAL, which inflated the number
+      // anytime a zombie row sat there waiting for fills-sync to reconcile.
+      // The trader saw "4 / 3" while Alpaca actually had 2 positions — the
+      // tier-cap warning fired falsely and looked like a bug. Now: if
+      // broker is reachable, use its position count; fall back to journal
+      // distinct-symbols only if broker is down. Either way we surface
+      // 'drift' so the UI can flag a gap (qty-level too: e.g. broker
+      // 14 shares vs journal 8 means a partial fill never got synced).
+      const journalSymbols = new Set(openPositions.map(p => p.symbol));
+      const brokerSymbols  = new Set((brokerPositions || []).map(p => p.symbol));
+      const brokerReachable = Array.isArray(brokerPositions);
+      const sourceOfTruth = brokerReachable ? brokerSymbols : journalSymbols;
+      const symbolDrift = [
+        ...[...journalSymbols].filter(s => !brokerSymbols.has(s)).map(s => ({ symbol: s, where: 'journal_only' })),
+        ...[...brokerSymbols].filter(s => !journalSymbols.has(s)).map(s => ({ symbol: s, where: 'broker_only' })),
+      ];
+      // Per-symbol qty drift — when a partial sell was double-counted or a
+      // pyramid-add never made it into the journal. Sums the journal's
+      // remaining_shares vs the broker's qty.
+      const qtyDrift = [];
+      for (const sym of brokerSymbols) {
+        const brokerQty = (brokerPositions.find(p => p.symbol === sym)?.qty) || 0;
+        const journalQty = openPositions
+          .filter(p => p.symbol === sym)
+          .reduce((s, p) => s + (p.remaining_shares ?? p.shares ?? 0), 0);
+        if (Math.abs(brokerQty - journalQty) >= 1) {
+          qtyDrift.push({ symbol: sym, brokerQty, journalQty, gap: brokerQty - journalQty });
+        }
+      }
       const tier = regime?.exposureRamp?.exposureLevel;
       const tierCap = tier && config.maxOpenPositionsByTier?.[tier] != null
         ? config.maxOpenPositionsByTier[tier]
         : null;
       const effectiveMaxPositions = tierCap != null ? tierCap : config.maxOpenPositions;
       const positionCount = {
-        current: distinctSymbols,
+        current: sourceOfTruth.size,
         cap:     effectiveMaxPositions,
         tier:    tier || null,
         tierOverride: tierCap != null,
-        atCap:   distinctSymbols >= effectiveMaxPositions,
+        atCap:   sourceOfTruth.size >= effectiveMaxPositions,
+        // Diagnostic fields — UI shows these as a small "DRIFT N" badge
+        // when symbolDrift.length || qtyDrift.length > 0, with a tooltip
+        // listing the gaps. Self-healing: the next broker_fills_sync cron
+        // (every 15 min market hours, EOD safety pass) closes journal_only
+        // zombies and creates broker_only orphans automatically. The UI
+        // can also offer a manual "RECONCILE NOW" button via the existing
+        // /api/portfolio/reconcile-zombies route.
+        source: brokerReachable ? 'broker' : 'journal',
+        journalCount: journalSymbols.size,
+        brokerCount:  brokerSymbols.size,
+        symbolDrift,
+        qtyDrift,
       };
 
       // Pyramid-first nudge. Feeds live broker prices (when we have them) so

@@ -10778,7 +10778,33 @@ function PortfolioTab() {
                  tier-aware (FTD ramp level scales the cap). At-cap turns the
                  count red to flag "close a laggard before staging a new name". */}
             <div className="panel" style={{padding:14}}>
-              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>OPEN POSITIONS</div>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8,display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                <span>OPEN POSITIONS</span>
+                {status.positionCount?.source && (
+                  <span style={{fontSize:8,color:'var(--text3)',padding:'1px 6px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:3,letterSpacing:1}}
+                        title={`Position count source = ${status.positionCount.source} (the authoritative one). 'broker' = Alpaca's open positions; 'journal' = local trades table fallback when broker unreachable.`}>
+                    SOURCE: {status.positionCount.source.toUpperCase()}
+                  </span>
+                )}
+                {/* Drift indicator — flashes amber when journal disagrees with
+                    broker on either symbol set or per-symbol qty. The
+                    broker_fills_sync cron self-heals every 15 min, but a
+                    visible badge means the user knows the count below
+                    reflects truth (broker) and a stale journal isn't
+                    silently lying. */}
+                {((status.positionCount?.symbolDrift?.length || 0) + (status.positionCount?.qtyDrift?.length || 0) > 0) && (
+                  <span style={{fontSize:9,color:'var(--amber)',padding:'1px 6px',background:'rgba(240,165,0,0.10)',border:'1px solid rgba(240,165,0,0.4)',borderRadius:3,letterSpacing:1,cursor:'help'}}
+                        title={
+                          'Journal disagrees with broker.\n\n' +
+                          (status.positionCount.symbolDrift || []).map(d => `  ${d.symbol}: ${d.where.replace('_',' ')}`).join('\n') +
+                          ((status.positionCount.symbolDrift || []).length && (status.positionCount.qtyDrift || []).length ? '\n' : '') +
+                          (status.positionCount.qtyDrift || []).map(d => `  ${d.symbol}: broker ${d.brokerQty}sh vs journal ${d.journalQty}sh (gap ${d.gap > 0 ? '+' : ''}${d.gap})`).join('\n') +
+                          '\n\nSelf-heals on next broker_fills_sync cron (every 15 min market hours, EOD safety). Or POST /api/portfolio/reconcile-zombies to fix now.'
+                        }>
+                    ⚠ DRIFT {(status.positionCount.symbolDrift?.length || 0) + (status.positionCount.qtyDrift?.length || 0)}
+                  </span>
+                )}
+              </div>
               <div style={{fontSize:36,fontWeight:800,color:status.positionCount?.atCap?'var(--red)':'var(--cyan)',fontFamily:'var(--font-mono)'}}>
                 {status.positionCount?.current ?? (status.brokerPositions?.length || status.openPositions || 0)}
                 <span style={{fontSize:18,color:'var(--text3)',fontWeight:400}}>
