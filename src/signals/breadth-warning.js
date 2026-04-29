@@ -47,7 +47,46 @@ function evaluateBreadthWarning() {
   }
 
   const latest = history[history.length - 1];
-  const currentScore = latest.composite_score;
+  // Pre-fix `currentScore` was just the persisted snapshot value (latest
+  // breadth_snapshot row, written by the daily 16:30 ET cron). Analytics'
+  // /api/breadth recomputes the composite LIVE from current quotes, so
+  // the two tabs displayed different numbers (Market Pulse 48, Analytics
+  // 45 — same trader, same minute). Confusing.
+  //
+  // Fix: try the live recompute first; fall back to the persisted value
+  // only if the live path fails. Deltas still use the persisted history
+  // (deltas need a stable historical baseline regardless of intraday
+  // moves), so ALL the warning thresholds and 1W/2W/3W deltas are
+  // unchanged — only the headline currentScore is now live.
+  let currentScore = latest.composite_score;
+  let scoreSource  = 'persisted_snapshot';
+  let scoreAsOf    = latest.date;
+  try {
+    const { computeBreadthFromSnapshots, computeCompositeBreadthScore,
+            assessVIXTermStructure } = require('./breadth');
+    const _db = db();
+    const latestDate = _db.prepare(
+      `SELECT MAX(date) as date FROM rs_snapshots WHERE type = 'stock'`
+    ).get()?.date;
+    if (latestDate) {
+      const liveBreadth = computeBreadthFromSnapshots(latestDate);
+      if (liveBreadth) {
+        const vixHistory = _db.prepare(
+          `SELECT price FROM rs_snapshots WHERE symbol = '^VIX' AND type='sector' AND price>0
+           ORDER BY date DESC LIMIT 252`
+        ).all().map(r => r.price).reverse();
+        const vixLatest = vixHistory.length ? vixHistory[vixHistory.length - 1] : null;
+        const vixStruct = vixLatest && vixHistory.length > 20
+          ? assessVIXTermStructure(vixLatest, vixHistory) : null;
+        const liveComposite = computeCompositeBreadthScore(liveBreadth, vixStruct, null);
+        if (liveComposite && Number.isFinite(liveComposite.score)) {
+          currentScore = liveComposite.score;
+          scoreSource  = 'live_recompute';
+          scoreAsOf    = latestDate;
+        }
+      }
+    }
+  } catch (_) { /* fall through with persisted score */ }
 
   // ── Rolling deltas over multiple windows ─────────────────────────────
   const delta5d  = _computeDelta(history, 5);   // ~1 week
@@ -108,6 +147,11 @@ function evaluateBreadthWarning() {
   return {
     ...warning,
     currentScore,
+    // Diagnostics so the UI can show "as of HH:MM (live)" vs "from
+    // YYYY-MM-DD snapshot" — proves to the user the same composite is
+    // displayed on Market Pulse AND Analytics.
+    scoreSource,
+    scoreAsOf,
     reasons,
     deltas: {
       composite5d: delta5d,
