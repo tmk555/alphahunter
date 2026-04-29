@@ -80,7 +80,7 @@ router.post('/replay/compare', (req, res) => {
 });
 
 // ─── Walk-forward optimization ────────────────────────────────────────────
-router.post('/replay/walk-forward', (req, res) => {
+router.post('/replay/walk-forward', async (req, res) => {
   try {
     const {
       strategy, tradeMode, startDate, endDate,
@@ -93,7 +93,7 @@ router.post('/replay/walk-forward', (req, res) => {
     if (!paramGrid || typeof paramGrid !== 'object') {
       return res.status(400).json({ error: 'paramGrid object required (e.g. { minRS: [70,80,90] })' });
     }
-    const result = runWalkForward({
+    const result = await runWalkForward({
       strategy, tradeMode: tradeMode || undefined,
       startDate, endDate,
       trainDays: trainDays || 120,
@@ -304,11 +304,11 @@ const JOB_KINDS = {
       initialCapital: initialCapital || 100000,
     });
   },
-  'walk-forward': (body) => {
+  'walk-forward': async (body) => {
     const { strategy, tradeMode, startDate, endDate, trainDays, testDays, paramGrid, optimizeMetric, maxPositions, initialCapital, execution } = body || {};
     if (!strategy || !startDate || !endDate) throw new Error('strategy, startDate, and endDate required');
     if (!paramGrid || typeof paramGrid !== 'object') throw new Error('paramGrid object required');
-    const result = runWalkForward({
+    const result = await runWalkForward({
       strategy, tradeMode: tradeMode || undefined,
       startDate, endDate,
       trainDays: trainDays || 120, testDays: testDays || 60,

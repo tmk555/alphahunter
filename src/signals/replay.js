@@ -1808,7 +1808,7 @@ function cartesianProduct(grid) {
 const WF_VALID_METRICS = ['sharpeRatio', 'totalReturn', 'profitFactor'];
 const WF_MAX_COMBOS = 256;
 
-function runWalkForward({
+async function runWalkForward({
   strategy,
   startDate,
   endDate,
@@ -1868,6 +1868,12 @@ function runWalkForward({
   let runEquity = initialCapital;
   const oosEquityCurve = [{ date: windows[0].testStart, equity: runEquity }];
 
+  // Each window evaluates `combos.length` training replays + 1 test replay.
+  // A single replay = 100-500ms of synchronous CPU. Without yields, a 5-window
+  // × 9-combo WF blocks the event loop for ~25s solid — long enough to break
+  // node-cron (1s missed-tick threshold) and freeze the UI for any tab the
+  // user navigates to. Yield between every combo to keep the server live.
+  let comboCounter = 0;
   for (const w of windows) {
     let best = null;
     const trainScores = [];
@@ -1891,6 +1897,7 @@ function runWalkForward({
       if (!best || safeScore > best.score) {
         best = { score: safeScore, params, trainResult };
       }
+      if ((++comboCounter % 2) === 0) await new Promise(r => setImmediate(r));
     }
 
     if (!best) {
@@ -1905,6 +1912,7 @@ function runWalkForward({
       maxPositions, initialCapital, execution,
       persistResult: false,
     });
+    await new Promise(r => setImmediate(r));
 
     if (testResult.tradeLog?.length) allTestTrades.push(...testResult.tradeLog);
 

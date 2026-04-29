@@ -441,14 +441,14 @@ async function runSweep(opts = {}) {
         current: `${q.strategy} · ${flavor} · ${q.strictRegime ? 'strict' : 'lenient'}`,
       });
     }
-    // Yield to the event loop every 5 combos. node-cron's missed-tick
-    // threshold is ~1 second; with replays running ~50-100ms each, a
-    // 5-combo batch is ~250-500ms — comfortably under the threshold.
-    // Yielding every combo (1×) was 5× slower because every setImmediate
-    // gives ALL queued macrotasks a turn (including unrelated incoming
-    // requests). Yielding every 10× let cron miss a tick. Five is the
-    // sweet spot: cron stays on schedule AND the sweep stays fast.
-    if (i % 5 === 4) await new Promise(r => setImmediate(r));
+    // Yield every combo. A single replay can take 200-800ms on heavy
+    // strategies — even 5-combo batches blocked the event loop past
+    // node-cron's 1-second missed-tick threshold and froze the UI on
+    // every tab navigation while a sweep ran. Per-combo yielding caps
+    // the maximum block at ~one replay's duration, keeping cron alive
+    // and the UI responsive. The throughput cost is small relative to
+    // a multi-minute sweep.
+    await new Promise(r => setImmediate(r));
   }
 
   // Sort by after-tax alpha (primary) then pre-tax alpha (tiebreaker)
@@ -486,7 +486,7 @@ async function runSweep(opts = {}) {
           const tradingDays = Math.max(1, Math.round(spanDays * 252 / 365));
           const wfTrainDays = Math.max(40, Math.min(180, Math.round(tradingDays * 0.6)));
           const wfTestDays  = Math.max(20, Math.min(90,  Math.round(tradingDays * 0.2)));
-          const wf = runWalkForward({
+          const wf = await runWalkForward({
             strategy: t.strategy,
             tradeMode: t.tradeMode || undefined,
             startDate, endDate,
