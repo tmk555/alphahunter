@@ -517,6 +517,69 @@ async function runReplayJob({ kind, body, onUpdate, signal, resumeJobId }) {
   }
 }
 
+// Global replay-job banner — surfaces in-flight backtest jobs on EVERY tab,
+// not just inside ReplayTab. Without this, a user who kicks off a 10-minute
+// auto-sweep and then switches to Market Pulse loses all visual confirmation
+// that the job is still running. The badge polls localStorage's active-job
+// map every 2s, fetches each job's server-side status, and renders a compact
+// summary. Clicking it routes back to Replay tab for the full progress view.
+function GlobalReplayJobsBadge({ onJump }) {
+  const [jobs, setJobs] = React.useState({}); // jobId → server job record
+  React.useEffect(() => {
+    let alive = true;
+    async function tick() {
+      const active = readActiveReplayJobs();
+      const ids = Object.entries(active); // [[kind, jobId], ...]
+      if (ids.length === 0) { if (alive) setJobs({}); return; }
+      const next = {};
+      await Promise.all(ids.map(async ([kind, jobId]) => {
+        try {
+          const j = await api(`/api/replay/jobs/${jobId}`, { timeout: 15_000 });
+          // Done/errored/cancelled jobs are dropped from the badge AND from
+          // localStorage so the next tick is clean. The full-view ReplayTab
+          // will render the result once the user navigates back.
+          if (j.status === 'running') next[kind] = j;
+          else writeActiveReplayJob(kind, null);
+        } catch (e) {
+          // 404 = server restart wiped the job map — clear the stale entry.
+          if (/not found/i.test(e?.message || '')) writeActiveReplayJob(kind, null);
+        }
+      }));
+      if (alive) setJobs(next);
+    }
+    tick();
+    const iv = setInterval(tick, 2000);
+    return () => { alive = false; clearInterval(iv); };
+  }, []);
+
+  const running = Object.entries(jobs);
+  if (running.length === 0) return null;
+
+  return (
+    <div onClick={onJump} style={{padding:'8px 12px',background:'rgba(0,180,255,0.10)',border:'1px solid var(--cyan)',borderRadius:5,marginBottom:10,fontSize:11,color:'var(--cyan)',cursor:'pointer',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}} title="Click to open Replay tab for full progress detail">
+      <span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:'var(--cyan)',animation:'pulse 1.5s ease-in-out infinite'}}/>
+      <span style={{fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:1}}>
+        ⏳ REPLAY JOB{running.length>1?'S':''} RUNNING
+      </span>
+      {running.map(([kind, j]) => {
+        const elapsed = Math.max(0, Math.round(((Date.now() - (j.startedAt||Date.now()))/1000)));
+        const p = j.progress;
+        const pctDone = p && p.total ? (p.done / p.total) : null;
+        const eta = (pctDone != null && pctDone > 0.02 && pctDone < 1)
+          ? Math.round(elapsed * (1 - pctDone) / pctDone) : null;
+        return (
+          <span key={kind} style={{display:'inline-flex',alignItems:'center',gap:6,fontSize:11,color:'var(--text2)'}}>
+            <strong style={{color:'var(--cyan)'}}>{kind}</strong>
+            <span>{elapsed}s{eta != null ? ` · ~${eta}s left` : ''}</span>
+            {p && p.total > 0 && <span style={{fontFamily:'var(--font-mono)',color:'var(--text)'}}>{p.done}/{p.total}</span>}
+          </span>
+        );
+      })}
+      <span style={{marginLeft:'auto',fontSize:10,color:'var(--text3)'}}>tap to view →</span>
+    </div>
+  );
+}
+
 async function askClaude(prompt, systemPrompt = '', useWebSearch = false) {
   const d = await api('/api/claude', {
     method:'POST', headers:{'Content-Type':'application/json'},
@@ -1763,6 +1826,11 @@ function App() {
 
       {/* CONTENT */}
       <div id="main">
+        {/* GLOBAL REPLAY-JOB BADGE — same App-level lift as the warming
+            banner below. A 10-minute auto-sweep launched from Replay must
+            stay visible when the user switches to Market Pulse / Macro /
+            etc. Inner ReplayTab badge stays for the rich per-job detail. */}
+        <GlobalReplayJobsBadge onJump={() => setTab('replay')} />
         {/* GLOBAL SCANNER WARMING-UP BANNER — shown on every tab while
             App's auto-scan is in flight. Pre-fix this banner only rendered
             inside TradeSetupsTab, so a user who landed on Sectors / Macro /
