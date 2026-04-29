@@ -580,7 +580,70 @@ const TRADE_EVENT_EMOJIS = {
   earnings_exit: '📅', swing_limit_exit: '⏳',
 };
 
+// ─── Event schema registry — single source of truth for trade events ────
+//
+// Pre-fix: 63 call sites across 8+ modules called notifyTradeEvent with
+// loosely-typed `{event, symbol, details}` args. A typo in an event name
+// silently produced a generic 🔔 alert. A missing detail key meant the
+// phone notification was incomplete and the user noticed minutes later.
+// New events were added without coordination.
+//
+// Now: every event MUST appear here with its expected detail keys.
+// notifyTradeEvent validates against this schema and warns (in DEBUG
+// mode) on unknown events or missing required keys. Existing callers
+// keep working — this is a soft contract; nothing throws — but typos and
+// missing fields are now visible during development.
+const TRADE_EVENT_SCHEMA = {
+  // Order lifecycle
+  submitted:           { required: ['shares','price'], optional: ['stop','message'] },
+  filled:              { required: ['shares','price'], optional: ['stop','message'] },
+  partial_fill:        { required: ['shares','price'], optional: ['message'] },
+  rejected:            { required: ['reason'],          optional: ['message'] },
+  cancelled:           { required: [],                  optional: ['reason','message'] },
+
+  // Stops + scaling
+  stop_hit:            { required: ['shares','price'], optional: ['pnl','pnl_pct'] },
+  stop_tightened:      { required: [],                  optional: ['from_stop','to_stop','reason'] },
+  trail_tightened:     { required: ['message'],         optional: ['shares','price'] },
+  target1_hit:         { required: ['shares','price'], optional: ['pnl','pnl_pct'] },
+  target2_hit:         { required: ['shares','price'], optional: ['pnl','pnl_pct'] },
+  scale_in:            { required: ['shares','price','tranche'], optional: ['message'] },
+  pyramid_add:         { required: ['shares','price','tranche'], optional: ['message','trigger_type'] },
+
+  // Auto-exit watchers
+  earnings_exit:       { required: ['reason'],         optional: ['shares','message'] },
+  swing_limit_exit:    { required: ['reason'],         optional: ['shares','message'] },
+
+  // Regime / breadth
+  regime_change:       { required: ['from_regime','to_regime'], optional: ['vix','size_multiplier','message'] },
+  breadth_warning:     { required: ['message'],         optional: ['from_regime','to_regime'] },
+
+  // Reconciliation
+  drift_detected:      { required: ['message'],         optional: ['reason'] },
+  drift_resolved:      { required: ['message'],         optional: ['reason'] },
+  zombie_reconciled:   { required: ['message'],         optional: ['shares','price'] },
+
+  // Misc
+  pullback_alert:      { required: ['price'],           optional: ['shares','message','trigger_type'] },
+  conditional_entry:   { required: ['price'],           optional: ['entry_type','message'] },
+};
+
+function _validateEvent(event, details) {
+  const schema = TRADE_EVENT_SCHEMA[event];
+  if (!schema) {
+    if (process.env.DEBUG_NOTIFICATIONS) {
+      console.warn(`[notifications] unknown event '${event}' — add to TRADE_EVENT_SCHEMA in src/notifications/channels.js`);
+    }
+    return;  // unknown event still delivers; just warn
+  }
+  const missing = (schema.required || []).filter(k => details[k] == null);
+  if (missing.length && process.env.DEBUG_NOTIFICATIONS) {
+    console.warn(`[notifications] event '${event}' missing required fields: ${missing.join(', ')}`);
+  }
+}
+
 async function notifyTradeEvent({ event, symbol, details = {} }) {
+  _validateEvent(event, details);
   const emoji = TRADE_EVENT_EMOJIS[event] || '🔔';
   const label = event.replace(/_/g, ' ').toUpperCase();
   const lines = [`${emoji} ${symbol} — ${label}`];
