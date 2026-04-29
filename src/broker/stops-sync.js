@@ -67,14 +67,13 @@ async function _cancelAndResubmit(leg, targetStop) {
 }
 
 // When the journal stop is at-or-above current price (long), the position
-// has ALREADY been breached. A new sell-stop above current price would be
-// rejected by Alpaca with 422. Submit a MARKET SELL instead — that's the
-// behavior the user actually wants ("STOP VIOLATED → close now").
-async function _marketCloseGap(symbol, qty, side) {
-  return alpaca.submitOrder({
-    symbol, qty, side: (side === 'short' ? 'buy' : 'sell'),
-    type: 'market', time_in_force: 'gtc',
-  });
+// has ALREADY been breached. closePosition() = DELETE /v2/positions/<symbol>
+// — Alpaca cancels all open sell-side legs (held stops, TP limits) AND
+// submits a market sell for the entire qty in one call. Submitting our
+// own market sell instead fails with "insufficient qty" because TP limit
+// orders keep the qty locked. closePosition is the only reliable path.
+async function _marketCloseGap(symbol /*, qty, side */) {
+  return alpaca.closePosition(symbol);
 }
 
 async function syncJournalStopsToBroker({ dryRun = false } = {}) {
