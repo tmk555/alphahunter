@@ -46,6 +46,86 @@ router.get('/replay/range', (req, res) => {
 });
 
 // ─── Run replay ───────────────────────────────────────────────────────────
+// ─── Year-by-year stability check ────────────────────────────────────────
+//
+// Run ONE combination across each calendar year of the window separately.
+// The sweep result table shows aggregate 10-year alpha; this route slices
+// by year so the user can see if a "winning" combo wins consistently or
+// just rode one lucky year. A real-edge combo wins ≥3 of 5 years vs the
+// benchmark; a noise combo wins one year and loses the rest.
+//
+// Body: { strategy, tradeMode, params, startDate, endDate, maxPositions,
+//         initialCapital, execution, benchmark } — same shape as /replay/run.
+// Returns: { years: [{ year, startDate, endDate, totalReturn, benchReturn,
+//                      alpha, trades, winRate, beat }],
+//            consistency: { yearsBeatBench, totalYears, beatRate } }
+router.post('/replay/year-by-year', async (req, res) => {
+  try {
+    const {
+      strategy, tradeMode, params, startDate, endDate,
+      maxPositions = 10, initialCapital = 100000, execution = {},
+      benchmark = 'SPY',
+    } = req.body || {};
+    if (!strategy || !startDate || !endDate) {
+      return res.status(400).json({ error: 'strategy, startDate, endDate required' });
+    }
+    // Lazy-load the benchmark if non-SPY (one Yahoo fetch worst case).
+    if (benchmark !== 'SPY') {
+      const { ensureBenchmarkLoaded } = require('../signals/replay');
+      try { await ensureBenchmarkLoaded(benchmark); }
+      catch (e) { return res.status(400).json({ error: `Benchmark load failed: ${e.message}` }); }
+    }
+    const startY = +startDate.slice(0, 4);
+    const endY   = +endDate.slice(0, 4);
+    const years = [];
+    for (let y = startY; y <= endY; y++) {
+      // Clip the year window to the user's actual range.
+      const yStart = (y === startY) ? startDate : `${y}-01-01`;
+      const yEnd   = (y === endY)   ? endDate   : `${y}-12-31`;
+      let r;
+      try {
+        r = runReplay({
+          strategy, tradeMode: tradeMode || undefined, params,
+          startDate: yStart, endDate: yEnd,
+          maxPositions, initialCapital, execution,
+          benchmark, persistResult: false,
+        });
+      } catch (e) {
+        years.push({ year: y, startDate: yStart, endDate: yEnd, error: e.message });
+        continue;
+      }
+      if (!r || r.error) {
+        years.push({ year: y, startDate: yStart, endDate: yEnd, error: r?.error || 'no data' });
+        continue;
+      }
+      const totalReturn = r.performance?.totalReturn ?? 0;
+      const benchReturn = r.benchmark?.spyReturn ?? 0;
+      const alpha       = +(totalReturn - benchReturn).toFixed(2);
+      years.push({
+        year: y, startDate: yStart, endDate: yEnd,
+        totalReturn:  +totalReturn.toFixed(2),
+        benchReturn:  +benchReturn.toFixed(2),
+        alpha,
+        trades:  r.trades?.total ?? 0,
+        winRate: r.trades?.winRate ?? 0,
+        maxDrawdown: r.performance?.maxDrawdown ?? null,
+        beat:   alpha > 0,
+      });
+    }
+    const valid = years.filter(y => !y.error);
+    const beatCount = valid.filter(y => y.beat).length;
+    res.json({
+      benchmark,
+      years,
+      consistency: {
+        yearsBeatBench: beatCount,
+        totalYears:     valid.length,
+        beatRate:       valid.length ? +(beatCount / valid.length * 100).toFixed(0) : null,
+      },
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 router.post('/replay/run', (req, res) => {
   try {
     const { strategy, tradeMode, params, startDate, endDate, maxPositions, initialCapital, execution, indexName } = req.body;

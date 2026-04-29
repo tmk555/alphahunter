@@ -13539,6 +13539,11 @@ function ReplayTab() {
   const [mcHistory, setMcHistory] = useState([]);
   const [wfHistory, setWfHistory] = useState([]);
   const [sweepHistory, setSweepHistory] = useState([]);
+  // Year-by-year stability cache, keyed by row index. null while loading,
+  // an object once fetched. Lets the user expand / collapse without
+  // re-fetching the per-year breakdown.
+  const [yearsByRow, setYearsByRow] = useState({});
+  const [yearsLoadingRow, setYearsLoadingRow] = useState(null);
   const [bfForm, setBfForm] = useState({ lookbackDays:2500 });
   const [bfResult, setBfResult] = useState(null);
   const [bfLoading, setBfLoading] = useState(false);
@@ -14807,14 +14812,16 @@ function ReplayTab() {
                   <th title="Source: deterministic grid (—) vs random sample (RND). Random samples interpolate the grid (e.g. minRS=83 between 80/85)."
                       style={{textAlign:'center'}}>Src</th>
                   <th style={{textAlign:'right'}}>Return</th>
-                  <th title="SPY buy-and-hold return over the same window — PRE-TAX. Hover any after-tax alpha cell for the after-tax SPY value."
-                      style={{textAlign:'right'}}>SPY</th>
+                  <th title="Benchmark buy-and-hold return over the same window — PRE-TAX. Hover any after-tax alpha cell for the after-tax benchmark value."
+                      style={{textAlign:'right'}}>{s.benchmark || 'SPY'}</th>
                   <th style={{textAlign:'right'}}>Pre-Tax α</th>
                   <th style={{textAlign:'right'}}>After-Tax α</th>
                   <th style={{textAlign:'right'}}>MaxDD</th>
                   <th style={{textAlign:'right'}}>Sharpe</th>
                   <th style={{textAlign:'right'}}>Trades</th>
                   <th>Params</th>
+                  <th title="Year-by-year stability check — runs the same combo independently against each calendar year. ≥3 of 5 years beating benchmark = real edge; only 2024 wins = noise."
+                      style={{textAlign:'center'}}>Years</th>
                 </tr></thead>
                 <tbody>
                   {(sweepResult.results || []).slice(0, 25).map((r, i) => {
@@ -14827,7 +14834,8 @@ function ReplayTab() {
                       ? `After-tax: strat ${afterTaxStrat>0?'+':''}${afterTaxStrat}%  ·  SPY ${afterTaxSpy>0?'+':''}${afterTaxSpy}%  →  α ${r.afterTaxAlpha>0?'+':''}${r.afterTaxAlpha}%`
                       : null;
                     return (
-                      <tr key={i} style={r.afterTaxAlpha > 0 ? { background: 'rgba(0,230,118,0.04)' } : undefined}>
+                      <React.Fragment key={i}>
+                      <tr style={r.afterTaxAlpha > 0 ? { background: 'rgba(0,230,118,0.04)' } : undefined}>
                         <td style={{fontFamily:'var(--font-mono)',color:i<3?'var(--amber)':'var(--text3)',fontWeight:700}}>{i+1}</td>
                         <td style={{fontWeight:600,color:'var(--cyan)'}}>{r.strategyName || r.strategy}</td>
                         <td style={{color:flavorColor,fontFamily:'var(--font-mono)',fontSize:10,fontWeight:700}}>{r.flavor}</td>
@@ -14848,8 +14856,111 @@ function ReplayTab() {
                         <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--red)'}}>{r.maxDrawdown}%</td>
                         <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:r.sharpeRatio>=1?'var(--green)':'var(--text)'}}>{r.sharpeRatio}</td>
                         <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text3)'}}>{r.trades}</td>
-                        <td style={{fontFamily:'var(--font-mono)',fontSize:9,color:'var(--text3)',maxWidth:280,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={r.paramsString}>{r.paramsString}</td>
+                        <td style={{fontFamily:'var(--font-mono)',fontSize:9,color:'var(--text3)',maxWidth:240,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={r.paramsString}>{r.paramsString}</td>
+                        <td style={{textAlign:'center'}}>
+                          {(() => {
+                            const expanded = yearsByRow[i];
+                            const loading  = yearsLoadingRow === i;
+                            return (
+                              <button onClick={async () => {
+                                if (expanded) {
+                                  setYearsByRow(prev => { const n = { ...prev }; delete n[i]; return n; });
+                                  return;
+                                }
+                                setYearsLoadingRow(i);
+                                try {
+                                  const body = {
+                                    strategy: r.strategy,
+                                    tradeMode: r.tradeMode || undefined,
+                                    params: r.params,
+                                    startDate: form.startDate, endDate: form.endDate,
+                                    maxPositions: form.maxPositions, initialCapital: form.initialCapital,
+                                    execution: r.slippageBps != null ? { entrySlippageBps: r.slippageBps, exitSlippageBps: Math.max(2, Math.round(r.slippageBps/2)) } : buildExecution(),
+                                    benchmark: s.benchmark || 'SPY',
+                                  };
+                                  const yr = await api('/api/replay/year-by-year', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+                                  setYearsByRow(prev => ({ ...prev, [i]: yr }));
+                                } catch (e) {
+                                  setError(`Year-by-year failed: ${e.message}`);
+                                } finally {
+                                  setYearsLoadingRow(null);
+                                }
+                              }}
+                                disabled={loading}
+                                style={{padding:'2px 8px',fontSize:9,fontFamily:'var(--font-mono)',letterSpacing:1,
+                                        background:'transparent',
+                                        border:`1px solid ${expanded ? 'var(--amber)' : 'var(--cyan)'}`,
+                                        color:expanded ? 'var(--amber)' : 'var(--cyan)',
+                                        borderRadius:3, cursor: loading ? 'wait' : 'pointer',
+                                        opacity: loading ? 0.5 : 1}}>
+                                {loading ? '…' : expanded ? '▼ HIDE' : '📅 YEARS'}
+                              </button>
+                            );
+                          })()}
+                        </td>
                       </tr>
+                      {yearsByRow[i] && (
+                        <tr key={i + '-years'} style={{background:'rgba(0,212,255,0.03)'}}>
+                          <td colSpan={15} style={{padding:'10px 14px'}}>
+                            {(() => {
+                              const yr = yearsByRow[i];
+                              const cons = yr.consistency || {};
+                              const beatColor = cons.beatRate >= 60 ? 'var(--green)' : cons.beatRate >= 40 ? 'var(--amber)' : 'var(--red)';
+                              const verdict = cons.beatRate >= 70 ? 'CONSISTENT EDGE'
+                                            : cons.beatRate >= 50 ? 'MIXED — borderline'
+                                            : cons.beatRate >= 30 ? 'INCONSISTENT — likely noise'
+                                            : 'NO EDGE — pure noise';
+                              return (
+                                <div>
+                                  <div style={{fontSize:11,marginBottom:8,fontFamily:'var(--font-mono)',display:'flex',alignItems:'baseline',gap:14,flexWrap:'wrap'}}>
+                                    <span style={{color:'var(--text3)',letterSpacing:1}}>YEAR-BY-YEAR vs {yr.benchmark}</span>
+                                    <span style={{color:beatColor,fontWeight:700,letterSpacing:1}}>
+                                      {cons.yearsBeatBench}/{cons.totalYears} years beat ({cons.beatRate}%) — {verdict}
+                                    </span>
+                                  </div>
+                                  <table className="data-table" style={{fontSize:10}}>
+                                    <thead><tr>
+                                      <th>Year</th>
+                                      <th style={{textAlign:'right'}}>Strat Return</th>
+                                      <th style={{textAlign:'right'}}>{yr.benchmark} Return</th>
+                                      <th style={{textAlign:'right'}}>α</th>
+                                      <th style={{textAlign:'right'}}>Beat?</th>
+                                      <th style={{textAlign:'right'}}>MaxDD</th>
+                                      <th style={{textAlign:'right'}}>Trades</th>
+                                      <th style={{textAlign:'right'}}>Win%</th>
+                                    </tr></thead>
+                                    <tbody>
+                                      {(yr.years || []).map((y, j) => {
+                                        if (y.error) {
+                                          return (
+                                            <tr key={j}><td>{y.year}</td><td colSpan={7} style={{color:'var(--text3)',fontStyle:'italic'}}>{y.error}</td></tr>
+                                          );
+                                        }
+                                        return (
+                                          <tr key={j} style={y.beat ? {background:'rgba(0,230,118,0.05)'} : undefined}>
+                                            <td style={{fontFamily:'var(--font-mono)',fontWeight:700}}>{y.year}</td>
+                                            <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:y.totalReturn>=0?'var(--green)':'var(--red)'}}>{y.totalReturn>0?'+':''}{y.totalReturn}%</td>
+                                            <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--text3)'}}>{y.benchReturn>0?'+':''}{y.benchReturn}%</td>
+                                            <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:y.alpha>=0?'var(--green)':'var(--red)',fontWeight:700}}>{y.alpha>0?'+':''}{y.alpha}%</td>
+                                            <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:y.beat?'var(--green)':'var(--red)',fontWeight:700}}>{y.beat?'YES':'NO'}</td>
+                                            <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--red)'}}>{y.maxDrawdown != null ? y.maxDrawdown + '%' : '—'}</td>
+                                            <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--text3)'}}>{y.trades}</td>
+                                            <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--text3)'}}>{y.winRate}%</td>
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                  </table>
+                                  <div style={{fontSize:9,color:'var(--text3)',marginTop:8,lineHeight:1.5}}>
+                                    Each year is run independently with the same params. ≥70% beat-rate = robust edge worth deploying. 30-50% = mostly noise. &lt;30% = no edge — the aggregate alpha came from one or two lucky years.
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                     );
                   })}
                 </tbody>
