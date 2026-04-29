@@ -620,4 +620,175 @@ async function reconcileOrphanPositions({ lookbackDays = 90, recentCloseWindowMi
   return { reconciled, stillOrphan };
 }
 
-module.exports = { syncBrokerFills, reconcileOrphanPositions, computeTargetsFromStop };
+// ─── Inverse drift: Journal rows that Alpaca says are flat ─────────────────
+//
+// reconcileOrphanPositions handles "Alpaca has it, journal doesn't". This
+// handles the OPPOSITE: journal has open trades for symbols Alpaca reports
+// zero qty on. That state breaks the swing-exit watcher and stop monitor —
+// every close-attempt comes back from Alpaca with "insufficient qty
+// available for order (requested: N, available: 0)" and the journal sits
+// in a dead loop forever.
+//
+// Common causes:
+//   • User manually closed via Alpaca UI / mobile app
+//   • A bracket stop fired at the broker that the fills-sync didn't pin
+//     back to the right row (sibling-tranche misallocation can leave
+//     remaining_shares lying)
+//   • An older partial-exit syncing bug
+//
+// Strategy: find each open journal row whose symbol has zero broker qty,
+// look up its most-recent matching SELL fill within `lookbackDays`, and
+// close the row at that fill price/date. If no matching sell can be found
+// (older than lookback or never linked), close at last close with a
+// "broker-says-flat" reason so the journal is at least no longer lying.
+//
+// Cooldown: brand-new closes (< recentCloseWindowMin) are skipped to
+// avoid racing the sells loop in syncBrokerFills (same pattern as the
+// orphan path).
+async function reconcileZombieJournalRows({
+  lookbackDays = 90,
+  recentCloseWindowMin = 15,
+  dryRun = false,
+} = {}) {
+  const db = getDB();
+
+  // 1. Snapshot Alpaca positions. Empty array = "everything in the journal
+  //    is potentially a zombie" — fine, the symbol-by-symbol filter below
+  //    catches each one.
+  let positions = [];
+  try { positions = await alpaca.getPositions(); }
+  catch (e) { return { closed: [], skipped: [], error: `getPositions failed: ${e.message}` }; }
+  const brokerHas = new Map();
+  for (const p of positions) brokerHas.set(p.symbol, Math.abs(+p.qty || 0));
+
+  // 2. Open journal rows.
+  const openRows = db.prepare(`
+    SELECT id, symbol, entry_date, entry_price, shares, initial_shares, remaining_shares,
+           alpaca_order_id, strategy
+      FROM trades
+     WHERE exit_date IS NULL
+       AND COALESCE(remaining_shares, shares, 0) > 0
+  `).all();
+  if (!openRows.length) return { closed: [], skipped: [] };
+
+  // 3. Cooldown: skip symbols just-closed (avoids racing fresh sell-side syncs).
+  const recentlyClosed = new Set(
+    db.prepare(
+      `SELECT DISTINCT symbol FROM trades
+        WHERE exit_date IS NOT NULL
+          AND datetime(exit_date) > datetime('now', ?)`
+    ).all(`-${recentCloseWindowMin} minutes`).map(r => r.symbol)
+  );
+
+  // 4. Pull recent fills once. Used to resolve exit_price/exit_date when
+  //    Alpaca sold something we never tagged.
+  const since = new Date(Date.now() - lookbackDays * 86400000).toISOString();
+  let allOrders = [];
+  try { allOrders = await alpaca.getOrders({ status: 'closed', limit: 500, after: since }); } catch (_) {}
+  const sellsBySymbol = {};
+  for (const o of allOrders) {
+    if (o.status !== 'filled' || o.side !== 'sell') continue;
+    (sellsBySymbol[o.symbol] ||= []).push(o);
+  }
+  // Sort newest-first per symbol so [0] is the most recent fill.
+  for (const s of Object.keys(sellsBySymbol)) {
+    sellsBySymbol[s].sort((a, b) =>
+      (b.filled_at || b.created_at || '').localeCompare(a.filled_at || a.created_at || ''));
+  }
+
+  // 5. Quote fallback for symbols whose broker history doesn't surface a
+  //    sell (e.g. closed before our lookback). Last close > nothing.
+  const { getQuotes } = require('../data/providers/manager');
+  let lastCloseBySymbol = {};
+  try {
+    const symsNeeded = [...new Set(openRows.map(r => r.symbol))];
+    if (symsNeeded.length) {
+      const quotes = await getQuotes(symsNeeded);
+      for (const q of (quotes || [])) {
+        if (q?.symbol && q?.regularMarketPrice != null) lastCloseBySymbol[q.symbol] = q.regularMarketPrice;
+      }
+    }
+  } catch (_) { /* fail-soft, exit_price falls back to entry_price */ }
+
+  // 6. Symbols Alpaca says zero on AND that aren't in the cooldown set.
+  const candidates = openRows.filter(r =>
+    !recentlyClosed.has(r.symbol)
+    && (brokerHas.get(r.symbol) || 0) === 0
+  );
+
+  if (!candidates.length) return { closed: [], skipped: [] };
+
+  // 7. Group by symbol — broker fills sum across journal tranches; we want
+  //    to allocate the most-recent broker sells to journal rows in entry-
+  //    age order (FIFO). Each journal row gets remaining_shares marked off
+  //    until either we exhaust shares-to-allocate or the symbol's sells run out.
+  const bySymbol = {};
+  for (const r of candidates) (bySymbol[r.symbol] ||= []).push(r);
+
+  const closeStmt = db.prepare(`
+    UPDATE trades
+       SET exit_date = ?,
+           exit_price = ?,
+           exit_reason = ?,
+           remaining_shares = 0,
+           realized_pnl_dollars = COALESCE(realized_pnl_dollars, 0)
+                                + (? - entry_price) * COALESCE(remaining_shares, shares, 0),
+           pnl_dollars = (? - entry_price) * COALESCE(initial_shares, shares, 0),
+           pnl_percent = ROUND((? - entry_price) / entry_price * 100, 2),
+           r_multiple = CASE
+             WHEN initial_stop_price IS NOT NULL AND initial_stop_price <> entry_price
+             THEN ROUND((? - entry_price) / (entry_price - initial_stop_price), 2)
+             ELSE NULL END,
+           needs_review = 1,
+           notes = COALESCE(notes,'') || char(10) || ?
+     WHERE id = ?
+  `);
+
+  const closed = [];
+  const skipped = [];
+  for (const symbol of Object.keys(bySymbol)) {
+    const rows = bySymbol[symbol].slice().sort((a, b) =>
+      (a.entry_date || '').localeCompare(b.entry_date || ''));
+    const sells = sellsBySymbol[symbol] || [];
+
+    // Allocate sell-fill rows to journal rows newest-first by date order.
+    // We use the FIRST (most recent) fill's price as the close price for
+    // every zombie tranche of this symbol — broker-side close was a single
+    // event from our perspective; per-tranche P&L splits internally.
+    const ref = sells[0] || null;
+    const exitPrice = ref?.filled_avg_price != null ? +ref.filled_avg_price
+      : (lastCloseBySymbol[symbol] != null ? lastCloseBySymbol[symbol]
+      : rows[0].entry_price);  // last-resort: zero-pnl close
+    const exitDate = ref?.filled_at ? ref.filled_at.slice(0, 10)
+      : new Date().toISOString().slice(0, 10);
+
+    const sourceTag = ref
+      ? `broker fill ${(ref.id || '').slice(0,8)} @ $${exitPrice.toFixed(2)} on ${exitDate}`
+      : (lastCloseBySymbol[symbol] != null
+        ? `last close $${exitPrice.toFixed(2)} on ${exitDate} (no broker fill found within ${lookbackDays}d)`
+        : `entry price (no broker fill OR live quote) — manual review required`);
+
+    for (const row of rows) {
+      try {
+        const note = `[ZOMBIE-RECONCILE] Alpaca reports 0 qty for ${symbol} — closing journal row at ${sourceTag}. Likely closed via broker UI / fired bracket / older sync miss.`;
+        if (!dryRun) {
+          closeStmt.run(exitDate, exitPrice, 'zombie_reconcile',
+            exitPrice, exitPrice, exitPrice, exitPrice, note, row.id);
+        }
+        closed.push({
+          tradeId: row.id, symbol, exitPrice, exitDate,
+          source: ref ? 'broker_fill' : (lastCloseBySymbol[symbol] != null ? 'last_close' : 'entry_price'),
+          shares: row.remaining_shares ?? row.shares,
+          entryPrice: row.entry_price,
+          notedReason: sourceTag,
+        });
+      } catch (e) {
+        skipped.push({ tradeId: row.id, symbol, reason: e.message });
+      }
+    }
+  }
+
+  return { closed, skipped, dryRun: !!dryRun };
+}
+
+module.exports = { syncBrokerFills, reconcileOrphanPositions, reconcileZombieJournalRows, computeTargetsFromStop };

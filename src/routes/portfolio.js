@@ -1060,6 +1060,19 @@ module.exports = function(db) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // Manual trigger for journal/broker drift reconcile. Closes any open
+  // journal row whose symbol Alpaca reports zero qty on, using the most
+  // recent broker sell-fill within 90 days as the close price. Same logic
+  // the broker_fills_sync cron runs every 15 min — this just lets the user
+  // force it without waiting. dryRun=true returns the plan without writing.
+  router.post('/portfolio/reconcile-zombies', async (req, res) => {
+    try {
+      const { reconcileZombieJournalRows } = require('../broker/fills-sync');
+      const result = await reconcileZombieJournalRows({ dryRun: !!req.body?.dryRun });
+      res.json(result);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   router.get('/portfolio/alpha/rolling', (req, res) => {
     try {
       const { calculateRollingSharpe, calculateRollingSortino, getEquitySnapshots } = require('../risk/alpha-tracker');

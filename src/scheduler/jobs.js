@@ -177,12 +177,29 @@ registerJobType('portfolio_reconcile', {
 // ─── 5b. Broker Fills Sync — Pull filled orders into journal + slippage log ──
 
 registerJobType('broker_fills_sync', {
-  description: 'Sync Alpaca fills into trades journal; captures slippage in execution_log',
+  description: 'Sync Alpaca fills into trades journal; captures slippage in execution_log; reconciles zombie journal rows',
   defaultConfig: {},
   handler: async () => {
-    const { syncBrokerFills } = require('../broker/fills-sync');
+    const { syncBrokerFills, reconcileZombieJournalRows } = require('../broker/fills-sync');
     const result = await syncBrokerFills();
-    return { synced: result.synced.length, exited: result.exited.length, backfilled: result.backfilled };
+    // Self-healing pass for journal rows where Alpaca reports zero qty.
+    // Without this, an externally-closed position (manual sell, fired
+    // bracket-stop missed by the sync) leaves the row open forever and the
+    // swing-exit watcher / stop monitor keep submitting close orders that
+    // Alpaca rejects with "insufficient qty available". Runs AFTER syncFills
+    // so any newly-recorded sells in this pass are visible to the cooldown
+    // guard (recentCloseWindowMin = 15min).
+    let zombie = { closed: [], skipped: [] };
+    try { zombie = await reconcileZombieJournalRows(); }
+    catch (e) { zombie = { closed: [], skipped: [{ reason: e.message }] }; }
+    return {
+      synced: result.synced.length,
+      exited: result.exited.length,
+      backfilled: result.backfilled,
+      zombiesClosed: zombie.closed.length,
+      zombiesSkipped: zombie.skipped.length,
+      zombieDetail: zombie.closed.map(c => ({ symbol: c.symbol, tradeId: c.tradeId, exitPrice: c.exitPrice, source: c.source })),
+    };
   },
 });
 
