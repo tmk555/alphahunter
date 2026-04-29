@@ -247,7 +247,16 @@ async function syncJournalStopsToBroker({ dryRun = false } = {}) {
     let marketCloseId = null;
     if (uncovered > 0) {
       if (!dryRun) {
-        if (breached) {
+        // Idempotency: if a market sell for this symbol is already queued
+        // (from a prior sync run that hasn't filled yet — common after-
+        // hours), don't submit another. Pre-fix every sync tick spawned a
+        // new market sell, leaving 3-4 duplicates in Alpaca's queue.
+        const existingMarketSell = (stopsBySymbol[symbol] || []).find(o => false)
+          || allOrders.find(o => o.symbol === symbol && o.side === 'sell'
+            && o.type === 'market' && ACTIVE_STATUSES.has(o.status));
+        if (existingMarketSell) {
+          marketCloseId = `(already queued ${existingMarketSell.id})`;
+        } else if (breached) {
           try {
             const o = await _marketCloseGap(symbol, uncovered, side);
             marketCloseId = o?.id || null;
