@@ -13537,6 +13537,7 @@ function ReplayTab() {
   const [mcForm, setMcForm] = useState({ iterations:1000, method:'permutation', positionFraction:0.10, selectedReplayId:null });
   const [mcHistory, setMcHistory] = useState([]);
   const [wfHistory, setWfHistory] = useState([]);
+  const [sweepHistory, setSweepHistory] = useState([]);
   const [bfForm, setBfForm] = useState({ lookbackDays:2500 });
   const [bfResult, setBfResult] = useState(null);
   const [bfLoading, setBfLoading] = useState(false);
@@ -13550,18 +13551,20 @@ function ReplayTab() {
 
   async function loadAll() {
     try {
-      const [s, r, h, mch, wfh] = await Promise.all([
+      const [s, r, h, mch, wfh, swh] = await Promise.all([
         api('/api/replay/strategies').catch(()=>({strategies:[]})),
         api('/api/replay/range').catch(()=>null),
         api('/api/replay/history?limit=10').catch(()=>({history:[]})),
         api('/api/replay/mc/history?limit=10').catch(()=>({history:[]})),
         api('/api/replay/wf/history?limit=10').catch(()=>({history:[]})),
+        api('/api/replay/sweep/history?limit=20').catch(()=>({history:[]})),
       ]);
       setStrategies(s.strategies||[]);
       setDateRange(r);
       setHistory(h.history||[]);
       setMcHistory(mch.history||[]);
       setWfHistory(wfh.history||[]);
+      setSweepHistory(swh.history||[]);
       // Auto-populate dates on initial load. Once set, user can manually change
       // via the date inputs OR use the ← FULL / LATEST → buttons to reset.
       if (!datesInitialized.current && r?.rs_snapshots?.start_date) {
@@ -14864,6 +14867,100 @@ function ReplayTab() {
           </div>
         );
       })()}
+
+      {/* Sweep history — past completed Auto-Sweep runs (30-day retention).
+          Click a row to load that run's full result back into the panel
+          above, no re-run needed. Pre-fix the only way to revisit a sweep
+          was to keep the browser tab open within the 24h window — this
+          fixes the "I can't find yesterday's best combo" gap. */}
+      {replayMode === 'sweep' && sweepHistory.length > 0 && (
+        <div className="panel" style={{marginTop:14}}>
+          <div className="panel-title" style={{display:'flex',alignItems:'center',gap:8}}>
+            🤖 <span>SWEEP</span> HISTORY
+            <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)',letterSpacing:1,fontWeight:400}}>
+              ({sweepHistory.length} run{sweepHistory.length>1?'s':''} · 30-day retention)
+            </span>
+          </div>
+          <table className="data-table" style={{fontSize:11}}>
+            <thead><tr>
+              <th>#</th><th>Started</th><th>Window</th><th>Strategies</th>
+              <th>TopK</th><th>Axes</th><th>Status</th><th>Duration</th><th>Size</th><th></th>
+            </tr></thead>
+            <tbody>
+              {sweepHistory.map(h => {
+                const dur = h.durationMs ? `${Math.round(h.durationMs/1000)}s` : '—';
+                const size = h.resultSizeBytes ? `${(h.resultSizeBytes/1024/1024).toFixed(1)}MB` : '—';
+                const axes = [
+                  h.runWalkForward && 'WF',
+                  h.runMonteCarlo && 'MC',
+                  h.slippageSweep && 'Slip',
+                  h.randomSamples > 0 && `Rand(${h.randomSamples})`,
+                ].filter(Boolean).join(' · ') || '—';
+                const statusColor = {
+                  done: 'var(--green)', error: 'var(--red)',
+                  cancelled: 'var(--text3)', interrupted: 'var(--amber)',
+                }[h.status] || 'var(--text3)';
+                return (
+                  <tr key={h.id}>
+                    <td style={{color:'var(--text3)',fontFamily:'var(--font-mono)'}}>#{h.id}</td>
+                    <td style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text2)'}}>
+                      {new Date(h.startedAt).toLocaleString()}
+                    </td>
+                    <td style={{fontFamily:'var(--font-mono)',fontSize:10}}>
+                      {h.startDate} → {h.endDate}
+                    </td>
+                    <td style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text2)'}}
+                        title={h.strategies.join(', ')}>
+                      {h.strategies.length === 0 ? '—'
+                        : h.strategies.length <= 2 ? h.strategies.join(', ')
+                        : `${h.strategies.length} strategies`}
+                    </td>
+                    <td style={{fontFamily:'var(--font-mono)'}}>{h.topK || '—'}</td>
+                    <td style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text2)'}}>{axes}</td>
+                    <td style={{color:statusColor,fontWeight:700,fontSize:10,letterSpacing:1,textTransform:'uppercase'}}>
+                      {h.status}
+                    </td>
+                    <td style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text3)'}}>{dur}</td>
+                    <td style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text3)'}}>{size}</td>
+                    <td>
+                      <button onClick={async () => {
+                        try {
+                          const job = await api(`/api/replay/jobs/${h.id}`);
+                          if (job?.result) {
+                            setSweepResult(job.result);
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          } else if (job?.checkpoint && job.status === 'interrupted') {
+                            // Interrupted job — offer resume.
+                            if (confirm(`Job #${h.id} was interrupted at combo ${job.checkpoint.results?.length||0}/${job.checkpoint.total||0}. Resume?`)) {
+                              const resumed = await api(`/api/replay/jobs/${h.id}/resume`, { method:'POST', headers:{'Content-Type':'application/json'} });
+                              writeActiveReplayJob('sweep', resumed.id);
+                              runSweep({ resumeJobId: resumed.id });
+                            }
+                          } else {
+                            setError(`Job #${h.id} has no stored result (status=${job?.status||'unknown'})`);
+                          }
+                        } catch (e) { setError(`Load failed: ${e.message}`); }
+                      }} disabled={h.status !== 'done' && h.status !== 'interrupted'}
+                         style={{padding:'3px 10px',fontSize:9,fontFamily:'var(--font-mono)',letterSpacing:1,
+                                 background:'transparent',
+                                 border:'1px solid var(--cyan)',color:'var(--cyan)',
+                                 borderRadius:3,cursor: h.status !== 'done' && h.status !== 'interrupted' ? 'not-allowed' : 'pointer',
+                                 opacity: h.status !== 'done' && h.status !== 'interrupted' ? 0.4 : 1}}>
+                        {h.status === 'interrupted' ? '↻ RESUME' : '↑ LOAD'}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div style={{fontSize:9,color:'var(--text3)',marginTop:8,lineHeight:1.5}}>
+            Click LOAD to view a past sweep's full results without re-running.
+            Interrupted runs (server restart mid-sweep) offer RESUME to pick up
+            from the last checkpoint.
+          </div>
+        </div>
+      )}
 
       {/* Comparison results */}
       {replayMode === 'compare' && result && result.comparisons && (

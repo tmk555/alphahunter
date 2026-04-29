@@ -21,8 +21,13 @@
 // grow unbounded. Server restart clears everything (fresh map) — the UI
 // handles 404 by showing a "job not found, try again" toast.
 
-const MAX_AGE_MS = 24 * 60 * 60 * 1000;   // 24h
-const MAX_JOBS   = 200;                   // hard cap on retained jobs
+// Per-kind retention. Sweeps take 5-15 min to run and produce ~1-3 MB
+// of result data the user wants to revisit days later (compare configs
+// over time, redo a deep-dive on a winning combo). Bumped to 30 days
+// for sweep-kind. Other kinds keep the original 24h.
+const MAX_AGE_MS         = 24 * 60 * 60 * 1000;        // 24h default
+const MAX_AGE_MS_BY_KIND = { sweep: 30 * 24 * 60 * 60 * 1000 };  // 30d
+const MAX_JOBS   = 200;                                // hard cap on retained jobs
 
 const jobs = new Map();
 let nextId = 1;
@@ -137,9 +142,11 @@ function loadPersistedJobs() {
 
 function _prune() {
   const now = Date.now();
-  // Drop anything older than MAX_AGE_MS first.
+  // Drop anything older than its kind's retention window.
   for (const [id, j] of jobs) {
-    if (j.finishedAt && (now - j.finishedAt) > MAX_AGE_MS) jobs.delete(id);
+    if (!j.finishedAt) continue;
+    const ttl = MAX_AGE_MS_BY_KIND[j.kind] ?? MAX_AGE_MS;
+    if (now - j.finishedAt > ttl) jobs.delete(id);
   }
   // Then enforce the hard cap by dropping oldest finished jobs.
   if (jobs.size > MAX_JOBS) {

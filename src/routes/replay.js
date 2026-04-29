@@ -254,6 +254,52 @@ router.get('/replay/history', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Sweep history (Auto-Sweep past runs) ────────────────────────────────
+// Lists completed sweep jobs from replay_jobs_state. Pre-fix the only way
+// to revisit a sweep was within the same session before the 24h prune
+// hit — there was no UI list of past sweeps, just a single in-memory
+// sweepResult tied to whichever job ran most recently. Now sweep
+// results live for 30 days and the UI's history panel pulls them via
+// this route. Each row carries enough metadata for a row-click to load
+// the full result back into the sweep panel without re-running.
+router.get('/replay/sweep/history', (req, res) => {
+  try {
+    const { getDB } = require('../data/database');
+    const limit = Math.max(1, Math.min(100, +req.query.limit || 20));
+    const rows = getDB().prepare(`
+      SELECT id, status, params, started_at, finished_at,
+             length(result) AS result_size, error
+        FROM replay_jobs_state
+       WHERE kind = 'sweep' AND status IN ('done','error','cancelled','interrupted')
+       ORDER BY started_at DESC
+       LIMIT ?
+    `).all(limit);
+
+    // Surface the headline metrics inline so the table doesn't need a
+    // per-row fetch of the full result (each is 1-3 MB). We only parse
+    // the params (small) and pull a few summary fields from result if
+    // available — done with a lightweight string-side scan to avoid
+    // JSON.parse-ing the whole 2 MB blob just for 4 numbers.
+    const lite = rows.map(r => {
+      let params = {};
+      try { params = r.params ? JSON.parse(r.params) : {}; } catch (_) {}
+      return {
+        id: r.id, status: r.status,
+        startedAt: r.started_at, finishedAt: r.finished_at,
+        durationMs: r.finished_at && r.started_at ? r.finished_at - r.started_at : null,
+        resultSizeBytes: r.result_size || 0,
+        startDate: params.startDate, endDate: params.endDate,
+        strategies: Array.isArray(params.strategies) ? params.strategies : [],
+        topK: params.topK, runWalkForward: !!params.runWalkForward,
+        runMonteCarlo: !!params.runMonteCarlo, slippageSweep: !!params.slippageSweep,
+        randomSamples: params.randomSamples || 0,
+        error: r.error || null,
+      };
+    });
+    res.json({ history: lite, count: lite.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Monte Carlo history & view (before :id catch-all) ──────────────────
 router.get('/replay/mc/history', (req, res) => {
   try {
