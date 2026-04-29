@@ -636,7 +636,7 @@ function GlobalReplayJobsBadge({ onJump }) {
             )}
             {p && p.outperforming != null && (
               <span style={{color: p.outperforming > 0 ? 'var(--green)' : 'var(--text3)',fontFamily:'var(--font-mono)'}}>
-                {p.outperforming} beating SPY
+                {p.outperforming} beating {j.params?.benchmark || 'SPY'}
               </span>
             )}
             {p && p.current && (
@@ -13961,7 +13961,7 @@ function ReplayTab() {
                       {p.done}/{p.total}
                       {p.outperforming != null && (
                         <span style={{color: p.outperforming > 0 ? 'var(--green)' : 'var(--text3)',fontWeight:400}}>
-                          {' · '}{p.outperforming} beating SPY so far
+                          {' · '}{p.outperforming} beating {j.params?.benchmark || 'SPY'} so far
                         </span>
                       )}
                     </span>
