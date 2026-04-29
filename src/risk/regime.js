@@ -208,6 +208,47 @@ async function getMarketRegime() {
       if (process.env.DEBUG_REGIME) console.warn('[regime] breadthOverlay failed:', err.message);
     }
 
+    // ── Breadth Early Warning clamp ──────────────────────────────────────────
+    // The breadthOverlay above only acts when the composite SCORE itself is
+    // weak (< 50). But evaluateBreadthWarning watches the *rate of change* —
+    // it fires WARNING/CRITICAL when score is dropping fast (e.g. -10 pts/wk)
+    // or new-lows dominate H/L, EVEN IF the absolute score is still >= 55.
+    // Pre-clamp this fired correctly in the UI strip but never propagated to
+    // the top regime label or the exposure ramp — so the user saw
+    // "BULL / RISK ON · ramp FULL" sitting next to "BREADTH WARNING: composite
+    // -10 pts in 1 week — sharp drop". A user-reported contradiction.
+    //
+    // Now: WARNING clamps the regime label to at most NEUTRAL and pulls the
+    // ramp down one tier; CRITICAL clamps to CAUTION and pulls two tiers.
+    // Same multiplier as the breadth-warning module's own sizingMult so the
+    // signals everywhere agree.
+    let breadthWarning = null;
+    try {
+      const { evaluateBreadthWarning } = require('../signals/breadth-warning');
+      breadthWarning = evaluateBreadthWarning();
+      if (breadthWarning && breadthWarning.level >= 2) {
+        const prevRegime = regime;
+        const wantClamp = breadthWarning.level === 3 ? 'CAUTION' : 'NEUTRAL';
+        // Hierarchy: HIGH RISK / BEAR (worst) > CAUTION > NEUTRAL > BULL.
+        // Only clamp DOWN — never relax a real bear/caution downstream.
+        const order = ['HIGH RISK / BEAR', 'CAUTION', 'NEUTRAL', 'BULL / RISK ON'];
+        const cur = order.indexOf(regime);
+        const target = order.indexOf(wantClamp);
+        if (cur > target) {
+          regime = wantClamp;
+          color = wantClamp === 'CAUTION' ? '#ff8c00' : '#f0a500';
+          swingOk = true;
+          positionOk = wantClamp === 'NEUTRAL';
+          sizeMultiplier = Math.min(sizeMultiplier, breadthWarning.sizingMult || 0.5);
+          warning = (warning ? warning + '. ' : '') +
+            `Breadth Early Warning ${breadthWarning.label}: ${breadthWarning.message || (breadthWarning.reasons || []).join('; ') || 'rapid breadth deterioration'}`;
+          breadthWarning.override = { applied: true, from: prevRegime, to: regime };
+        }
+      }
+    } catch (err) {
+      if (process.env.DEBUG_REGIME) console.warn('[regime] breadthWarning failed:', err.message);
+    }
+
     // ── Macro regime overlay (v8: yield curve, credit spreads, dollar, ISM) ──
     let macroOverlay = null;
     try {
@@ -292,6 +333,21 @@ async function getMarketRegime() {
         }
       }
 
+      // Breadth Early Warning rate-of-change modulator. Independent of the
+      // composite-score band above — fires when breadth is dropping fast
+      // (-10 pts/wk, H/L ratio collapsing, etc.) even with score still in
+      // the "ok" 55+ zone. Without this, the user sees ramp FULL right next
+      // to a WARNING/CRITICAL banner.
+      if (breadthWarning) {
+        if (breadthWarning.level === 3) {
+          downshiftReasons.push('breadth warning CRITICAL (-2)');
+          if (currentIdx >= 0) currentIdx = Math.max(0, currentIdx - 2);
+        } else if (breadthWarning.level === 2) {
+          downshiftReasons.push('breadth warning WARNING (-1)');
+          if (currentIdx >= 0) currentIdx = Math.max(0, currentIdx - 1);
+        }
+      }
+
       if (downshiftReasons.length && currentIdx >= 0 && currentIdx !== startTierIdx) {
         const modulatedLevel = tiers[currentIdx];
         exposureRamp.baseExposureLevel = exposureRamp.exposureLevel;
@@ -306,7 +362,7 @@ async function getMarketRegime() {
     const result = {
       regime, color, swingOk, positionOk, sizeMultiplier, warning, vixLevel,
       spyPrice, spyChg1d, spy50, spy200, above50, above200,
-      cycleOverride, exposureRamp, breadthOverlay, macroOverlay,
+      cycleOverride, exposureRamp, breadthOverlay, breadthWarning, macroOverlay,
       qqqChg1d: qqq?.regularMarketChangePercent,
       iwmChg1d: iwm?.regularMarketChangePercent,
       tltChg1d: tlt?.regularMarketChangePercent,
