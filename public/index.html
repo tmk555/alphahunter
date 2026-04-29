@@ -567,9 +567,15 @@ function GlobalReplayJobsBadge({ onJump }) {
         const pctDone = p && p.total ? (p.done / p.total) : null;
         const eta = (pctDone != null && pctDone > 0.02 && pctDone < 1)
           ? Math.round(elapsed * (1 - pctDone) / pctDone) : null;
+        // Date range — pulled from the body the UI submitted with the job
+        // (server stores it on the job record). Lets the user verify they
+        // launched the right window without opening Replay tab.
+        const sd = j.params?.startDate;
+        const ed = j.params?.endDate;
         return (
           <span key={kind} style={{display:'inline-flex',alignItems:'center',gap:6,fontSize:11,color:'var(--text2)'}}>
             <strong style={{color:'var(--cyan)'}}>{kind}</strong>
+            {sd && ed && <span style={{color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{sd} → {ed}</span>}
             <span>{elapsed}s{eta != null ? ` · ~${eta}s left` : ''}</span>
             {p && p.total > 0 && <span style={{fontFamily:'var(--font-mono)',color:'var(--text)'}}>{p.done}/{p.total}</span>}
           </span>
@@ -13818,6 +13824,9 @@ function ReplayTab() {
               <div key={kind} style={{padding:'4px 0'}}>
                 <div style={{display:'flex',gap:14,fontSize:11,color:'var(--text2)',flexWrap:'wrap',alignItems:'center'}}>
                   <strong style={{color:'var(--cyan)'}}>{kind}</strong>
+                  {j.params?.startDate && j.params?.endDate && (
+                    <span style={{color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{j.params.startDate} → {j.params.endDate}</span>
+                  )}
                   <span>{elapsed}s elapsed{eta != null ? ` · ~${eta}s remaining` : ''}</span>
                   {p && p.total > 0 && (
                     <span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--text)'}}>
