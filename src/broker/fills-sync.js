@@ -419,9 +419,31 @@ async function syncBrokerFills({ lookbackDays = 7, limit = 100 } = {}) {
       const actualAlloc = Math.min(alloc, rem);  // defensive clamp
       const newRem      = rem - actualAlloc;
       const existing    = row.partial_exits ? JSON.parse(row.partial_exits) : [];
+
+      // Idempotency on order id — if a previous pass already recorded a
+      // partial_exit with this sell.id for this row, skip the second
+      // attempt (defense-in-depth on top of seenExitIds).
+      const alreadyRecorded = existing.some(p => p.order_id === sell.id);
+      if (alreadyRecorded) continue;
+
+      // Bracket-leg labeling: if the fill price matches the row's target1
+      // or target2 within a penny, label it as that leg (NOT
+      // 'auto_sync_prorata'). Pre-fix the bracket TP fired at target1
+      // price, fills-sync labeled it 'auto_sync_prorata', then the
+      // scaling engine's `tookT1 = partials.some(p => p.level === 'target1')`
+      // returned false and it fired ITS OWN partial_exit — double
+      // decrementing remaining_shares (AVGO ended with journal=8sh while
+      // broker had 14sh because every TP fill was counted twice).
+      const PENNY = 0.01;
+      const t1 = row.target1, t2 = row.target2;
+      let level;
+      if (t1 != null && Math.abs(exitPrice - t1) <= PENNY) level = 'target1';
+      else if (t2 != null && Math.abs(exitPrice - t2) <= PENNY) level = 'target2';
+      else level = isProrata ? 'auto_sync_prorata' : 'auto_sync';
+
       const partialPnl  = +((exitPrice - row.entry_price) * actualAlloc).toFixed(2);
       existing.push({
-        level: isProrata ? 'auto_sync_prorata' : 'auto_sync',
+        level,
         shares: actualAlloc, price: exitPrice, pnl: partialPnl,
         timestamp: sell.filled_at || sell.created_at, order_id: sell.id,
       });

@@ -31,8 +31,20 @@ function evaluateScalingAction(trade, currentPrice) {
 
   let partials = [];
   try { partials = JSON.parse(trade.partial_exits || '[]'); } catch (_) {}
-  const tookT1 = partials.some(p => p.level === 'target1');
-  const tookT2 = partials.some(p => p.level === 'target2');
+  // Recognize a target-level hit by either explicit label OR by price
+  // proximity. Pre-fix only the explicit label was checked, so when
+  // fills-sync (or a legacy row) recorded a target-priced fill as
+  // 'auto_sync_prorata', tookT1/tookT2 returned false and the scaling
+  // engine fired ITS OWN partial_exit — decrementing remaining_shares a
+  // second time. AVGO surfaced this: journal sum drifted to 8sh while
+  // Alpaca held 14sh. Defense-in-depth on top of fills-sync's labeling.
+  const PENNY = 0.01;
+  const tookT1 = !!target1 && partials.some(p =>
+    p.level === 'target1' ||
+    (p.price != null && Math.abs(p.price - target1) <= PENNY));
+  const tookT2 = !!target2 && partials.some(p =>
+    p.level === 'target2' ||
+    (p.price != null && Math.abs(p.price - target2) <= PENNY));
 
   // Helper: long target hit when price >= target; short target when price <= target
   const hit = (lvl) => isShort ? currentPrice <= lvl : currentPrice >= lvl;
