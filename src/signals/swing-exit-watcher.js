@@ -101,8 +101,41 @@ async function evaluateSwingExits({
   if (dryRun) return { actions, executed: [], skipped: [], dryRun: true };
 
   // ── Live mode: submit market close orders, log partial_exit, notify ─────
-  const { closePosition } = require('../broker/alpaca');
+  const { closePosition, getOrders, cancelOrder } = require('../broker/alpaca');
   const { notifyTradeEvent } = require('../notifications/channels');
+
+  // Pre-fix this loop submitted closePosition straight to Alpaca and frequently
+  // got back "insufficient qty available for order (requested: N, available: 0)"
+  // — the qty was tied up in OPEN sell legs (bracket stops, OCO stop-limit
+  // pairs, take-profit limits). Net effect: the watcher correctly identified
+  // a position needing exit (e.g. TER on its earnings day) but Alpaca rejected
+  // every close attempt, the trade held through the binary event, and the
+  // user discovered the failure after the fact in job_history.
+  //
+  // The fix: enumerate open sell-side orders for the symbol and cancel them
+  // first so the qty unlocks. Then submit closePosition. We pull the open
+  // order list ONCE per evaluateSwingExits call and reuse it across all
+  // actions to keep the API cost flat.
+  let openOrdersBySymbol = {};
+  try {
+    const open = await getOrders({ status: 'open', limit: 500 });
+    for (const o of open) {
+      if (o.side !== 'sell') continue;
+      (openOrdersBySymbol[o.symbol] ||= []).push(o);
+      // Bracket legs are surfaced as flat top-level orders here (we pass
+      // nested=false at the alpaca layer); the parent order may also have
+      // an embedded `.legs` array on some endpoints — handle both shapes.
+      if (Array.isArray(o.legs)) {
+        for (const leg of o.legs) {
+          if (leg?.side === 'sell' && leg?.symbol === o.symbol) {
+            openOrdersBySymbol[o.symbol].push(leg);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn(`  swing-exit-watcher: getOrders failed (${e.message}) — proceeding without leg cancel`);
+  }
 
   const executed = [];
   const skipped = [];
@@ -118,6 +151,34 @@ async function evaluateSwingExits({
         skipped.push({ ...a, skipReason: 'pending_close_already_set' });
         continue;
       }
+
+      // Cancel any open sell legs (stop, take-profit, OCO siblings) on this
+      // symbol before submitting the market close. Without this, Alpaca holds
+      // the locked qty for the existing leg and rejects our DELETE
+      // /v2/positions/<symbol> with "insufficient qty available". We do this
+      // only ONCE per symbol — even if multiple journal rows for the same
+      // ticker are in the actions list, the first cancel pass clears the
+      // legs and subsequent rows skip the (now-empty) cancel block.
+      const legs = openOrdersBySymbol[a.symbol] || [];
+      const cancelledLegs = [];
+      const failedLegs = [];
+      for (const leg of legs) {
+        if (!leg?.id) continue;
+        try {
+          await cancelOrder(leg.id);
+          cancelledLegs.push({ id: leg.id, type: leg.type, qty: leg.qty });
+        } catch (e) {
+          // 404 = already filled/cancelled in another pass; ignore.
+          if (!/not found|already/i.test(e.message)) {
+            failedLegs.push({ id: leg.id, error: e.message });
+          }
+        }
+      }
+      // Mark the symbol's leg list as drained so the next action for this
+      // symbol doesn't re-issue cancels.
+      delete openOrdersBySymbol[a.symbol];
+      a.cancelledLegs = cancelledLegs;
+      if (failedLegs.length) a.failedLegCancels = failedLegs;
 
       const order = await closePosition(a.symbol);
       // Stamp the pending close so the UI shows PENDING CLOSE and fills-sync
