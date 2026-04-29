@@ -51,18 +51,46 @@ function px(n) {
   return Math.round(+n * 100) / 100;
 }
 
+// Cancel a leg that PATCH refused, then submit a fresh standalone stop with
+// the desired price. Used when Alpaca returns 404 on PATCH (bracket-leg
+// children in status='held' can't be modified — they have to be replaced).
+async function _cancelAndResubmit(leg, targetStop) {
+  try { await alpaca.cancelOrder(leg.id); } catch (_) { /* may already be gone */ }
+  return alpaca.submitOrder({
+    symbol: leg.symbol,
+    qty: Math.abs(+leg.qty || 0),
+    side: 'sell',
+    type: 'stop',
+    time_in_force: 'gtc',
+    stop_price: targetStop,
+  });
+}
+
+// When the journal stop is at-or-above current price (long), the position
+// has ALREADY been breached. A new sell-stop above current price would be
+// rejected by Alpaca with 422. Submit a MARKET SELL instead — that's the
+// behavior the user actually wants ("STOP VIOLATED → close now").
+async function _marketCloseGap(symbol, qty, side) {
+  return alpaca.submitOrder({
+    symbol, qty, side: (side === 'short' ? 'buy' : 'sell'),
+    type: 'market', time_in_force: 'gtc',
+  });
+}
+
 async function syncJournalStopsToBroker({ dryRun = false } = {}) {
   // 1. Snapshot Alpaca positions and open orders ONCE per call.
   let positions = [];
   try { positions = await alpaca.getPositions(); }
   catch (e) { return { error: `getPositions failed: ${e.message}`, plans: [] }; }
   const posBySymbol = {};
+  const curPrices = {};
   for (const p of positions) {
     posBySymbol[p.symbol] = {
       qty: Math.abs(+p.qty),
       avgEntry: +p.avg_entry_price,
       side: (+p.qty < 0) ? 'short' : 'long',
     };
+    if (p.current_price != null) curPrices[p.symbol] = +p.current_price;
   }
 
   // Pull ALL recent orders (status='all') and filter for ACTIVE sell-stops
@@ -126,10 +154,16 @@ async function syncJournalStopsToBroker({ dryRun = false } = {}) {
     let coveredQty = 0;
     for (const leg of legs) coveredQty += Math.abs(+leg.qty || 0);
 
-    // Per-leg: patch price if mismatch.
+    // Per-leg: patch price if mismatch. If PATCH fails 404 (Alpaca refuses
+    // to modify a held bracket-leg child), cancel + resubmit a fresh
+    // standalone stop with the desired price — same protective behavior,
+    // just disconnected from its (now-irrelevant) parent bracket.
     const patches = [];
     let anyPatched = false;
     let anyFailed = false;
+    const curPrice = curPrices[symbol];
+    const breached = (curPrice != null && targetStop != null)
+      && (side === 'short' ? curPrice >= targetStop : curPrice <= targetStop);
     for (const leg of legs) {
       const cur = px(+leg.stop_price);
       if (cur == null || targetStop == null) continue;
@@ -144,34 +178,73 @@ async function syncJournalStopsToBroker({ dryRun = false } = {}) {
       patches.push({ legId: leg.id, currentStop: cur, targetStop, action: 'patch' });
       if (!dryRun) {
         try {
-          // Use the alpaca.js raw PATCH path. Accepts string or number.
           await _patchStopPrice(leg.id, targetStop);
           anyPatched = true;
         } catch (e) {
-          anyFailed = true;
-          patches[patches.length - 1].error = e.message;
+          // 404 → leg is a held bracket child Alpaca won't PATCH. Cancel
+          // and resubmit as a standalone stop. Other errors propagate as
+          // failure.
+          if (/404|not found/i.test(e.message)) {
+            try {
+              const fresh = await _cancelAndResubmit(leg, targetStop);
+              patches[patches.length - 1].resubmittedAs = fresh?.id || null;
+              anyPatched = true;
+            } catch (e2) {
+              anyFailed = true;
+              patches[patches.length - 1].error = `patch+resubmit failed: ${e.message} / ${e2.message}`;
+            }
+          } else {
+            anyFailed = true;
+            patches[patches.length - 1].error = e.message;
+          }
         }
       }
     }
 
     // If covered qty < broker position, place a fresh stop for the gap.
+    // Special case: if the journal stop is at or above current price (long),
+    // the position has ALREADY been breached — Alpaca rejects sell-stops
+    // above current with 422. Submit a market sell instead (that's the
+    // exit the user expected; it's just overdue).
     const uncovered = brokerQty - coveredQty;
     let createdStopId = null;
     let createError = null;
+    let marketCloseId = null;
     if (uncovered > 0) {
       if (!dryRun) {
-        try {
-          const o = await alpaca.submitOrder({
-            symbol,
-            qty: uncovered,
-            side: 'sell',
-            type: 'stop',
-            time_in_force: 'gtc',
-            stop_price: targetStop,
-          });
-          createdStopId = o?.id || null;
-        } catch (e) {
-          createError = e.message;
+        if (breached) {
+          try {
+            const o = await _marketCloseGap(symbol, uncovered, side);
+            marketCloseId = o?.id || null;
+          } catch (e) {
+            createError = `market-close fallback failed: ${e.message}`;
+          }
+        } else {
+          try {
+            const o = await alpaca.submitOrder({
+              symbol,
+              qty: uncovered,
+              side: 'sell',
+              type: 'stop',
+              time_in_force: 'gtc',
+              stop_price: targetStop,
+            });
+            createdStopId = o?.id || null;
+          } catch (e) {
+            // If we get 422 stop_price even though we thought we weren't
+            // breached, fall back to market-close (broker price moved
+            // between our positions snapshot and the order submit).
+            if (/422|stop price/i.test(e.message)) {
+              try {
+                const o = await _marketCloseGap(symbol, uncovered, side);
+                marketCloseId = o?.id || null;
+              } catch (e2) {
+                createError = `submit-stop and market-close both failed: ${e.message} / ${e2.message}`;
+              }
+            } else {
+              createError = e.message;
+            }
+          }
         }
       }
     }
@@ -183,12 +256,17 @@ async function syncJournalStopsToBroker({ dryRun = false } = {}) {
       coveredQty,
       uncovered,
       desiredStop: targetStop,
+      currentPrice: curPrice ?? null,
+      breached,
       legPatches: patches,
       createdStopId,
+      marketCloseId,
       createError,
       patched: anyPatched,
       patchFailed: anyFailed,
-      reason: legs.length === 0
+      reason: breached && uncovered > 0
+        ? `journal stop ${targetStop} at-or-above current ${curPrice} — submitted market close for ${uncovered}sh`
+        : legs.length === 0
         ? (uncovered > 0 ? 'no broker stop existed — created' : 'no broker stop and no uncovered qty')
         : (uncovered > 0 ? `partial coverage (${coveredQty}/${brokerQty}) — patched + filled gap` : `existing coverage — patched stops`),
     });
