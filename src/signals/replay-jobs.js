@@ -208,6 +208,13 @@ function startJob(kind, params, runFn) {
     // (~5-15 seconds), so this isn't hot-path enough to need throttling.
     _persist(job);
   };
+  // Worker handle — set by the runInWorker helper so cancelJob can call
+  // worker.terminate() to actually stop the engine. Pre-fix cancel just
+  // flipped the status flag; the worker kept running and burning CPU
+  // until its natural completion. Stored as a non-enumerable so it
+  // doesn't leak into JSON serialization or persistence.
+  Object.defineProperty(job, '_worker', { value: null, writable: true, enumerable: false });
+  const setWorker = (w) => { job._worker = w; };
   // setImmediate so the caller's response is sent before the work begins —
   // otherwise the POST that creates the job would block on the work and
   // we'd lose the whole point of background execution.
@@ -216,7 +223,7 @@ function startJob(kind, params, runFn) {
       // Runner gets both setProgress and setCheckpoint helpers. setProgress
       // drives the badge; setCheckpoint persists the resume blob (sweep
       // only — other kinds ignore it).
-      const r = await runFn(setProgress, setCheckpoint, job);
+      const r = await runFn(setProgress, setCheckpoint, job, setWorker);
       job.result = r;
       job.status = 'done';
       // Clear checkpoint on success — no need to keep the queue+results
@@ -268,6 +275,18 @@ function cancelJob(id) {
     j.status = 'cancelled';
     j.finishedAt = Date.now();
     _persist(j);
+    // Actually stop the engine. Pre-fix this only flipped the status flag
+    // and the worker kept running for minutes burning CPU until its
+    // natural completion (its result was then discarded — wasted work).
+    // Now: forcibly terminate the worker thread. Engine state is in JS
+    // memory, so terminate is safe — nothing to clean up. The worker's
+    // 'exit' handler in runInWorker already rejects the in-flight Promise
+    // for non-zero exit codes, but cancel sets status first so the
+    // rejected error is suppressed by the cancelled-status check.
+    if (j._worker && typeof j._worker.terminate === 'function') {
+      try { j._worker.terminate(); } catch (_) { /* already exited */ }
+      j._worker = null;
+    }
   }
   return true;
 }

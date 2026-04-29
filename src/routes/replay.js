@@ -343,7 +343,7 @@ const JOB_KINDS = {
   // enabled). Runs in a Worker thread so the main event loop stays
   // responsive — without this, every other UI tab took seconds to load
   // while a sweep was in flight, and node-cron missed scheduled ticks.
-  sweep: (body, setProgress, setCheckpoint, jobRecord) => {
+  sweep: (body, setProgress, setCheckpoint, jobRecord, setWorker) => {
     const {
       strategies, startDate, endDate,
       maxPositions, initialCapital, execution,
@@ -351,9 +351,6 @@ const JOB_KINDS = {
       mcIterations, randomSamples, slippageSweep,
     } = body || {};
     if (!startDate || !endDate) throw new Error('startDate and endDate required');
-    // Resume support: if the caller passed a checkpoint (via the
-    // /resume route), feed it through to the worker so the engine
-    // skips already-evaluated combos and continues at queue[done+1].
     const resumeFrom = body?._resumeFrom || jobRecord?.checkpoint || null;
     return runInWorker('sweep', {
       strategies: strategies && strategies.length ? strategies : Object.keys(STRATEGY_GRIDS),
@@ -372,7 +369,7 @@ const JOB_KINDS = {
       randomSamples:  +randomSamples || 0,
       slippageSweep:  !!slippageSweep,
       resumeFrom,
-    }, setProgress, setCheckpoint);
+    }, setProgress, setCheckpoint, setWorker);
   },
 };
 
@@ -386,28 +383,42 @@ const JOB_KINDS = {
 // that into the cancel path.
 const { Worker } = require('worker_threads');
 const path = require('path');
-function runInWorker(kind, params, setProgress, setCheckpoint) {
+function runInWorker(kind, params, setProgress, setCheckpoint, setWorker) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(
       path.join(__dirname, '..', 'signals', 'replay-worker.js'),
       { workerData: { kind, params } }
     );
+    // Hand the worker handle to replay-jobs so cancelJob can call
+    // worker.terminate() when the user hits ABORT — without this the
+    // engine kept running until natural completion even after cancel.
+    setWorker?.(worker);
+    let settled = false;
     worker.on('message', msg => {
       if (msg.type === 'progress') {
         setProgress?.(msg.progress);
       } else if (msg.type === 'checkpoint') {
         setCheckpoint?.(msg.checkpoint);
       } else if (msg.type === 'done') {
+        settled = true;
         resolve(msg.result);
       } else if (msg.type === 'error') {
+        settled = true;
         reject(new Error(msg.error));
       }
     });
-    worker.on('error', err => reject(err));
+    worker.on('error', err => { settled = true; reject(err); });
     worker.on('exit', code => {
-      // If the worker exited without a 'done' or 'error' message and we
-      // haven't resolved yet, treat as a crash.
-      if (code !== 0) reject(new Error(`replay-worker exited with code ${code}`));
+      // Forcible terminate() exits with code=1. If we got here without
+      // a 'done'/'error' message it's either a cancel (already settled
+      // by cancelJob writing status='cancelled') or a real crash. In the
+      // cancel case the caller's poll loop sees status='cancelled' and
+      // surfaces "Job cancelled" — we still need to settle the Promise
+      // so the runFn closure cleans up.
+      if (!settled) {
+        if (code === 0) resolve(null);  // shouldn't happen but safe
+        else reject(new Error(`replay-worker terminated (exit code ${code})`));
+      }
     });
   });
 }
@@ -423,8 +434,8 @@ router.post('/replay/jobs', (req, res) => {
     // ignore the extras) and the live job record (so handlers can read
     // job.checkpoint when resuming).
     const job = startJob(kind, body || {},
-      (setProgress, setCheckpoint, jobRecord) =>
-        runner(body || {}, setProgress, setCheckpoint, jobRecord)
+      (setProgress, setCheckpoint, jobRecord, setWorker) =>
+        runner(body || {}, setProgress, setCheckpoint, jobRecord, setWorker)
     );
     res.status(202).json({ id: job.id, kind: job.kind, status: job.status, startedAt: job.startedAt });
   } catch (e) { res.status(400).json({ error: e.message }); }
@@ -451,8 +462,8 @@ router.post('/replay/jobs/:id/resume', (req, res) => {
     const runner = JOB_KINDS.sweep;
     const body = { ...(old.params || {}), _resumeFrom: old.checkpoint };
     const job = startJob('sweep', body,
-      (setProgress, setCheckpoint, jobRecord) =>
-        runner(body, setProgress, setCheckpoint, jobRecord)
+      (setProgress, setCheckpoint, jobRecord, setWorker) =>
+        runner(body, setProgress, setCheckpoint, jobRecord, setWorker)
     );
     res.status(202).json({
       id: job.id, kind: job.kind, status: job.status, startedAt: job.startedAt,
