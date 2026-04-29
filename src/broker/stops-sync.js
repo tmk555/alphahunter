@@ -74,22 +74,41 @@ async function _cancelAndResubmit(leg, targetStop) {
 // cancel every active sell-side order on the symbol first, give Alpaca
 // a beat to release the qty, then submit closePosition().
 async function _marketCloseGap(symbol) {
-  // Pull ALL recent orders, filter to active sell-side for this symbol.
+  // Cancellable states: orders that aren't yet in a transitional or terminal
+  // state. `pending_cancel` is already mid-cancel — sending another cancel
+  // is a no-op and we just have to wait it out.
+  const CANCELLABLE = new Set(['new', 'accepted', 'held', 'pending_new',
+    'pending_replace', 'partially_filled', 'replaced']);
+  // Anything still locking qty after we've issued cancels.
+  const STILL_LOCKED = new Set([...CANCELLABLE, 'pending_cancel']);
+
   let orders = [];
   try { orders = await alpaca.getOrders({ status: 'all', limit: 500 }); }
-  catch (_) { /* fall through; closePosition still has its own internal cancel */ }
-  const ACTIVE = new Set(['new', 'accepted', 'held', 'pending_new',
-    'pending_replace', 'partially_filled', 'replaced']);
+  catch (_) { /* fall through */ }
+
   const toCancel = orders.filter(o =>
-    o.symbol === symbol && o.side === 'sell' && ACTIVE.has(o.status)
+    o.symbol === symbol && o.side === 'sell' && CANCELLABLE.has(o.status)
   );
   for (const o of toCancel) {
     try { await alpaca.cancelOrder(o.id); } catch (_) { /* may already be gone */ }
   }
-  // Brief settle delay so Alpaca's positions endpoint sees the qty freed
-  // before we submit the close. 1.2s is well below human-perceptible
-  // latency and matches Alpaca's own ~1s settlement cache.
-  if (toCancel.length) await new Promise(r => setTimeout(r, 1200));
+
+  // Wait for ALL sell-side locks to clear. After-hours Alpaca's
+  // pending_cancel can take 5-10s to resolve; during market hours it's
+  // sub-second. Poll every 700ms up to 12s before giving up. Without this,
+  // closePosition immediately 403s with 'insufficient qty available'
+  // because pending_cancel orders STILL lock the position.
+  const deadline = Date.now() + 12_000;
+  while (Date.now() < deadline) {
+    let cur = [];
+    try { cur = await alpaca.getOrders({ status: 'all', limit: 200 }); }
+    catch (_) { break; }
+    const stillLocked = cur.some(o =>
+      o.symbol === symbol && o.side === 'sell' && STILL_LOCKED.has(o.status)
+    );
+    if (!stillLocked) break;
+    await new Promise(r => setTimeout(r, 700));
+  }
   return alpaca.closePosition(symbol);
 }
 
