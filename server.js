@@ -237,6 +237,20 @@ app.listen(PORT, () => {
   } catch (e) {
     console.error(`   Scheduler seed failed: ${e.message}`);
   }
+  // Restore replay jobs from disk. Pre-fix the job map was 100% in-memory,
+  // so a server restart mid-sweep wiped every running job and the user got
+  // a generic "Job N no longer available" 404 the next time they polled.
+  // Now: completed jobs (done/error/cancelled) are restored verbatim and
+  // any rows still in 'running' state get marked 'interrupted' so the UI
+  // can surface them with a clear "RESTARTED — click to retry" button
+  // instead of a confusing 404.
+  try {
+    const { loadPersistedJobs } = require('./src/signals/replay-jobs');
+    const r = loadPersistedJobs();
+    if (r.loaded) console.log(`   Replay jobs restored from disk: ${r.loaded} (${r.interrupted} marked 'interrupted')`);
+  } catch (e) {
+    console.error(`   Replay-jobs restore failed: ${e.message}`);
+  }
   startScheduler();
 
   // Catch-up runner: walk every enabled job and fire any whose natural

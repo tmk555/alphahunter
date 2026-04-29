@@ -27,6 +27,105 @@ const MAX_JOBS   = 200;                   // hard cap on retained jobs
 const jobs = new Map();
 let nextId = 1;
 
+// ─── Persistence ────────────────────────────────────────────────────────
+// Pre-fix the job map was 100% in-memory. A server restart mid-sweep
+// wiped every running job. From the user's POV: "I clicked Auto-Sweep
+// 8 minutes ago, server restarted, badge says 'Job N no longer
+// available'." Now we mirror to a SQLite table so:
+//   • Done / error / cancelled jobs survive restart (history preserved)
+//   • Running jobs get marked 'interrupted' on startup so the UI can
+//     show a clear "RESTARTED — click to retry" affordance instead of
+//     a generic 404
+//   • The id sequence picks up where it left off so no collisions
+//
+// We don't try to RESUME a running job — the engine state (in-flight
+// loops, partial results, etc.) is in JS memory and gone. The job's
+// params are persisted, so the UI can offer one-click retry.
+let _db = null;
+function _ensureDb() {
+  if (_db) return _db;
+  try {
+    const { getDB } = require('../data/database');
+    _db = getDB();
+    _db.prepare(`
+      CREATE TABLE IF NOT EXISTS replay_jobs_state (
+        id           TEXT PRIMARY KEY,
+        kind         TEXT NOT NULL,
+        status       TEXT NOT NULL,
+        params       TEXT,
+        result       TEXT,
+        error        TEXT,
+        progress     TEXT,
+        started_at   INTEGER NOT NULL,
+        finished_at  INTEGER
+      )
+    `).run();
+  } catch (_) { _db = null; }
+  return _db;
+}
+
+function _persist(job) {
+  const db = _ensureDb();
+  if (!db) return;
+  try {
+    db.prepare(`
+      INSERT INTO replay_jobs_state (id, kind, status, params, result, error, progress, started_at, finished_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        status=excluded.status, result=excluded.result, error=excluded.error,
+        progress=excluded.progress, finished_at=excluded.finished_at
+    `).run(
+      job.id, job.kind, job.status,
+      job.params ? JSON.stringify(job.params) : null,
+      job.result ? JSON.stringify(job.result) : null,
+      job.error || null,
+      job.progress ? JSON.stringify(job.progress) : null,
+      job.startedAt, job.finishedAt
+    );
+  } catch (e) {
+    if (process.env.DEBUG_REPLAY_JOBS) console.warn('[replay-jobs] persist failed:', e.message);
+  }
+}
+
+// Called on server boot from server.js. Loads finished jobs into the
+// in-memory map (so the UI can fetch their results) and marks any
+// 'running' rows as 'interrupted' (the runtime that owned them is gone).
+function loadPersistedJobs() {
+  const db = _ensureDb();
+  if (!db) return { loaded: 0, interrupted: 0 };
+  let interrupted = 0;
+  try {
+    db.prepare(`
+      UPDATE replay_jobs_state
+         SET status = 'interrupted', finished_at = ?
+       WHERE status = 'running'
+    `).run(Date.now());
+    interrupted = db.prepare(
+      `SELECT COUNT(*) AS c FROM replay_jobs_state WHERE status = 'interrupted' AND finished_at >= ?`
+    ).get(Date.now() - 5_000)?.c || 0;
+    const rows = db.prepare(
+      `SELECT * FROM replay_jobs_state WHERE finished_at IS NOT NULL OR status = 'running'
+        ORDER BY started_at DESC LIMIT ?`
+    ).all(MAX_JOBS);
+    for (const r of rows) {
+      jobs.set(r.id, {
+        id: r.id, kind: r.kind, status: r.status,
+        params: r.params ? JSON.parse(r.params) : null,
+        result: r.result ? JSON.parse(r.result) : null,
+        error: r.error,
+        progress: r.progress ? JSON.parse(r.progress) : null,
+        startedAt: r.started_at, finishedAt: r.finished_at,
+      });
+      const numericId = +r.id;
+      if (Number.isFinite(numericId) && numericId >= nextId) nextId = numericId + 1;
+    }
+    return { loaded: rows.length, interrupted };
+  } catch (e) {
+    if (process.env.DEBUG_REPLAY_JOBS) console.warn('[replay-jobs] loadPersistedJobs failed:', e.message);
+    return { loaded: 0, interrupted: 0 };
+  }
+}
+
 function _prune() {
   const now = Date.now();
   // Drop anything older than MAX_AGE_MS first.
@@ -71,11 +170,21 @@ function startJob(kind, params, runFn) {
     progress: null,
   };
   jobs.set(id, job);
+  _persist(job);
   // Runner gets a setProgress(obj) helper. Anything passed gets merged
   // into job.progress; null clears it.
+  // Persist progress every 10s while the job runs so UI polls hit fresh
+  // data even if our setProgress fires faster (per-combo). Reads of the
+  // in-memory map are cheap; writes are 10s-throttled to keep DB pressure
+  // low during a 2700-combo sweep.
+  let lastProgressPersist = 0;
   const setProgress = (obj) => {
     if (obj == null) job.progress = null;
     else job.progress = { ...(job.progress || {}), ...obj, ts: Date.now() };
+    if (Date.now() - lastProgressPersist > 10_000) {
+      lastProgressPersist = Date.now();
+      _persist(job);
+    }
   };
   // setImmediate so the caller's response is sent before the work begins —
   // otherwise the POST that creates the job would block on the work and
@@ -88,10 +197,10 @@ function startJob(kind, params, runFn) {
     } catch (e) {
       job.error  = e?.message || String(e);
       job.status = 'error';
-      // Stack trace to server log only — too noisy to ship over the wire.
       console.error(`[replay-jobs] job ${id} (${kind}) failed:`, e);
     } finally {
       job.finishedAt = Date.now();
+      _persist(job);
     }
   });
   return job;
@@ -130,8 +239,9 @@ function cancelJob(id) {
   if (j.status === 'running') {
     j.status = 'cancelled';
     j.finishedAt = Date.now();
+    _persist(j);
   }
   return true;
 }
 
-module.exports = { startJob, getJob, listJobs, cancelJob };
+module.exports = { startJob, getJob, listJobs, cancelJob, loadPersistedJobs };
