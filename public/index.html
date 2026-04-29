@@ -13947,7 +13947,22 @@ function ReplayTab() {
   // scroll. Each mode renders its form + result; non-active modes are
   // hidden via display:none so state (in-flight jobs, results, form
   // values) survives mode switches without remount.
-  const [replayMode, setReplayMode] = useState('single');
+  // Default mode is Auto-Sweep — that's the recommended path. Single Run
+  // and Compare are still available but moved behind a "more" disclosure
+  // so the strip leads with the right answer. Persist last choice in
+  // localStorage so power users who actually want Single Run land on it
+  // on remount instead of being kicked back to Sweep every time.
+  const [replayMode, setReplayMode] = useState(() => {
+    try { return localStorage.getItem('alphahunter:replay-mode') || 'sweep'; }
+    catch (_) { return 'sweep'; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('alphahunter:replay-mode', replayMode); } catch (_) {}
+  }, [replayMode]);
+  const [showLegacyModes, setShowLegacyModes] = useState(() => {
+    try { return localStorage.getItem('alphahunter:replay-legacy-modes') === '1'; }
+    catch (_) { return false; }
+  });
   // Single-replay result panel sub-tabs: Overview / Trades / Regime / Macro.
   const [singleResultSubTab, setSingleResultSubTab] = useState('overview');
   // Compare result panel sub-tabs.
@@ -14454,10 +14469,11 @@ function ReplayTab() {
       <div className="panel" style={{padding:'10px 12px',marginBottom:10}}>
         <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
           <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginRight:6}}>MODE</span>
+          {/* Primary modes — Auto-Sweep leads. WF + MC stay visible because
+              they're independent diagnostic tools (not subsumed by Sweep
+              the way Single Run + Compare are). */}
           {[
-            { k:'single',  l:'▶ Single Run', tip:'Run one strategy with one parameter set against the date range. The base case.' },
-            { k:'compare', l:'⚔ Compare',    tip:'Run all 10 built-in strategies head-to-head over the same window.' },
-            { k:'sweep',   l:'🤖 Auto-Sweep ★', tip:'RECOMMENDED. Test every meaningful (strategy × params × flavor) combination, ranked by AFTER-TAX alpha vs SPY long-term hold. The "do everything" entry point.' },
+            { k:'sweep',   l:'🤖 Auto-Sweep ★', tip:'RECOMMENDED. Test every meaningful (strategy × params × flavor) combination, ranked by AFTER-TAX alpha vs benchmark long-term hold. The "do everything" entry point — also captures what Single Run + Compare used to test.' },
             { k:'wf',      l:'🔄 Walk-Forward', tip:'Sweep params on rolling train windows, validate on next held-out test slice. Reveals overfitting.' },
             { k:'mc',      l:'🎲 Monte Carlo',  tip:'Resample a previous replay\'s trades to see how much was edge vs ordering luck.' },
           ].map(m => (
@@ -14474,6 +14490,39 @@ function ReplayTab() {
               {m.l}
             </button>
           ))}
+          {/* Legacy modes — kept for power users but tucked behind a
+              disclosure so the strip leads with Auto-Sweep. Single Run is
+              an Auto-Sweep with strategies=[one], grid={user params}.
+              Compare is an Auto-Sweep over all strategies with default
+              grids. Both produce a SUBSET of what Sweep gives you. */}
+          {showLegacyModes && [
+            { k:'single',  l:'▶ Single Run', tip:'LEGACY. Run one strategy with one parameter set. Auto-Sweep with strategies=[one] is the modern equivalent.' },
+            { k:'compare', l:'⚔ Compare',    tip:'LEGACY. Run all 10 built-in strategies head-to-head. Auto-Sweep with topK=10 covers this and more.' },
+          ].map(m => (
+            <button key={m.k} onClick={() => setReplayMode(m.k)} title={m.tip}
+              style={{
+                padding:'7px 14px',
+                background: replayMode===m.k ? 'var(--cyan)' : 'var(--bg3)',
+                border: `1px solid ${replayMode===m.k ? 'var(--cyan)' : 'var(--border)'}`,
+                borderRadius:4,
+                color: replayMode===m.k ? '#000' : 'var(--text3)',
+                cursor:'pointer',
+                fontSize:11, fontWeight:700, fontFamily:'var(--font-mono)', letterSpacing:1,
+                opacity: 0.85,
+              }}>
+              {m.l}
+            </button>
+          ))}
+          <button onClick={() => {
+              const next = !showLegacyModes;
+              setShowLegacyModes(next);
+              try { localStorage.setItem('alphahunter:replay-legacy-modes', next ? '1' : '0'); } catch (_) {}
+              if (!next && (replayMode === 'single' || replayMode === 'compare')) setReplayMode('sweep');
+            }}
+            title="Show / hide Single Run and Compare modes. They're subsumed by Auto-Sweep but kept for power users who want a one-strategy quick check."
+            style={{padding:'7px 10px',fontSize:10,fontFamily:'var(--font-mono)',color:'var(--text3)',background:'transparent',border:'1px dashed var(--border2)',borderRadius:3,cursor:'pointer',letterSpacing:1}}>
+            {showLegacyModes ? '✕ Hide Legacy' : '+ Show Legacy'}
+          </button>
           <button onClick={() => setHistoryCollapsed(c => !c)}
             title="Toggle history panels (Replay / WF / MC)"
             style={{marginLeft:'auto',padding:'7px 14px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text3)',cursor:'pointer',fontSize:10,fontFamily:'var(--font-mono)',letterSpacing:1}}>
