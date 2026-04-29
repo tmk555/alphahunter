@@ -1797,8 +1797,7 @@ function App() {
     { id:'trades',    label:'💼 Trades', badge: tradesUrgent || null,
                        badgeWarn: !!badgeCounts.review },
     { id:'replay',    label:'🔁 Replay' },
-    { id:'edge',      label:'📈 Analytics' },
-    { id:'telemetry', label:'📡 Edge Telemetry' },
+    { id:'diagnostics', label:'📈 Diagnostics' },
     { id:'hedge',     label:'🛡 Hedge' },
     { id:'settings',  label:'⚙ Settings' },
   ];
@@ -1936,8 +1935,7 @@ function App() {
         {tab==='hedge'      && <HedgeTab />}
         {tab==='trades'     && <TradesTab rsData={rsData} badgeCounts={badgeCounts}/>}
         {tab==='replay'     && <ReplayTab />}
-        {tab==='edge'       && <EdgeDashboardTab />}
-        {tab==='telemetry'  && <TelemetryTab />}
+        {tab==='diagnostics' && <DiagnosticsTab />}
         {tab==='settings'   && <SettingsTab />}
       </div>
 
@@ -13536,6 +13534,48 @@ function MacroContextCard({ ctx, title = 'MACRO CONTEXT (FRED)' }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Diagnostics Tab — Edge Analytics + Telemetry combined ──────────────
+//
+// Pre-consolidation: 'Analytics' (📈) and 'Edge Telemetry' (📡) were two
+// top-level tabs. Both are 'internal health dashboards.' One tab with a
+// sub-tab strip cleans the navigation and matches the lifecycle pattern
+// used in Trades / Rotation. Underlying components untouched.
+function DiagnosticsTab() {
+  const [sub, setSub] = useState(() => {
+    try { return localStorage.getItem('alphahunter:diag-sub') || 'analytics'; }
+    catch (_) { return 'analytics'; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('alphahunter:diag-sub', sub); } catch (_) {}
+  }, [sub]);
+  const SUBS = [
+    { k:'analytics', label:'📈 Edge Analytics', tip:'Backtest summary stats, breadth+composite charts, signal decay, return decomposition.' },
+    { k:'telemetry', label:'📡 Telemetry',      tip:'Live edge metrics — provider latency, cron health, scheduler runs, broker errors.' },
+  ];
+  return (
+    <div>
+      <div className="panel" style={{padding:'8px 10px',marginBottom:12}}>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+          <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginRight:6}}>VIEW</span>
+          {SUBS.map(s => (
+            <button key={s.k} onClick={() => setSub(s.k)} title={s.tip}
+              style={{
+                padding:'5px 12px', fontSize:11, fontFamily:'var(--font-mono)',
+                fontWeight:700, letterSpacing:1,
+                background: sub === s.k ? 'var(--cyan)' : 'transparent',
+                color: sub === s.k ? '#000' : 'var(--text2)',
+                border: `1px solid ${sub === s.k ? 'var(--cyan)' : 'var(--border2)'}`,
+                borderRadius:3, cursor:'pointer',
+              }}>{s.label}</button>
+          ))}
+        </div>
+      </div>
+      {sub === 'analytics' && <EdgeDashboardTab />}
+      {sub === 'telemetry' && <TelemetryTab />}
     </div>
   );
 }
