@@ -377,10 +377,9 @@ function _daysSinceYearStart() {
 //
 // Returns { scanned, corrected: [{date, before, after}], failed: [{date, error}] }.
 async function correctStaleSpyRows() {
-  const _db = require('../db').db;
   const { getHistoryFull } = require('../data/providers/manager');
 
-  const rows = _db().prepare(
+  const rows = getDB().prepare(
     'SELECT date, spy_close FROM equity_snapshots ORDER BY date'
   ).all();
 
@@ -423,7 +422,7 @@ async function correctStaleSpyRows() {
     if (d && b.close != null) byDate[d] = b.close;
   }
 
-  const update = _db().prepare('UPDATE equity_snapshots SET spy_close = ? WHERE date = ?');
+  const update = getDB().prepare('UPDATE equity_snapshots SET spy_close = ? WHERE date = ?');
   const corrected = [];
   const failed = [];
   for (const s of fixable) {
