@@ -944,6 +944,22 @@ registerJobType('swing_exit_check', {
 // open it has stale data and reads NONE for level when the tape was actually
 // deteriorating across Friday's close. This job runs post-RS-scan so the
 // composite reads the same-day rs_snapshots the scan just wrote.
+// ─── Stop Discipline — unified stop-tightening pass ─────────────────────
+// Replaces three independent tighten paths with one composed evaluation.
+// Sources: per-trade trail_pct, exposure-ramp tier, breadth-warning level.
+// Picks the tightest recommendation per trade, writes journal, hands off
+// to stops-sync for broker patching. Runs every 30 min during market hours.
+registerJobType('stop_discipline_check', {
+  description: 'Evaluate all open stops against composed signals; pick tightest; sync to broker',
+  defaultConfig: {},
+  handler: async () => {
+    const { evaluateAllOpenStops, applyStopAdjustments } = require('../risk/stop-discipline');
+    const { plans, skipped } = await evaluateAllOpenStops();
+    const result = await applyStopAdjustments(plans);
+    return { evaluated: plans.length + skipped.length, plans: plans.length, skipped: skipped.length, ...result };
+  },
+});
+
 // ─── Paper-trade auto-close ────────────────────────────────────────────────
 // Sweeps open paper_trades, fetches live quotes, closes any whose intraday
 // low hit the stop or whose intraday high hit target2 (target1 is left as
@@ -1164,6 +1180,18 @@ const DEFAULT_JOBS = [
     description: 'Auto-close paper trades on stop / target2 hit',
     job_type: 'paper_trade_check',
     cron_expression: '15 16 * * 1-5',  // 4:15 PM server local, weekdays
+    config: {},
+  },
+
+  // Stop Discipline — unified stop-tightening pass. Replaces three
+  // independent paths (position-deterioration, breadth-warning, regime-
+  // downgrade tighten). Composes signals, picks tightest, writes journal,
+  // syncs to broker. Runs twice an hour during market hours.
+  {
+    name: 'stop_discipline_intraday',
+    description: 'Composed stop-tighten evaluation across all signal sources',
+    job_type: 'stop_discipline_check',
+    cron_expression: '*/30 9-16 * * 1-5',
     config: {},
   },
 
