@@ -1611,7 +1611,14 @@ function App() {
     setScannerTarget(ticker);
     setTab('rs');
   }, []);
-  const navigateToTrading = useCallback(() => setTab('trading'), []);
+  // Trades-tab consolidation: 'trading' is now a sub-tab under 'trades'.
+  // Set the parent tab AND persist 'open' as the desired sub-tab so the
+  // user lands on Live Positions (the historical destination of "Open
+  // Trading →" toast actions).
+  const navigateToTrading = useCallback(() => {
+    try { localStorage.setItem('alphahunter:trades-sub', 'open'); } catch (_) {}
+    setTab('trades');
+  }, []);
   // Expose globally so all tab components can call it without prop drilling
   useEffect(() => {
     window.navigateToScanner  = navigateToScanner;
@@ -1773,6 +1780,14 @@ function App() {
     return () => { cancelled = true; clearInterval(id); };
   }, [rsData.length]);
 
+  // Trade lifecycle is one mental concept (staged → open → closed →
+  // paper) presented as four stops. Pre-consolidation those were four
+  // top-level tabs; now they live as sub-tabs under a single 'Trades'
+  // entry. The badge on the parent rolls up the most-urgent of:
+  //   • staged-needs-action (orange)
+  //   • journal needs_review (red — money already exposed)
+  // Open-position count goes inside as a sub-tab badge.
+  const tradesUrgent = badgeCounts.review || badgeCounts.staged || badgeCounts.positions || 0;
   const TABS = [
     { id:'pulse',     label:'⚡ Market Pulse' },
     { id:'macro',     label:'📉 Macro' },
@@ -1780,11 +1795,9 @@ function App() {
     { id:'industries',label:'🏭 Industries' },
     { id:'rs',        label:'📊 Scanner' },
     { id:'setups',    label:'🎯 Trade Setups' },
-    { id:'watchlist', label:'📋 Pipeline', badge: badgeCounts.staged || null },
-    { id:'trading',   label:'💼 Trading', badge: badgeCounts.positions || null },
-    { id:'journal',   label:'📒 Journal', badge: badgeCounts.review || null, badgeWarn: !!badgeCounts.review },
+    { id:'trades',    label:'💼 Trades', badge: tradesUrgent || null,
+                       badgeWarn: !!badgeCounts.review },
     { id:'replay',    label:'🔁 Replay' },
-    { id:'paper',     label:'🧪 Paper' },
     { id:'edge',      label:'📈 Analytics' },
     { id:'telemetry', label:'📡 Edge Telemetry' },
     { id:'hedge',     label:'🛡 Hedge' },
@@ -1922,12 +1935,9 @@ function App() {
         {tab==='industries' && <IndustriesTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
         {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} rsLoading={rsLoading} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} sigFilters={rsSigFilters} setSigFilters={setRsSigFilters} quickFilter={rsQuickFilter} setQuickFilter={setRsQuickFilter} scannerTarget={scannerTarget} clearScannerTarget={() => setScannerTarget(null)}/>}
         {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} rsLoading={rsLoading} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary} setupSigFilters={setupSigFilters} setSetupSigFilters={setSetupSigFilters} mode={setupMode} setMode={setSetupMode} sortBy={setupSortBy} setSortBy={setSetupSortBy} exitStrategy={setupExitStrategy} setExitStrategy={setSetupExitStrategy}/>}
-        {tab==='watchlist'  && <WatchlistTab rsData={rsData} />}
         {tab==='hedge'      && <HedgeTab />}
-        {tab==='trading'    && <><PortfolioTab /><StrategiesSection /><ExecutionTab /></>}
-        {tab==='journal'    && <><PerformanceTab /><TradeJournalTab /></>}
+        {tab==='trades'     && <TradesTab rsData={rsData} badgeCounts={badgeCounts}/>}
         {tab==='replay'     && <ReplayTab />}
-        {tab==='paper'      && <PaperTradesTab />}
         {tab==='edge'       && <EdgeDashboardTab />}
         {tab==='telemetry'  && <TelemetryTab />}
         {tab==='settings'   && <SettingsTab />}
@@ -13483,6 +13493,78 @@ function MacroContextCard({ ctx, title = 'MACRO CONTEXT (FRED)' }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Trades Tab — unified lifecycle navigation ───────────────────────────
+//
+// Pre-consolidation: Pipeline / Trading / Journal / Paper were 4 separate
+// top-level tabs even though they're 4 stops on the same lifecycle:
+//   Staged (intent) → Open (live) → Closed (history) → Paper (sandbox)
+// Cleaner mental model: one Trades tab with sub-tab strip. Same
+// components reused; sub-active state lives in the parent so navigating
+// away and back preserves context. Default sub-tab is 'open' since that's
+// the most-checked stop in daily workflow.
+function TradesTab({ rsData, badgeCounts }) {
+  // Persist sub-tab choice in localStorage so a hard reload returns to
+  // wherever the user was last looking.
+  const [sub, setSub] = useState(() => {
+    try { return localStorage.getItem('alphahunter:trades-sub') || 'open'; }
+    catch (_) { return 'open'; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('alphahunter:trades-sub', sub); } catch (_) {}
+  }, [sub]);
+
+  const SUBS = [
+    { k:'staged', label:'📋 Staged', tip:'Pre-submission queue — orders staged from Trade Setups awaiting your final approval before they hit the broker.',
+      badge: badgeCounts.staged || null },
+    { k:'open',   label:'💼 Open',   tip:'Live broker positions — what Alpaca actually holds right now plus the journal sibling-tranche detail.',
+      badge: badgeCounts.positions || null },
+    { k:'closed', label:'📒 Closed', tip:'Trade journal — closed positions, P&L, R-multiple, exit reasons. Rows flagged needs_review (orange dot) want a manual eyeball.',
+      badge: badgeCounts.review || null, badgeWarn: !!badgeCounts.review },
+    { k:'paper',  label:'🧪 Paper',  tip:'Discretionary watchlist + paper P&L. Practice the judgment-overlay workflow without committing capital.' },
+  ];
+
+  return (
+    <div>
+      {/* Sub-tab strip — same visual language as Replay's mode tabs so the
+          UI primitive is consistent across consolidated tabs. */}
+      <div className="panel" style={{padding:'8px 10px',marginBottom:12}}>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+          <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginRight:6}}>VIEW</span>
+          {SUBS.map(s => (
+            <button key={s.k} onClick={() => setSub(s.k)} title={s.tip}
+              style={{
+                padding:'5px 12px', fontSize:11, fontFamily:'var(--font-mono)',
+                fontWeight:700, letterSpacing:1,
+                background: sub === s.k ? 'var(--cyan)' : 'transparent',
+                color: sub === s.k ? '#000' : 'var(--text2)',
+                border: `1px solid ${sub === s.k ? 'var(--cyan)' : 'var(--border2)'}`,
+                borderRadius:3, cursor:'pointer',
+                display:'flex', alignItems:'center', gap:6,
+              }}>
+              {s.label}
+              {s.badge != null && s.badge > 0 && (
+                <span style={{
+                  fontSize:9, padding:'1px 5px', borderRadius:8,
+                  background: s.badgeWarn ? 'var(--red)' : sub === s.k ? '#000' : 'var(--bg2)',
+                  color: s.badgeWarn ? '#fff' : sub === s.k ? 'var(--cyan)' : 'var(--text2)',
+                  fontWeight:700,
+                }}>
+                  {s.badge}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {sub === 'staged' && <WatchlistTab rsData={rsData} />}
+      {sub === 'open'   && <><PortfolioTab /><StrategiesSection /><ExecutionTab /></>}
+      {sub === 'closed' && <><PerformanceTab /><TradeJournalTab /></>}
+      {sub === 'paper'  && <PaperTradesTab />}
     </div>
   );
 }
