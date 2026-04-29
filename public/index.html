@@ -14785,8 +14785,13 @@ function ReplayTab() {
               <table className="data-table" style={{fontSize:11}}>
                 <thead><tr>
                   <th>#</th><th>Strategy</th><th>Flavor</th><th>Exit</th><th>Reg</th>
+                  <th title="Slippage axis variant — bps applied at entry. '—' = config default (no slippage axis enabled)."
+                      style={{textAlign:'right'}}>Slip</th>
+                  <th title="Source: deterministic grid (—) vs random sample (RND). Random samples interpolate the grid (e.g. minRS=83 between 80/85)."
+                      style={{textAlign:'center'}}>Src</th>
                   <th style={{textAlign:'right'}}>Return</th>
-                  <th style={{textAlign:'right'}}>SPY</th>
+                  <th title="SPY buy-and-hold return over the same window — PRE-TAX. Hover any after-tax alpha cell for the after-tax SPY value."
+                      style={{textAlign:'right'}}>SPY</th>
                   <th style={{textAlign:'right'}}>Pre-Tax α</th>
                   <th style={{textAlign:'right'}}>After-Tax α</th>
                   <th style={{textAlign:'right'}}>MaxDD</th>
@@ -14798,6 +14803,12 @@ function ReplayTab() {
                   {(sweepResult.results || []).slice(0, 25).map((r, i) => {
                     const flavorColor = r.flavor === 'Position' ? 'var(--cyan)' : r.flavor === 'Swing' ? 'var(--amber)' : 'var(--text2)';
                     const atxColor = r.afterTaxAlpha > 0 ? 'var(--green)' : 'var(--red)';
+                    // After-tax SPY value for tooltip — derived from the row.
+                    const afterTaxSpy = r.spyNetAfterTax;
+                    const afterTaxStrat = r.stratNetAfterTax;
+                    const taxTip = afterTaxSpy != null && afterTaxStrat != null
+                      ? `After-tax: strat ${afterTaxStrat>0?'+':''}${afterTaxStrat}%  ·  SPY ${afterTaxSpy>0?'+':''}${afterTaxSpy}%  →  α ${r.afterTaxAlpha>0?'+':''}${r.afterTaxAlpha}%`
+                      : null;
                     return (
                       <tr key={i} style={r.afterTaxAlpha > 0 ? { background: 'rgba(0,230,118,0.04)' } : undefined}>
                         <td style={{fontFamily:'var(--font-mono)',color:i<3?'var(--amber)':'var(--text3)',fontWeight:700}}>{i+1}</td>
@@ -14805,10 +14816,18 @@ function ReplayTab() {
                         <td style={{color:flavorColor,fontFamily:'var(--font-mono)',fontSize:10,fontWeight:700}}>{r.flavor}</td>
                         <td style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text3)'}}>{r.exit.replace(/_/g, '/')}</td>
                         <td style={{fontFamily:'var(--font-mono)',fontSize:10,color:r.strictRegime?'var(--cyan)':'var(--amber)'}}>{r.strictRegime?'STR':'len'}</td>
+                        <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text3)'}}>
+                          {r.slippageBps != null ? r.slippageBps + 'bps' : '—'}
+                        </td>
+                        <td style={{textAlign:'center',fontFamily:'var(--font-mono)',fontSize:9}}
+                            title={r.fromRandomSample ? 'Random sample (interpolated grid point)' : 'Deterministic grid combo'}>
+                          {r.fromRandomSample ? <span style={{color:'var(--purple)',fontWeight:700}}>RND</span> : <span style={{color:'var(--text3)'}}>—</span>}
+                        </td>
                         <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:r.totalReturn>=0?'var(--green)':'var(--red)'}}>{r.totalReturn>0?'+':''}{r.totalReturn}%</td>
-                        <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--text3)'}}>{r.spyReturn>0?'+':''}{r.spyReturn}%</td>
+                        <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--text3)'}}
+                            title={afterTaxSpy != null ? `Pre-tax. After-tax SPY = ${afterTaxSpy>0?'+':''}${afterTaxSpy}%` : 'SPY pre-tax buy-and-hold'}>{r.spyReturn>0?'+':''}{r.spyReturn}%</td>
                         <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:(r.preTaxAlpha||0)>0?'var(--green)':'var(--red)'}}>{r.preTaxAlpha!=null?(r.preTaxAlpha>0?'+':'')+r.preTaxAlpha+'%':'—'}</td>
-                        <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:atxColor,fontWeight:700}}>{r.afterTaxAlpha!=null?(r.afterTaxAlpha>0?'+':'')+r.afterTaxAlpha+'%':'—'}</td>
+                        <td title={taxTip} style={{textAlign:'right',fontFamily:'var(--font-mono)',color:atxColor,fontWeight:700,cursor: taxTip ? 'help' : 'default'}}>{r.afterTaxAlpha!=null?(r.afterTaxAlpha>0?'+':'')+r.afterTaxAlpha+'%':'—'}</td>
                         <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--red)'}}>{r.maxDrawdown}%</td>
                         <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:r.sharpeRatio>=1?'var(--green)':'var(--text)'}}>{r.sharpeRatio}</td>
                         <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text3)'}}>{r.trades}</td>
@@ -14826,35 +14845,71 @@ function ReplayTab() {
                 <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:8}}>
                   TOP-{sweepResult.topKDeepDive.length} DEEP-DIVE — Walk-Forward + Monte Carlo
                 </div>
-                <div style={{maxHeight:280,overflowY:'auto'}}>
-                  <table className="data-table" style={{fontSize:10}}>
+                <div style={{fontSize:10,color:'var(--text3)',marginBottom:8,lineHeight:1.5}}>
+                  Each row is one of the top-{sweepResult.topKDeepDive.length} configurations by after-tax alpha — the
+                  strategy may repeat with DIFFERENT params; the Params column makes the
+                  difference visible. Highest WF OOS + highest Param Stab + lowest MC p95 DD = most trustworthy live deployment.
+                </div>
+                <div style={{maxHeight:320,overflowY:'auto'}}>
+                  <table className="data-table" style={{fontSize:10,tableLayout:'fixed',width:'100%'}}>
+                    <colgroup>
+                      <col style={{width:30}}/>
+                      <col style={{width:120}}/>
+                      <col style={{width:60}}/>
+                      <col style={{width:90}}/>
+                      <col style={{width:75}}/>
+                      <col style={{width:80}}/>
+                      <col style={{width:80}}/>
+                      <col style={{width:90}}/>
+                      <col/>
+                    </colgroup>
                     <thead><tr>
-                      <th>#</th><th>Strategy</th><th>Flavor</th>
-                      <th title="Out-of-sample return from walk-forward">WF OOS Ret</th>
-                      <th>WF Sharpe</th>
-                      <th title="Parameter stability — % of windows that picked the same winning params">Param Stab</th>
-                      <th title="Monte Carlo 95th-percentile max drawdown">MC p95 DD</th>
-                      <th title="Monte Carlo: % of permutations that ended profitable">MC %Profitable</th>
+                      <th style={{textAlign:'right'}}>#</th>
+                      <th style={{textAlign:'left'}}>Strategy</th>
+                      <th style={{textAlign:'left'}}>Flavor</th>
+                      <th title="Compounded out-of-sample return across all walk-forward windows. Honest 'what would this combo have done if I'd been adapting params live'."
+                          style={{textAlign:'right'}}>WF OOS Ret</th>
+                      <th title="Walk-forward out-of-sample Sharpe ratio."
+                          style={{textAlign:'right'}}>WF Sharpe</th>
+                      <th title="Fraction of WF windows where the SAME param combo won training. ≥70% = robust across regimes; <50% = different params won different windows (overfitting flag)."
+                          style={{textAlign:'right'}}>Param Stab</th>
+                      <th title="Monte Carlo 95th-percentile max drawdown across 1,000 trade-order permutations. 5% of orderings did worse than this."
+                          style={{textAlign:'right'}}>MC p95 DD</th>
+                      <th title="Fraction of MC permutations that ended profitable. 100% = robust to trade order; <80% = edge fragile."
+                          style={{textAlign:'right'}}>MC %Profit</th>
+                      <th style={{textAlign:'left'}}>Params</th>
                     </tr></thead>
                     <tbody>
-                      {sweepResult.topKDeepDive.map((d, i) => (
-                        <tr key={i}>
-                          <td style={{color:'var(--amber)',fontWeight:700}}>{d.rank}</td>
-                          <td style={{color:'var(--cyan)',fontWeight:600}}>{d.strategy}</td>
-                          <td style={{color:d.flavor==='Position'?'var(--cyan)':d.flavor==='Swing'?'var(--amber)':'var(--text2)',fontFamily:'var(--font-mono)'}}>{d.flavor}</td>
-                          <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:(d.walkForward?.oosReturn||0)>=0?'var(--green)':'var(--red)'}}>
-                            {d.walkForward?.oosReturn != null ? (d.walkForward.oosReturn>0?'+':'') + d.walkForward.oosReturn + '%' : (d.walkForwardError ? '⚠' : '—')}
-                          </td>
-                          <td style={{textAlign:'right',fontFamily:'var(--font-mono)'}}>{d.walkForward?.oosSharpe ?? '—'}</td>
-                          <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:(d.walkForward?.paramStability||0)>=50?'var(--green)':'var(--amber)'}}>
-                            {d.walkForward?.paramStability != null ? d.walkForward.paramStability + '%' : '—'}
-                          </td>
-                          <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--red)'}}>{d.monteCarlo?.p95MaxDD != null ? d.monteCarlo.p95MaxDD + '%' : '—'}</td>
-                          <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:(d.monteCarlo?.profitablePct||0)>=50?'var(--green)':'var(--red)'}}>
-                            {d.monteCarlo?.profitablePct != null ? d.monteCarlo.profitablePct + '%' : '—'}
-                          </td>
-                        </tr>
-                      ))}
+                      {sweepResult.topKDeepDive.map((d, i) => {
+                        const paramsStr = d.params ? JSON.stringify(d.params) : '—';
+                        return (
+                          <tr key={i}>
+                            <td style={{textAlign:'right',color:'var(--amber)',fontWeight:700,fontFamily:'var(--font-mono)'}}>{d.rank}</td>
+                            <td style={{textAlign:'left',color:'var(--cyan)',fontWeight:600}}>{d.strategy}</td>
+                            <td style={{textAlign:'left',color:d.flavor==='Position'?'var(--cyan)':d.flavor==='Swing'?'var(--amber)':'var(--text2)',fontFamily:'var(--font-mono)'}}>{d.flavor}</td>
+                            <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:(d.walkForward?.oosReturn||0)>=0?'var(--green)':'var(--red)'}}
+                                title={d.walkForwardError ? `WF failed: ${d.walkForwardError}` : null}>
+                              {d.walkForward?.oosReturn != null ? (d.walkForward.oosReturn>0?'+':'') + d.walkForward.oosReturn + '%' : (d.walkForwardError ? '⚠' : '—')}
+                            </td>
+                            <td style={{textAlign:'right',fontFamily:'var(--font-mono)'}}>{d.walkForward?.oosSharpe ?? '—'}</td>
+                            <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:(d.walkForward?.paramStability||0)>=70?'var(--green)':(d.walkForward?.paramStability||0)>=50?'var(--amber)':'var(--red)'}}>
+                              {d.walkForward?.paramStability != null ? d.walkForward.paramStability + '%' : '—'}
+                            </td>
+                            <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--red)'}}
+                                title={d.monteCarlo?.p5MaxDD != null && d.monteCarlo?.p50MaxDD != null
+                                  ? `p5: ${d.monteCarlo.p5MaxDD}%  ·  p50: ${d.monteCarlo.p50MaxDD}%  ·  p95: ${d.monteCarlo.p95MaxDD}%`
+                                  : null}>
+                              {d.monteCarlo?.p95MaxDD != null ? d.monteCarlo.p95MaxDD + '%' : '—'}
+                            </td>
+                            <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:(d.monteCarlo?.profitablePct||0)>=80?'var(--green)':(d.monteCarlo?.profitablePct||0)>=50?'var(--amber)':'var(--red)'}}>
+                              {d.monteCarlo?.profitablePct != null ? d.monteCarlo.profitablePct + '%' : (d.monteCarloSkipped ? <span title={d.monteCarloSkipped}>SKIP</span> : '—')}
+                            </td>
+                            <td style={{textAlign:'left',fontFamily:'var(--font-mono)',fontSize:9,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={paramsStr}>
+                              {paramsStr}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
