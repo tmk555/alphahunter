@@ -53,6 +53,55 @@ router.get('/regime', async (req, res) => {
   catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// /api/market-state — unified market-state envelope.
+//
+// Pre-fix: Market Pulse / Trade Setups / Conditional Entries / etc. each
+// fetched 3-4 separate endpoints (/api/regime, /api/breadth/early-warning,
+// /api/macro, /api/cycle-auto-detect) and re-composed locally. Each path
+// had subtly different stale-data risk and the breadth-composite drift
+// surfaced earlier today (Market Pulse 48 vs Analytics 45) was a symptom.
+//
+// Now: ONE call returns the canonical state. getMarketRegime() already
+// composes regime/breadthOverlay/breadthWarning/macroOverlay/cycleOverride
+// into a single object — this route adds the live evaluateBreadthWarning
+// alongside (it reads from breadth_snapshots history for deltas the
+// regime engine doesn't surface) and tags an asOf timestamp so consumers
+// can show "as of HH:MM:SS".
+router.get('/market-state', async (req, res) => {
+  try {
+    const regime = await getMarketRegime();
+    let breadthWarning = null;
+    try {
+      const { evaluateBreadthWarning } = require('../signals/breadth-warning');
+      breadthWarning = evaluateBreadthWarning();
+    } catch (_) { /* fail-soft */ }
+    res.json({
+      asOf: new Date().toISOString(),
+      regime,
+      breadthWarning,
+      // Convenience nesting so callers can read state.breadth.score
+      // instead of state.regime.breadthOverlay?.score (the existing
+      // nested name is technically correct but lopsided — score lives
+      // at the top of "breadth" conceptually, not under "overlay").
+      breadth: regime.breadthOverlay ? {
+        score: regime.breadthOverlay.score,
+        regime: regime.breadthOverlay.regime,
+        pctAbove50MA: regime.breadthOverlay.pctAbove50MA,
+        pctAbove200MA: regime.breadthOverlay.pctAbove200MA,
+        divergence: regime.breadthOverlay.divergence,
+        sizeMultiplier: regime.breadthOverlay.sizeMultiplier,
+      } : null,
+      macro: regime.macroOverlay ? {
+        score: regime.macroOverlay.score,
+        regime: regime.macroOverlay.regime,
+        sizeMultiplier: regime.macroOverlay.multiplier,
+      } : null,
+      cycle: regime.cycleOverride || null,
+      exposureRamp: regime.exposureRamp || null,
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // /api/macro
 router.get('/macro', async (req, res) => {
   try {
