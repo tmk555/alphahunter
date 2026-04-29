@@ -580,12 +580,25 @@ function GlobalReplayJobsBadge({ onJump }) {
         // launched the right window without opening Replay tab.
         const sd = j.params?.startDate;
         const ed = j.params?.endDate;
+        const pctStr = pctDone != null ? `${(pctDone * 100).toFixed(1)}%` : null;
         return (
-          <span key={kind} style={{display:'inline-flex',alignItems:'center',gap:6,fontSize:11,color:'var(--text2)'}}>
+          <span key={kind} style={{display:'inline-flex',alignItems:'center',gap:6,fontSize:11,color:'var(--text2)',flexWrap:'wrap'}}>
             <strong style={{color:'var(--cyan)'}}>{kind}</strong>
             {sd && ed && <span style={{color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{sd} → {ed}</span>}
             <span>{elapsed}s{eta != null ? ` · ~${eta}s left` : ''}</span>
-            {p && p.total > 0 && <span style={{fontFamily:'var(--font-mono)',color:'var(--text)'}}>{p.done}/{p.total}</span>}
+            {p && p.total > 0 && (
+              <span style={{fontFamily:'var(--font-mono)',color:'var(--text)'}}>
+                {p.done}/{p.total}{pctStr ? ` (${pctStr})` : ''}
+              </span>
+            )}
+            {p && p.outperforming != null && (
+              <span style={{color: p.outperforming > 0 ? 'var(--green)' : 'var(--text3)',fontFamily:'var(--font-mono)'}}>
+                {p.outperforming} beating SPY
+              </span>
+            )}
+            {p && p.current && (
+              <span style={{color:'var(--text3)',fontSize:10,fontFamily:'var(--font-mono)'}}>· {p.current}</span>
+            )}
           </span>
         );
       })}
