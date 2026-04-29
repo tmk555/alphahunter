@@ -65,11 +65,21 @@ async function syncJournalStopsToBroker({ dryRun = false } = {}) {
     };
   }
 
-  let openOrders = [];
-  try { openOrders = await alpaca.getOrders({ status: 'open', limit: 500 }); }
+  // Pull ALL recent orders (status='all') and filter for ACTIVE sell-stops
+  // ourselves. status='open' alone misses bracket-leg children which Alpaca
+  // returns with status='held' until the parent fills — those legs ARE the
+  // user's actual broker-side stops. Pre-fix the sync ignored them and saw
+  // zero coverage on TER/HPE/AVGO/DELL even though stops existed (just
+  // wide of the journal value), which would have caused us to submit a
+  // duplicate stop on top of the existing leg.
+  const ACTIVE_STATUSES = new Set(['new', 'accepted', 'held', 'pending_new',
+    'pending_replace', 'partially_filled', 'replaced']);
+  let allOrders = [];
+  try { allOrders = await alpaca.getOrders({ status: 'all', limit: 500 }); }
   catch (e) { return { error: `getOrders failed: ${e.message}`, plans: [] }; }
   const stopsBySymbol = {};
-  for (const o of openOrders) {
+  for (const o of allOrders) {
+    if (!ACTIVE_STATUSES.has(o.status)) continue;
     if (o.side !== 'sell') continue;
     if (o.type !== 'stop' && o.type !== 'stop_limit') continue;
     (stopsBySymbol[o.symbol] ||= []).push(o);
