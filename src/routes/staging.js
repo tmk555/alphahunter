@@ -6,6 +6,7 @@ const router  = express.Router();
 const { stageOrder, stageFromSetup, getStagedOrders, getStagedOrder,
         submitStagedOrder, syncOrderStatus, cancelStagedOrder,
         modifyStagedEntryPrice } = require('../broker/staging');
+const { notifyTradeEvent } = require('../notifications/channels');
 const { computeTradeSetup } = require('../signals/candidates');
 const { calculatePositionSize } = require('../risk/position-sizer');
 const { calcConviction, evaluateConvictionOverride } = require('../signals/conviction');
@@ -189,14 +190,18 @@ module.exports = function(db, runScan) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ─── Arm VWAP + gap gate on a staged order ───────────────────────────────
+  // ─── Arm submission gate on a staged order ───────────────────────────────
   // Flips status 'staged' → 'pending_trigger' and writes the gate config JSON.
-  // The vwap_gate_check cron then promotes the row back to 'staged' and
-  // submits it once the first 39-min candle closes above VWAP and the gap is
-  // within bounds.
+  // The vwap_gate_check cron walks pending_trigger rows every 5 minutes,
+  // evaluates each configured gate, and promotes the row back to 'staged'
+  // (then submits it) once ALL configured gates pass.
+  //
+  // Each gate is opt-in. Body fields control which gates apply:
   //
   // Body: {
-  //   minutes?: 39,             // candle duration (default 39)
+  //   triggerPrice?: 280.98,    // pivot trigger — long: price≥this; short: ≤
+  //   volumePaceMin?: 1.4,      // CANSLIM-style volume confirmation
+  //   minutes?: 39,             // candle duration for VWAP reclaim (default 39)
   //   gapUpLimitPct?: 0.02,      // reject gap up > this (default 2%)
   //   gapDownLimitPct?: 0.02,    // reject gap down > this (default 2%)
   //   requireAboveVWAP?: true,   // long side default
@@ -214,18 +219,56 @@ module.exports = function(db, runScan) {
       }
 
       const body = req.body || {};
-      const gate = {
-        minutes:              body.minutes ?? 39,
-        gapUpLimitPct:        body.gapUpLimitPct ?? 0.02,
-        gapDownLimitPct:      body.gapDownLimitPct ?? 0.02,
-        requireAboveVWAP:     body.requireAboveVWAP ?? true,
-        earliestAfterOpenMin: body.earliestAfterOpenMin ?? (body.minutes ?? 39),
-        cancelOnFail:         !!body.cancelOnFail,
-        expiresAt:            body.expiresAt || null,
-      };
+      // Build gate JSON with only the fields the caller specified — leaving
+      // a gate unset means "don't enforce it." This lets a breakout gate
+      // (triggerPrice + volumePaceMin only) skip VWAP/gap entirely instead
+      // of inheriting defaults that would block the fire.
+      const gate = {};
+      if (body.triggerPrice != null)       gate.triggerPrice       = +body.triggerPrice;
+      if (body.volumePaceMin != null)      gate.volumePaceMin      = +body.volumePaceMin;
+      if (body.requireAboveVWAP != null)   gate.requireAboveVWAP   = !!body.requireAboveVWAP;
+      if (body.gapUpLimitPct != null)      gate.gapUpLimitPct      = +body.gapUpLimitPct;
+      if (body.gapDownLimitPct != null)    gate.gapDownLimitPct    = +body.gapDownLimitPct;
+      if (body.minutes != null)            gate.minutes            = +body.minutes;
+      if (body.earliestAfterOpenMin != null) gate.earliestAfterOpenMin = +body.earliestAfterOpenMin;
+      if (body.cancelOnFail)               gate.cancelOnFail       = true;
+      if (body.expiresAt)                  gate.expiresAt          = body.expiresAt;
+
+      // Sanity: at least one gate must be configured, else this is a no-op
+      // that just leaves the row stuck in pending_trigger forever.
+      const hasAnyGate = gate.triggerPrice != null
+        || gate.volumePaceMin != null
+        || gate.requireAboveVWAP != null
+        || gate.gapUpLimitPct != null
+        || gate.gapDownLimitPct != null;
+      if (!hasAnyGate) {
+        return res.status(400).json({
+          error: 'arm-gate requires at least one of: triggerPrice, volumePaceMin, requireAboveVWAP, gapUpLimitPct, gapDownLimitPct',
+        });
+      }
+
       db.prepare(
         "UPDATE staged_orders SET status = 'pending_trigger', submission_gate = ? WHERE id = ?"
       ).run(JSON.stringify(gate), id);
+
+      // Phone notification — user wants to know when an entry is armed so
+      // they can monitor / cancel without having to refresh the UI.
+      const gateLabels = [];
+      if (gate.triggerPrice != null)     gateLabels.push(`trigger $${gate.triggerPrice}`);
+      if (gate.volumePaceMin != null)    gateLabels.push(`vol ≥${gate.volumePaceMin}×`);
+      if (gate.requireAboveVWAP != null) gateLabels.push(`VWAP reclaim`);
+      if (gate.gapUpLimitPct != null || gate.gapDownLimitPct != null) gateLabels.push('gap bounds');
+      notifyTradeEvent({
+        event: 'entry_armed',
+        symbol: existing.symbol,
+        details: {
+          message: `${existing.symbol} entry armed — waiting for: ${gateLabels.join(' + ')}`,
+          trigger_price: gate.triggerPrice,
+          volume_pace_min: gate.volumePaceMin,
+          gates: gateLabels,
+        },
+      }).catch(() => {});
+
       res.json({ id, gate, status: 'pending_trigger' });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

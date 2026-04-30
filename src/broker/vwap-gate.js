@@ -1,37 +1,46 @@
-// ─── VWAP + Gap Submission Gate ──────────────────────────────────────────────
+// ─── Submission Gate (VWAP / gap / pivot-trigger / volume-pace) ────────────
 //
-// Holds staged orders in `pending_trigger` status until:
-//   1. The first N-minute candle (default 39) has closed above VWAP
-//   2. The overnight gap is inside the configured bounds (same logic as
-//      gap_guard, reused for consistency)
-//   3. The current time is after the earliest-after-open threshold
+// Holds staged orders in `pending_trigger` status until ALL configured gates
+// pass; only then does the watcher flip `pending_trigger → staged` and call
+// `submitStagedOrder`.
 //
-// Only when ALL three pass does the gate flip `pending_trigger → staged` and
-// call `submitStagedOrder` — the order then goes through normal broker
-// submission + pre-trade risk checks.
+// Each gate is OPT-IN: only fields present in the gate JSON are evaluated.
+// A gate JSON with just { triggerPrice: 280.98, volumePaceMin: 1.4 } skips
+// VWAP and gap checks entirely — supports O'Neil-style breakout entries.
 //
-// The gate is OPT-IN per staged order: a row is governed only when its
-// `submission_gate` JSON column is non-null. Rows without a gate behave
-// exactly as before. This keeps the feature zero-risk to existing flows.
+// File name kept as vwap-gate.js for backward compat with imports; it now
+// handles the full suite of gates, not just VWAP.
 //
-// Schema of submission_gate JSON:
+// Schema of submission_gate JSON (all fields optional):
 //   {
-//     minutes: 39,               // candle duration for VWAP reclaim
-//     gapUpLimitPct: 0.02,       // reject gaps above this
-//     gapDownLimitPct: 0.02,     // reject gaps below this
-//     requireAboveVWAP: true,    // long side default
-//     earliestAfterOpenMin: 39,  // don't check before this many minutes post-open
-//     cancelOnFail: false,       // if true, gate failure cancels; else leaves pending for re-try
-//     expiresAt: '2026-04-23',   // optional — cancel if gate hasn't passed by this date
+//     // ── Pivot-trigger gate (price-based, fast) ──
+//     triggerPrice: 280.98,        // long: require live price >= this; short: <=
+//
+//     // ── Volume confirmation gate (CANSLIM-style) ──
+//     volumePaceMin: 1.4,          // require live pace >= this (1.4 = O'Neil 40% rule)
+//
+//     // ── VWAP reclaim gate (intraday bars) ──
+//     minutes: 39,                 // candle duration for VWAP reclaim
+//     requireAboveVWAP: true,      // require Nth-min candle close > VWAP (long side)
+//
+//     // ── Gap bounds gate (uses today's open) ──
+//     gapUpLimitPct: 0.02,         // reject if open gaps > +X% from staged entry
+//     gapDownLimitPct: 0.02,       // reject if open gaps < −X% from staged entry
+//
+//     // ── Timing controls ──
+//     earliestAfterOpenMin: 39,    // skip evaluation before this many minutes post-open
+//     cancelOnFail: false,         // hard cancel on gate failure (vs leave pending)
+//     expiresAt: '2026-04-23',     // auto-cancel if gates never pass by this date
 //   }
 //
-// The watcher cron fires every 5 minutes during market hours. On each tick it
-// walks all pending_trigger rows, pulls today's 1-min bars, aggregates to the
-// configured candle duration, computes VWAP, and evaluates the gate.
+// The watcher cron fires every 5 minutes during market hours. Order of
+// evaluation: cheapest-first (trigger → volume → VWAP/gap) so the common
+// "trigger not yet hit" case exits without an intraday-bar fetch.
 
 const { getDB } = require('../data/database');
 const { getIntradayBars, getQuotes } = require('../data/providers/manager');
 const { calculateVWAP, aggregateToTimeframe } = require('../signals/intraday');
+const { getVolumePace } = require('../signals/volume-pace');
 const { notifyTradeEvent } = require('../notifications/channels');
 
 function db() { return getDB(); }
@@ -55,7 +64,10 @@ function _marketMinutesSinceOpen(bars) {
 }
 
 // Evaluate the gate for a single staged_orders row. Returns a verdict object
-// with pass/fail + reasons. Pure function aside from the bar fetch; testable.
+// with pass/fail + reasons. Each check is opt-in: only fields present in the
+// gateCfg JSON are enforced. Cheap checks (price/volume) run before
+// expensive ones (intraday bars + VWAP) so the common "not yet triggered"
+// case exits without bar fetches.
 async function evaluateGate(row, gateCfg) {
   const verdict = {
     symbol: row.symbol,
@@ -65,95 +77,173 @@ async function evaluateGate(row, gateCfg) {
     reasons: [],
     data: {},
   };
+  const isShort = row.side === 'sell';
 
-  const minutes = gateCfg.minutes ?? 39;
-  const requireAboveVWAP = gateCfg.requireAboveVWAP ?? (row.side === 'buy' || !row.side);
-  const earliestAfterOpenMin = gateCfg.earliestAfterOpenMin ?? minutes;
+  // Track which gate fields are configured so the verdict reasons can show
+  // "all_gates_passed (trigger,volume)" instead of just "all_gates_passed".
+  const activeGates = [];
 
-  // 1. Fetch today's 1-minute bars
-  let bars;
-  try {
-    bars = await getIntradayBars(row.symbol, 'minute', 1);
-  } catch (e) {
-    verdict.reasons.push(`bar_fetch_failed:${e.message}`);
-    return verdict;
-  }
-  if (!bars?.length) {
-    verdict.reasons.push('no_intraday_bars');
-    return verdict;
-  }
-
-  // 2. Earliest-after-open gate — don't evaluate before the first N-min candle
-  //    could have closed. This prevents premature fires on the very first
-  //    1-min bar after the open.
-  const minutesElapsed = _marketMinutesSinceOpen(bars);
-  verdict.data.minutesSinceOpen = +minutesElapsed.toFixed(1);
-  if (minutesElapsed < earliestAfterOpenMin) {
-    verdict.reasons.push(`too_early:${minutesElapsed.toFixed(1)}min<${earliestAfterOpenMin}min`);
-    return verdict;
-  }
-
-  // 3. Aggregate to the configured candle duration
-  const aggBars = aggregateToTimeframe(bars, minutes);
-  if (!aggBars.length) {
-    verdict.reasons.push('aggregation_empty');
-    return verdict;
-  }
-  const firstCandle = aggBars[0];       // First N-min candle of the day
-  verdict.data.firstCandle = {
-    open:  firstCandle.open,
-    high:  firstCandle.high,
-    low:   firstCandle.low,
-    close: firstCandle.close,
-    volume: firstCandle.volume,
-  };
-
-  // 4. VWAP reclaim check — first candle's close must be above VWAP at that
-  //    moment. We compute VWAP from the 1-min bars up through the candle's
-  //    end so the reference is "VWAP as of close of bar 39".
-  const barsThroughFirstCandle = bars.slice(0, Math.min(bars.length, minutes));
-  const vwapSnap = calculateVWAP(barsThroughFirstCandle);
-  if (!vwapSnap) {
-    verdict.reasons.push('vwap_compute_failed');
-    return verdict;
-  }
-  verdict.data.vwap = vwapSnap.vwap;
-  verdict.data.vwapCloseDelta = +(firstCandle.close - vwapSnap.vwap).toFixed(2);
-
-  if (requireAboveVWAP && firstCandle.close <= vwapSnap.vwap) {
-    verdict.reasons.push(`below_vwap:close=${firstCandle.close}<=vwap=${vwapSnap.vwap}`);
-    return verdict;
-  }
-  if (!requireAboveVWAP && firstCandle.close >= vwapSnap.vwap) {
-    verdict.reasons.push(`above_vwap:close=${firstCandle.close}>=vwap=${vwapSnap.vwap}`);
-    return verdict;
-  }
-
-  // 5. Gap bounds — rejected if the open gaps beyond user-configured limits
-  //    vs the staged entry price. Mirrors checkPreOpenGaps but runs at fire
-  //    time so pre-open quote gaps don't slip through.
-  const gapUpLimit   = gateCfg.gapUpLimitPct   ?? 0.02;
-  const gapDownLimit = gateCfg.gapDownLimitPct ?? 0.02;
-  const entry = row.entry_price;
-  if (entry && firstCandle.open) {
-    const upperBand = entry * (1 + gapUpLimit);
-    const lowerBand = entry * (1 - gapDownLimit);
-    verdict.data.gapPct = +((firstCandle.open / entry - 1) * 100).toFixed(2);
-    if (row.side === 'buy' || !row.side) {
-      if (firstCandle.open > upperBand) {
-        verdict.reasons.push(`gap_up:open=${firstCandle.open}>${upperBand.toFixed(2)}`);
+  // ── Gate 1: pivot trigger price ─────────────────────────────────────────
+  // Cheap: one quote call. For longs require live price ≥ trigger; for
+  // shorts require ≤ trigger. Skipped entirely if triggerPrice not set.
+  if (gateCfg.triggerPrice != null) {
+    activeGates.push('trigger');
+    try {
+      const quotes = await getQuotes([row.symbol]);
+      const px = quotes?.[0]?.regularMarketPrice;
+      if (px == null) {
+        verdict.reasons.push('trigger_quote_unavailable');
         return verdict;
       }
-    } else {
-      if (firstCandle.open < lowerBand) {
-        verdict.reasons.push(`gap_down:open=${firstCandle.open}<${lowerBand.toFixed(2)}`);
+      verdict.data.livePrice = px;
+      verdict.data.triggerPrice = gateCfg.triggerPrice;
+      const triggered = isShort ? px <= gateCfg.triggerPrice : px >= gateCfg.triggerPrice;
+      if (!triggered) {
+        verdict.reasons.push(
+          isShort
+            ? `above_trigger:price=${px}>trigger=${gateCfg.triggerPrice}`
+            : `below_trigger:price=${px}<trigger=${gateCfg.triggerPrice}`
+        );
         return verdict;
+      }
+    } catch (e) {
+      verdict.reasons.push(`trigger_quote_failed:${e.message}`);
+      return verdict;
+    }
+  }
+
+  // ── Gate 2: volume pace (CANSLIM-style confirmation) ────────────────────
+  // Compares today's volume-to-now against the linearly-prorated 50-day
+  // average. Skipped if volumePaceMin not set. We accept low-confidence
+  // windows (first/last 30 min of session) at 80% of the threshold —
+  // mirrors passesVolumePace's leniency.
+  if (gateCfg.volumePaceMin != null) {
+    activeGates.push('volume');
+    try {
+      const pace = await getVolumePace(row.symbol);
+      verdict.data.volumePace = pace;
+      if (!pace || pace.pace == null) {
+        // No data ≠ block. If we can't measure, allow (matches
+        // passesVolumePace fallback=true philosophy).
+        verdict.data.volumePaceFallback = pace?.reason || 'no_data';
+      } else {
+        const effectiveMin = pace.confidence === 'low'
+          ? gateCfg.volumePaceMin * 0.8
+          : gateCfg.volumePaceMin;
+        if (pace.pace < effectiveMin) {
+          verdict.reasons.push(
+            `volume_light:pace=${pace.pace}<${effectiveMin.toFixed(2)}` +
+            (pace.confidence === 'low' ? ' (low-confidence window)' : '')
+          );
+          return verdict;
+        }
+      }
+    } catch (e) {
+      verdict.reasons.push(`volume_pace_failed:${e.message}`);
+      return verdict;
+    }
+  }
+
+  // ── Gate 3 & 4: VWAP reclaim + gap bounds (intraday bars) ──────────────
+  // These share the same intraday-bar fetch, so we pull bars once and
+  // evaluate both. Skipped together if neither requireAboveVWAP nor gap
+  // limits are set.
+  const wantsVWAP = gateCfg.requireAboveVWAP != null;
+  const wantsGap  = gateCfg.gapUpLimitPct != null || gateCfg.gapDownLimitPct != null;
+  if (wantsVWAP || wantsGap) {
+    if (wantsVWAP) activeGates.push('vwap');
+    if (wantsGap)  activeGates.push('gap');
+
+    const minutes = gateCfg.minutes ?? 39;
+    const earliestAfterOpenMin = gateCfg.earliestAfterOpenMin ?? minutes;
+
+    let bars;
+    try {
+      bars = await getIntradayBars(row.symbol, 'minute', 1);
+    } catch (e) {
+      verdict.reasons.push(`bar_fetch_failed:${e.message}`);
+      return verdict;
+    }
+    if (!bars?.length) {
+      verdict.reasons.push('no_intraday_bars');
+      return verdict;
+    }
+
+    // Earliest-after-open: don't evaluate before the first N-min candle
+    // could have closed.
+    const minutesElapsed = _marketMinutesSinceOpen(bars);
+    verdict.data.minutesSinceOpen = +minutesElapsed.toFixed(1);
+    if (minutesElapsed < earliestAfterOpenMin) {
+      verdict.reasons.push(`too_early:${minutesElapsed.toFixed(1)}min<${earliestAfterOpenMin}min`);
+      return verdict;
+    }
+
+    // Aggregate to the configured candle duration
+    const aggBars = aggregateToTimeframe(bars, minutes);
+    if (!aggBars.length) {
+      verdict.reasons.push('aggregation_empty');
+      return verdict;
+    }
+    const firstCandle = aggBars[0];
+    verdict.data.firstCandle = {
+      open:  firstCandle.open,
+      high:  firstCandle.high,
+      low:   firstCandle.low,
+      close: firstCandle.close,
+      volume: firstCandle.volume,
+    };
+
+    if (wantsVWAP) {
+      const requireAboveVWAP = gateCfg.requireAboveVWAP;
+      const barsThroughFirstCandle = bars.slice(0, Math.min(bars.length, minutes));
+      const vwapSnap = calculateVWAP(barsThroughFirstCandle);
+      if (!vwapSnap) {
+        verdict.reasons.push('vwap_compute_failed');
+        return verdict;
+      }
+      verdict.data.vwap = vwapSnap.vwap;
+      verdict.data.vwapCloseDelta = +(firstCandle.close - vwapSnap.vwap).toFixed(2);
+
+      if (requireAboveVWAP && firstCandle.close <= vwapSnap.vwap) {
+        verdict.reasons.push(`below_vwap:close=${firstCandle.close}<=vwap=${vwapSnap.vwap}`);
+        return verdict;
+      }
+      if (!requireAboveVWAP && firstCandle.close >= vwapSnap.vwap) {
+        verdict.reasons.push(`above_vwap:close=${firstCandle.close}>=vwap=${vwapSnap.vwap}`);
+        return verdict;
+      }
+    }
+
+    if (wantsGap) {
+      const gapUpLimit   = gateCfg.gapUpLimitPct   ?? Infinity;
+      const gapDownLimit = gateCfg.gapDownLimitPct ?? Infinity;
+      const entry = row.entry_price;
+      if (entry && firstCandle.open) {
+        const upperBand = entry * (1 + gapUpLimit);
+        const lowerBand = entry * (1 - gapDownLimit);
+        verdict.data.gapPct = +((firstCandle.open / entry - 1) * 100).toFixed(2);
+        if (!isShort) {
+          if (firstCandle.open > upperBand) {
+            verdict.reasons.push(`gap_up:open=${firstCandle.open}>${upperBand.toFixed(2)}`);
+            return verdict;
+          }
+        } else {
+          if (firstCandle.open < lowerBand) {
+            verdict.reasons.push(`gap_down:open=${firstCandle.open}<${lowerBand.toFixed(2)}`);
+            return verdict;
+          }
+        }
       }
     }
   }
 
+  // No gates configured at all? Treat as pass — caller should have
+  // disarmed instead of leaving an empty gate, but don't lock the row.
   verdict.pass = true;
-  verdict.reasons.push('all_gates_passed');
+  verdict.reasons.push(activeGates.length
+    ? `all_gates_passed:${activeGates.join(',')}`
+    : 'no_gates_configured');
+  verdict.data.activeGates = activeGates;
   return verdict;
 }
 
@@ -222,13 +312,25 @@ async function runVwapGateTick() {
     try {
       db().prepare("UPDATE staged_orders SET status = 'staged' WHERE id = ?").run(row.id);
       await submitStagedOrder(row.id);
+      // Build a gate-aware notification message. For trigger-only gates the
+      // VWAP-flavored message would be misleading, so we describe what
+      // actually fired.
+      const gateLabels = verdict.data.activeGates || [];
+      const firePrice = verdict.data.livePrice
+        ?? verdict.data.firstCandle?.close
+        ?? row.entry_price;
+      const msgParts = [];
+      if (gateLabels.includes('trigger')) msgParts.push(`price $${verdict.data.livePrice} ≥ trigger $${verdict.data.triggerPrice}`);
+      if (gateLabels.includes('volume') && verdict.data.volumePace?.pace) msgParts.push(`vol pace ${verdict.data.volumePace.pace}× (${verdict.data.volumePace.label})`);
+      if (gateLabels.includes('vwap'))    msgParts.push(`above VWAP $${verdict.data.vwap}`);
+      if (gateLabels.includes('gap'))     msgParts.push(`gap ${verdict.data.gapPct ?? 0}% in bounds`);
+      const message = msgParts.length
+        ? `${row.symbol} entry triggered — ${msgParts.join(', ')} — order submitted`
+        : `${row.symbol} gate passed — order submitted`;
       notifyTradeEvent({
-        event: 'vwap_gate_passed',
+        event: 'entry_triggered',
         symbol: row.symbol,
-        details: {
-          price: verdict.data.firstCandle?.close,
-          message: `VWAP gate passed (${gateCfg.minutes || 39}-min close $${verdict.data.firstCandle?.close} > VWAP $${verdict.data.vwap}) — order submitted`,
-        },
+        details: { price: firePrice, gates: gateLabels, message },
       }).catch(() => {});
       passed.push({ id: row.id, symbol: row.symbol, verdict });
     } catch (e) {

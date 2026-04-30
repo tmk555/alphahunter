@@ -626,6 +626,10 @@ const TRADE_EVENT_SCHEMA = {
   // Misc
   pullback_alert:      { required: ['price'],           optional: ['shares','message','trigger_type'] },
   conditional_entry:   { required: ['price'],           optional: ['entry_type','message'] },
+
+  // Submission-gate lifecycle (vwap-gate.js / arm-gate route)
+  entry_armed:         { required: ['message'],         optional: ['trigger_price','volume_pace_min','gates'] },
+  entry_triggered:     { required: ['message','price'], optional: ['gates'] },
 };
 
 function _validateEvent(event, details) {
