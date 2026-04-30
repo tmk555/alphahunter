@@ -4152,11 +4152,27 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
         setSelectedSectors(new Set());
       }
     }
-    // These filters we clear regardless — they're orthogonal to "show me this stock now."
+    // Clear filters that would HIDE the target — but preserve any that
+    // already include the target. Pre-fix this cleared every filter
+    // unconditionally; clicking a ticker from within the Scanner table
+    // (or from a Setups row) wiped the strategy selection the user had
+    // just set, which broke the "drill into a strategy candidate" flow.
+    //
+    // Search query is always cleared — it's a free-text find, never the
+    // selection. asOfDate snapshot date is cleared so the user lands on
+    // live data. The other two are conditional.
     if (searchQuery) setSearchQuery('');
-    if (sigFilters && sigFilters.length) setSigFilters([]);
     if (asOfDate) setAsOfDate('');
-    if (strategyFilter) setStrategyFilter('');
+    if (sigFilters && sigFilters.length && target) {
+      const targetSigs = new Set(target.signals || []);
+      const stillVisible = sigFilters.every(sig => targetSigs.has(sig));
+      if (!stillVisible) setSigFilters([]);
+    }
+    if (strategyFilter && target) {
+      const filterFn = strategyEntryFilters[strategyFilter];
+      const stillVisible = !filterFn || filterFn(target);
+      if (!stillVisible) setStrategyFilter('');
+    }
 
     setExpandedTicker(scannerTarget);
 

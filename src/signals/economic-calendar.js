@@ -234,11 +234,13 @@ function getUpcomingEvents(startISO, endISO) {
     return importanceWeight[a.importance] - importanceWeight[b.importance];
   });
 
-  // Add daysOut + dayOfWeek for the UI
-  const today = new Date().toISOString().slice(0, 10);
+  // Add daysOut + dayOfWeek for the UI. 'Today' anchors to US Eastern,
+  // not UTC — without this, late-afternoon CDT/PDT users saw the IN
+  // column tick one day ahead because UTC had already rolled over.
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const todayMs = Date.parse(today + 'T00:00:00Z');
   for (const e of out) {
     const t = Date.parse(e.date + 'T00:00:00Z');
-    const todayMs = Date.parse(today + 'T00:00:00Z');
     e.daysOut = Math.round((t - todayMs) / 86400000);
     e.dayOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dayOfWeek(e.date)];
   }

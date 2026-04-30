@@ -127,8 +127,13 @@ router.get('/market/upcoming-earnings', async (req, res) => {
     const cached = cacheGet(cacheKey, TTL_EARNINGS_RESPONSE);
     if (cached) return res.json(cached);
 
-    const today = new Date();
-    const todayMs = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+    // 'Today' must be the US Eastern calendar day, NOT UTC. From ~8 PM
+    // local CDT onward (or earlier in PST), UTC has already rolled to
+    // tomorrow's date — that made daysOut compute one day ahead of what
+    // the user sees on their wall clock. Earnings are reported on ET
+    // trading days, so ET is the correct anchor.
+    const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });  // YYYY-MM-DD
+    const todayMs = Date.parse(todayET + 'T00:00:00Z');
     const cutoffMs = todayMs + days * 86400000;
 
     // ── Build the symbol universe ─────────────────────────────────────────
@@ -361,8 +366,10 @@ router.get('/stock/:symbol/brief', async (req, res) => {
 router.get('/market/economic-events', (req, res) => {
   try {
     const days = Math.max(1, Math.min(60, parseInt(req.query.days) || 14));
-    const today = new Date().toISOString().slice(0, 10);
-    const end = new Date(Date.now() + days * 86400_000).toISOString().slice(0, 10);
+    // ET-anchored today (see comment in /upcoming-earnings).
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const end = new Date(Date.parse(today + 'T00:00:00Z') + days * 86400_000)
+      .toISOString().slice(0, 10);
     const { getUpcomingEvents } = require('../signals/economic-calendar');
     const events = getUpcomingEvents(today, end);
     res.json({ events, count: events.length, days, fromDate: today, toDate: end });
