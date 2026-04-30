@@ -4451,24 +4451,26 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
       rowRefs.current[ticker]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 50);
   }
-  const { sortData: sortRS, SH, setSort } = useSortTable('rsRank');
+  const { sortData: sortRS, SH, setSort, sortKey, sortDir, toggleSort } = useSortTable('rsRank');
 
-  // When the user picks a strategy, reset the column sort to that strategy's
-  // canonical ranking field so the first render reflects the replay engine's
-  // picks. Subsequent column clicks still win — this is a seed, not an override.
-  useEffect(() => {
-    if (!strategyFilter) return;
-    const seeds = {
-      rs_momentum:      ['rsRank',        -1],
-      vcp_breakout:     ['volumeRatio',    1],   // lowest first — quietest coils
-      sepa_trend:       ['sepaScore',     -1],
-      rs_line_new_high: ['rsRank',        -1],
-      conviction:       ['rsRank',        -1],
-      emerging_leader:  ['rsTrend.vs4w',  -1],
-    };
-    const s = seeds[strategyFilter];
-    if (s) setSort(s[0], s[1]);
-  }, [strategyFilter]);
+  // Track whether the user has manually clicked a column header since the
+  // current strategy was selected. While false, the displayed list uses the
+  // STRATEGY's canonical comparator (e.g. rs_momentum sorts by RS+momentum
+  // combined). Once the user clicks a column header, switch to column sort
+  // so their click is respected. Reset to false whenever strategy changes.
+  const [userColumnSortDirty, setUserColumnSortDirty] = useState(false);
+  useEffect(() => { setUserColumnSortDirty(false); }, [strategyFilter]);
+  // Wrap toggleSort so clicking ANY column header marks the sort as
+  // user-driven. SH is what renders headers — re-issue it via this wrapper.
+  const wrappedToggleSort = (k) => { setUserColumnSortDirty(true); toggleSort(k); };
+  function StrategySH({ k, label, title }) {
+    return (
+      <th onClick={() => wrappedToggleSort(k)} title={title||''}
+        style={{cursor:'pointer',userSelect:'none',color:sortKey===k && userColumnSortDirty ?'var(--amber)':''}}>
+        {label}{sortKey===k && userColumnSortDirty?(sortDir>0?' ▲':' ▼'):''}
+      </th>
+    );
+  }
 
   // Signal filter chips — from App props, persists across tab switches
   const toggleSig = key => setSigFilters(prev => {
@@ -4552,8 +4554,17 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
       ranked.forEach((s, i) => rankMap.set(s.ticker, i + 1));
       top5 = new Set(ranked.slice(0, 5).map(s => s.ticker));
     }
-    // Always apply the user's column sort to the displayed order.
-    return { filtered: sortRS(list), replayTop5: top5, replayRank: rankMap };
+    // Default sort: strategy's comparator when a strategy is active and the
+    // user hasn't clicked a column header yet (so the row order matches the
+    // ranking badge instead of contradicting it). Column-click flips
+    // userColumnSortDirty=true and we revert to the column-based sort.
+    let displayed;
+    if (strategyFilter && strategySorts[strategyFilter] && !userColumnSortDirty) {
+      displayed = list.slice().sort(strategySorts[strategyFilter]);
+    } else {
+      displayed = sortRS(list);
+    }
+    return { filtered: displayed, replayTop5: top5, replayRank: rankMap };
   })();
 
   return (
@@ -4778,20 +4789,20 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
                 </colgroup>
                 <thead>
                   <tr>
-                    <SH k="rsRank"        label="IBD RS"    title="Percentile rank 1-99 vs universe (12M weighted). ≥ 70 = top 30% institutional quality."/>
-                    <SH k="swingMomentum" label="Mom"       title="Raw price velocity NOW — NOT vs peers. Base 50+(5d%×3)+(10d%×1.5)+(21d%×0.5)+5 if above MA10. Score 94≈13% in 5d. Score 50=flat. ≥60=fast, ≥45=ok, <40=stalling."/>
-                    <SH k="rsTrend.vs4w"  label="Accel"     title="RS Accel: percentile rank change vs 28 days ago. +12=passed 12% of peers. Sort ↓ to find fastest institutional accumulation."/>
-                    <SH k="stage"         label="Stage"     title="Weinstein Stage (150MA trend). S1=Basing, S2=Uptrend (buy zone), S3=Topping (reduce), S4=Decline (avoid/short). Sort to cluster by stage."/>
+                    <StrategySH k="rsRank"        label="IBD RS"    title="Percentile rank 1-99 vs universe (12M weighted). ≥ 70 = top 30% institutional quality."/>
+                    <StrategySH k="swingMomentum" label="Mom"       title="Raw price velocity NOW — NOT vs peers. Base 50+(5d%×3)+(10d%×1.5)+(21d%×0.5)+5 if above MA10. Score 94≈13% in 5d. Score 50=flat. ≥60=fast, ≥45=ok, <40=stalling."/>
+                    <StrategySH k="rsTrend.vs4w"  label="Accel"     title="RS Accel: percentile rank change vs 28 days ago. +12=passed 12% of peers. Sort ↓ to find fastest institutional accumulation."/>
+                    <StrategySH k="stage"         label="Stage"     title="Weinstein Stage (150MA trend). S1=Basing, S2=Uptrend (buy zone), S3=Topping (reduce), S4=Decline (avoid/short). Sort to cluster by stage."/>
                     <th title="Signals: ★=Triple (RS>70+Accel+Mom>60). ⭐=RS Line 52wk high. ↗=Emerging RS65-79. VCP=coiling setup. SEPA/8=Minervini score.">Signals</th>
-                    <SH k="ticker"        label="Ticker"    title="Ticker symbol. Click to sort alphabetically."/>
-                    <SH k="name"          label="Name"      title="Company name. Click to sort alphabetically."/>
-                    <SH k="price"         label="Price"     title="Current market price"/>
-                    <SH k="chg1d"         label="1D"        title="Today's price change %"/>
-                    <SH k="chg1w"         label="1W"        title="5-day price return"/>
-                    <SH k="vsMA50"        label="vs 50MA"   title="% above/below 50-day MA. 0-5% above = buyable pullback zone. >5% = extended. Negative = caution."/>
-                    <SH k="distFromHigh"  label="52wkH%"    title="% below 52-week high. <5% = near breakout. Sort ascending to find stocks nearest highs."/>
-                    <SH k="volumeRatio"   label="Vol"       title="Today's volume ÷ 3M avg. ⚡=surge ≥2x near highs. ACC=above 50MA+vol>1.2x. DIST=below 50MA+vol>1.2x."/>
-                    <SH k="daysToEarnings" label="Earn"     title="Days until next earnings. Sort ascending to find closest earnings reports. ⚠ red=7d, amber=14d. Never hold swings into earnings."/>
+                    <StrategySH k="ticker"        label="Ticker"    title="Ticker symbol. Click to sort alphabetically."/>
+                    <StrategySH k="name"          label="Name"      title="Company name. Click to sort alphabetically."/>
+                    <StrategySH k="price"         label="Price"     title="Current market price"/>
+                    <StrategySH k="chg1d"         label="1D"        title="Today's price change %"/>
+                    <StrategySH k="chg1w"         label="1W"        title="5-day price return"/>
+                    <StrategySH k="vsMA50"        label="vs 50MA"   title="% above/below 50-day MA. 0-5% above = buyable pullback zone. >5% = extended. Negative = caution."/>
+                    <StrategySH k="distFromHigh"  label="52wkH%"    title="% below 52-week high. <5% = near breakout. Sort ascending to find stocks nearest highs."/>
+                    <StrategySH k="volumeRatio"   label="Vol"       title="Today's volume ÷ 3M avg. ⚡=surge ≥2x near highs. ACC=above 50MA+vol>1.2x. DIST=below 50MA+vol>1.2x."/>
+                    <StrategySH k="daysToEarnings" label="Earn"     title="Days until next earnings. Sort ascending to find closest earnings reports. ⚠ red=7d, amber=14d. Never hold swings into earnings."/>
                     <th style={{width:50}}></th>
                   </tr>
                 </thead>
@@ -6257,13 +6268,71 @@ function MarketPulseTab() {
             </div>
             <div style={{textAlign:'right'}}>
               <div style={{fontFamily:'var(--font-mono)',fontSize:13,color:'var(--text3)'}}>Position size multiplier</div>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:28,color:regime.color,fontWeight:700}}>{regime.sizeMultiplier}x</div>
+              {(() => {
+                // Effective sizing = regime.sizeMultiplier × tier_factor.
+                // tier_factor maps the exposure ramp tier to the fraction of
+                // the FULL 8% heat ceiling actually allowed: PILOT=0.25,
+                // HALF=0.5, THREE_QUARTER=0.75, FULL=1.0, REDUCED=0.5.
+                // Without this the user sees 1.0x next to "ramp HALF" and
+                // assumes full size — but heat is actually capped at 4%.
+                const tierFactors = { PILOT: 0.25, HALF: 0.5, THREE_QUARTER: 0.75, FULL: 1.0, REDUCED: 0.5 };
+                const tierFactor = tierFactors[regime.exposureRamp?.exposureLevel] ?? 1.0;
+                const baseMult = regime.sizeMultiplier ?? 1.0;
+                const effective = +(baseMult * tierFactor).toFixed(2);
+                const effectiveDiffers = Math.abs(effective - baseMult) > 0.001;
+                return (
+                  <>
+                    <div style={{fontFamily:'var(--font-mono)',fontSize:effectiveDiffers?20:28,
+                                 color: effectiveDiffers ? 'var(--text3)' : regime.color,
+                                 fontWeight:700,
+                                 textDecoration: effectiveDiffers ? 'line-through' : 'none'}}>
+                      {baseMult}x
+                    </div>
+                    {effectiveDiffers && (
+                      <div style={{fontFamily:'var(--font-mono)',fontSize:28,color:regime.color,fontWeight:700,marginTop:2}}
+                           title={`${baseMult}x regime × ${tierFactor}x ${regime.exposureRamp?.exposureLevel || 'tier'} = ${effective}x effective`}>
+                        {effective}x <span style={{fontSize:11,color:'var(--text3)',marginLeft:4}}>effective</span>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           </div>
           <div style={{display:'flex',gap:8,marginTop:14,flexWrap:'wrap'}}>
             {(regime.riskOnSignals||[]).map(s => <span key={s} style={{fontSize:11,padding:'3px 10px',background:'rgba(0,230,118,0.12)',border:'1px solid rgba(0,230,118,0.3)',borderRadius:3,color:'var(--green)'}}>{s}</span>)}
             {(regime.riskOffSignals||[]).map(s => <span key={s} style={{fontSize:11,padding:'3px 10px',background:'rgba(255,61,87,0.12)',border:'1px solid rgba(255,61,87,0.3)',borderRadius:3,color:'var(--red)'}}>{s}</span>)}
           </div>
+          {/* Label/breadth disagreement banner — fires when the BULL label
+              survives despite weak breadth (composite < 50 OR breadth-warning
+              level ≥ 1). The label itself is from price+VIX, breadth is its
+              own dimension; without this strip the user could read "BULL · 1x"
+              as "deploy fully" while the tape is rolling over underneath. */}
+          {regime.regime === 'BULL / RISK ON' && (
+            (regime.breadthOverlay?.score != null && regime.breadthOverlay.score < 50) ||
+            (regime.breadthWarning?.level >= 1)
+          ) && (
+            <div style={{
+              marginTop: 14,
+              padding: '10px 14px',
+              background: 'rgba(240,165,0,0.10)',
+              border: '1px solid rgba(240,165,0,0.45)',
+              borderRadius: 4,
+              fontSize: 12,
+              color: 'var(--text2)',
+              fontFamily: 'var(--font-mono)',
+            }}>
+              <span style={{color: 'var(--amber)', fontWeight: 700, letterSpacing: 1}}>⚠ TAPE / BREADTH DISAGREE</span>
+              <span style={{marginLeft: 10}}>
+                Label says BULL (price + VIX), but
+                {regime.breadthOverlay?.score != null && regime.breadthOverlay.score < 50 &&
+                  ` composite breadth ${regime.breadthOverlay.score}/100 (${regime.breadthOverlay.regime || 'weak'})`}
+                {regime.breadthOverlay?.score != null && regime.breadthOverlay.score < 50 && regime.breadthWarning?.level >= 1 && ' and'}
+                {regime.breadthWarning?.level >= 1 && ` breadth ${regime.breadthWarning.label || 'warning'} firing`}
+                . Exposure throttled via tier — see effective multiplier.
+              </span>
+            </div>
+          )}
         </div>
       )}
 

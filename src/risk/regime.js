@@ -205,10 +205,20 @@ async function getMarketRegime() {
           // can't size below the global minimum unless the basic regime says
           // so (which sets sizeMultiplier=0 directly above).
           const SIZE_FLOOR = 0.25;
-          if (composite.sizeMultiplier < sizeMultiplier && composite.score < 40) {
+          // Trigger threshold raised 40 → 50 (2026-04-30): the MIXED zone
+          // (40-49 composite) was previously not enough to force a label
+          // downgrade. User saw "BULL / RISK ON · 1x" with composite 44 +
+          // breadth CAUTION — visually contradictory. Composite 44 is
+          // weak-but-not-broken; clamping the label to NEUTRAL (and forcing
+          // sizing to 0.7×) reflects that honestly.
+          if (composite.sizeMultiplier < sizeMultiplier && composite.score < 50) {
             const prevRegime = regime;
             sizeMultiplier = Math.max(sizeMultiplier * 0.7, composite.sizeMultiplier, SIZE_FLOOR);
-            if (sizeMultiplier < 0.5 && regime === 'BULL / RISK ON') {
+            // Threshold for label demotion lifted 0.5 → 0.75 to match the new
+            // 50-point threshold: composite 44 → multiplier ~0.7 → still > 0.5
+            // pre-fix → label stayed BULL. Now any size cut from MIXED breadth
+            // demotes BULL to NEUTRAL.
+            if (sizeMultiplier < 0.75 && regime === 'BULL / RISK ON') {
               regime = 'NEUTRAL'; color = '#f0a500';
               warning = `Breadth deteriorating (score ${composite.score}/100) — reducing exposure`;
             }
@@ -244,15 +254,16 @@ async function getMarketRegime() {
     // "BULL / RISK ON · ramp FULL" sitting next to "BREADTH WARNING: composite
     // -10 pts in 1 week — sharp drop". A user-reported contradiction.
     //
-    // Now: WARNING clamps the regime label to at most NEUTRAL and pulls the
-    // ramp down one tier; CRITICAL clamps to CAUTION and pulls two tiers.
-    // Same multiplier as the breadth-warning module's own sizingMult so the
-    // signals everywhere agree.
+    // Now: CAUTION/WARNING both clamp BULL → NEUTRAL (CAUTION used to be a
+    // pure UI strip with no propagation, which left BULL+CAUTION sitting
+    // next to each other). CRITICAL clamps further to CAUTION. Same
+    // multiplier as the breadth-warning module's own sizingMult so signals
+    // everywhere agree.
     let breadthWarning = null;
     try {
       const { evaluateBreadthWarning } = require('../signals/breadth-warning');
       breadthWarning = evaluateBreadthWarning();
-      if (breadthWarning && breadthWarning.level >= 2) {
+      if (breadthWarning && breadthWarning.level >= 1) {
         const prevRegime = regime;
         const wantClamp = breadthWarning.level === 3 ? 'CAUTION' : 'NEUTRAL';
         // Hierarchy: HIGH RISK / BEAR (worst) > CAUTION > NEUTRAL > BULL.

@@ -647,6 +647,15 @@ module.exports = function (db, runScan, UNIVERSE, SECTOR_MAP) {
         const { syncUniverse } = require('../signals/universe-tracker');
         syncUniverse(UNIVERSE, SECTOR_MAP);
       } catch(_){}
+      // Invalidate scanner cache so the next scan call rebuilds with the new
+      // symbol included. Without this the user would wait up to TTL_QUOTE
+      // (60s) before the freshly-added symbol showed up in scanner results
+      // — felt like the add silently failed.
+      try {
+        const { cacheInvalidatePrefix } = require('../data/cache');
+        cacheInvalidatePrefix('rs:');
+        cacheInvalidatePrefix('scan:');
+      } catch(_){}
       res.json({ added: sym, sector, resolvedFrom, universeSize: UNIVERSE.length });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
