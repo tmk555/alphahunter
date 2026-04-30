@@ -18,6 +18,7 @@ const { notifyTradeEvent } = require('../notifications/channels');
 const { createTaxLot, sellTaxLots } = require('../risk/tax-engine');
 const { logExecution } = require('../risk/execution-quality');
 const { assignStrategy } = require('../risk/strategy-manager');
+const { applyAtrContext } = require('../risk/atr-context');
 const { syncBrokerFills } = require('../broker/fills-sync');
 
 module.exports = function(db) {
@@ -317,8 +318,9 @@ module.exports = function(db) {
         } catch (_) {}
       }
 
+      const resolvedEntryDate = entry_date || new Date().toISOString().split('T')[0];
       const result = stmt.run(
-        symbol.toUpperCase(), side, entry_date || new Date().toISOString().split('T')[0],
+        symbol.toUpperCase(), side, resolvedEntryDate,
         entry_price, stop_price, target1, target2,
         shares, shares, shares,
         entry_rs, entry_sepa, entry_regime, wave, sector, notes,
@@ -328,6 +330,16 @@ module.exports = function(db) {
       if (stop_price) {
         try { createStopAlert(result.lastInsertRowid); } catch (_) {}
       }
+
+      // Capture ATR context for the chandelier trail in stop-discipline.
+      try {
+        applyAtrContext(db, result.lastInsertRowid, {
+          symbol: symbol.toUpperCase(),
+          entryDate: resolvedEntryDate,
+          entryPrice: entry_price,
+          strategy: assignedStrategy,
+        });
+      } catch (_) {}
 
       notifyTradeEvent({ event: 'buy', symbol: symbol.toUpperCase(), details: { shares, price: entry_price, stop: stop_price, strategy: assignedStrategy } }).catch(e => console.error('Notification error:', e.message));
       res.json({ ok: true, id: result.lastInsertRowid, strategy: assignedStrategy });

@@ -11,6 +11,7 @@ const { getMarketRegime } = require('../risk/regime');
 const { createTaxLot, sellTaxLots } = require('../risk/tax-engine');
 const { logExecution } = require('../risk/execution-quality');
 const { assignStrategy } = require('../risk/strategy-manager');
+const { applyAtrContext } = require('../risk/atr-context');
 
 // ─── computeTargetsFromStop ─────────────────────────────────────────────
 // Derive T1/T2 from (entry, stop) using the classic Minervini/O'Neil
@@ -269,6 +270,22 @@ async function syncBrokerFills({ lookbackDays = 7, limit = 100 } = {}) {
           shares: +order.filled_qty,
           costBasis: +order.filled_avg_price,
           acquiredDate: fillDate,
+        });
+      } catch (_) {}
+
+      // Capture entry_atr (from rs_snapshots) and trail_atr_mult (from
+      // strategy.exit_rules) so the chandelier trail in stop-discipline /
+      // scaling can replace the flat trail_pct path. Runs AFTER the
+      // strategy auto-assign block above so the right multiplier is
+      // pulled. Falls back gracefully when the symbol has no rs_snapshot
+      // — the trail consumers then use trail_pct.
+      try {
+        const strategy = db.prepare('SELECT strategy FROM trades WHERE id = ?').get(lastTradeId)?.strategy;
+        applyAtrContext(db, lastTradeId, {
+          symbol: order.symbol,
+          entryDate: fillDate,
+          entryPrice: +order.filled_avg_price,
+          strategy,
         });
       } catch (_) {}
     }
@@ -618,7 +635,7 @@ async function reconcileOrphanPositions({ lookbackDays = 90, recentCloseWindowMi
         ? `[RECONCILED-FROM-BROKER] ${qty}sh @ $${avgEntry.toFixed(2)} — linked to filled order ${orderId.slice(0,8)}... Review thesis + exit plan, then clear needs_review.`
         : `[RECONCILED-FROM-BROKER] ${qty}sh @ $${avgEntry.toFixed(2)} — no originating buy order found within last ${lookbackDays}d (older than window, or submitted outside this app). Set entry_date / strategy manually if needed.`;
 
-      stmt.run(sym, 'long', entryDate, avgEntry, qty, sector, brokerStop, target1, target2, orderId, note);
+      const insertResult = stmt.run(sym, 'long', entryDate, avgEntry, qty, sector, brokerStop, target1, target2, orderId, note);
 
       // Sibling-copy bracket + always set initial/remaining_shares.
       // Orphan rows were the original stop/T1/T2 NULL source — this closes
@@ -628,6 +645,19 @@ async function reconcileOrphanPositions({ lookbackDays = 90, recentCloseWindowMi
       if (orderId) {
         try { ensureBracketFields(db, orderId, sym, { brokerStop }); } catch (_) {}
       }
+
+      // Capture ATR context. Orphan-reconciled rows have no strategy
+      // assigned (the originating signal context is lost), so the
+      // multiplier defaults to 2.5; the user can tighten by editing the
+      // trade row later.
+      try {
+        applyAtrContext(db, insertResult.lastInsertRowid, {
+          symbol: sym,
+          entryDate,
+          entryPrice: avgEntry,
+          strategy: null,
+        });
+      } catch (_) {}
 
       reconciled.push({
         symbol: sym, qty, avgEntry, stopPrice: brokerStop,

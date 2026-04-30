@@ -892,6 +892,23 @@ function initSchema() {
   safeAddColumn('trades', 'trail_tightened_at', 'TEXT');
   safeAddColumn('trades', 'trail_tightened_reason', 'TEXT');
 
+  // ATR-based chandelier trail. Replaces the flat trail_pct path:
+  //   entry_atr      — ATR in DOLLARS captured at trade-creation time from
+  //                    rs_snapshots.atr_pct × entry_price. Stays fixed for
+  //                    the life of the trade; the multiplier is what
+  //                    tightens, not the ATR itself.
+  //   trail_atr_mult — Multiplier applied to entry_atr to produce the trail
+  //                    distance. Strategy-driven default (2.5 for swing,
+  //                    3.0 for position) sourced from
+  //                    strategies.exit_rules.trail_atr_mult; tightened to
+  //                    1.5 / 1.0 by deterioration & regime-downgrade rules
+  //                    instead of flipping trail_pct.
+  // Legacy fallback: when entry_atr is NULL (rows that pre-date this
+  // capture, or symbols without an rs_snapshot at entry time), the trail
+  // consumers fall back to the old trail_pct × current_price path.
+  safeAddColumn('trades', 'entry_atr', 'REAL');
+  safeAddColumn('trades', 'trail_atr_mult', 'REAL');
+
   // Pending-close tracking: when the user submits a LIMIT sell via the
   // Exit button, the position ISN'T closed yet — the limit may or may not
   // fill. These columns record the pending broker order id so fills-sync
