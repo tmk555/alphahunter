@@ -29,6 +29,7 @@
 //
 //     // ── Timing controls ──
 //     earliestAfterOpenMin: 39,    // skip evaluation before this many minutes post-open
+//     eodOnly: true,               // defer ALL gates until 3:00 PM ET (CANSLIM-strict)
 //     cancelOnFail: false,         // hard cancel on gate failure (vs leave pending)
 //     expiresAt: '2026-04-23',     // auto-cancel if gates never pass by this date
 //   }
@@ -82,6 +83,24 @@ async function evaluateGate(row, gateCfg) {
   // Track which gate fields are configured so the verdict reasons can show
   // "all_gates_passed (trigger,volume)" instead of just "all_gates_passed".
   const activeGates = [];
+
+  // ── Gate 0: end-of-day deferral ─────────────────────────────────────────
+  // O'Neil's CANSLIM rule says "breakout-day VOLUME ≥ 50d avg × 1.40 measured
+  // AT THE CLOSE." Our volume-pace.js extrapolates linearly, but real
+  // intraday volume is U-shaped — a midday pace of 1.4 can fade to 1.1 by
+  // close. eodOnly defers ALL gate evaluation until 3:00 PM ET (15 minutes
+  // before close, 375 minutes after open) so the volume reading is close to
+  // realized end-of-day. Trigger and other gates are still enforced — eod
+  // just gates WHEN they're checked, not WHAT.
+  if (gateCfg.eodOnly) {
+    activeGates.push('eod');
+    const elapsed = require('../signals/volume-pace').minutesSinceMarketOpenET();
+    if (elapsed == null || elapsed < 375) {
+      verdict.reasons.push(`eod_only:wait_until_3pm_et (${elapsed != null ? elapsed.toFixed(0) : '?'}min<375min)`);
+      verdict.data.minutesSinceOpen = elapsed;
+      return verdict;
+    }
+  }
 
   // ── Gate 1: pivot trigger price ─────────────────────────────────────────
   // Cheap: one quote call. For longs require live price ≥ trigger; for

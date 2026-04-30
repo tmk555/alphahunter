@@ -28,7 +28,19 @@ function window15(lo, hi) {
 
 test('calcVCP: null input → default result', () => {
   const r = calcVCP(null);
-  assert.deepEqual(r, { vcpForming: false, vcpCount: 0, vcpTightness: null });
+  // Default shape includes textbook-mode fields added in v8: pivot, stop,
+  // higherLows, volumeDrying, mode. The deep check pins the FULL shape so
+  // accidental field renames are caught.
+  assert.deepEqual(r, {
+    vcpForming: false,
+    vcpCount: 0,
+    vcpTightness: null,
+    vcpPivot: null,
+    vcpStop: null,
+    vcpHigherLows: false,
+    vcpVolumeDrying: null,
+    vcpMode: 'insufficient-data',
+  });
 });
 
 test('calcVCP: fewer than 60 bars → default result (no patterns possible)', () => {
@@ -102,11 +114,14 @@ test('calcVCP: only 1 contraction → vcpForming false (needs ≥ 2)', () => {
   assert.equal(r.vcpForming, false);
 });
 
-// ─── Boundary at n = 60 (only 4 windows fit) ───────────────────────────────
+// ─── Boundary at minimum bars (75 = 5 × WINDOW_SIZE) ──────────────────────
 
-test('calcVCP: at exactly 60 bars, only 4 windows are built', () => {
-  // At n=60, the 5th window would start at -15 and break early.
-  // Ranges oldest→newest: 30, 19, 9, 4.5 → 3 contractions (not 4).
+test('calcVCP: 60 bars (< 5×15 minimum) → default insufficient-data result', () => {
+  // Production requires closes.length >= N_WINDOWS × WINDOW_SIZE = 5 × 15 = 75
+  // bars before any pattern analysis runs (vcp.js:37). Earlier behavior
+  // attempted partial-window analysis at lower counts which was unreliable;
+  // the early-return is now strict. 60 bars hits the floor and returns
+  // the empty default — vcpMode === 'insufficient-data'.
   const closes = [
     ...window15(100, 130),  // range 30
     ...window15(105, 125),  // range ~19
@@ -116,8 +131,9 @@ test('calcVCP: at exactly 60 bars, only 4 windows are built', () => {
   assert.equal(closes.length, 60);
 
   const r = calcVCP(closes);
-  assert.equal(r.vcpForming, true);
-  assert.equal(r.vcpCount, 3, 'only 4 windows → 3 contraction transitions');
+  assert.equal(r.vcpForming, false);
+  assert.equal(r.vcpCount, 0);
+  assert.equal(r.vcpMode, 'insufficient-data');
 });
 
 // ─── Expansion (not contraction) ───────────────────────────────────────────

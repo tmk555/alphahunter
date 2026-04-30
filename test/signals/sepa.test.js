@@ -105,10 +105,13 @@ test('calcSEPA: priceNearHigh boundary — distFromHigh = 0.251 is FALSE', () =>
   assert.equal(r.sepa.priceNearHigh, false);
 });
 
-test('calcSEPA: priceNearHigh — null distFromHigh → false (not counted)', () => {
+test('calcSEPA: priceNearHigh — null distFromHigh → null (not counted)', () => {
+  // Production semantics: null in → null out. The sepaScore counter then
+  // ignores nulls (only counts === true), so a null priceNearHigh is
+  // effectively "not counted" without lying about the value.
   const closes = flat(252, 100);
   const r = calcSEPA(100, 100, 100, 100, closes, null, 50);
-  assert.equal(r.sepa.priceNearHigh, false);
+  assert.equal(r.sepa.priceNearHigh, null);
 });
 
 // ─── ma200Rising behavior ───────────────────────────────────────────────────
@@ -159,12 +162,12 @@ test('calcSEPA: ma200Rising averages the TRUE 200-bar window (closes[n-220..n-20
 test('calcSEPA: null MAs produce null rule flags (not false)', () => {
   const closes = flat(252, 100);
   const r = calcSEPA(100, null, null, null, closes, 0, 50);
-  // The code does `vsMA200 != null && vsMA200 > 0` — when ma200 is null,
-  // vsMA200 is null, so the rule evaluates to FALSE (short-circuit).
-  // Note: it's `false`, not `null`. That's a real behavior lock.
-  assert.equal(r.sepa.aboveMA200, false);
-  assert.equal(r.sepa.aboveMA150, false);
-  assert.equal(r.sepa.aboveMA50,  false);
+  // Production: `vsMA200 != null ? vsMA200 > 0 : null` — when input is null,
+  // we can't say true OR false honestly, so return null. sepaScore counts
+  // only === true, so nulls flow through correctly without lying.
+  assert.equal(r.sepa.aboveMA200, null);
+  assert.equal(r.sepa.aboveMA150, null);
+  assert.equal(r.sepa.aboveMA50,  null);
   // ma150AboveMA200 guards the ternary and returns null for missing inputs
   assert.equal(r.sepa.ma150AboveMA200, null);
   // ma50AboveAll similarly

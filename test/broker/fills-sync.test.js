@@ -93,33 +93,38 @@ function mkOrder({ id, symbol, side, status = 'filled', qty = 10, price = 100,
 
 // ─── Bug #1a: exit_order_id dedupe ─────────────────────────────────────────
 
-test('sells dedupe: re-running sync does NOT close a second row for the same sell id', async () => {
+test('sells dedupe: re-running sync does NOT re-apply the same sell id', async () => {
   wipeAll();
 
-  // Two open rows for DELL (multi-tranche or reconcile-created duplicate).
+  // Single open DELL row (18 sh) + matching 18-sh sell. With one row the
+  // prorata path (introduced post-this test) routes the full quantity to
+  // that row and closes it cleanly. Test invariant: re-running the sync
+  // with the SAME sell id in the 7-day broker window must not produce
+  // any second close, partial_exit, or reconciliation. Pre-dedupe this
+  // produced ghost-close cascades (DELL had 6 phantom rows).
   const row1 = insertOpenTrade({ symbol: 'DELL', shares: 18, entry: 100 });
-  const row2 = insertOpenTrade({ symbol: 'DELL', shares: 18, entry: 100 });
 
   alpacaStub._orders = [
     mkOrder({ id: 'SELL-X', symbol: 'DELL', side: 'sell', qty: 18, price: 105 }),
   ];
 
-  // First run: one real sell → closes exactly one row.
+  // First run closes the row.
   await syncBrokerFills();
-
-  const after1 = getDB().prepare('SELECT id, exit_date, exit_order_id FROM trades ORDER BY id').all();
+  const after1 = getDB().prepare('SELECT id, exit_date, exit_order_id, partial_exits FROM trades ORDER BY id').all();
   const closed1 = after1.filter(r => r.exit_date);
-  assert.equal(closed1.length, 1, 'first sync must close exactly one row');
+  assert.equal(closed1.length, 1, 'first sync must close the open row');
   assert.equal(closed1[0].exit_order_id, 'SELL-X', 'exit_order_id must be stamped');
 
-  // Second run with the same sell still in the broker's 7-day window.
-  // Without dedupe this would close row2 too — the historical DELL bug.
+  // Capture row state pre-second-run so we can pin "no further mutation."
+  const snapshot = JSON.stringify(after1);
+
+  // Second run: same sell still in the broker's 7-day window. seenExitIds
+  // (built from exit_order_id) must short-circuit before any further work.
   await syncBrokerFills();
 
-  const after2 = getDB().prepare('SELECT id, exit_date FROM trades ORDER BY id').all();
-  const closed2 = after2.filter(r => r.exit_date);
-  assert.equal(closed2.length, 1,
-    'second sync with identical sell id must NOT close a second row (dedupe by exit_order_id)');
+  const after2 = getDB().prepare('SELECT id, exit_date, exit_order_id, partial_exits FROM trades ORDER BY id').all();
+  assert.equal(JSON.stringify(after2), snapshot,
+    'second sync must be a complete no-op — no extra closes, no extra partials, no field churn');
 });
 
 test('sells: pending_close_order_id pins the fill to the exact lot', async () => {

@@ -143,3 +143,24 @@ test('empty gate: passes with no_gates_configured (UI should disarm instead)', a
   assert.equal(v.pass, true);
   assert.match(v.reasons[0], /no_gates_configured/);
 });
+
+// ── eodOnly defers all evaluation until 3:00 PM ET ────────────────────────
+
+test('eodOnly: midday (120 min after open) → deferred', async () => {
+  // The volume-pace stub at top of file returns minutesSinceMarketOpenET=120.
+  // 120 < 375, so eodOnly blocks regardless of trigger.
+  quotesStub._quotes.MKSI = { symbol: 'MKSI', regularMarketPrice: 281.50 };
+  const v = await evaluateGate(buyRow(), { eodOnly: true, triggerPrice: 280.98 });
+  assert.equal(v.pass, false);
+  assert.match(v.reasons[0], /eod_only:wait_until_3pm_et/);
+});
+
+test('eodOnly: late-session (380 min after open) → gates run normally', async () => {
+  const prev = require.cache[require.resolve('../../src/signals/volume-pace')].exports.minutesSinceMarketOpenET;
+  require.cache[require.resolve('../../src/signals/volume-pace')].exports.minutesSinceMarketOpenET = () => 380;
+  quotesStub._quotes.MKSI = { symbol: 'MKSI', regularMarketPrice: 281.50 };
+  const v = await evaluateGate(buyRow(), { eodOnly: true, triggerPrice: 280.98 });
+  require.cache[require.resolve('../../src/signals/volume-pace')].exports.minutesSinceMarketOpenET = prev;
+  assert.equal(v.pass, true, v.reasons.join(','));
+  assert.deepEqual(v.data.activeGates, ['eod', 'trigger']);
+});

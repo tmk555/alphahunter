@@ -231,6 +231,7 @@ module.exports = function(db, runScan) {
       if (body.gapDownLimitPct != null)    gate.gapDownLimitPct    = +body.gapDownLimitPct;
       if (body.minutes != null)            gate.minutes            = +body.minutes;
       if (body.earliestAfterOpenMin != null) gate.earliestAfterOpenMin = +body.earliestAfterOpenMin;
+      if (body.eodOnly)                    gate.eodOnly            = true;
       if (body.cancelOnFail)               gate.cancelOnFail       = true;
       if (body.expiresAt)                  gate.expiresAt          = body.expiresAt;
 
