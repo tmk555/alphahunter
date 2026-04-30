@@ -4826,8 +4826,15 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
                     // canonical ranking (replayTop5), decoupled from the
                     // displayed sort — so clicking a column header no longer
                     // re-labels which rows were the engine's top picks.
-                    const isReplayPick    = strategyFilter ? replayTop5.has(s.ticker) : false;
-                    const isBeyondReplay  = strategyFilter ? !replayTop5.has(s.ticker) : false;
+                    //
+                    // Suppressed for rs_momentum (per user, 2026-04-30): the
+                    // displayed list now sorts by the strategy's comparator
+                    // by default, so the "top 5" callout is just the top of
+                    // the visible list anyway — adds visual noise (dimmed
+                    // rows below the cutoff) without information value.
+                    const showReplayHighlight = strategyFilter && strategyFilter !== 'rs_momentum';
+                    const isReplayPick    = showReplayHighlight ? replayTop5.has(s.ticker) : false;
+                    const isBeyondReplay  = showReplayHighlight ? !replayTop5.has(s.ticker) : false;
                     const stratRank       = strategyFilter ? (replayRank.get(s.ticker) || null) : null;
                     return (
                     <React.Fragment key={s.ticker}>
