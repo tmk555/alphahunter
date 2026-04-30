@@ -141,13 +141,39 @@ async function getMarketRegime() {
               assessVIXTermStructure, detectBreadthDivergence } = require('../signals/breadth');
       const { getDB } = require('../data/database');
       const _db = getDB();
-      const latestDate = _db.prepare(
-        `SELECT MAX(date) as date FROM rs_snapshots WHERE type = 'stock'`
-      ).get()?.date;
+      // Pre-fix: this used MAX(date) regardless of completeness. When
+      // rs_scan wrote partial rows for TODAY (e.g. quote fetch failed and
+      // every row has price=0), computeBreadthFromSnapshots returned null
+      // because of the price>0 filter — leaving breadthOverlay null,
+      // which silently disabled the ramp-tier modulator. User saw ramp
+      // FULL with regime NEUTRAL + composite 48 ('how is this FULL?').
+      //
+      // Fix: fall back to the most recent date that actually has usable
+      // priced rows. computeBreadthFromSnapshots does its own further
+      // gating (data-quality), so we try up to 7 days back; if all 7 are
+      // unusable, breadthOverlay stays null and we surface a diagnostic
+      // (regime.breadthOverlayStatus) so the UI can show 'breadth data
+      // unavailable' instead of silently de-modulating the ramp.
+      const usableDates = _db.prepare(
+        `SELECT date, COUNT(*) AS priced
+           FROM rs_snapshots
+          WHERE type = 'stock' AND price > 0
+          GROUP BY date
+         HAVING priced >= 50
+          ORDER BY date DESC
+          LIMIT 7`
+      ).all();
+      let breadth = null;
+      let usedDate = null;
+      for (const row of usableDates) {
+        const r = computeBreadthFromSnapshots(row.date);
+        // Non-null AND not the data-quality-gate error object.
+        if (r && !r.error) { breadth = r; usedDate = row.date; break; }
+      }
 
-      if (latestDate) {
-        const breadth = computeBreadthFromSnapshots(latestDate);
-        if (breadth) {
+      if (breadth) {
+        const latestDate = usedDate;
+        {
           const vixHistory = _db.prepare(
             `SELECT price FROM rs_snapshots WHERE symbol = '^VIX' AND type = 'sector' AND price > 0
              ORDER BY date DESC LIMIT 252`
