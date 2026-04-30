@@ -570,6 +570,16 @@ function initSchema() {
   // Migration: breadth columns
   safeAddColumn('breadth_snapshots', 'mcclellan_osc', 'REAL');
   safeAddColumn('breadth_snapshots', 'summation_index', 'REAL');
+  // stock_count = how many rs_snapshots rows fed this breadth row. Used by
+  // breadth-warning.js to detect sample-size jumps that would otherwise
+  // produce false-alarm deltas. Pre-fix (2026-04-30): the universe grew
+  // from 360 → 656 → 1620 over a single day as SP1500 was merged, and
+  // delta10d compared today's 656-stock composite against a 14-day-ago
+  // 371-stock composite — apples to oranges, triggered CRITICAL warning
+  // when the underlying breadth had actually improved by 3 points.
+  // With this column, the warning module can suppress deltas when the
+  // sample size shifted >20% between the two endpoints.
+  safeAddColumn('breadth_snapshots', 'stock_count', 'INTEGER');
 
   // ─── Phase 1: Equity Snapshots & Alpha Metrics ──────────────────────────
   db.exec(`

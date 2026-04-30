@@ -705,13 +705,14 @@ function saveBreadthSnapshot(date, data, opts = {}) {
     INSERT OR REPLACE INTO breadth_snapshots
     (date, pct_above_50ma, pct_above_200ma, new_highs, new_lows, ad_ratio,
      vol_thrust_pct, stage2_pct, stage4_pct, composite_score, regime,
-     mcclellan_osc, summation_index)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     mcclellan_osc, summation_index, stock_count)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     date, data.pctAbove50MA, data.pctAbove200MA, data.newHighs, data.newLows,
     data.adRatio, data.volThrustPct, data.stage2Pct, data.stage4Pct,
     data.compositeScore || null, data.regime || null,
-    data.mcclellanOsc || null, data.summationIndex || null
+    data.mcclellanOsc || null, data.summationIndex || null,
+    data.stockCount || null
   );
   return { saved: true, date };
 }

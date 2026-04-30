@@ -32,7 +32,7 @@ const WARNING_LEVELS = {
 function evaluateBreadthWarning() {
   const history = db().prepare(`
     SELECT date, composite_score, pct_above_50ma, pct_above_200ma,
-           new_highs, new_lows, regime
+           new_highs, new_lows, regime, stock_count
     FROM breadth_snapshots
     ORDER BY date DESC LIMIT 30
   `).all().reverse();
@@ -103,21 +103,63 @@ function evaluateBreadthWarning() {
   const avgNewLows  = recentHL.reduce((s, r) => s + (r.new_lows || 0), 0) / recentHL.length;
   const hlRatio = avgNewLows > 0 ? +(avgNewHighs / avgNewLows).toFixed(2) : 99;
 
+  // ── Sample-size sanity check ─────────────────────────────────────────
+  // Detect when the universe-of-comparison shifted between today and the
+  // 14-day-ago lookback row. If today's stock_count differs from the
+  // lookback's stock_count by more than this threshold (default 20%),
+  // delta-based warnings become apples-to-oranges and trigger false
+  // alarms — e.g. universe expanded 360 → 656 over 24 hours, all the
+  // delta scores collapsed to "CRITICAL deterioration" even though the
+  // underlying breadth had improved (2026-04-30 incident).
+  //
+  // When a material sample-size shift is detected, all delta-driven
+  // CRITICAL/WARNING/CAUTION rules are suppressed for the affected
+  // window. Absolute-score rules (composite ≤ 25, ≤ 40) still fire
+  // because those are universe-size-independent.
+  const SAMPLE_DRIFT_THRESHOLD = 0.20;
+  function _sampleDriftSuppressed(lookbackBars) {
+    if (history.length < lookbackBars + 1) return false;
+    const now  = history[history.length - 1]?.stock_count;
+    const past = history[history.length - 1 - lookbackBars]?.stock_count;
+    if (!now || !past) return false;
+    return Math.abs(now - past) / Math.max(now, past) > SAMPLE_DRIFT_THRESHOLD;
+  }
+  const drift5d  = _sampleDriftSuppressed(5);
+  const drift10d = _sampleDriftSuppressed(10);
+  const drift15d = _sampleDriftSuppressed(15);
+
   // ── Determine warning level ─────────────────────────────────────────
   const reasons = [];
   let warningLevel = 'NONE';
+  // Suppression notes — exposed in the verdict so the UI can show "deltas
+  // suppressed: universe size changed materially" instead of going dark.
+  const suppressed = [];
+  if (drift5d)  suppressed.push('1w_drift');
+  if (drift10d) suppressed.push('2w_drift');
+  if (drift15d) suppressed.push('3w_drift');
+
+  // Universe-size-INDEPENDENT triggers fire regardless of drift —
+  // composite ≤25 ("breadth broken") and absolute H/L ratio are honest
+  // signals about today's tape, not delta comparisons.
+  //
+  // Universe-size-DEPENDENT triggers (delta10d, delta15d, ma50Delta10d,
+  // delta5d, ma50Delta5d) are gated on the matching drift flag — if the
+  // sample size jumped >20% over the lookback window, the delta is
+  // apples-to-oranges and SUPPRESSED. The reason string surfaces this
+  // suppression so the user can see what would have fired had the
+  // universe been stable.
 
   // CRITICAL triggers (any one is enough)
   if (currentScore <= 25) {
     warningLevel = 'CRITICAL';
     reasons.push(`Composite score ${currentScore} — breadth broken`);
-  } else if (delta10d <= -15) {
+  } else if (delta10d <= -15 && !drift10d) {
     warningLevel = 'CRITICAL';
     reasons.push(`Composite dropped ${Math.abs(delta10d)} pts in 2 weeks — rapid deterioration`);
-  } else if (delta15d <= -20) {
+  } else if (delta15d <= -20 && !drift15d) {
     warningLevel = 'CRITICAL';
     reasons.push(`Composite dropped ${Math.abs(delta15d)} pts in 3 weeks — sustained collapse`);
-  } else if (ma50Delta10d <= -15) {
+  } else if (ma50Delta10d <= -15 && !drift10d) {
     warningLevel = 'CRITICAL';
     reasons.push(`% above 50MA dropped ${Math.abs(ma50Delta10d)} pts in 2 weeks`);
   }
@@ -125,21 +167,21 @@ function evaluateBreadthWarning() {
   // WARNING triggers (need at least 2 signals for robustness)
   if (warningLevel === 'NONE') {
     let warningSignals = 0;
-    if (delta10d <= -10) { warningSignals++; reasons.push(`Composite -${Math.abs(delta10d)} pts over 2 weeks`); }
-    if (ma50Delta10d <= -10) { warningSignals++; reasons.push(`% above 50MA -${Math.abs(ma50Delta10d)} pts over 2 weeks`); }
+    if (delta10d <= -10 && !drift10d) { warningSignals++; reasons.push(`Composite -${Math.abs(delta10d)} pts over 2 weeks`); }
+    if (ma50Delta10d <= -10 && !drift10d) { warningSignals++; reasons.push(`% above 50MA -${Math.abs(ma50Delta10d)} pts over 2 weeks`); }
     if (hlRatio < 0.5) { warningSignals++; reasons.push(`New lows dominating (H/L ratio: ${hlRatio})`); }
     if (currentScore <= 40) { warningSignals++; reasons.push(`Composite score ${currentScore} in MIXED zone`); }
-    if (delta5d <= -8) { warningSignals++; reasons.push(`Composite -${Math.abs(delta5d)} pts in 1 week — sharp drop`); }
+    if (delta5d <= -8 && !drift5d) { warningSignals++; reasons.push(`Composite -${Math.abs(delta5d)} pts in 1 week — sharp drop`); }
 
     if (warningSignals >= 2) warningLevel = 'WARNING';
   }
 
   // CAUTION triggers (single signal is enough — early flag)
   if (warningLevel === 'NONE') {
-    if (delta10d <= -5) { warningLevel = 'CAUTION'; reasons.push(`Composite -${Math.abs(delta10d)} pts over 2 weeks`); }
-    else if (delta5d <= -5) { warningLevel = 'CAUTION'; reasons.push(`Composite -${Math.abs(delta5d)} pts in 1 week`); }
-    else if (ma50Delta5d <= -8) { warningLevel = 'CAUTION'; reasons.push(`% above 50MA dropped ${Math.abs(ma50Delta5d)} pts in 1 week`); }
-    else if (currentScore <= 45 && delta5d < 0) { warningLevel = 'CAUTION'; reasons.push(`Low composite (${currentScore}) still declining`); }
+    if (delta10d <= -5 && !drift10d) { warningLevel = 'CAUTION'; reasons.push(`Composite -${Math.abs(delta10d)} pts over 2 weeks`); }
+    else if (delta5d <= -5 && !drift5d) { warningLevel = 'CAUTION'; reasons.push(`Composite -${Math.abs(delta5d)} pts in 1 week`); }
+    else if (ma50Delta5d <= -8 && !drift5d) { warningLevel = 'CAUTION'; reasons.push(`% above 50MA dropped ${Math.abs(ma50Delta5d)} pts in 1 week`); }
+    else if (currentScore <= 45 && delta5d < 0 && !drift5d) { warningLevel = 'CAUTION'; reasons.push(`Low composite (${currentScore}) still declining`); }
   }
 
   const warning = WARNING_LEVELS[warningLevel];
@@ -160,6 +202,19 @@ function evaluateBreadthWarning() {
       ma50_5d: ma50Delta5d,
       ma50_10d: ma50Delta10d,
       hlRatio,
+    },
+    // Universe-stability diagnostics. When non-empty, the corresponding
+    // deltas have been suppressed because the sample size shifted >20%
+    // over that window (e.g. universe expansion, bulk add/remove). The
+    // UI can render this as "deltas suppressed: universe in transition"
+    // so the user sees why warnings aren't firing despite negative deltas.
+    suppressed,
+    sampleDrift: {
+      currentStockCount: latest.stock_count ?? null,
+      stockCount5dAgo: history[history.length - 6]?.stock_count ?? null,
+      stockCount10dAgo: history[history.length - 11]?.stock_count ?? null,
+      stockCount15dAgo: history[history.length - 16]?.stock_count ?? null,
+      thresholdPct: SAMPLE_DRIFT_THRESHOLD * 100,
     },
     latest: {
       date: latest.date,

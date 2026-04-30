@@ -6589,19 +6589,34 @@ function MarketPulseTab() {
 
       {/* Breadth stable indicator (when no warning) */}
       {bWarning && bWarning.level === 0 && (
-        <div style={{padding:'8px 14px',background:'rgba(76,175,80,0.06)',border:'1px solid rgba(76,175,80,0.2)',borderRadius:5,marginBottom:14,display:'flex',alignItems:'center',gap:12}}>
+        <div style={{padding:'8px 14px',background:'rgba(76,175,80,0.06)',border:'1px solid rgba(76,175,80,0.2)',borderRadius:5,marginBottom:14,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
           <span style={{fontFamily:'var(--font-mono)',fontSize:10,letterSpacing:2,color:'var(--green)',fontWeight:700}}
-                title="Computed from rs_snapshots — count varies as the universe grows (S&P 500 + ETFs + leadership names; ~657 after 2026-04-30 expansion).">
+                title="Computed live from rs_snapshots. Stock count varies as the universe grows.">
             BREADTH STABLE
           </span>
           <span style={{fontSize:11,color:'var(--text2)'}}>
             No deterioration detected — composite {bWarning.currentScore}
-            {bWarning.latest?.stockCount && (
+            {bWarning.sampleDrift?.currentStockCount && (
               <span style={{color:'var(--text3)',marginLeft:6}}>
-                · across {bWarning.latest.stockCount} stocks
+                · across {bWarning.sampleDrift.currentStockCount} stocks
               </span>
             )}
           </span>
+          {/* Universe-transition pill — shown when sample-size jumped >20%
+              over any delta window and warnings were suppressed as a
+              result. Without this, the user can't tell whether "no warning"
+              means "real stability" or "deltas were apples-to-oranges and
+              we suppressed them." */}
+          {bWarning.suppressed?.length > 0 && (
+            <span style={{
+              fontSize:10, fontFamily:'var(--font-mono)', letterSpacing:1,
+              padding:'2px 8px', background:'rgba(0,212,255,0.10)',
+              border:'1px solid rgba(0,212,255,0.35)', borderRadius:3,
+              color:'var(--cyan)',
+            }} title={`Sample size shifted >${bWarning.sampleDrift?.thresholdPct||20}% over ${bWarning.suppressed.join(' / ')}. Comparing today's composite (${bWarning.sampleDrift?.currentStockCount} stocks) against the historical row's composite (${bWarning.sampleDrift?.stockCount10dAgo} 14d ago) is apples-to-oranges, so delta-based warnings are suppressed until the universe stabilizes (~14 trading days).`}>
+              ⚠ UNIVERSE IN TRANSITION — {bWarning.suppressed.join(', ')} suppressed
+            </span>
+          )}
         </div>
       )}
 
