@@ -9092,6 +9092,47 @@ function ExecutionTab() {
     } catch(e) { setError(e.message); }
   }
 
+  async function armBreakoutGate(o) {
+    // Default trigger to current entry_price; user can edit. Volume pace
+    // defaults to 1.4 (O'Neil CANSLIM 40% rule). Plain prompts keep this
+    // change minimal — a dedicated modal is a future polish.
+    const triggerStr = window.prompt(
+      `🎯 ARM BREAKOUT GATE — ${o.symbol}\n\n` +
+      `Order will wait until price ≥ trigger AND volume pace ≥ threshold before submitting.\n\n` +
+      `Trigger price (default = current entry $${o.entry_price}):`,
+      String(o.entry_price)
+    );
+    if (triggerStr == null) return;
+    const triggerPrice = +triggerStr;
+    if (!(triggerPrice > 0)) { setError('Invalid trigger price'); return; }
+    const volStr = window.prompt(
+      `Volume pace minimum (1.0 = normal, 1.4 = O'Neil 40% rule, 1.5+ = strict):\n\n` +
+      `Leave blank to skip volume gate.`,
+      '1.4'
+    );
+    if (volStr == null) return;
+    const body = { triggerPrice };
+    if (volStr.trim() !== '') {
+      const vp = +volStr;
+      if (!(vp > 0)) { setError('Invalid volume pace'); return; }
+      body.volumePaceMin = vp;
+    }
+    try {
+      await api(`/api/staging/${o.id}/arm-gate`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body),
+      });
+      loadAll();
+    } catch(e) { setError('Arm failed: ' + e.message); }
+  }
+
+  async function disarmGate(id) {
+    try {
+      await api(`/api/staging/${id}/disarm-gate`, {method:'POST'});
+      loadAll();
+    } catch(e) { setError('Disarm failed: ' + e.message); }
+  }
+
   async function cancelPyramid(id) {
     if (!window.confirm(`Cancel pyramid plan #${id}? Any unfilled tranches will be cancelled at the broker.`)) return;
     try {
@@ -9194,7 +9235,19 @@ function ExecutionTab() {
     {id:'scalein',   label:'Scale-In'},
   ];
 
-  const statusColor = s => s==='filled'?'var(--green)':s==='submitted'?'var(--cyan)':s==='staged'?'var(--amber)':s==='cancelled'||s==='expired'?'var(--text3)':'var(--text)';
+  const statusColor = s => s==='filled'?'var(--green)':s==='submitted'?'var(--cyan)':s==='staged'?'var(--amber)':s==='pending_trigger'?'var(--purple)':s==='cancelled'||s==='expired'?'var(--text3)':'var(--text)';
+  // Decode submission_gate JSON into a one-line label for the row.
+  // Examples: "🟣 ARMED @ $280.98 + vol≥1.4×", "🟣 ARMED VWAP+gap"
+  const armedSummary = (o) => {
+    if (o.status !== 'pending_trigger' || !o.submission_gate) return null;
+    let g; try { g = JSON.parse(o.submission_gate); } catch (_) { return 'ARMED'; }
+    const parts = [];
+    if (g.triggerPrice != null)     parts.push(`@ $${g.triggerPrice}`);
+    if (g.volumePaceMin != null)    parts.push(`vol≥${g.volumePaceMin}×`);
+    if (g.requireAboveVWAP != null) parts.push('VWAP');
+    if (g.gapUpLimitPct != null || g.gapDownLimitPct != null) parts.push('gap');
+    return parts.length ? `ARMED ${parts.join(' + ')}` : 'ARMED';
+  };
 
   return (
     <div>
@@ -9486,8 +9539,9 @@ function ExecutionTab() {
                       </td>
                       <td style={{padding:'8px 6px',fontSize:10,color:'var(--text3)'}}>{o.source}</td>
                       <td style={{padding:'8px 6px'}}>
-                        <span style={{padding:'2px 8px',borderRadius:3,fontSize:10,fontWeight:700,color:statusColor(o.status),background:`${statusColor(o.status)}15`,border:`1px solid ${statusColor(o.status)}30`}}>
-                          {o.status.toUpperCase()}
+                        <span style={{padding:'2px 8px',borderRadius:3,fontSize:10,fontWeight:700,color:statusColor(o.status),background:`${statusColor(o.status)}15`,border:`1px solid ${statusColor(o.status)}30`}}
+                              title={o.status==='pending_trigger' ? 'Order armed — waits for gate(s) to pass before submitting to broker' : undefined}>
+                          {armedSummary(o) || o.status.toUpperCase()}
                         </span>
                       </td>
                       <td style={{padding:'8px 6px',fontSize:10,color:'var(--text3)'}}>{o.created_at?.split(' ')[0]}</td>
@@ -9499,13 +9553,25 @@ function ExecutionTab() {
                               SUBMIT
                             </button>
                           )}
+                          {o.status==='staged' && (
+                            <button onClick={()=>armBreakoutGate(o)} title="Arm breakout gate — order waits for price ≥ trigger AND volume pace ≥ threshold before submitting (O'Neil-style entry)"
+                              style={{padding:'3px 8px',background:'transparent',border:'1px solid var(--purple)',borderRadius:3,color:'var(--purple)',fontSize:10,cursor:'pointer',fontWeight:700}}>
+                              🎯 Arm
+                            </button>
+                          )}
+                          {o.status==='pending_trigger' && (
+                            <button onClick={()=>disarmGate(o.id)} title="Disarm gate — revert to plain staged"
+                              style={{padding:'3px 8px',background:'transparent',border:'1px solid var(--text3)',borderRadius:3,color:'var(--text3)',fontSize:10,cursor:'pointer'}}>
+                              Disarm
+                            </button>
+                          )}
                           {(o.status==='staged'||o.status==='submitted') && o.order_type==='limit' && (
                             <button onClick={()=>openModifyEntry(o)} title="Modify entry price"
                               style={{padding:'3px 8px',background:'transparent',border:'1px solid var(--cyan)',borderRadius:3,color:'var(--cyan)',fontSize:10,cursor:'pointer'}}>
                               ✏️ Edit
                             </button>
                           )}
-                          {(o.status==='staged'||o.status==='submitted') && (
+                          {(o.status==='staged'||o.status==='submitted'||o.status==='pending_trigger') && (
                             <button onClick={()=>cancelStaged(o.id)}
                               style={{padding:'3px 8px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,color:'var(--text3)',fontSize:10,cursor:'pointer'}}>
                               Cancel
