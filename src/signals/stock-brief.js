@@ -238,6 +238,23 @@ async function getStockBrief(symbol) {
   const brief = {
     symbol,
     fetchedAt: new Date().toISOString(),
+    // Company overview surfaces what the ticker actually IS (business
+     // summary, sector/industry, hq, employees, website) so the user
+     // doesn't have to leave the app to remember "wait, is XYZ the fab
+     // or the services co?" Powers the new overview block at the top
+     // of the brief drawer.
+    overview: {
+      summary: profile?.summary || null,
+      sector: profile?.sector || null,
+      industry: profile?.industry || null,
+      quoteType: profile?.quoteType || null,
+      country: profile?.country || null,
+      website: profile?.website || null,
+      employees: profile?.employees ?? null,
+      headquarters: profile?.headquarters || null,
+      // Market cap from quote (it's only on quote, not the asset profile).
+      marketCap: quote?.marketCap ?? null,
+    },
     header: {
       longName: profile?.longName || symbol,
       sector: profile?.sector || null,

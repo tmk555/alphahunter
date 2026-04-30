@@ -1968,6 +1968,61 @@ function App() {
 //
 // No LLM API used — payload is assembled from Yahoo's keyless endpoints
 // + a local keyword classifier. See src/signals/stock-brief.js.
+// Sub-component for the StockBrief drawer's overview block. Held as its
+// own component so the local 'expanded' state for the long-summary
+// toggle doesn't leak into StockBriefDrawer's main state.
+function OverviewBlock({ ov, summary, fmtMcap, summaryNeedsToggle, SUMMARY_PREVIEW }) {
+  const [expanded, setExpanded] = useState(false);
+  const visibleSummary = summaryNeedsToggle && !expanded
+    ? summary.slice(0, SUMMARY_PREVIEW).trimEnd() + '…'
+    : summary;
+  // Quick stats grid — sector / industry / market cap / employees / hq / quoteType.
+  const stats = [
+    ov.quoteType && { label: 'TYPE',     val: ov.quoteType },
+    ov.sector   && { label: 'SECTOR',   val: ov.sector },
+    ov.industry && { label: 'INDUSTRY', val: ov.industry },
+    ov.marketCap   != null && { label: 'MARKET CAP', val: fmtMcap(ov.marketCap) },
+    ov.employees   != null && { label: 'EMPLOYEES',  val: ov.employees.toLocaleString() },
+    ov.headquarters && { label: 'HQ',       val: ov.headquarters },
+  ].filter(Boolean);
+  return (
+    <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:12,marginBottom:12}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8,gap:8}}>
+        <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>
+          OVERVIEW
+        </div>
+        {ov.website && (
+          <a href={ov.website} target="_blank" rel="noopener noreferrer"
+             style={{fontSize:10,fontFamily:'var(--font-mono)',color:'var(--cyan)',textDecoration:'none',letterSpacing:0.5}}>
+            ↗ {ov.website.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}
+          </a>
+        )}
+      </div>
+      {stats.length > 0 && (
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))',gap:8,marginBottom:summary?10:0}}>
+          {stats.map(s => (
+            <div key={s.label}>
+              <div style={{fontSize:8,color:'var(--text3)',letterSpacing:1.2,fontFamily:'var(--font-mono)'}}>{s.label}</div>
+              <div style={{fontSize:11,color:'var(--text)',marginTop:1,fontFamily:'var(--font-mono)'}}>{s.val}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {summary && (
+        <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.55,marginTop:stats.length?6:0}}>
+          {visibleSummary}
+          {summaryNeedsToggle && (
+            <button onClick={() => setExpanded(e => !e)}
+              style={{marginLeft:6,padding:'1px 6px',fontSize:9,fontFamily:'var(--font-mono)',background:'transparent',border:'1px solid var(--border2)',borderRadius:3,color:'var(--cyan)',cursor:'pointer',letterSpacing:0.5}}>
+              {expanded ? 'less' : 'more'}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StockBriefDrawer() {
   const [symbol, setSymbol] = useState(null);
   const [data, setData]     = useState(null);
@@ -2111,6 +2166,31 @@ function StockBriefDrawer() {
                 </div>
               </div>
             )}
+
+            {/* Company overview — what does this ticker actually do?
+                Surfaces sector / industry / HQ / employees / website +
+                the long business summary. The user shouldn't have to
+                leave the app to remember whether NVDA is the GPU co or
+                whether ANET is the switch fabric vendor. Collapsed by
+                default if the summary is long; click 'more' to expand. */}
+            {(() => {
+              const ov = data?.overview;
+              if (!ov) return null;
+              const hasContent = ov.summary || ov.sector || ov.industry
+                || ov.country || ov.website || ov.employees || ov.marketCap;
+              if (!hasContent) return null;
+              const fmtMcap = (n) => {
+                if (n == null) return null;
+                if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;
+                if (n >= 1e9)  return `$${(n / 1e9).toFixed(1)}B`;
+                if (n >= 1e6)  return `$${(n / 1e6).toFixed(0)}M`;
+                return `$${n}`;
+              };
+              const SUMMARY_PREVIEW = 280;
+              const summary = ov.summary || '';
+              const summaryNeedsToggle = summary.length > SUMMARY_PREVIEW;
+              return <OverviewBlock ov={ov} summary={summary} fmtMcap={fmtMcap} summaryNeedsToggle={summaryNeedsToggle} SUMMARY_PREVIEW={SUMMARY_PREVIEW}/>;
+            })()}
 
             {/* Analyst panel */}
             {a && (a.bullishSharePct != null || a.recentChanges?.length) && (

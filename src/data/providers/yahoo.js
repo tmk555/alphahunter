@@ -610,6 +610,15 @@ async function yahooAssetProfile(symbol) {
       sector:   profile.sector   || null,
       industry: profile.industry || null,
       quoteType: qt.quoteType || null,   // EQUITY / ETF / …
+      // Company overview fields. These power the stock-brief drawer's
+      // "what does this company do?" header — without them the user has
+      // to leave the app to remember whether a ticker is a fab, a
+      // services co, or a holding company.
+      summary:    profile.longBusinessSummary || null,
+      country:    profile.country    || null,
+      website:    profile.website    || null,
+      employees:  profile.fullTimeEmployees ?? null,
+      headquarters: [profile.city, profile.state, profile.country].filter(Boolean).join(', ') || null,
     };
     cacheSet(key, out);
     return out;
