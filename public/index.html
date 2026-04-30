@@ -6030,10 +6030,6 @@ function MarketPulseTab() {
   const [bWarning, setBWarning] = useState(null);
   const [bwApplying, setBwApplying] = useState(false);
   const [sparkRange, setSparkRange] = useState('1M');
-  // Broader-market breadth proxy (index-level, not universe-bound). Fetched
-  // alongside the main load() so the panel populates with the rest of the
-  // tab. Source: /api/market/breadth-proxy (RSP/SPY ratio, ^RUT, ^NYA, etc.)
-  const [bProxy, setBProxy] = useState(null);
   // Sentiment + upcoming-earnings — fetched alongside the main load().
   // fngErr captures the reason we couldn't load F&G so the UI can show a
   // specific message (auth problem vs route-missing vs CNN down) rather
@@ -6176,7 +6172,7 @@ function MarketPulseTab() {
     // failure dropped EVERYTHING into the catch-all silent-empty branch and
     // the user saw a blank Market Pulse with no error indication.
     try {
-      const [rd, md, cd, bw, fg, bp] = await Promise.all([
+      const [rd, md, cd, bw, fg] = await Promise.all([
         api('/api/regime').catch(()=>null),
         api('/api/macro').catch(()=>null),
         api('/api/cycle-auto-detect').catch(()=>null),
@@ -6185,9 +6181,6 @@ function MarketPulseTab() {
         // concrete error so the panel can surface it (helps diagnose
         // auth/routing/CNN-down scenarios without opening devtools).
         api('/api/market/fear-greed').catch(e => { setFngErr(e?.message || String(e)); return null; }),
-        // Broader-market breadth proxy — fails open (panel just won't render
-        // if Yahoo's index quotes are temporarily unavailable).
-        api('/api/market/breadth-proxy').catch(()=>null),
       ]);
       if (rd) setRegime(rd);
       if (md) {
@@ -6199,7 +6192,6 @@ function MarketPulseTab() {
       setCycle(cd);
       setBWarning(bw);
       setFng(fg);
-      setBProxy(bp);
     } catch(_) {}
     setLoading(false);
     setLlLoad(true);
@@ -6434,9 +6426,8 @@ function MarketPulseTab() {
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:12}}>
             <div style={{flex:1}}>
               <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8,flexWrap:'wrap'}}>
-                <span style={{fontFamily:'var(--font-mono)',fontSize:11,letterSpacing:2,color:bWarning.color,fontWeight:800}}
-                      title="Computed from rs_snapshots over our managed universe (~360 leadership names). NOT NYSE-wide. See the Market Breadth Proxy panel for broader-market signals (RSP/SPY ratio, ^RUT, ^NYA).">
-                  LEADERSHIP BREADTH WARNING
+                <span style={{fontFamily:'var(--font-mono)',fontSize:11,letterSpacing:2,color:bWarning.color,fontWeight:800}}>
+                  BREADTH EARLY WARNING
                 </span>
                 <span style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:800,color:bWarning.color,
                   padding:'2px 10px',background:bWarning.color+'25',borderRadius:3}}>
@@ -6599,93 +6590,10 @@ function MarketPulseTab() {
       {/* Breadth stable indicator (when no warning) */}
       {bWarning && bWarning.level === 0 && (
         <div style={{padding:'8px 14px',background:'rgba(76,175,80,0.06)',border:'1px solid rgba(76,175,80,0.2)',borderRadius:5,marginBottom:14,display:'flex',alignItems:'center',gap:12}}>
-          <span style={{fontFamily:'var(--font-mono)',fontSize:10,letterSpacing:2,color:'var(--green)',fontWeight:700}}>LEADERSHIP BREADTH</span>
-          <span style={{fontSize:11,color:'var(--text2)'}}>No deterioration detected — composite {bWarning.currentScore}, breadth stable across our 360-name universe</span>
+          <span style={{fontFamily:'var(--font-mono)',fontSize:10,letterSpacing:2,color:'var(--green)',fontWeight:700}}>BREADTH EARLY WARNING</span>
+          <span style={{fontSize:11,color:'var(--text2)'}}>No deterioration detected — composite {bWarning.currentScore}, breadth stable</span>
         </div>
       )}
-
-      {/* MARKET BREADTH PROXY — broader-market signals from index quotes.
-          Sits alongside the universe-bound LEADERSHIP BREADTH WARNING above
-          so the user can read both: leadership deterioration vs broader-tape
-          participation. Fails open if /api/market/breadth-proxy errors. */}
-      {bProxy && (() => {
-        const bs = bProxy.breadth_signals || {};
-        const ix = bProxy.indices || {};
-        const broadCnt = bs.broad_advancing ?? 0;
-        const broadTot = bs.broad_count ?? 5;
-        // Color gates: 4-5/5 broad = green, 2-3 = amber, 0-1 = red
-        const breadthColor = broadCnt >= 4 ? 'var(--green)' : broadCnt >= 2 ? 'var(--amber)' : 'var(--red)';
-        const breadthLabel = broadCnt >= 4 ? 'BROAD' : broadCnt >= 2 ? 'MIXED' : 'NARROW';
-        const cellColor = (v) => v == null ? 'var(--text3)' : v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text2)';
-        const tile = (k, label, sub) => {
-          const idx = ix[k];
-          if (!idx) return null;
-          return (
-            <div key={k} style={{padding:'8px 10px',background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)',minWidth:120}}>
-              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,marginBottom:2}}>{label}</div>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:14,fontWeight:700,color:cellColor(idx.change_pct)}}>
-                {idx.change_pct != null ? (idx.change_pct >= 0 ? '+' : '') + idx.change_pct.toFixed(2) + '%' : '—'}
-              </div>
-              {sub && <div style={{fontSize:9,color:'var(--text3)',marginTop:2}}>{sub}</div>}
-            </div>
-          );
-        };
-        return (
-          <div style={{padding:'12px 16px',background:breadthColor+'10',border:`1px solid ${breadthColor}55`,borderRadius:8,marginBottom:14}}>
-            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap',marginBottom:10}}>
-              <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
-                <span style={{fontFamily:'var(--font-mono)',fontSize:10,letterSpacing:2,color:'var(--text3)',fontWeight:700}}
-                      title="Broader-market breadth derived from index quotes (RSP, ^RUT, ^MID, ^NYA, EQAL). Index-level proxies, not raw NYSE A/D ticker. Use for confirmation alongside the LEADERSHIP BREADTH WARNING above which measures our 360-name universe.">
-                  MARKET BREADTH PROXY <span style={{color:'var(--text3)',marginLeft:4}}>(broader tape)</span>
-                </span>
-                <span style={{padding:'2px 10px',background:breadthColor+'25',border:`1px solid ${breadthColor}`,borderRadius:3,
-                              fontFamily:'var(--font-mono)',fontSize:11,fontWeight:800,color:breadthColor,letterSpacing:1}}>
-                  {breadthLabel}
-                </span>
-                <span style={{fontSize:11,color:'var(--text2)'}}>
-                  {broadCnt}/{broadTot} broad indices advancing
-                </span>
-              </div>
-            </div>
-            <div style={{display:'flex',gap:10,flexWrap:'wrap',marginBottom:10}}>
-              {tile('^GSPC', 'S&P 500', 'cap-weight')}
-              {tile('RSP',   'RSP',     'S&P equal-weight')}
-              {tile('^MID',  'S&P 400', 'mid caps')}
-              {tile('^RUT',  'Russell 2000', 'small caps')}
-              {tile('^NYA',  'NYSE Composite', '~2000 stocks')}
-              {tile('EQAL',  'EQAL',    'Russell 1000 EW')}
-            </div>
-            {/* Breadth differentials — the actionable signal: positive = broad
-                tape, negative = narrow / mega-cap-driven. */}
-            <div style={{display:'flex',gap:14,flexWrap:'wrap',fontSize:11,fontFamily:'var(--font-mono)'}}>
-              {bs.rsp_minus_spy_pct != null && (
-                <span title="Equal-weight S&P minus cap-weight S&P, today's % change. Positive = broad participation; negative = mega-cap leaders carrying the index alone.">
-                  RSP − SPY: <span style={{color:cellColor(bs.rsp_minus_spy_pct),fontWeight:700}}>
-                    {(bs.rsp_minus_spy_pct >= 0 ? '+' : '') + bs.rsp_minus_spy_pct}%
-                  </span>
-                </span>
-              )}
-              {bs.small_minus_large_pct != null && (
-                <span title="Russell 2000 minus S&P 500, today's % change. Positive = small caps participating (risk-on); negative = flight to mega-cap quality.">
-                  ^RUT − ^GSPC: <span style={{color:cellColor(bs.small_minus_large_pct),fontWeight:700}}>
-                    {(bs.small_minus_large_pct >= 0 ? '+' : '') + bs.small_minus_large_pct}%
-                  </span>
-                </span>
-              )}
-              {bs.eqal_minus_spy_pct != null && (
-                <span title="Russell 1000 equal-weight minus SPY. Confirmation of the RSP-SPY signal across a broader (1000) name set.">
-                  EQAL − SPY: <span style={{color:cellColor(bs.eqal_minus_spy_pct),fontWeight:700}}>
-                    {(bs.eqal_minus_spy_pct >= 0 ? '+' : '') + bs.eqal_minus_spy_pct}%
-                  </span>
-                </span>
-              )}
-            </div>
-            <div style={{fontSize:9,color:'var(--text3)',marginTop:8,fontStyle:'italic'}}>
-              {bProxy.caveat}
-            </div>
-          </div>
-        );
-      })()}
 
       <SectionHeader label="Sentiment & Event Risk" sub="crowd mood · binary events to clip risk around" />
       {/* ─── FEAR & GREED + UPCOMING EARNINGS ROW ─────────────────────────── */}
