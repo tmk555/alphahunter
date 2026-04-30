@@ -87,6 +87,44 @@ try {
   if (dbCount) console.log(`   Universe: +${dbCount} stocks from DB (total ${UNIVERSE.length})`);
 } catch(_) { /* universe_mgmt table may not exist on first run */ }
 
+// Merge sector + industry ETFs into the main scanner universe.
+//
+// Pre-fix: ETFs were scanned ONLY by runETFScan (powering the Sectors tab)
+// and never appeared in the main scanner. Users who wanted to see "is XLK
+// strong right now alongside MKSI?" had to flip tabs. The Sectors tab
+// continues to work — runETFScan still writes 'sector'/'industry' typed
+// rs_snapshots rows for the dedicated sector dashboard. This addition just
+// makes the same symbols ALSO available in the main RS scan ('stock' type)
+// so they rank against the broader universe.
+//
+// Sector tag = the underlying sector the ETF tracks. SECTOR_ETFS list (XLK,
+// XLF, ...) uses each ETF's `n` field directly. INDUSTRY_ETFS uses each
+// ETF's `sec` (parent sector) so e.g. SMH → Technology, IGV → Technology.
+// This keeps sector-filtering in the scanner correct (XLK + SMH both group
+// under Technology when the user filters by that sector).
+//
+// assignStrategy in src/risk/strategy-manager.js detects ETFs by symbol
+// match — its hardcoded list is updated to cover both sector + industry
+// ETFs so any of these added here route to sector_rotation strategy.
+{
+  let etfCount = 0;
+  for (const e of UNI_SECTOR_ETFS) {
+    if (!SECTOR_MAP[e.t]) {
+      SECTOR_MAP[e.t] = e.n;        // 'Technology', 'Healthcare', etc.
+      UNIVERSE.push(e.t);
+      etfCount++;
+    }
+  }
+  for (const e of INDUSTRY_ETFS) {
+    if (!SECTOR_MAP[e.t]) {
+      SECTOR_MAP[e.t] = e.sec;      // parent sector (Technology for SMH/IGV/HACK/ROBO, etc.)
+      UNIVERSE.push(e.t);
+      etfCount++;
+    }
+  }
+  if (etfCount) console.log(`   Universe: +${etfCount} ETFs (sector + industry, total ${UNIVERSE.length})`);
+}
+
 // ─── Scanner (needs universe context) ────────────────────────────────────────
 const { runRSScan } = require('./src/scanner');
 const runScan = () => runRSScan(UNIVERSE, SECTOR_MAP);

@@ -480,10 +480,25 @@ function assignStrategy(trade) {
   const isSectorEtf = trade.isSectorEtf || trade.is_sector_etf || false;
   const symbol = (trade.symbol || '').toUpperCase();
 
-  // Check sector ETF by common symbols
-  const SECTOR_ETFS = ['XLK','XLF','XLV','XLE','XLI','XLP','XLU','XLB','XLC','XLRE','XLY',
-    'SMH','IBB','IYR','IYT','KBE','KRE','XHB','XBI','XOP','GDX','TAN','ARKK'];
-  const isSectorSymbol = isSectorEtf || SECTOR_ETFS.includes(symbol);
+  // Check sector / industry ETF by symbol. Mirrors universe.js's SECTOR_ETFS
+  // + INDUSTRY_ETFS so any ETF added there auto-routes to sector_rotation
+  // when staged. Updated 2026-04-30 when ETFs were merged into the main
+  // scanner universe (server.js boot block).
+  const ETF_SYMBOLS = [
+    // Sector SPDR (11 GICS sectors)
+    'XLK','XLC','XLY','XLI','XLE','XLF','XLV','XLB','XLP','XLU','XLRE',
+    // Industry / thematic
+    'SMH','IGV','HACK','ROBO',                                  // tech sub-industries
+    'ITA','GRID','JETS','IYT',                                  // industrials sub-industries
+    'ITB','XHB','XRT',                                          // consumer disc sub-industries
+    'IBB','XBI','IHF','IHI',                                    // healthcare sub-industries
+    'XOP','ICLN','URA',                                         // energy sub-industries
+    'GDX','COPX','LIT',                                         // materials sub-industries
+    'KRE','FINX','IAK',                                         // financials sub-industries
+    // Legacy / additional
+    'IYR','KBE','TAN','ARKK',
+  ];
+  const isSectorSymbol = isSectorEtf || ETF_SYMBOLS.includes(symbol);
 
   // Priority 1: Sector ETF rotation
   if (isSectorSymbol) {
