@@ -125,7 +125,8 @@ try {
   if (etfCount) console.log(`   Universe: +${etfCount} ETFs (sector + industry, total ${UNIVERSE.length})`);
 }
 
-// Merge active S&P 500 constituents from universe_membership.
+// Merge active S&P 1500 constituents (S&P 500 + 400 + 600) from
+// universe_membership.
 //
 // Why: prior to this, breadth metrics (% above 50MA, A/D ratio, new highs,
 // new lows) were computed from ~360 leadership-only names — heavily
@@ -133,33 +134,36 @@ try {
 // real architectural problem (2026-04-30): "breadth, regime, exposure,
 // FTD should be driven by whole market, not just my universe."
 //
-// universe_membership is populated from the S&P historical-membership
-// backfill (scripts/fetch-sp500-history.js). Active constituents (rows
-// with end_date IS NULL) are the ~500 names currently in the index.
-// Sector data comes from those rows, so each symbol gets a clean GICS
-// sector tag from the index source.
+// universe_membership is populated from:
+//   • scripts/fetch-sp500-history.js  → SP500 (large caps, ~503)
+//   • scripts/fetch-sp400-sp600.js    → SP400 (mid caps, 400) + SP600 (small caps, 603)
 //
-// Effect: scanner universe grows from ~360 to ~611 (with the 251 SP500
-// names not already present). Daily scan time scales linearly — ~30s
-// becomes ~50s. All downstream signals (breadth.js, regime, FTD via
+// Active constituents (rows with end_date IS NULL) are the ~1500 names
+// currently in the indices. Sector data comes from those rows so each
+// symbol gets a clean GICS sector tag from the index source.
+//
+// Effect: scanner universe grows from ~360 to ~1500. Daily scan time
+// scales linearly — ~30s becomes ~2-3min for 1500 stocks (acceptable for
+// a daily job). All downstream signals (breadth.js, regime, FTD via
 // _countDistributionDays which is SPY-driven anyway, exposure ramp)
 // automatically pick up the broader base from rs_snapshots without
 // further code changes — the data IS the signal.
 try {
-  const sp500Rows = db.prepare(`
+  const spRows = db.prepare(`
     SELECT symbol, sector
       FROM universe_membership
-     WHERE index_name = 'SP500' AND end_date IS NULL
+     WHERE index_name IN ('SP500', 'SP400', 'SP600')
+       AND end_date IS NULL
   `).all();
   let spCount = 0;
-  for (const { symbol, sector } of sp500Rows) {
+  for (const { symbol, sector } of spRows) {
     if (!SECTOR_MAP[symbol]) {
       SECTOR_MAP[symbol] = sector || 'Unknown';
       UNIVERSE.push(symbol);
       spCount++;
     }
   }
-  if (spCount) console.log(`   Universe: +${spCount} S&P 500 constituents (total ${UNIVERSE.length}) — breadth now reflects broader market`);
+  if (spCount) console.log(`   Universe: +${spCount} S&P 1500 constituents (total ${UNIVERSE.length}) — breadth now reflects broader market`);
 } catch(_) { /* universe_membership may not exist on fresh installs */ }
 
 // ─── Scanner (needs universe context) ────────────────────────────────────────

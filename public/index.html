@@ -6590,8 +6590,18 @@ function MarketPulseTab() {
       {/* Breadth stable indicator (when no warning) */}
       {bWarning && bWarning.level === 0 && (
         <div style={{padding:'8px 14px',background:'rgba(76,175,80,0.06)',border:'1px solid rgba(76,175,80,0.2)',borderRadius:5,marginBottom:14,display:'flex',alignItems:'center',gap:12}}>
-          <span style={{fontFamily:'var(--font-mono)',fontSize:10,letterSpacing:2,color:'var(--green)',fontWeight:700}}>BREADTH EARLY WARNING</span>
-          <span style={{fontSize:11,color:'var(--text2)'}}>No deterioration detected — composite {bWarning.currentScore}, breadth stable</span>
+          <span style={{fontFamily:'var(--font-mono)',fontSize:10,letterSpacing:2,color:'var(--green)',fontWeight:700}}
+                title="Computed from rs_snapshots — count varies as the universe grows (S&P 500 + ETFs + leadership names; ~657 after 2026-04-30 expansion).">
+            BREADTH STABLE
+          </span>
+          <span style={{fontSize:11,color:'var(--text2)'}}>
+            No deterioration detected — composite {bWarning.currentScore}
+            {bWarning.latest?.stockCount && (
+              <span style={{color:'var(--text3)',marginLeft:6}}>
+                · across {bWarning.latest.stockCount} stocks
+              </span>
+            )}
+          </span>
         </div>
       )}
 
