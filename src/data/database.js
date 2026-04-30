@@ -967,6 +967,16 @@ function initSchema() {
   safeAddColumn('rs_snapshots', 'pattern_confidence', 'INTEGER');
   safeAddColumn('rs_snapshots', 'revision_score', 'REAL');
   safeAddColumn('rs_snapshots', 'institutional_score', 'INTEGER');
+  // Price proximity to 52-week extremes — used for the NYSE-style new-highs
+  // / new-lows breadth count in src/signals/breadth.js. Pre-fix the count
+  // used s.rs_line_new_high (RS line outperformance vs SPY) which is a
+  // different signal than literal price at a fresh 52-week high — left
+  // GOOGL invisible to the count even when its price tagged $385 with the
+  // 52w high at $385.83. dist_from_high = (52w_high - price) / 52w_high
+  // (decimal, so 0 = at the high). Stocks with value < 0.005 (within 0.5%)
+  // count as "new high"; same logic mirrored for dist_from_low.
+  safeAddColumn('rs_snapshots', 'dist_from_high', 'REAL');
+  safeAddColumn('rs_snapshots', 'dist_from_low',  'REAL');
   safeAddColumn('scan_results', 'pattern_data', 'JSON');
   safeAddColumn('scan_results', 'revision_data', 'JSON');
   safeAddColumn('scan_results', 'institutional_data', 'JSON');

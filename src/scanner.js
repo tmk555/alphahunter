@@ -132,6 +132,9 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
     const vsMA50  = ma50  ? +((price-ma50) /ma50 *100).toFixed(2) : null;
     const vsMA200 = ma200 ? +((price-ma200)/ma200*100).toFixed(2) : null;
     const distFromHigh = q.fiftyTwoWeekHigh ? +((q.fiftyTwoWeekHigh-price)/q.fiftyTwoWeekHigh).toFixed(4) : null;
+    // Distance below 52w low (mirror of distFromHigh, decimal). 0 = AT the low.
+    // Used by breadth.js for the NYSE-style new-lows count.
+    const distFromLow  = q.fiftyTwoWeekLow  ? +((price-q.fiftyTwoWeekLow)/q.fiftyTwoWeekLow).toFixed(4) : null;
     const periods = calcPeriodReturns(closes);
     const atr     = calcATR(barsMap[sym] || closes);  // True ATR from OHLCV bars, fallback to closes
     const atrPct  = atr && price ? +(atr/price*100).toFixed(2) : null;
@@ -198,7 +201,7 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
       price, chg1d: q.regularMarketChangePercent,
       chg1w: periods.chg1w, chg1m: periods.chg1m,
       chg3m: periods.chg3m, chg6m: periods.chg6m,
-      vsMA50, vsMA200, distFromHigh,
+      vsMA50, vsMA200, distFromHigh, distFromLow,
       w52h: q.fiftyTwoWeekHigh, w52l: q.fiftyTwoWeekLow,
       ma50, ma200, atr, atrPct,
       volume: q.regularMarketVolume, avgVol: q.averageDailyVolume3Month,

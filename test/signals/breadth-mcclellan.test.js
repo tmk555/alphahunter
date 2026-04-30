@@ -50,7 +50,9 @@ function freshDb() {
       stage INTEGER DEFAULT 2,
       volume_ratio REAL DEFAULT 1.0,
       rs_line_new_high INTEGER DEFAULT 0,
-      vcp_forming INTEGER DEFAULT 0
+      vcp_forming INTEGER DEFAULT 0,
+      dist_from_high REAL,
+      dist_from_low REAL
     );
     CREATE TABLE breadth_snapshots (
       date TEXT PRIMARY KEY,

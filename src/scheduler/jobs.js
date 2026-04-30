@@ -41,9 +41,10 @@ registerJobType('rs_scan', {
         INSERT OR IGNORE INTO rs_snapshots (
           date, symbol, type, rs_rank, swing_momentum, sepa_score, stage,
           price, vs_ma50, vs_ma200, volume_ratio, vcp_forming, rs_line_new_high, atr_pct,
-          rs_rank_weekly, rs_rank_monthly, rs_tf_alignment, up_down_ratio_50, accumulation_50
+          rs_rank_weekly, rs_rank_monthly, rs_tf_alignment, up_down_ratio_50, accumulation_50,
+          dist_from_high, dist_from_low
         )
-        VALUES (?, ?, 'stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, 'stock', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       // Backfill NULL columns on existing rows. The previous guard
       // `WHERE ... AND price IS NULL` was too narrow — if a prior run wrote
@@ -68,9 +69,11 @@ registerJobType('rs_scan', {
             volume_ratio     = COALESCE(volume_ratio, ?),
             vcp_forming      = COALESCE(vcp_forming, ?),
             rs_line_new_high = COALESCE(rs_line_new_high, ?),
-            atr_pct          = COALESCE(atr_pct, ?)
+            atr_pct          = COALESCE(atr_pct, ?),
+            dist_from_high   = COALESCE(dist_from_high, ?),
+            dist_from_low    = COALESCE(dist_from_low, ?)
         WHERE date = ? AND symbol = ? AND type = 'stock'
-          AND (price IS NULL OR vs_ma50 IS NULL OR vs_ma200 IS NULL OR volume_ratio IS NULL)
+          AND (price IS NULL OR vs_ma50 IS NULL OR vs_ma200 IS NULL OR volume_ratio IS NULL OR dist_from_high IS NULL)
       `);
       const txn = db().transaction(() => {
         let count = 0;
@@ -79,7 +82,8 @@ registerJobType('rs_scan', {
             r.price ?? null, r.vsMA50 ?? null, r.vsMA200 ?? null, r.volumeRatio ?? null,
             r.vcpForming ? 1 : 0, r.rsLineNewHigh ? 1 : 0, r.atrPct ?? null,
             r.rsRankWeekly ?? null, r.rsRankMonthly ?? null, r.rsTimeframeAlignment ?? null,
-            r.volumeProfile?.upDownRatio50 ?? null, r.volumeProfile?.accumulation50 ?? null);
+            r.volumeProfile?.upDownRatio50 ?? null, r.volumeProfile?.accumulation50 ?? null,
+            r.distFromHigh ?? null, r.distFromLow ?? null);
           // Run the backfill update whenever the scan produced ANY new field
           // worth merging — not just price. The broadened WHERE clause above
           // means this is a no-op on already-complete rows.
@@ -89,6 +93,7 @@ registerJobType('rs_scan', {
             r.vsMA50 ?? null, r.vsMA200 ?? null,
             r.volumeRatio ?? null, r.vcpForming ? 1 : 0,
             r.rsLineNewHigh ? 1 : 0, r.atrPct ?? null,
+            r.distFromHigh ?? null, r.distFromLow ?? null,
             date, r.ticker,
           );
           count++;

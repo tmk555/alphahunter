@@ -30,7 +30,8 @@ const TTL_BREADTH = 5 * 60 * 1000; // 5 min cache
 function computeBreadthFromSnapshots(date, opts = {}) {
   const snapshots = db().prepare(`
     SELECT symbol, price, vs_ma50, vs_ma200, rs_rank, swing_momentum, stage,
-           volume_ratio, rs_line_new_high, vcp_forming
+           volume_ratio, rs_line_new_high, vcp_forming,
+           dist_from_high, dist_from_low
     FROM rs_snapshots
     WHERE date = ? AND type = 'stock' AND price > 0
   `).all(date);
@@ -86,10 +87,29 @@ function computeBreadthFromSnapshots(date, opts = {}) {
   const pctAbove50 = +(above50 / total * 100).toFixed(1);
   const pctAbove200 = +(above200 / total * 100).toFixed(1);
 
-  // 2. New highs / lows proxy (using RS line new high as proxy for 52wk high)
-  const newHighs = snapshots.filter(s => s.rs_line_new_high).length;
-  // Proxy for new lows: stage 4 + RS < 20
-  const newLows = snapshots.filter(s => s.stage === 4 && s.rs_rank <= 20).length;
+  // 2. New highs / new lows — true 52-week price-extreme count (NYSE-style)
+  //
+  // Pre-fix: counted s.rs_line_new_high (RS line outperformance vs SPY) for
+  // newHighs and "stage 4 + RS<=20" for newLows — neither matched what the
+  // user expects from "new highs/new lows" breadth (the daily NYSE/NASDAQ
+  // figure published as advance-decline data). Result: GOOGL at $385 with
+  // its 52w high at $385.83 was invisible to the count, breadth_snapshots
+  // showed 0 new highs every day for weeks while the actual market had
+  // plenty of leaders printing fresh highs.
+  //
+  // Now: dist_from_high < 0.005 (within 0.5% of 52w high) → new high.
+  // 0.5% threshold absorbs the day's wiggle so a stock that touched the
+  // high intraday and pulled back 30bps still counts. Mirror for new lows.
+  // Legacy fallback: rows that pre-date the dist_from_high column have
+  // dist_from_high == null and won't be counted — that's correct (we
+  // can't classify without the data).
+  const NEAR_EXTREME = 0.005;
+  const newHighs = snapshots.filter(s =>
+    s.dist_from_high != null && s.dist_from_high <= NEAR_EXTREME
+  ).length;
+  const newLows = snapshots.filter(s =>
+    s.dist_from_low != null && s.dist_from_low <= NEAR_EXTREME
+  ).length;
   const hlDiff = newHighs - newLows;
   const hlRatio = newLows > 0 ? +(newHighs / newLows).toFixed(2) : (newHighs > 0 ? 99 : 1);
 
