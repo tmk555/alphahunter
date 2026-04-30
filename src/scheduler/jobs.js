@@ -1133,18 +1133,19 @@ const DEFAULT_JOBS = [
     cron_expression: '32 9 * * 1-5',  // 9:32 AM — 2 min after open
     config: {},
   },
+  // Post-close reconcile catches both auction-print drift (4:00-4:05 PM
+  // late prints) AND any orphan positions opened/closed during the day.
+  // Pre-fix we ran TWO crons here (4:05 PM 'post_close' and 5:00 PM
+  // 'daily'), which were 55 min apart and ~95% redundant. Now: one EOD
+  // pass at 4:30 PM. If you have an existing 'portfolio_reconcile_daily'
+  // row in scheduled_jobs, manually disable or delete it via
+  // /api/scheduler/jobs — the seed function is idempotent on name so it
+  // won't re-create.
   {
-    name: 'portfolio_reconcile_post_close',
-    description: 'Reconcile journal vs broker 5 min after close (catches auction drift)',
+    name: 'portfolio_reconcile_eod',
+    description: 'Reconcile journal vs broker at EOD (auction + intraday drift)',
     job_type: 'portfolio_reconcile',
-    cron_expression: '5 16 * * 1-5',  // 4:05 PM server local, weekdays
-    config: {},
-  },
-  {
-    name: 'portfolio_reconcile_daily',
-    description: 'Reconcile local trade journal with broker positions (EOD)',
-    job_type: 'portfolio_reconcile',
-    cron_expression: '0 17 * * 1-5',  // 5:00 PM server local, weekdays
+    cron_expression: '30 16 * * 1-5',  // 4:30 PM server local, weekdays
     config: {},
   },
 
