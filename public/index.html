@@ -7679,10 +7679,21 @@ function MacroTab() {
                 const fmt = rangeBars <= 66 ? d => d.slice(5) : d => d.slice(0, 7);
                 return <text key={k} x={x} y={chartH-6} fill="var(--text3)" fontSize="9" textAnchor="middle" fontFamily="var(--font-mono)">{fmt(date)}</text>;
               })}
-              {/* Crosshair + tooltip */}
+              {/* Crosshair + tooltip — both axes per user ask. Horizontal
+                  line tracks the FIRST series so the user gets a y-axis
+                  reference; the per-series dots (rendered next) mark
+                  each line's exact value at the hover x. */}
               {hov != null && hovX != null && (
                 <g pointerEvents="none">
                   <line x1={hovX} y1={padT} x2={hovX} y2={padT+drawH} stroke="var(--text2)" strokeWidth="0.6" strokeDasharray="2,3" opacity="0.6"/>
+                  {(() => {
+                    const v0 = SERIES[0]?.vals?.[hov];
+                    const y0 = v0 != null ? toY(v0) : null;
+                    return y0 != null
+                      ? <line x1={padL} y1={y0} x2={padL+drawW} y2={y0}
+                              stroke="var(--text2)" strokeWidth="0.6" strokeDasharray="2,3" opacity="0.5"/>
+                      : null;
+                  })()}
                   {SERIES.map(s => {
                     const v = s.vals[hov];
                     const y = v != null ? toY(v) : null;
@@ -7731,10 +7742,16 @@ function MacroTab() {
             const v = snapshot?.values?.[id];
             const m = META[id] || { label:id, fmt:x=>String(x) };
             const active = selected === id;
-            // Colour cues: T10Y2Y red when inverted; VIX amber/red at stress levels; else cyan.
+            // Colour cues: T10Y2Y red when inverted; VIX amber/red at stress
+            // levels; 10Y yield gold so it stops blending with the cyan
+            // active-card border (user complaint: "10Y mixing with blue/teal");
+            // 2Y yield distinct as well so the yield-curve duo reads
+            // immediately. Default for everything else stays cyan.
             let accent = 'var(--cyan)';
             if (id === 'T10Y2Y' && v != null) accent = v < 0 ? 'var(--red)' : 'var(--green)';
             if (id === 'VIXCLS' && v != null) accent = v >= 30 ? 'var(--red)' : v >= 20 ? 'var(--amber)' : 'var(--green)';
+            if (id === 'DGS10') accent = 'var(--gold)';
+            if (id === 'DGS2')  accent = '#ffb700';  // amber-gold sibling — same hue family, distinct intensity
             return (
               <button key={id} onClick={() => setSelected(id)}
                 style={{
@@ -7837,11 +7854,23 @@ function MacroTab() {
                 const y0 = toY(0);
                 return <line x1={padL} y1={y0} x2={padL+drawW} y2={y0} stroke="var(--red)" strokeWidth="1" strokeDasharray="4,3" opacity="0.6"/>;
               })()}
-              <polyline points={pts} fill="none" stroke="var(--cyan)" strokeWidth="1.8"/>
               {(() => {
+                // Series-specific line color so 10Y yield stops blending
+                // with the cyan card border. Gold for DGS10, amber for
+                // DGS2, default cyan otherwise. Same palette as the
+                // headline-card accent above so the visual identity is
+                // consistent between card and chart.
+                const lineColor = selected === 'DGS10' ? 'var(--gold)'
+                                : selected === 'DGS2'  ? '#ffb700'
+                                : 'var(--cyan)';
                 const lastX = padL + (points.length-1)*stepX;
                 const lastY = toY(lastV);
-                return <circle cx={lastX} cy={lastY} r="3" fill="var(--cyan)" stroke="var(--bg)" strokeWidth="1.5"/>;
+                return (
+                  <React.Fragment>
+                    <polyline points={pts} fill="none" stroke={lineColor} strokeWidth="1.8"/>
+                    <circle cx={lastX} cy={lastY} r="3" fill={lineColor} stroke="var(--bg)" strokeWidth="1.5"/>
+                  </React.Fragment>
+                );
               })()}
               {(() => {
                 const first = points[0]?.date, last = points[points.length-1]?.date;
@@ -7861,10 +7890,17 @@ function MacroTab() {
                 });
               })()}
 
-              {/* Cursor crosshair + value bubble */}
+              {/* Cursor crosshair + value bubble — both axes so the user
+                  can read the y-value on the left axis at a glance, not
+                  just the date below. Horizontal added per user ask
+                  (Macro tab charts had only the vertical line). */}
               {hovPoint && hovX != null && (
                 <g pointerEvents="none">
                   <line x1={hovX} y1={padT} x2={hovX} y2={padT+drawH} stroke="var(--text2)" strokeWidth="0.6" strokeDasharray="2,3" opacity="0.6"/>
+                  {hovY != null && (
+                    <line x1={padL} y1={hovY} x2={padL+drawW} y2={hovY}
+                          stroke="var(--text2)" strokeWidth="0.6" strokeDasharray="2,3" opacity="0.6"/>
+                  )}
                   {hovY != null && <circle cx={hovX} cy={hovY} r="3.5" fill="var(--amber)" stroke="var(--bg)" strokeWidth="1.5"/>}
                   {/* Tooltip — flip side when near right edge so it doesn't clip */}
                   {(() => {
