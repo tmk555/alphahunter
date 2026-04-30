@@ -288,35 +288,76 @@ async function getYahooFundamentals(symbol) {
       epsGrowth_Q0_yoy != null && epsGrowth_Q1_yoy != null &&
       epsGrowth_Q0_yoy > epsGrowth_Q1_yoy;
 
-    // ── A: Annual EPS
-    let epsGrowthYoY = null;
+    // ── A: Annual EPS — CANSLIM "A" criterion (per-share, ≥25% YoY)
+    //
+    // Per O'Neil's CANSLIM: "A" is annual DILUTED EPS-PER-SHARE growth, not
+    // net income growth. They diverge when share count changes (buybacks lift
+    // EPS without growing net income; dilution suppresses EPS even if net
+    // income rises). Yahoo's incomeStatementHistory.dilutedAverageShares is
+    // null for most tickers (verified empty on SPHR / AAPL / RIVN), so we
+    // can't compute true per-share annual EPS history directly.
+    //
+    // Workaround: Yahoo's financialData.earningsGrowth IS true per-share
+    // diluted EPS YoY growth. Use it as the primary source for the "A"
+    // criterion; fall back to net-income growth when undefined (sign-flip
+    // years break Yahoo's calc — e.g. SPHR's loss → profit → loss pattern).
+    //
+    // Both the per-share value and the net-income chart values are exposed
+    // separately so the UI can show 1) the CANSLIM-correct per-share number
+    // and 2) the underlying net-income trend. The `epsGrowthYoY_source`
+    // field lets the UI label which method was used.
+    let epsGrowthYoY = null;            // per-share (CANSLIM "A")
+    let epsGrowthYoY_source = null;     // 'per_share' | 'net_income' | null
+    let netIncomeGrowthYoY = null;      // raw net income YoY (for chart)
     let epsAnnualGrowth = [];
-    let epsTurnaround = false;    // loss → profit transition
-    let epsAnnualValues = [];     // actual annual net income for display
-    if (ish.length >= 2) {
-      const eps0 = raw(ish[0]?.netIncome);
-      const eps1 = raw(ish[1]?.netIncome);
-      const eps2 = raw(ish[2]?.netIncome);
-      const rev0 = raw(ish[0]?.totalRevenue);
+    let epsTurnaround = false;
+    let epsAnnualValues = [];
 
-      // Store actual values for display
+    // Per-share path: Yahoo's pre-computed annual EPS YoY growth.
+    if (raw(fd.earningsGrowth) != null) {
+      epsGrowthYoY = +(fd.earningsGrowth.raw * 100).toFixed(1);
+      epsGrowthYoY_source = 'per_share';
+    }
+
+    if (ish.length >= 2) {
+      const ni0 = raw(ish[0]?.netIncome);
+      const ni1 = raw(ish[1]?.netIncome);
+      const ni2 = raw(ish[2]?.netIncome);
+
+      // Store actual net-income values for display (still useful — shows
+      // raw earnings power irrespective of share-count noise).
       for (let i = 0; i < Math.min(ish.length, 4); i++) {
         const ni = raw(ish[i]?.netIncome);
         if (ni != null) epsAnnualValues.push({ date: ish[i]?.endDate?.fmt, netIncome: ni });
       }
 
-      if (eps0 != null && eps1 != null && eps1 > 0) {
-        epsGrowthYoY = +((eps0/eps1 - 1)*100).toFixed(1);
-      } else if (eps0 != null && eps0 > 0 && eps1 != null && eps1 <= 0) {
-        // Turnaround: loss last year → profit this year
-        epsTurnaround = true;
-        epsGrowthYoY = null; // can't compute meaningful %, but flag it
+      // Net-income YoY (always computed — UI displays alongside per-share
+      // when both available, falls back to it when per-share is undefined).
+      if (ni0 != null && ni1 != null && ni1 > 0) {
+        netIncomeGrowthYoY = +((ni0/ni1 - 1)*100).toFixed(1);
       }
 
-      if (eps0 != null && eps1 != null && eps1 > 0)
-        epsAnnualGrowth.push(+((eps0/eps1 - 1)*100).toFixed(1));
-      if (eps1 != null && eps2 != null && eps2 > 0)
-        epsAnnualGrowth.push(+((eps1/eps2 - 1)*100).toFixed(1));
+      // Turnaround flag (loss → profit) — same logic as before.
+      if (ni0 != null && ni0 > 0 && ni1 != null && ni1 <= 0) {
+        epsTurnaround = true;
+      }
+
+      // Fallback: when Yahoo's per-share earningsGrowth is undefined (volatile
+      // earnings with sign flips), use net-income growth as a proxy. Mark the
+      // source so the UI can warn the user the per-share number wasn't
+      // available.
+      if (epsGrowthYoY == null && netIncomeGrowthYoY != null) {
+        epsGrowthYoY = netIncomeGrowthYoY;
+        epsGrowthYoY_source = 'net_income';
+      }
+
+      // Multi-year growth array (for the "epsAnnualGrowth" sparkline).
+      // Kept on net-income basis since we'd need 3+ years of dilutedShares
+      // to do this on a per-share basis — and we don't have that.
+      if (ni0 != null && ni1 != null && ni1 > 0)
+        epsAnnualGrowth.push(+((ni0/ni1 - 1)*100).toFixed(1));
+      if (ni1 != null && ni2 != null && ni2 > 0)
+        epsAnnualGrowth.push(+((ni1/ni2 - 1)*100).toFixed(1));
     }
     const annualEpsAccelerating = epsAnnualGrowth.length >= 2 &&
       epsAnnualGrowth[0] > epsAnnualGrowth[1];
@@ -360,6 +401,15 @@ async function getYahooFundamentals(symbol) {
 
     return {
       epsGrowthQoQ, epsGrowthYoY, epsAccelerating,
+      // CANSLIM "A" provenance — UI uses this to label whether the displayed
+      // YoY number is true per-share (Yahoo's pre-computed earningsGrowth)
+      // or a net-income fallback (when sign-flips break the per-share calc).
+      epsGrowthYoY_source,
+      // Net income growth surfaced separately — the underlying chart of
+      // annual values is on net-income basis, so we expose the matching
+      // YoY % in the same units. Per-share is what CANSLIM grades; net
+      // income is what the historical bars in epsAnnualValues represent.
+      netIncomeGrowthYoY,
       epsGrowth_Q0_yoy, epsGrowth_Q1_yoy, epsGrowth_Q2_yoy,
       c_pass_q0, c_pass_q1, c_pass_q2,
       epsAccelerating_qoq,

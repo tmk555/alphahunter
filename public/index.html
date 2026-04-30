@@ -3345,7 +3345,21 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
 
               {/* ── A: Annual EPS section ─────────────────────────────── */}
               <div style={{marginBottom:10,padding:'8px 10px',background:'var(--bg3)',borderRadius:4,border:'1px solid var(--border)'}}>
-                <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,marginBottom:6,textTransform:'uppercase'}}>A — Annual EPS</div>
+                <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,marginBottom:6,textTransform:'uppercase'}}>
+                  A — Annual EPS{' '}
+                  {funds.epsGrowthYoY_source === 'per_share' && (
+                    <span title="True diluted EPS-per-share YoY (CANSLIM-correct, from Yahoo financialData.earningsGrowth)"
+                          style={{color:'var(--green)',fontSize:8,letterSpacing:1,marginLeft:6}}>
+                      [PER-SHARE ✓]
+                    </span>
+                  )}
+                  {funds.epsGrowthYoY_source === 'net_income' && (
+                    <span title="Per-share number unavailable from Yahoo (sign-flip in earnings breaks YoY calc). Showing net-income growth as a proxy — directionally honest but not strictly CANSLIM-conformant."
+                          style={{color:'var(--amber)',fontSize:8,letterSpacing:1,marginLeft:6}}>
+                      [NET INCOME — fallback]
+                    </span>
+                  )}
+                </div>
                 <div style={{display:'flex',gap:16,flexWrap:'wrap',alignItems:'center'}}>
                   <div>
                     <span style={{fontSize:10,color:'var(--text3)'}}>YoY Growth: </span>
