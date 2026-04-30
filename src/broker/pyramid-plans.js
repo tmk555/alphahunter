@@ -31,7 +31,15 @@ const { evaluateGate } = require('./vwap-gate');
 
 function db() { return getDB(); }
 
-const DEFAULT_VOLUME_PACE_MIN = 1.2;
+// O'Neil's CANSLIM rule: breakout-day volume ≥ 50d avg × 1.40 (40% above).
+// Pre-2026-04: 1.2 (looser — caught more breakouts but more fakeouts).
+// Now: 1.4 to match the strict end-of-day rule. Note our pace is intraday-
+// extrapolated (today_volume / linear-prorated-50d-avg) so a 1.4 reading
+// at midday doesn't guarantee 1.4 at close — volume is U-shaped (heavy
+// open, lull, heavy close) so midday 1.4 may end at 1.1-1.2. Low-confidence
+// windows (first/last 30 min) auto-relax to 80% of this threshold in
+// volume-pace.js to avoid noise rejections.
+const DEFAULT_VOLUME_PACE_MIN = 1.4;
 const GAP_WARN_PCT            = 0.03;  // 3% above pivot at open → reduce qty
 const GAP_ABORT_PCT           = 0.07;  // 7% above pivot → cancel plan
 // Gap-DOWN invalidation: if price drops more than 3% BELOW pivot before pilot

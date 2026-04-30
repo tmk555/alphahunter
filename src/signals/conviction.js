@@ -37,13 +37,21 @@ function calcConviction(stock, rsTrend, rotationModel, industryRotationModel = n
   // Advanced chart patterns (cup-handle, ascending base, power play, HTF)
   // are among the most reliable setup signals — they represent completed
   // accumulation patterns that institutions use to build positions.
+  //
+  // Pre-fix: a flat per-pattern bonus regardless of how textbook the
+  // pattern was. A 58%-confidence powerPlay (loose, marginal) and a
+  // 95%-confidence powerPlay (tight, picture-perfect) both got +7.
+  // Now: the bonus scales with pattern confidence — a perfect detection
+  // gets the full credit, a marginal one gets ~half.
   const pd = stock.patternData;
   if (pd && pd.patternCount > 0) {
     const best = pd.bestPattern;
-    if (best === 'highTightFlag')   score += 12;  // rarest, most powerful pattern
-    else if (best === 'cupHandle')  score += 9;   // classic institutional accumulation
-    else if (best === 'ascendingBase') score += 8; // persistent demand
-    else if (best === 'powerPlay')  score += 7;   // tight consolidation = coiled spring
+    const conf = pd.patterns?.[best]?.confidence ?? 70;
+    const confScale = Math.max(0.5, conf / 100); // floor at 0.5× (never crush)
+    if (best === 'highTightFlag')   score += 12 * confScale;  // rarest, most powerful
+    else if (best === 'cupHandle')  score += 9  * confScale;  // institutional accumulation
+    else if (best === 'ascendingBase') score += 8 * confScale; // persistent demand
+    else if (best === 'powerPlay')  score += 7  * confScale;  // tight consolidation = coiled spring
     if (pd.patternCount >= 2)       score += 3;   // multiple patterns confirming = extra conviction
   }
 

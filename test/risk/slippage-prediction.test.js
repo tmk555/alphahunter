@@ -33,7 +33,12 @@ function wipeExecLog() {
 }
 
 // Insert N synthetic fills for (symbol, side, orderType). `slippages` is an
-// array of `slippage_pct` values (signed — buyer-paid-more = negative).
+// array of `slippage_pct` values in the PRODUCTION convention:
+//   POSITIVE = cost (buyer paid more / seller received less)
+//   NEGATIVE = improvement (paid less / received more)
+// See src/risk/execution-quality.js logExecution comment block. Old test
+// fixture used the opposite sign which let "improvement clamped to zero"
+// silently zero out every prediction.
 // `daysAgo` parallels slippages if you want to control age.
 function seedFills(symbol, side, orderType, slippages, daysAgo = null) {
   const ins = getDB().prepare(`
@@ -54,15 +59,15 @@ function seedFills(symbol, side, orderType, slippages, daysAgo = null) {
 
 test('predictSlippage: tier A match — exact symbol+side+orderType', () => {
   wipeExecLog();
-  // Seed 6 AAPL buys with limit orders, slippage around -8bps to -12bps
+  // Seed 6 AAPL buys with limit orders, slippage around 8-12 bps cost.
   seedFills('AAPL', 'buy', 'limit',
-    [-0.08, -0.10, -0.09, -0.11, -0.10, -0.12]);
+    [0.08, 0.10, 0.09, 0.11, 0.10, 0.12]);
 
   const result = predictSlippage({ symbol: 'AAPL', side: 'buy', orderType: 'limit' });
   assert.equal(result.tier, 'A');
   assert.equal(result.basedOn, 'symbol+orderType');
   assert.equal(result.sampleSize, 6);
-  // Median is around -0.10 → 10bps
+  // Median is around 0.10 → 10bps
   assert.ok(result.predictedSlippageBps >= 9 && result.predictedSlippageBps <= 11,
     `expected ~10 bps, got ${result.predictedSlippageBps}`);
   // Stress is p90 (worst 10%) — should be worse than median.
@@ -75,14 +80,14 @@ test('predictSlippage: tier B fallback — mixed order types', () => {
   wipeExecLog();
   // 2 limit + 4 market → can't reach MIN_SAMPLE_TIER_A for limit alone,
   // but together should go to tier B.
-  seedFills('MSFT', 'buy', 'limit',  [-0.05, -0.07]);
-  seedFills('MSFT', 'buy', 'market', [-0.20, -0.25, -0.22, -0.18]);
+  seedFills('MSFT', 'buy', 'limit',  [0.05, 0.07]);
+  seedFills('MSFT', 'buy', 'market', [0.20, 0.25, 0.22, 0.18]);
 
   const result = predictSlippage({ symbol: 'MSFT', side: 'buy', orderType: 'limit' });
   assert.equal(result.tier, 'B');
   assert.equal(result.basedOn, 'symbol');
   assert.equal(result.sampleSize, 6);
-  // Mix of limit(-5 to -7) and market(-18 to -25): median falls in between.
+  // Mix of limit(5-7 bps) and market(18-25 bps): median falls in between.
   assert.ok(result.predictedSlippageBps > 0);
 });
 
@@ -93,7 +98,7 @@ test('predictSlippage: tier C fallback — global side-level data', () => {
   // 0 rows for NVDA specifically. But enough global buy-side rows to
   // trigger tier C.
   for (let i = 0; i < 12; i++) {
-    seedFills(`STOCK${i}`, 'buy', 'limit', [-0.15]);
+    seedFills(`STOCK${i}`, 'buy', 'limit', [0.15]);
   }
 
   const result = predictSlippage({ symbol: 'NVDA', side: 'buy', orderType: 'limit' });
@@ -127,12 +132,12 @@ test('predictSlippage: tier D — unknown order type falls back to default', () 
 
 test('predictSlippage: recency decay — fresh fills weighted more than stale', () => {
   wipeExecLog();
-  // Seed 5 old "bad" fills (-30 bps, 120 days ago) and 5 recent "good"
-  // fills (-5 bps, today). With HALF_LIFE_DAYS=30, the 120d weight is
+  // Seed 5 old "bad" fills (30 bps cost, 120 days ago) and 5 recent "good"
+  // fills (5 bps cost, today). With HALF_LIFE_DAYS=30, the 120d weight is
   // (0.5)^4 ≈ 0.0625 while today's weight is 1.0 → recent median should
   // dominate.
-  seedFills('AAA', 'buy', 'limit', [-0.30, -0.30, -0.30, -0.30, -0.30], [120, 120, 120, 120, 120]);
-  seedFills('AAA', 'buy', 'limit', [-0.05, -0.05, -0.05, -0.05, -0.05], [0, 0, 0, 0, 0]);
+  seedFills('AAA', 'buy', 'limit', [0.30, 0.30, 0.30, 0.30, 0.30], [120, 120, 120, 120, 120]);
+  seedFills('AAA', 'buy', 'limit', [0.05, 0.05, 0.05, 0.05, 0.05], [0, 0, 0, 0, 0]);
 
   const result = predictSlippage({ symbol: 'AAA', side: 'buy', orderType: 'limit' });
   assert.equal(result.tier, 'A');
@@ -142,11 +147,12 @@ test('predictSlippage: recency decay — fresh fills weighted more than stale', 
 
 // ─── "No improvement allowed" clamp ───────────────────────────────────────
 
-test('predictSlippage: positive slippages (improvement) are clamped to zero', () => {
+test('predictSlippage: negative slippages (improvement) are clamped to zero', () => {
   wipeExecLog();
   // Trader "got better than intended" every time — either lucky or a
-  // logging bug. Either way, do NOT reward the sizer with a negative cost.
-  seedFills('LUCKY', 'buy', 'limit', [0.05, 0.08, 0.03, 0.10, 0.04, 0.07]);
+  // logging bug. Either way, do NOT reward the sizer with a free lunch.
+  // In production cost convention, improvement is NEGATIVE.
+  seedFills('LUCKY', 'buy', 'limit', [-0.05, -0.08, -0.03, -0.10, -0.04, -0.07]);
 
   const result = predictSlippage({ symbol: 'LUCKY', side: 'buy', orderType: 'limit' });
   assert.equal(result.tier, 'A');
@@ -180,8 +186,8 @@ test('predictSlippage: missing symbol/side → default tier D, no crash', () => 
 
 test('sizer integration: slippage prediction inflates effective entry on buys', () => {
   wipeExecLog();
-  // Seed 7 AAPL buys at -20 bps each → predictedSlippageBps = 20.
-  seedFills('AAPL', 'buy', 'limit', [-0.20, -0.20, -0.20, -0.20, -0.20, -0.20, -0.20]);
+  // Seed 7 AAPL buys at 20 bps cost each → predictedSlippageBps = 20.
+  seedFills('AAPL', 'buy', 'limit', [0.20, 0.20, 0.20, 0.20, 0.20, 0.20, 0.20]);
 
   const result = calculatePositionSize({
     accountSize: 100000,
@@ -205,7 +211,7 @@ test('sizer integration: skipSlippageAdjustment bypasses lookup', () => {
   wipeExecLog();
   // Even with seeded data, the skip flag should leave the effective
   // entry equal to the intended entry.
-  seedFills('AAPL', 'buy', 'limit', [-0.50, -0.50, -0.50, -0.50, -0.50, -0.50]);
+  seedFills('AAPL', 'buy', 'limit', [0.50, 0.50, 0.50, 0.50, 0.50, 0.50]);
 
   const result = calculatePositionSize({
     accountSize: 100000,
