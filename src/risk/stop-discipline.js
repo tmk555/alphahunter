@@ -77,15 +77,35 @@ async function evaluateAllOpenStops(marketState = null) {
     const price = priceBy[trade.symbol];
     const recs = [];
 
-    // ── Source 1: trailing-stop floor based on per-trade trail_pct ──────
-    // Always-on for any long with trailing_stop_active OR a positive
-    // trail_pct. Computes "current price × (1 − trail_pct)" and clamps to
-    // never go below current stop (one-way ratchet).
-    if (price && trade.trail_pct > 0) {
-      const trail = isShort ? +(price * (1 + trade.trail_pct)).toFixed(2)
-                            : +(price * (1 - trade.trail_pct)).toFixed(2);
-      const tightens = isShort ? trail < cur : trail > cur;
-      if (tightens) recs.push({ source: 'trail', recommendedStop: trail, reason: `trail ${(trade.trail_pct*100).toFixed(0)}% from \$${price.toFixed(2)}` });
+    // ── Source 1: chandelier trail (ATR-based) ──────────────────────────
+    // Preferred path: trail = price ∓ (trail_atr_mult × entry_atr). This
+    // is the chandelier exit Minervini/Le Beau use — distance scales with
+    // the stock's volatility instead of an arbitrary 8% flat. With
+    // entry_atr fixed and trail_atr_mult tightened by deterioration
+    // signals (see position-deterioration.js), the trail compresses by
+    // shrinking the multiplier (2.5 → 1.5 → 1.0) rather than by halving
+    // a percentage.
+    //
+    // Legacy fallback: rows that pre-date the entry_atr capture (or
+    // symbols without an rs_snapshot at entry time) still use the flat
+    // trail_pct × current_price path so existing positions don't lose
+    // their trail.
+    if (price) {
+      const useAtr = trade.entry_atr > 0 && (trade.trail_atr_mult ?? 0) > 0;
+      let trail = null, label = null;
+      if (useAtr) {
+        const dist = trade.trail_atr_mult * trade.entry_atr;
+        trail = isShort ? +(price + dist).toFixed(2) : +(price - dist).toFixed(2);
+        label = `chandelier ${trade.trail_atr_mult}× ATR ($${trade.entry_atr.toFixed(2)}) from $${price.toFixed(2)}`;
+      } else if (trade.trail_pct > 0) {
+        trail = isShort ? +(price * (1 + trade.trail_pct)).toFixed(2)
+                        : +(price * (1 - trade.trail_pct)).toFixed(2);
+        label = `trail ${(trade.trail_pct*100).toFixed(0)}% from $${price.toFixed(2)} (legacy — no entry_atr)`;
+      }
+      if (trail != null) {
+        const tightens = isShort ? trail < cur : trail > cur;
+        if (tightens) recs.push({ source: 'trail', recommendedStop: trail, reason: label });
+      }
     }
 
     // ── Source 2: regime-tier ramp downshift floor ──────────────────────

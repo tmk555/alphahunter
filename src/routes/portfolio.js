@@ -671,6 +671,47 @@ module.exports = function(db) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ─── POST /api/trades/backfill-atr-context ─────────────────────────────
+  // Populate entry_atr + trail_atr_mult on existing open trades that
+  // pre-date the ATR-context capture. Looks up rs_snapshots.atr_pct on or
+  // before the trade's entry_date; multiplies by entry_price for the
+  // dollar ATR. Strategy id sources the multiplier from
+  // strategies.exit_rules — null strategy gets the 2.5 default.
+  // Idempotent (COALESCE in applyAtrContext).
+  router.post('/trades/backfill-atr-context', (req, res) => {
+    try {
+      const candidates = db.prepare(`
+        SELECT id, symbol, entry_date, entry_price, strategy
+          FROM trades
+         WHERE exit_date IS NULL
+           AND entry_atr IS NULL
+      `).all();
+      const patched = [];
+      const skipped = [];
+      for (const t of candidates) {
+        const r = applyAtrContext(db, t.id, {
+          symbol: t.symbol,
+          entryDate: t.entry_date,
+          entryPrice: t.entry_price,
+          strategy: t.strategy,
+        });
+        if (r.entryAtr != null) {
+          patched.push({ id: t.id, symbol: t.symbol, entryAtr: r.entryAtr, trailAtrMult: r.trailAtrMult });
+        } else {
+          skipped.push({ id: t.id, symbol: t.symbol, reason: r.fallback || 'unknown' });
+        }
+      }
+      res.json({
+        ok: true,
+        patched: patched.length,
+        skipped: skipped.length,
+        rows: patched,
+        skippedRows: skipped,
+        message: `Backfilled ATR context on ${patched.length} trade(s); ${skipped.length} left on legacy trail_pct fallback (no rs_snapshot).`,
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // ─── POST /api/trades/dedup ────────────────────────────────────────────
   // Detect and delete duplicate OPEN trade rows (same alpaca_order_id, OR
   // same symbol+entry_date+entry_price+shares with NULL order_id). The

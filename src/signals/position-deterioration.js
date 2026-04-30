@@ -39,7 +39,15 @@ function db() { return getDB(); }
 
 const DEFAULT_RS_DROP = 20;
 const DEFAULT_LOOKBACK_DAYS = 10;
+// Legacy trail_pct fallback for rows without entry_atr captured. New rows
+// tighten via DEFAULT_TIGHT_MULT below.
 const DEFAULT_TIGHT_TRAIL = 0.04;
+// ATR-multiplier compression on deterioration. Default is 2.5 (swing) or
+// 3.0 (position) — tightening drops to 1.5×ATR (~half-distance from
+// price). Regime-downgrade tightening (tightenOnRegimeDowngrade) drops
+// further to 1.0×ATR.
+const DEFAULT_TIGHT_MULT = 1.5;
+const REGIME_TIGHT_MULT = 1.0;
 const COOLDOWN_DAYS = 3;
 
 // Map of stock sectors → their representative industry ETFs. This is
@@ -119,16 +127,26 @@ function detectStageDistribution(trade) {
 
 // Main scan: evaluate every open position and return the list of
 // deterioration signals + the adjustments they trigger.
-function scanOpenPositions({ rsDropThreshold = DEFAULT_RS_DROP, lookbackDays = DEFAULT_LOOKBACK_DAYS, tightTrailPct = DEFAULT_TIGHT_TRAIL } = {}) {
+function scanOpenPositions({
+  rsDropThreshold = DEFAULT_RS_DROP,
+  lookbackDays = DEFAULT_LOOKBACK_DAYS,
+  tightTrailPct = DEFAULT_TIGHT_TRAIL,
+  tightAtrMult = DEFAULT_TIGHT_MULT,
+} = {}) {
   const openTrades = db().prepare(`
     SELECT * FROM trades WHERE exit_date IS NULL
   `).all();
 
   const alerts = [];
   for (const trade of openTrades) {
-    // Cooldown: skip if tightened in the last 3 days (unless user manually
-    // untightened by editing trail_pct back up)
-    if (trade.trail_tightened_at && trade.trail_pct <= tightTrailPct + 0.001) {
+    // Cooldown: skip if already tightened. ATR-context rows check the
+    // multiplier (≤ tightAtrMult means already compressed); legacy rows
+    // fall back to the trail_pct check.
+    const useAtr = trade.entry_atr > 0;
+    const alreadyTight = useAtr
+      ? (trade.trail_atr_mult ?? Infinity) <= tightAtrMult + 0.01
+      : (trade.trail_pct ?? 0.08) <= tightTrailPct + 0.001;
+    if (trade.trail_tightened_at && alreadyTight) {
       const last = new Date(trade.trail_tightened_at);
       const daysSince = (Date.now() - last.getTime()) / 86400000;
       if (daysSince < COOLDOWN_DAYS) continue;
@@ -160,17 +178,32 @@ function scanOpenPositions({ rsDropThreshold = DEFAULT_RS_DROP, lookbackDays = D
     }
 
     if (signals.length > 0) {
-      alerts.push({ trade, signals, newTrailPct: tightTrailPct });
+      alerts.push({
+        trade,
+        signals,
+        newTrailPct: tightTrailPct,   // legacy path
+        newTrailAtrMult: tightAtrMult, // ATR-context path
+      });
     }
   }
   return alerts;
 }
 
-// Apply the tightening: flip trail_pct, patch broker stops, notify user.
+// Apply the tightening: compress the ATR multiplier (or flip trail_pct
+// for legacy rows), patch broker stops, notify user.
 async function applyDeteriorationTighten(alerts) {
   if (!alerts?.length) return { tightened: 0, brokerPatched: 0, brokerFailed: 0 };
 
-  const updateStmt = db().prepare(`
+  // Two distinct UPDATE statements: ATR-context rows compress the
+  // multiplier (entry_atr stays fixed); legacy rows flip trail_pct as
+  // before. Keeping these separate makes the audit trail clearer in
+  // trail_tightened_reason.
+  const updateAtrMult = db().prepare(`
+    UPDATE trades SET trail_atr_mult = ?, trail_tightened_at = datetime('now'),
+      trail_tightened_reason = ?
+    WHERE id = ?
+  `);
+  const updateTrailPct = db().prepare(`
     UPDATE trades SET trail_pct = ?, trail_tightened_at = datetime('now'),
       trail_tightened_reason = ?
     WHERE id = ?
@@ -182,10 +215,16 @@ async function applyDeteriorationTighten(alerts) {
   try { broker = getBroker(); } catch (_) { broker = null; }
 
   for (const alert of alerts) {
-    const { trade, signals, newTrailPct } = alert;
+    const { trade, signals, newTrailPct, newTrailAtrMult } = alert;
     const reason = signals.map(s => s.detail).join(' | ');
 
-    updateStmt.run(newTrailPct, reason, trade.id);
+    const useAtr = trade.entry_atr > 0;
+    const newMult = newTrailAtrMult ?? DEFAULT_TIGHT_MULT;
+    if (useAtr) {
+      updateAtrMult.run(newMult, reason, trade.id);
+    } else {
+      updateTrailPct.run(newTrailPct, reason, trade.id);
+    }
     tightened++;
 
     // Recompute the new stop RIGHT NOW and patch the broker leg so the
@@ -193,26 +232,24 @@ async function applyDeteriorationTighten(alerts) {
     // to a real broker stop change. Pre-fix this branch was gated on
     // `trade.trailing_stop_active` — most rows had that flag 0, so the
     // journal got tightened and the user's phone buzzed but the broker
-    // stop never moved. Net effect: positions sat at -4% to -7% with
-    // STOP VIOLATED in the journal while Alpaca's actual stop was still
-    // at the original wide level. Removing the gate fixes that. Even if
-    // the position has no broker stop yet (manual entry, reconciled
-    // orphan), the periodic syncJournalStopsToBroker job will create one
-    // — but on tight-trigger we still attempt the patch path so the user
-    // sees a same-tick action.
+    // stop never moved.
     if (broker && trade.remaining_shares > 0) {
       try {
-        // Fetch current price for a stop recompute
         const { getQuotes } = require('../data/providers/manager');
         const quotes = await getQuotes([trade.symbol]);
         const price = quotes[0]?.regularMarketPrice;
         if (price) {
           const isShort = trade.side === 'short';
-          const newStop = isShort
-            ? +(price * (1 + newTrailPct)).toFixed(2)
-            : +(price * (1 - newTrailPct)).toFixed(2);
+          let newStop;
+          if (useAtr) {
+            const dist = newMult * trade.entry_atr;
+            newStop = isShort ? +(price + dist).toFixed(2) : +(price - dist).toFixed(2);
+          } else {
+            newStop = isShort
+              ? +(price * (1 + newTrailPct)).toFixed(2)
+              : +(price * (1 - newTrailPct)).toFixed(2);
+          }
           const currentStop = trade.stop_price;
-          // Only tighten — never loosen
           const shouldUpdate = isShort ? newStop < currentStop : newStop > currentStop;
           if (shouldUpdate) {
             db().prepare('UPDATE trades SET stop_price = ? WHERE id = ?').run(newStop, trade.id);
@@ -230,14 +267,16 @@ async function applyDeteriorationTighten(alerts) {
       }
     }
 
-    // Phone notification so the user knows their thesis eroded
+    const tightLabel = useAtr
+      ? `${newMult}× ATR`
+      : `${(newTrailPct*100).toFixed(0)}%`;
     notifyTradeEvent({
       event: 'trail_tightened',
       symbol: trade.symbol,
       details: {
         shares: trade.remaining_shares ?? trade.shares,
         price: trade.stop_price,
-        message: `Trail tightened to ${(newTrailPct*100).toFixed(0)}% — ${reason}`,
+        message: `Trail tightened to ${tightLabel} — ${reason}`,
       },
     }).catch(e => console.error(`  notify trail_tightened ${trade.symbol}: ${e.message}`));
   }
@@ -262,15 +301,32 @@ async function runPositionDeteriorationScan(config = {}) {
 
 // Called directly by regime.js when BULL→CAUTION or CAUTION→BEAR detected.
 // Tightens ALL open positions regardless of individual signals — the whole
-// market turned against us, not just this one stock.
-async function tightenOnRegimeDowngrade({ fromRegime, toRegime, tightTrailPct = 0.04 }) {
+// market turned against us, not just this one stock. Regime downgrades
+// hit harder than per-trade deterioration: 1.0× ATR (vs 1.5× for the
+// per-trade path), or 0.04 trail_pct on legacy rows.
+async function tightenOnRegimeDowngrade({
+  fromRegime,
+  toRegime,
+  tightTrailPct = 0.04,
+  tightAtrMult = REGIME_TIGHT_MULT,
+} = {}) {
   const openTrades = db().prepare('SELECT * FROM trades WHERE exit_date IS NULL').all();
   if (!openTrades.length) return { tightened: 0 };
 
   const reason = `Regime downgrade ${fromRegime} → ${toRegime}`;
   const alerts = openTrades
-    .filter(t => (t.trail_pct ?? 0.08) > tightTrailPct) // skip ones already tight
-    .map(trade => ({ trade, signals: [{ type: 'regime_downgrade', detail: reason }], newTrailPct: tightTrailPct }));
+    .filter(t => {
+      const useAtr = t.entry_atr > 0;
+      return useAtr
+        ? (t.trail_atr_mult ?? Infinity) > tightAtrMult
+        : (t.trail_pct ?? 0.08) > tightTrailPct;
+    })
+    .map(trade => ({
+      trade,
+      signals: [{ type: 'regime_downgrade', detail: reason }],
+      newTrailPct: tightTrailPct,
+      newTrailAtrMult: tightAtrMult,
+    }));
 
   return applyDeteriorationTighten(alerts);
 }

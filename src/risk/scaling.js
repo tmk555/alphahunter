@@ -90,20 +90,25 @@ function evaluateScalingAction(trade, currentPrice) {
 
   // Trailing stop maintenance for the final third (after target2)
   if (isScaleOut && tookT2 && trade.trailing_stop_active) {
-    // Per-trade trail percentage — defaults to 8% but the rotation/deterioration
-    // watcher can tighten it to 4% when the trade's thesis erodes
-    // (industry rotation down, individual RS collapse, stage→distribution).
-    const trailPct = trade.trail_pct ?? 0.08;
-    const newTrail = isShort
-      ? +(currentPrice * (1 + trailPct)).toFixed(2)
-      : +(currentPrice * (1 - trailPct)).toFixed(2);
-    // Only tighten, never loosen
+    // Chandelier trail when entry_atr is captured: trail = price ∓ mult ×
+    // entry_atr. Falls back to flat trail_pct for legacy rows that pre-
+    // date ATR-context capture. Both paths converge on the same
+    // tighten-only ratchet — never loosens an existing stop.
+    const useAtr = trade.entry_atr > 0 && (trade.trail_atr_mult ?? 0) > 0;
+    let newTrail, reason;
+    if (useAtr) {
+      const dist = trade.trail_atr_mult * trade.entry_atr;
+      newTrail = isShort ? +(currentPrice + dist).toFixed(2) : +(currentPrice - dist).toFixed(2);
+      reason = `Chandelier trail tightened to ${newTrail} (${trade.trail_atr_mult}× ATR $${trade.entry_atr.toFixed(2)})`;
+    } else {
+      const trailPct = trade.trail_pct ?? 0.08;
+      newTrail = isShort
+        ? +(currentPrice * (1 + trailPct)).toFixed(2)
+        : +(currentPrice * (1 - trailPct)).toFixed(2);
+      reason = `Trailing stop tightened to ${newTrail} (${(trailPct*100).toFixed(0)}% trail — legacy)`;
+    }
     if (isShort ? newTrail < stopPrice : newTrail > stopPrice) {
-      return {
-        action: 'update_stop',
-        moveStopTo: newTrail,
-        reason: `Trailing stop tightened to ${newTrail} (${(trailPct*100).toFixed(0)}% trail)`,
-      };
+      return { action: 'update_stop', moveStopTo: newTrail, reason };
     }
   }
 
