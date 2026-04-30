@@ -9117,6 +9117,15 @@ function ExecutionTab() {
       if (!(vp > 0)) { setError('Invalid volume pace'); return; }
       body.volumePaceMin = vp;
     }
+    // CANSLIM-strict mode: defer ALL gate evaluation until 3:00 PM ET so
+    // the volume reading reflects realized end-of-day, not midday-extrapolation
+    // (which can fade by close due to U-shaped intraday volume).
+    const eodOnly = window.confirm(
+      `CANSLIM-strict mode?\n\n` +
+      `OK = wait until 3:00 PM ET before evaluating any gate (catches end-of-day volume confirmation, but you lose 5 hours of session).\n\n` +
+      `Cancel = evaluate gates throughout the session (default — fires earlier but volume may fade by close).`
+    );
+    if (eodOnly) body.eodOnly = true;
     try {
       await api(`/api/staging/${o.id}/arm-gate`, {
         method:'POST', headers:{'Content-Type':'application/json'},
@@ -9237,11 +9246,12 @@ function ExecutionTab() {
 
   const statusColor = s => s==='filled'?'var(--green)':s==='submitted'?'var(--cyan)':s==='staged'?'var(--amber)':s==='pending_trigger'?'var(--purple)':s==='cancelled'||s==='expired'?'var(--text3)':'var(--text)';
   // Decode submission_gate JSON into a one-line label for the row.
-  // Examples: "🟣 ARMED @ $280.98 + vol≥1.4×", "🟣 ARMED VWAP+gap"
+  // Examples: "🟣 ARMED @ $280.98 + vol≥1.4×", "🟣 ARMED EOD @ $280.98"
   const armedSummary = (o) => {
     if (o.status !== 'pending_trigger' || !o.submission_gate) return null;
     let g; try { g = JSON.parse(o.submission_gate); } catch (_) { return 'ARMED'; }
     const parts = [];
+    if (g.eodOnly)                  parts.push('EOD');
     if (g.triggerPrice != null)     parts.push(`@ $${g.triggerPrice}`);
     if (g.volumePaceMin != null)    parts.push(`vol≥${g.volumePaceMin}×`);
     if (g.requireAboveVWAP != null) parts.push('VWAP');
