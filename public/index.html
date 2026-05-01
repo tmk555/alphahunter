@@ -3448,30 +3448,85 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
                       <span style={{fontFamily:'var(--font-mono)',fontSize:13,color:'var(--text3)'}}>—</span>
                     )}
                   </div>
-                  {funds.epsAnnualGrowth?.length>=2 && (
-                    <div style={{fontSize:10}}>
-                      <span style={{color:'var(--text3)'}}>3-yr trend: </span>
-                      {funds.epsAnnualGrowth.map((g,i)=>(
-                        <span key={i} style={{fontFamily:'var(--font-mono)',color:g>=25?'var(--green)':g>0?'var(--amber)':'var(--red)',marginRight:6}}>{g}%</span>
-                      ))}
-                      {funds.annualEpsAccelerating && <span style={{color:'var(--green)',fontWeight:700}}>⚡ accelerating</span>}
-                    </div>
-                  )}
+                  {/* 3-yr trend: prefer SEC's true per-share growth when
+                      available. SEC trend = each year's diluted EPS divided
+                      by the prior year's, expressed as %. Yahoo's
+                      epsAnnualGrowth is a net-income proxy that distorts on
+                      buybacks — only show it when SEC isn't available. */}
+                  {(() => {
+                    const secYears = funds.epsAnnualValuesSEC;
+                    let trend = null;
+                    let isSEC = false;
+                    if (Array.isArray(secYears) && secYears.length >= 2) {
+                      // Compute YoY % from SEC per-share EPS, newest pair first
+                      trend = [];
+                      for (let i = 0; i < secYears.length - 1 && trend.length < 2; i++) {
+                        const cur = secYears[i]?.eps, pri = secYears[i+1]?.eps;
+                        if (cur != null && pri != null && pri > 0) {
+                          trend.push(+(((cur/pri) - 1) * 100).toFixed(1));
+                        }
+                      }
+                      isSEC = trend.length > 0;
+                    }
+                    if (!trend || trend.length === 0) {
+                      trend = funds.epsAnnualGrowth || [];
+                    }
+                    if (trend.length < 2) return null;
+                    return (
+                      <div style={{fontSize:10}}
+                           title={isSEC ? 'True per-share diluted EPS YoY from SEC 10-K filings' : 'Yahoo net-income proxy (per-share unavailable from SEC for this symbol)'}>
+                        <span style={{color:'var(--text3)'}}>3-yr trend: </span>
+                        {trend.map((g,i)=>(
+                          <span key={i} style={{fontFamily:'var(--font-mono)',color:g>=25?'var(--green)':g>0?'var(--amber)':'var(--red)',marginRight:6}}>{g}%</span>
+                        ))}
+                        {isSEC && <span style={{fontSize:8,color:'var(--text3)',letterSpacing:1,marginRight:6}}>[SEC]</span>}
+                        {funds.annualEpsAccelerating && <span style={{color:'var(--green)',fontWeight:700}}>⚡ accelerating</span>}
+                      </div>
+                    );
+                  })()}
                 </div>
-                {/* Annual net income values */}
-                {funds.epsAnnualValues?.length > 0 && (
-                  <div style={{marginTop:6,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
-                    <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>NET INCOME:</span>
-                    {funds.epsAnnualValues.map((v,i) => (
-                      <span key={i} style={{fontSize:10,fontFamily:'var(--font-mono)',padding:'1px 6px',borderRadius:3,
-                        background:v.netIncome>0?'rgba(0,230,118,0.08)':'rgba(255,61,87,0.08)',
-                        border:`1px solid ${v.netIncome>0?'var(--green)':'var(--red)'}`,
-                        color:v.netIncome>0?'var(--green)':'var(--red)'}}>
-                        {v.date?.slice(0,4)}: {v.netIncome>=0?'':''}${(v.netIncome/1e9).toFixed(2)}B
-                      </span>
-                    ))}
-                  </div>
-                )}
+                {/* Annual values: prefer SEC per-share EPS (the CANSLIM "A"
+                    metric proper) when available, fall back to Yahoo's net
+                    income for symbols SEC doesn't cover (foreign ADRs file
+                    20-F instead of 10-K and return null from EDGAR). Label
+                    adapts so the user knows which is being shown. */}
+                {(() => {
+                  const secYears = funds.epsAnnualValuesSEC;
+                  if (Array.isArray(secYears) && secYears.length > 0) {
+                    return (
+                      <div style={{marginTop:6,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}
+                           title="Diluted EPS per share, sourced from SEC 10-K filings. True CANSLIM 'A' metric — share-count-adjusted, immune to buyback distortion.">
+                        <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>EPS/SHARE [SEC]:</span>
+                        {secYears.slice(0,5).map((v,i) => (
+                          <span key={i} style={{fontSize:10,fontFamily:'var(--font-mono)',padding:'1px 6px',borderRadius:3,
+                            background:v.eps>0?'rgba(0,230,118,0.08)':'rgba(255,61,87,0.08)',
+                            border:`1px solid ${v.eps>0?'var(--green)':'var(--red)'}`,
+                            color:v.eps>0?'var(--green)':'var(--red)'}}
+                            title={`${v.fyLabel} — fiscal year ending ${v.end}, 10-K filed ${v.filedAt}`}>
+                            {v.fyLabel || (v.end?.slice(0,4))}: {v.eps>=0?'':''}${v.eps?.toFixed(2)}
+                          </span>
+                        ))}
+                      </div>
+                    );
+                  }
+                  if (Array.isArray(funds.epsAnnualValues) && funds.epsAnnualValues.length > 0) {
+                    return (
+                      <div style={{marginTop:6,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}
+                           title="Net income (Yahoo) — fallback when SEC per-share data isn't available for this symbol (foreign ADRs, recent IPOs).">
+                        <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>NET INCOME [Yahoo]:</span>
+                        {funds.epsAnnualValues.map((v,i) => (
+                          <span key={i} style={{fontSize:10,fontFamily:'var(--font-mono)',padding:'1px 6px',borderRadius:3,
+                            background:v.netIncome>0?'rgba(0,230,118,0.08)':'rgba(255,61,87,0.08)',
+                            border:`1px solid ${v.netIncome>0?'var(--green)':'var(--red)'}`,
+                            color:v.netIncome>0?'var(--green)':'var(--red)'}}>
+                            {v.date?.slice(0,4)}: {v.netIncome>=0?'':''}${(v.netIncome/1e9).toFixed(2)}B
+                          </span>
+                        ))}
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
               </div>
 
               {/* ── S I + quality grid ───────────────────────────────── */}
