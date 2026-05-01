@@ -1938,11 +1938,14 @@ function App() {
             className="load-btn"
             onClick={loadAll}
             disabled={rsLoading}
-            title={rsLoading
-              ? 'Scanner running — refreshes ~363 universe stocks (RS ranks, patterns, stage, volume, etc.) + macro ticker bar. ~30–60s.'
-              : rsLoaded
-                ? 'Re-run the RS scan over the full universe (~363 stocks) and refresh the macro ticker bar. Use when you want the latest quotes/patterns without waiting for the 60s auto-refresh. ~30–60s.'
-                : 'Initial scan — fetching ~363 universe stocks with RS ranks, patterns, stage, volume. Normally auto-runs on app load.'}>
+            title={(() => {
+              const n = (rsData && rsData.length) ? rsData.length : 1620;
+              return rsLoading
+                ? `Scanner running — refreshes ~${n} universe stocks (RS ranks, patterns, stage, volume, etc.) + macro ticker bar. ~30–60s.`
+                : rsLoaded
+                  ? `Re-run the RS scan over the full universe (~${n} stocks) and refresh the macro ticker bar. Use when you want the latest quotes/patterns without waiting for the 60s auto-refresh. ~30–60s.`
+                  : `Initial scan — fetching ~${n} universe stocks with RS ranks, patterns, stage, volume. Normally auto-runs on app load.`;
+            })()}>
             {rsLoading ? '⟳ SCANNING...' : '↻ REFRESH ALL'}
           </button>
           {/* Stock Brief — keyless context drawer for any ticker. Opens from
@@ -2002,7 +2005,7 @@ function App() {
           <div style={{padding:'10px 14px',background:'rgba(0,212,255,0.10)',border:'1px solid rgba(0,212,255,0.35)',borderRadius:5,marginBottom:12,display:'flex',alignItems:'center',gap:10}}>
             <span style={{display:'inline-block',width:10,height:10,borderRadius:'50%',background:'var(--cyan)',animation:'pulse 1.5s ease-in-out infinite'}}/>
             <span style={{fontSize:12,color:'var(--text2)'}}>
-              Scanner warming up — fetching quotes/patterns/stage/volume for the universe (~363 stocks, ~30–60s). Tab data populates once it finishes.
+              Scanner warming up — fetching quotes/patterns/stage/volume for the universe (~{(rsData && rsData.length) ? rsData.length : 1620} stocks, ~30–60s). Tab data populates once it finishes.
             </span>
           </div>
         )}
