@@ -125,6 +125,33 @@ function _extractConcept(facts, concept, namespace = 'us-gaap') {
   return { unit: unitKey, rows: units[unitKey] || [] };
 }
 
+// Concept selector that prefers the candidate whose latest `end` date is
+// freshest. Companies migrate XBRL concepts over time (e.g. AAPL/MSFT moved
+// from `Revenues` / `SalesRevenueNet` to `RevenueFromContractWithCustomer-
+// ExcludingAssessedTax` after ASC 606 in 2018) but keep the legacy concept
+// shells in their facts dump with stale historical rows. Picking the first
+// non-empty concept silently returns 7-year-old data; picking by recency
+// always lands on the live one.
+//
+// Returns the same shape as _extractConcept, plus `concept` for diagnostics.
+function _pickFreshestConcept(facts, candidates, namespace = 'us-gaap') {
+  let best = null;
+  for (const concept of candidates) {
+    const ext = _extractConcept(facts, concept, namespace);
+    if (!ext || !ext.rows.length) continue;
+    // Find latest period-end date in this concept's rows.
+    let latest = '';
+    for (const r of ext.rows) {
+      if (r.end && r.end > latest) latest = r.end;
+    }
+    if (!latest) continue;
+    if (!best || latest > best.latest) {
+      best = { ...ext, concept, latest };
+    }
+  }
+  return best;
+}
+
 // ─── Quarterly EPS history (real per-share EPS) ──────────────────────────
 //
 // Returns the last N quarters of diluted EPS, sourced directly from the
@@ -243,6 +270,113 @@ async function getAnnualEPS(ticker, n = 4) {
   };
 }
 
+// ─── Quarterly revenue history (CANSLIM "N") ─────────────────────────────
+//
+// Yahoo's incomeStatementHistoryQuarterly only carries 4 quarters, and
+// when we don't have 5+ quarters its YoY-growth field falls back to
+// sequential Q/Q while keeping the YoY label — that's how AMZN ended up
+// showing revenueGrowthYoY = -14.9% (actually Q1-2025 vs Q4-2024
+// sequential) instead of the true +9% YoY.
+//
+// SEC's XBRL has 8-12+ quarters of revenue under one of three concepts
+// (companies vary by industry / accounting policy):
+//   - Revenues — generic, most common
+//   - RevenueFromContractWithCustomerExcludingAssessedTax — ASC 606 era
+//   - SalesRevenueNet — older / industrial
+// We try them in turn and use whichever returns data.
+//
+// Returns rows in the same shape as getQuarterlyEPS — date, val (in $),
+// fy, fp, form, filed.
+
+async function getQuarterlyRevenue(ticker, n = 8) {
+  const facts = await getCompanyFacts(ticker);
+  if (!facts) return null;
+
+  // Pick whichever revenue concept has the freshest data — see
+  // _pickFreshestConcept comment for why first-non-empty is wrong.
+  const series = _pickFreshestConcept(facts, [
+    'RevenueFromContractWithCustomerExcludingAssessedTax', // ASC 606 era (2018+)
+    'Revenues',                                            // generic, legacy
+    'SalesRevenueNet',                                     // pre-ASC-606
+  ]);
+  if (!series) return null;
+
+  // SEC reports revenue at the period level (Q1-only, FY-only). For the
+  // per-quarter view we want non-cumulative figures; 10-Q facts are
+  // already quarterly. 10-K Q4 is also a quarterly period. Avoid YTD
+  // cumulative values (some companies report 6-mo and 9-mo aggregates
+  // with the same `end` as Q2/Q3 — disambiguated by `start`).
+  const quarters = (series.rows || [])
+    .filter(r => r.form === '10-Q' || (r.form === '10-K' && r.fp === 'Q4'))
+    .filter(r => r.end && r.val != null && r.start)
+    // Quarterly periods span ~90 days. Drop YTD cumulative rows
+    // (3 months ≈ 80–95 day windows; 6mo/9mo/FY are 180+, drop them).
+    .filter(r => {
+      const ms = new Date(r.end + 'T00:00:00Z') - new Date(r.start + 'T00:00:00Z');
+      const days = ms / (1000 * 60 * 60 * 24);
+      return days >= 80 && days <= 100;
+    })
+    .reduce((acc, r) => {
+      const cur = acc.get(r.end);
+      if (!cur || (r.filed < cur.filed)) acc.set(r.end, r);  // earliest filed wins
+      return acc;
+    }, new Map());
+
+  return [...quarters.values()]
+    .sort((a, b) => b.end.localeCompare(a.end))
+    .slice(0, n)
+    .map(r => ({
+      date: r.end,
+      revenue: r.val,
+      fy: r.fy,
+      fiscalQuarter: r.fp,
+      form: r.form,
+      filedAt: r.filed,
+    }));
+}
+
+// ─── Annual revenue history ──────────────────────────────────────────────
+//
+// FY-frame revenue from 10-Ks. Used by the Levels card's annual values
+// section (alongside annual EPS) and for revenue-trend tooltips.
+
+async function getAnnualRevenue(ticker, n = 4) {
+  const facts = await getCompanyFacts(ticker);
+  if (!facts) return null;
+
+  const series = _pickFreshestConcept(facts, [
+    'RevenueFromContractWithCustomerExcludingAssessedTax',
+    'Revenues',
+    'SalesRevenueNet',
+  ]);
+  if (!series) return null;
+
+  // FY rows from 10-Ks. Period span ~360-370 days (full fiscal year).
+  const annual = (series.rows || [])
+    .filter(r => r.form === '10-K' && r.fp === 'FY' && r.val != null && r.end && r.start)
+    .filter(r => {
+      const ms = new Date(r.end + 'T00:00:00Z') - new Date(r.start + 'T00:00:00Z');
+      const days = ms / (1000 * 60 * 60 * 24);
+      return days >= 350 && days <= 380;
+    })
+    .reduce((acc, r) => {
+      const cur = acc.get(r.end);
+      if (!cur || (r.filed < cur.filed)) acc.set(r.end, r);  // earliest filed wins
+      return acc;
+    }, new Map());
+
+  return [...annual.values()]
+    .sort((a, b) => b.end.localeCompare(a.end))
+    .slice(0, n)
+    .map(r => ({
+      fy: r.fy,
+      fyLabel: r.end ? `FY${r.end.slice(0, 4)}` : `FY${r.fy}`,
+      end: r.end,
+      revenue: r.val,
+      filedAt: r.filed,
+    }));
+}
+
 // ─── Earnings dates for chart markers ────────────────────────────────────
 //
 // Pulls the actual 10-Q + 10-K filing dates so the user can see when
@@ -333,6 +467,8 @@ module.exports = {
   getCompanyFacts,
   getQuarterlyEPS,
   getAnnualEPS,
+  getQuarterlyRevenue,
+  getAnnualRevenue,
   getFilingMarkers,
   classify8KItems,
 };

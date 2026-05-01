@@ -267,10 +267,16 @@ async function getFundamentals(symbol) {
   // 6h cache on SEC company-facts means this adds <50ms per call when
   // warm; ~2s on cold cache (one-time per symbol per 6 hours).
   try {
-    const { getQuarterlyEPS, getAnnualEPS, getFilingMarkers } = require('./secEdgar');
-    const [secQ, secA, secMarkers] = await Promise.all([
+    const {
+      getQuarterlyEPS, getAnnualEPS,
+      getQuarterlyRevenue, getAnnualRevenue,
+      getFilingMarkers,
+    } = require('./secEdgar');
+    const [secQ, secA, secRevQ, secRevA, secMarkers] = await Promise.all([
       getQuarterlyEPS(symbol, 8).catch(() => null),
       getAnnualEPS(symbol, 4).catch(() => null),
+      getQuarterlyRevenue(symbol, 8).catch(() => null),
+      getAnnualRevenue(symbol, 4).catch(() => null),
       getFilingMarkers(symbol, ['10-Q', '10-K']).catch(() => null),
     ]);
 
@@ -280,42 +286,131 @@ async function getFundamentals(symbol) {
     // price reacted. We blend in Yahoo's `estimate` / `surprisePct` /
     // `surprise` for any overlapping period since SEC doesn't carry analyst
     // estimates.
-    //
-    // Pre-fix this only ran when SEC had a FRESHER period than Yahoo —
-    // meaning quarters where both providers had the same latest period
-    // kept Yahoo's structure (no filedAt → chart markers placed at
-    // calendar quarter-end, not the actual price-reaction date). The new
-    // unconditional override gives every chart's earnings markers a
-    // proper EDGAR anchor regardless of who reported first.
     if (Array.isArray(secQ) && secQ.length) {
       const yahooByDate = new Map((data.epsActualQuarterly || []).map(q => [q.date, q]));
       data.epsActualQuarterly = secQ.map(s => ({
         date: s.date,
         actual: s.eps,
-        // Carry Yahoo's analyst estimate + surprise % when we have them
-        // for the same period — SEC doesn't include analyst estimates.
         estimate:    yahooByDate.get(s.date)?.estimate    ?? null,
         surprise:    yahooByDate.get(s.date)?.surprise    ?? null,
         surprisePct: yahooByDate.get(s.date)?.surprisePct ?? null,
-        // SEC-specific provenance — UI can show "filed YYYY-MM-DD" badge
         filedAt: s.filedAt,
         form:    s.form,
         source:  'sec_edgar',
       }));
       data.epsDataSource = 'sec_edgar';
+
+      // ── Re-derive Q0/Q-1/Q-2 YoY from SEC's true 8-quarter series ──
+      //
+      // Yahoo's `epsGrowth_Q*_yoy` fields are computed in yahoo.js from
+      // `incomeStatementHistoryQuarterly`, which only carries 4 quarters.
+      // When that's not enough, the code falls back to SEQUENTIAL Q/Q
+      // while keeping the YoY label — that's how AMZN's Q0 ended up at
+      // "0%" (Q4 2025 vs Q3 2025 sequential, both $1.95) instead of the
+      // true +75% YoY (Q1 2026 $2.78 vs Q1 2025 $1.59).
+      //
+      // SEC gives us 8 quarters reliably. Match each quarter to the same
+      // fiscal quarter one year earlier by month-day window (±15 days
+      // tolerance for fiscal-year shift / 13-week vs 4-4-5 cadence).
+      const findYoYMatch = (idx) => {
+        const cur = secQ[idx];
+        if (!cur) return null;
+        const curEnd = new Date(cur.date + 'T00:00:00Z');
+        for (let j = idx + 1; j < secQ.length; j++) {
+          const cand = secQ[j];
+          const candEnd = new Date(cand.date + 'T00:00:00Z');
+          const daysDiff = (curEnd - candEnd) / (1000 * 60 * 60 * 24);
+          // Same fiscal quarter prior year ≈ 365 days (350-380 window
+          // covers leap years and 13-week vs 14-week quarters).
+          if (daysDiff >= 350 && daysDiff <= 380) return cand;
+          if (daysDiff > 380) break;  // gone past — no match exists
+        }
+        return null;
+      };
+      const yoyPct = (cur, prior) => {
+        if (cur == null || prior == null) return null;
+        // Defensive on zero / negative prior — sign-flip makes % meaningless
+        if (prior <= 0) return null;
+        return +((cur / prior - 1) * 100).toFixed(1);
+      };
+      for (const slot of [0, 1, 2]) {
+        const cur = secQ[slot];
+        const prior = findYoYMatch(slot);
+        const pct = cur && prior ? yoyPct(cur.eps, prior.eps) : null;
+        data[`epsGrowth_Q${slot}_yoy`] = pct;
+        data[`c_pass_q${slot}`] = pct != null && pct >= 25;
+      }
+      // Re-derive headline epsGrowthQoQ + acceleration from the SEC-aligned
+      // YoY values. Pre-fix these used Yahoo's mislabelled sequential.
+      data.epsGrowthQoQ = data.epsGrowth_Q0_yoy ?? data.epsGrowthQoQ;
+      data.epsAccelerating_qoq =
+        data.epsGrowth_Q0_yoy != null && data.epsGrowth_Q1_yoy != null &&
+        data.epsGrowth_Q0_yoy > data.epsGrowth_Q1_yoy;
     }
 
     // Annual EPS YoY: SEC's growthYoY uses true per-share diluted EPS,
-    // strictly more honest than Yahoo's net-income proxy. Override when
-    // SEC has it.
+    // strictly more honest than Yahoo's net-income proxy.
     if (secA?.growthYoY != null) {
       data.epsGrowthYoY = secA.growthYoY;
       data.epsGrowthYoY_source = 'sec_per_share';
-      data.epsAnnualValuesSEC = secA.years; // for UI tooltips/charts
+      data.epsAnnualValuesSEC = secA.years;
     }
 
-    // Filing markers — surface the actual 10-Q / 10-K file dates so the
-    // chart layer can render vertical "ER" markers per quarter.
+    // ── Quarterly REVENUE: same Yahoo-staleness problem as EPS ─────────
+    //
+    // Yahoo's revGrowth_Q*_yoy is computed from incomeStatementHistory-
+    // Quarterly which has the 4-quarter ceiling, so it falls back to
+    // sequential Q/Q with the YoY label. AMZN currently shows
+    // revenueGrowthYoY = -14.9% (actually Q1-2025 vs Q4-2024 sequential)
+    // when the true YoY is +9%. SEC has 8 quarters of revenue under one
+    // of three concept names (Revenues / RevenueFromContractWith… /
+    // SalesRevenueNet), enough to compute proper YoY.
+    if (Array.isArray(secRevQ) && secRevQ.length) {
+      data.revActualQuarterly = secRevQ.map(r => ({
+        date: r.date,
+        revenue: r.revenue,
+        filedAt: r.filedAt,
+        form: r.form,
+        source: 'sec_edgar',
+      }));
+      data.revDataSource = 'sec_edgar';
+
+      // Match each quarter to its same-fiscal-quarter-prior-year.
+      const findRevYoY = (idx) => {
+        const cur = secRevQ[idx];
+        if (!cur) return null;
+        const curEnd = new Date(cur.date + 'T00:00:00Z');
+        for (let j = idx + 1; j < secRevQ.length; j++) {
+          const candEnd = new Date(secRevQ[j].date + 'T00:00:00Z');
+          const daysDiff = (curEnd - candEnd) / (1000 * 60 * 60 * 24);
+          if (daysDiff >= 350 && daysDiff <= 380) return secRevQ[j];
+          if (daysDiff > 380) break;
+        }
+        return null;
+      };
+      const revYoy = (cur, prior) => {
+        if (cur == null || prior == null || prior <= 0) return null;
+        return +((cur / prior - 1) * 100).toFixed(1);
+      };
+      for (const slot of [0, 1]) {
+        const cur = secRevQ[slot];
+        const prior = findRevYoY(slot);
+        data[`revGrowth_Q${slot}_yoy`] = cur && prior ? revYoy(cur.revenue, prior.revenue) : null;
+      }
+      // Headline revenueGrowthYoY → SEC's Q0 YoY (true number).
+      if (data.revGrowth_Q0_yoy != null) {
+        data.revenueGrowthYoY = data.revGrowth_Q0_yoy;
+        data.revenueGrowthYoY_source = 'sec_per_quarter';
+      }
+    }
+
+    // Annual revenue values (parallel to epsAnnualValuesSEC). Used by the
+    // Levels card for the trend strip alongside per-share EPS.
+    if (Array.isArray(secRevA) && secRevA.length) {
+      data.revAnnualValuesSEC = secRevA;
+    }
+
+    // Filing markers for the chart layer (vertical "ER" markers).
     if (Array.isArray(secMarkers) && secMarkers.length) {
       data.filingMarkers = secMarkers;
     }
