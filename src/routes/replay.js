@@ -26,7 +26,15 @@ const { runEarningsDriftBackfill } = require('../signals/backfillEarningsDrift')
 const { runRevisionsBackfill } = require('../signals/backfillRevisions');
 const { startJob, getJob, listJobs, cancelJob } = require('../signals/replay-jobs');
 const { runSweep, previewSweep, STRATEGY_GRIDS, DEFAULT_SHORT_TERM_RATE, DEFAULT_LONG_TERM_RATE } = require('../signals/replay-sweep');
-const { FULL_UNIVERSE } = require('../../universe');
+// Use the runtime-universe singleton instead of universe.js FULL_UNIVERSE
+// so backfill operations cover the FULL live universe (S&P 1500 +
+// leadership + ETFs ~1620 symbols) rather than just the 360 hardcoded
+// leadership names. Lazily resolved per request — server.js publishes
+// the array after boot, so direct require time is too early.
+const { getRuntimeUniverse } = require('../data/runtime-universe');
+function defaultBackfillSymbols() {
+  return getRuntimeUniverse().universe;
+}
 
 // ─── Available strategies ─────────────────────────────────────────────────
 router.get('/replay/strategies', (req, res) => {
@@ -228,7 +236,7 @@ router.post('/replay/backfill', async (req, res) => {
     const { lookbackDays = 365, symbols, concurrency = 5 } = req.body || {};
     const useSymbols = Array.isArray(symbols) && symbols.length
       ? symbols
-      : Object.keys(FULL_UNIVERSE);
+      : defaultBackfillSymbols();
     if (!useSymbols.length) {
       return res.status(400).json({ error: 'no symbols available — provide symbols[] or populate universe' });
     }
@@ -256,7 +264,7 @@ router.post('/replay/backfill-institutional', async (req, res) => {
     const { lookbackDays = 252, symbols, concurrency = 5 } = req.body || {};
     const useSymbols = Array.isArray(symbols) && symbols.length
       ? symbols
-      : Object.keys(FULL_UNIVERSE);
+      : defaultBackfillSymbols();
     if (!useSymbols.length) {
       return res.status(400).json({ error: 'no symbols available — provide symbols[] or populate universe' });
     }
@@ -283,7 +291,7 @@ router.post('/replay/backfill-earnings-drift', async (req, res) => {
     const { lookbackDays = 252, symbols, concurrency = 5 } = req.body || {};
     const useSymbols = Array.isArray(symbols) && symbols.length
       ? symbols
-      : Object.keys(FULL_UNIVERSE);
+      : defaultBackfillSymbols();
     if (!useSymbols.length) {
       return res.status(400).json({ error: 'no symbols available — provide symbols[] or populate universe' });
     }
@@ -311,7 +319,7 @@ router.post('/replay/backfill-revisions', async (req, res) => {
     const { symbols, concurrency = 3 } = req.body || {};
     const useSymbols = Array.isArray(symbols) && symbols.length
       ? symbols
-      : Object.keys(FULL_UNIVERSE);
+      : defaultBackfillSymbols();
     if (!useSymbols.length) {
       return res.status(400).json({ error: 'no symbols available — provide symbols[] or populate universe' });
     }

@@ -166,6 +166,15 @@ try {
   if (spCount) console.log(`   Universe: +${spCount} S&P 1500 constituents (total ${UNIVERSE.length}) — breadth now reflects broader market`);
 } catch(_) { /* universe_membership may not exist on fresh installs */ }
 
+// Publish the assembled runtime universe via a singleton so route
+// modules (replay.js) and scheduler jobs that can't receive it through
+// a factory argument read the SAME 1620-symbol list as the explicit
+// consumers. See src/data/runtime-universe.js for the rationale.
+{
+  const { setRuntimeUniverse } = require('./src/data/runtime-universe');
+  setRuntimeUniverse(UNIVERSE, SECTOR_MAP);
+}
+
 // ─── Scanner (needs universe context) ────────────────────────────────────────
 const { runRSScan } = require('./src/scanner');
 const runScan = () => runRSScan(UNIVERSE, SECTOR_MAP);

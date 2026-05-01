@@ -270,8 +270,15 @@ registerJobType('universe_reconstitute', {
     dryRun: true,            // Preview changes without applying
   },
   handler: async (config) => {
-    const { FULL_UNIVERSE }   = require('../../universe');
-    const symbols = Object.keys(FULL_UNIVERSE).filter(s => FULL_UNIVERSE[s] !== 'Hedge');
+    // Use runtime universe (1620 stocks: SP1500 + leadership + ETFs)
+    // instead of the static 360-name FULL_UNIVERSE — the universe-clean
+    // job's whole point is checking which symbols still meet the size /
+    // volume floor. With 4× more symbols in scope the clean now catches
+    // delisted/abandoned names across the broader universe, not just
+    // the leadership tier.
+    const { getRuntimeUniverse } = require('../data/runtime-universe');
+    const { universe, sectorMap } = getRuntimeUniverse();
+    const symbols = universe.filter(s => sectorMap[s] !== 'Hedge');
     // Universe reconstitute needs marketCap / averageDailyVolume3Month — these
     // are Yahoo-specific quote fields. When the manager cascade falls through
     // to Polygon/FMP/AV those fields land as null, which downstream code
@@ -296,7 +303,7 @@ registerJobType('universe_reconstitute', {
           const reasons = [];
           if (failsCap) reasons.push(`mktCap $${(mktCap/1e9).toFixed(1)}B < $${(config.minMarketCap/1e9).toFixed(0)}B`);
           if (failsVol) reasons.push(`avgVol ${Math.round(avgVol/1000)}K < ${Math.round(config.minAvgVolume/1000)}K`);
-          removals.push({ symbol: q.symbol, sector: FULL_UNIVERSE[q.symbol], reason: reasons.join(', '), mktCap, avgVol });
+          removals.push({ symbol: q.symbol, sector: sectorMap[q.symbol], reason: reasons.join(', '), mktCap, avgVol });
         } else {
           retentions.push(q.symbol);
         }
