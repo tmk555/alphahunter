@@ -1735,7 +1735,7 @@ function App() {
     setRsLoading(true);
     try {
       await Promise.all([
-        api('/api/rs-scan').then(d => {
+        api('/api/rs-scan', { timeout: 5 * 60 * 1000 }).then(d => {
           setRsData((d.stocks || []).filter(s => s.ticker !== 'SPY'));
           setRsLoaded(true);
           return d;
@@ -3560,7 +3560,7 @@ function SectorStocks({ sectorName, rsData: propData, onClose }) {
     // If prop data not yet loaded, fetch it
     if (!propData?.length && !localStocks) {
       setLoading(true);
-      api('/api/rs-scan').then(d => {
+      api('/api/rs-scan', { timeout: 5 * 60 * 1000 }).then(d => {
         const stocks = d.stocks || [];
         setLocalStocks(stocks);
         window._rsData = stocks; // share globally
@@ -4508,7 +4508,13 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
   async function load() {
     setLoading(true); setError('');
     try {
-      const d = await api('/api/rs-scan');
+      // Scanner now scans 1620 stocks (was 360 before SP1500 expansion).
+      // First call after cache expiry hits Yahoo for every symbol +
+      // computes RS / SEPA / patterns — easily 90-120s wall time. The
+      // 45s default times out before the backend finishes; bump to 5min
+      // for this specific call. Subsequent calls within TTL_QUOTE (60s)
+      // hit the rs:full cache and return in <100ms.
+      const d = await api('/api/rs-scan', { timeout: 5 * 60 * 1000 });
       setRsData((d.stocks || []).filter(s => s.ticker !== 'SPY'));
       setRsLoaded(true);
     } catch(e) { setError(e.message); }
