@@ -82,10 +82,26 @@ function persistPatternDetections(symbol, patternData) {
 }
 
 // ─── Core RS scan (shared, cached) ──────────────────────────────────────────
+//
+// Singleflight: if a scan is in flight, every other caller awaits the
+// SAME promise instead of kicking off a parallel scan. Without this, a
+// page load with 5 tabs polling cold-cache /api/rs-scan + /trade-setups
+// + /daily-picks + /hedge/shorts simultaneously would each trigger an
+// independent ~30s 1620-symbol scan — 5× CPU + 5× memory churn for
+// identical work. With it, all 5 share one scan.
+let _inFlightScan = null;
+
 async function runRSScan(UNIVERSE, SECTOR_MAP) {
   const cached = cacheGet('rs:full', TTL_QUOTE);
   if (cached) return cached;
+  if (_inFlightScan) return _inFlightScan;
+  _inFlightScan = _runRSScanBody(UNIVERSE, SECTOR_MAP).finally(() => {
+    _inFlightScan = null;
+  });
+  return _inFlightScan;
+}
 
+async function _runRSScanBody(UNIVERSE, SECTOR_MAP) {
   const uniq = [...new Set([...UNIVERSE, 'SPY'])];
   console.log(`  RS scan: ${uniq.length} stocks...`);
   const t0 = Date.now();
