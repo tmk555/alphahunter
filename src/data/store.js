@@ -78,13 +78,32 @@ function _stripPrefix(symbol) {
  *   const h = loadHistory(t); const dates = Object.keys(h).sort();
  *   { dateCount: dates.length, lastDate: dates[dates.length-1] }
  * for callers that only need the dimensions, not the data.
+ *
+ * COUNT(DISTINCT date) over 3.7M rows runs ~1.8s even with the
+ * (date, type) index — slow enough to make /api/health feel hung. Cached
+ * keyed on lastDate: when the scanner persists a new snapshot, lastDate
+ * advances, the cache invalidates, and we recompute. MAX(date) alone is
+ * an index-edge probe, so the freshness check is sub-ms.
  */
+const _statsCache = {};   // type → { lastDate, dateCount }
+
 function getHistoryStats(type) {
   try {
-    return getDB().prepare(
-      `SELECT COUNT(DISTINCT date) AS dateCount, MAX(date) AS lastDate
-       FROM rs_snapshots WHERE type = ?`
-    ).get(type) || { dateCount: 0, lastDate: null };
+    const db = getDB();
+    const last = db.prepare(
+      `SELECT MAX(date) AS d FROM rs_snapshots WHERE type = ?`
+    ).get(type)?.d || null;
+    if (!last) return { dateCount: 0, lastDate: null };
+
+    const cached = _statsCache[type];
+    if (cached && cached.lastDate === last) {
+      return { dateCount: cached.dateCount, lastDate: last };
+    }
+    const dateCount = db.prepare(
+      `SELECT COUNT(DISTINCT date) AS n FROM rs_snapshots WHERE type = ?`
+    ).get(type)?.n || 0;
+    _statsCache[type] = { lastDate: last, dateCount };
+    return { dateCount, lastDate: last };
   } catch (_) { return { dateCount: 0, lastDate: null }; }
 }
 
@@ -140,107 +159,173 @@ function getSymbolHistory(type, symbol) {
  * passed symbols. Same shape getRSTrend(ticker, history) returns:
  *   { current, direction, note, vs1w, vs2w, vs4w, vs1m, vs2m, vs3m }
  *
- * Pulls a 100-day window of (symbol, date, rs_rank) rows once and walks them
- * in JS — replaces N × loadHistory() (N callers each materializing the full
- * 3.7M-row table) with a single ~150k-row scan keyed off the (date, type)
- * index.
+ * Performance shape (measured on the 3.7M-row stock table):
+ *   - Full date-window scan (no symbols filter):  ~100 ms
+ *   - IN-clause path with 1620 symbols (4×500):   ~6000 ms
+ *   - IN-clause path with ~50 symbols:            ~30 ms
  *
- * Pass `symbols` to scope the query (used by routes like /hedge/shorts that
- * only care about ~20 names). Omit to pull every row for the window — that
- * path is for the scanner, where we attach a trend to all 1620 results.
+ * The IN-clause is dramatically slower for large N — SQLite's planner
+ * picks a less efficient lookup strategy than a clean date-range scan
+ * over idx_rs_snapshots_date_type. So above LARGE_N we always do the
+ * full scan and filter the resulting Map in JS.
+ *
+ * Cache: the full Map for each type is memoized keyed on lastDate. A new
+ * scan persisting advances lastDate which auto-invalidates. lastDate
+ * itself is an index-edge probe (~1 ms), so freshness checks are cheap.
  */
+const LARGE_N = 200;
+const _bulkTrendCache = {};   // type → { lastDate, fullMap }
+
+function _buildAllTrends(db, type, last, windowDays) {
+  const cutoffT = new Date(last + 'T12:00:00Z');
+  cutoffT.setUTCDate(cutoffT.getUTCDate() - windowDays);
+  const cutoff = cutoffT.toISOString().slice(0, 10);
+
+  const rows = db.prepare(`
+    SELECT symbol, date, rs_rank FROM rs_snapshots
+    WHERE type = ? AND date >= ? AND date <= ?
+    ORDER BY symbol, date ASC
+  `).all(type, cutoff, last);
+
+  const bySym = new Map();
+  for (const r of rows) {
+    let arr = bySym.get(r.symbol);
+    if (!arr) { arr = []; bySym.set(r.symbol, arr); }
+    arr.push(r);
+  }
+
+  const lookbacks = [7, 14, 28, 60, 90];
+  const targetByDays = {};
+  for (const d of lookbacks) {
+    const t = new Date(last + 'T12:00:00Z');
+    t.setUTCDate(t.getUTCDate() - d);
+    targetByDays[d] = t.toISOString().slice(0, 10);
+  }
+
+  const out = new Map();
+  for (const [sym, series] of bySym) {
+    if (series.length < 2) continue;
+    const now = series[series.length - 1].rs_rank;
+    if (now == null) continue;
+
+    const findAt = (daysAgo) => {
+      const target = targetByDays[daysAgo];
+      let best = null;
+      for (const r of series) {
+        if (r.date <= target) best = r;
+        else break;
+      }
+      return best?.rs_rank ?? null;
+    };
+
+    const w1 = findAt(7),  w2 = findAt(14), w4 = findAt(28);
+    const m3 = findAt(90), m2 = findAt(60);
+    const dir  = w1 != null ? (now-w1 > 3 ? 'rising' : now-w1 < -3 ? 'falling' : 'flat') : 'new';
+    const note = now < 50 && dir === 'rising' ? 'low-RS-rising' : dir;
+    out.set(sym, {
+      current: now, direction: dir, note,
+      vs1w: w1 != null ? +(now-w1).toFixed(0) : null,
+      vs2w: w2 != null ? +(now-w2).toFixed(0) : null,
+      vs4w: w4 != null ? +(now-w4).toFixed(0) : null,
+      vs3m: m3 != null ? +(now-m3).toFixed(0) : null,
+      vs1m: w4 != null ? +(now-w4).toFixed(0) : null,  // 4 weeks ≈ 1 month
+      vs2m: m2 != null ? +(now-m2).toFixed(0) : null,
+    });
+  }
+  return out;
+}
+
+function _filterTrendMap(fullMap, symbols) {
+  const out = new Map();
+  for (const s of symbols) {
+    const clean = _stripPrefix(s);
+    const t = fullMap.get(clean);
+    if (t) out.set(clean, t);
+  }
+  return out;
+}
+
 function getRSTrendsBulk(type, symbols = null, opts = {}) {
   const { windowDays = 100 } = opts;
   try {
     const db = getDB();
-    const lastRow = db.prepare(
+    const last = db.prepare(
       `SELECT MAX(date) AS d FROM rs_snapshots WHERE type = ?`
-    ).get(type);
-    const last = lastRow?.d;
+    ).get(type)?.d || null;
     if (!last) return new Map();
 
-    const cutoffT = new Date(last + 'T12:00:00Z');
-    cutoffT.setUTCDate(cutoffT.getUTCDate() - windowDays);
-    const cutoff = cutoffT.toISOString().slice(0, 10);
+    // Full-Map cache hit: lastDate hasn't moved → return memoized.
+    const cached = _bulkTrendCache[type];
+    if (cached && cached.lastDate === last && cached.windowDays === windowDays) {
+      return symbols ? _filterTrendMap(cached.fullMap, symbols) : cached.fullMap;
+    }
 
-    let rows;
-    // Symbol-scoped path: chunk to stay well under SQLite's variable limit.
-    // Most callers pass <100 names so this is one query in practice.
-    if (Array.isArray(symbols) && symbols.length > 0) {
+    // Small symbol set with no cached map: targeted IN query is fastest
+    // (typically <50 ms for 50 symbols). Doesn't seed the full-Map cache —
+    // we leave that to the next "full" caller.
+    if (Array.isArray(symbols) && symbols.length > 0 && symbols.length <= LARGE_N) {
       const cleanSyms = [...new Set(symbols.map(_stripPrefix))];
-      const CHUNK = 500;
-      rows = [];
-      for (let i = 0; i < cleanSyms.length; i += CHUNK) {
-        const slice = cleanSyms.slice(i, i + CHUNK);
-        const placeholders = slice.map(() => '?').join(',');
-        const part = db.prepare(`
-          SELECT symbol, date, rs_rank FROM rs_snapshots
-          WHERE type = ? AND date >= ? AND date <= ? AND symbol IN (${placeholders})
-          ORDER BY symbol, date ASC
-        `).all(type, cutoff, last, ...slice);
-        rows.push(...part);
-      }
-    } else {
-      rows = db.prepare(`
+      const cutoffT = new Date(last + 'T12:00:00Z');
+      cutoffT.setUTCDate(cutoffT.getUTCDate() - windowDays);
+      const cutoff = cutoffT.toISOString().slice(0, 10);
+      const placeholders = cleanSyms.map(() => '?').join(',');
+      const rows = db.prepare(`
         SELECT symbol, date, rs_rank FROM rs_snapshots
-        WHERE type = ? AND date >= ? AND date <= ?
+        WHERE type = ? AND date >= ? AND date <= ? AND symbol IN (${placeholders})
         ORDER BY symbol, date ASC
-      `).all(type, cutoff, last);
+      `).all(type, cutoff, last, ...cleanSyms);
+      // Pretend this came back as a "full" series for these symbols and reuse
+      // the same trend-build pass. Slightly clunky — we synthesize a tiny
+      // cached-shape object so _buildAllTrends's logic can be mirrored inline.
+      const bySym = new Map();
+      for (const r of rows) {
+        let arr = bySym.get(r.symbol);
+        if (!arr) { arr = []; bySym.set(r.symbol, arr); }
+        arr.push(r);
+      }
+      const lookbacks = [7, 14, 28, 60, 90];
+      const targetByDays = {};
+      for (const d of lookbacks) {
+        const t = new Date(last + 'T12:00:00Z');
+        t.setUTCDate(t.getUTCDate() - d);
+        targetByDays[d] = t.toISOString().slice(0, 10);
+      }
+      const out = new Map();
+      for (const [sym, series] of bySym) {
+        if (series.length < 2) continue;
+        const now = series[series.length - 1].rs_rank;
+        if (now == null) continue;
+        const findAt = (daysAgo) => {
+          const target = targetByDays[daysAgo];
+          let best = null;
+          for (const r of series) {
+            if (r.date <= target) best = r;
+            else break;
+          }
+          return best?.rs_rank ?? null;
+        };
+        const w1 = findAt(7),  w2 = findAt(14), w4 = findAt(28);
+        const m3 = findAt(90), m2 = findAt(60);
+        const dir  = w1 != null ? (now-w1 > 3 ? 'rising' : now-w1 < -3 ? 'falling' : 'flat') : 'new';
+        const note = now < 50 && dir === 'rising' ? 'low-RS-rising' : dir;
+        out.set(sym, {
+          current: now, direction: dir, note,
+          vs1w: w1 != null ? +(now-w1).toFixed(0) : null,
+          vs2w: w2 != null ? +(now-w2).toFixed(0) : null,
+          vs4w: w4 != null ? +(now-w4).toFixed(0) : null,
+          vs3m: m3 != null ? +(now-m3).toFixed(0) : null,
+          vs1m: w4 != null ? +(now-w4).toFixed(0) : null,
+          vs2m: m2 != null ? +(now-m2).toFixed(0) : null,
+        });
+      }
+      return out;
     }
 
-    // Group rows by symbol — ascending date order is preserved by ORDER BY.
-    const bySym = new Map();
-    for (const r of rows) {
-      let arr = bySym.get(r.symbol);
-      if (!arr) { arr = []; bySym.set(r.symbol, arr); }
-      arr.push(r);
-    }
-
-    // Pre-compute the lookback target dates once. Each one is "last - N days"
-    // as a YYYY-MM-DD string; the trend logic uses "latest entry whose date
-    // <= target" (matches the original getRSTrend findAt() semantics).
-    const lookbacks = [7, 14, 28, 60, 90];
-    const targetByDays = {};
-    for (const d of lookbacks) {
-      const t = new Date(last + 'T12:00:00Z');
-      t.setUTCDate(t.getUTCDate() - d);
-      targetByDays[d] = t.toISOString().slice(0, 10);
-    }
-
-    const out = new Map();
-    for (const [sym, series] of bySym) {
-      if (series.length < 2) continue;
-      const lastEntry = series[series.length - 1];
-      const now = lastEntry.rs_rank;
-      if (now == null) continue;
-
-      // Latest series entry whose date <= target. Series is sorted
-      // ascending so we walk forward and remember the running best.
-      const findAt = (daysAgo) => {
-        const target = targetByDays[daysAgo];
-        let best = null;
-        for (const r of series) {
-          if (r.date <= target) best = r;
-          else break;
-        }
-        return best?.rs_rank ?? null;
-      };
-
-      const w1 = findAt(7),  w2 = findAt(14), w4 = findAt(28);
-      const m3 = findAt(90), m2 = findAt(60);
-      const dir  = w1 != null ? (now-w1 > 3 ? 'rising' : now-w1 < -3 ? 'falling' : 'flat') : 'new';
-      const note = now < 50 && dir === 'rising' ? 'low-RS-rising' : dir;
-      out.set(sym, {
-        current: now, direction: dir, note,
-        vs1w: w1 != null ? +(now-w1).toFixed(0) : null,
-        vs2w: w2 != null ? +(now-w2).toFixed(0) : null,
-        vs4w: w4 != null ? +(now-w4).toFixed(0) : null,
-        vs3m: m3 != null ? +(now-m3).toFixed(0) : null,
-        vs1m: w4 != null ? +(now-w4).toFixed(0) : null,  // 4 weeks ≈ 1 month
-        vs2m: m2 != null ? +(now-m2).toFixed(0) : null,
-      });
-    }
-    return out;
+    // Large or no-filter path: build the full Map once, cache it, filter on
+    // the way out if a symbol set was passed.
+    const fullMap = _buildAllTrends(db, type, last, windowDays);
+    _bulkTrendCache[type] = { lastDate: last, windowDays, fullMap };
+    return symbols ? _filterTrendMap(fullMap, symbols) : fullMap;
   } catch (_) { return new Map(); }
 }
 
