@@ -216,6 +216,14 @@ async function getAnnualEPS(ticker, n = 4) {
   return {
     years: sorted.map(r => ({
       fy: r.fy,
+      // fyLabel = the calendar year the fiscal year ENDED in. For
+      // calendar-year fiscals (AMZN, NVDA partial) end-year matches
+      // r.fy. For offset fiscals like AAPL (FY ends in September), SEC
+      // sometimes tags r.fy = end-year + 1 (their internal filing
+      // convention). Display preference: derive from r.end so the user
+      // sees "FY2024" when end is 2024-09-28, not SEC's confusing
+      // r.fy=2025. Falls back to r.fy when end is missing.
+      fyLabel: r.end ? `FY${r.end.slice(0, 4)}` : `FY${r.fy}`,
       end: r.end,
       eps: r.val,
       filedAt: r.filed,

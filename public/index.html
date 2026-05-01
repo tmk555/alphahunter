@@ -5309,7 +5309,14 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
     // and switching modes doesn't trigger a refetch.
     setPicksLoad(true);
     try {
-      const d = await api('/api/trade-setups/cached?mode=both');
+      // ALWAYS-FRESH on tab click: pass ?fresh=1 so the route bypasses the
+      // deep_scan_cache and runs a live runRSScan + runDeepScan. Server
+      // caches RS scan at 60s TTL_QUOTE so back-to-back clicks within
+      // that window are cheap. User-flagged 2026-05-01: stale prices in
+      // Trade Setups vs Scanner — root cause was the cached path returning
+      // 5-30 min old prices. ?fresh=1 forces apples-to-apples freshness
+      // with Scanner.
+      const d = await api('/api/trade-setups/cached?mode=both&fresh=1', { timeout: 5 * 60 * 1000 });
       // If the cached scan's regime differs from live regime, the cache is
       // showing stale conviction overrides and outdated sizing math.
       // Auto-trigger a fresh scan instead of rendering the stale results.

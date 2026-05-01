@@ -101,9 +101,38 @@ Return JSON array:
   // Filters via isSwingCandidate/isPositionCandidate, scores with convictionScore
   // (RS + SEPA + VCP + rotation), returns both swingSetup + positionSetup per
   // candidate. AI briefs optional (if anthropic is configured).
+  //
+  // FRESHNESS GUARANTEE (2026-05-01): the route ALWAYS calls runRSScanFn()
+  // to get current quotes — it does NOT trust client-supplied `stocks`.
+  // Pre-fix: when the UI passed stale rsData (e.g. 90s old) the deep
+  // scan ran on stale prices, so Scanner showed live $X but Trade Setups
+  // showed cached $Y for the same ticker.
+  //
+  // Pre-fix the API accepted optional `stocks` in the body. We retain
+  // that ONLY as a SHORTLIST filter (subset of tickers to inspect) —
+  // NEVER as the data source.
   router.post('/trade-setups/scan', async (req, res) => {
-    const { stocks = [], mode = 'both' } = req.body;
-    if (!stocks.length) return res.status(400).json({ error: 'No stocks provided' });
+    const { stocks: shortlist = [], mode = 'both', forceRefresh = false } = req.body;
+
+    // Always refresh quotes server-side. runRSScanFn caches at TTL_QUOTE
+    // (60s) so back-to-back scan clicks are cheap; first call after the
+    // window walks Yahoo for every symbol. forceRefresh=true busts the
+    // cache for users who want guaranteed sub-60s freshness.
+    if (forceRefresh) {
+      try {
+        const { cacheInvalidatePrefix } = require('../data/cache');
+        cacheInvalidatePrefix('rs:');
+      } catch (_) {}
+    }
+    const allStocks = await runRSScanFn();
+
+    // If caller supplied a shortlist, filter to those tickers. Otherwise
+    // run on the full live universe (the typical Trade Setups flow).
+    const stocks = shortlist.length
+      ? allStocks.filter(s => shortlist.some(x => (x.ticker || x) === s.ticker))
+      : allStocks;
+
+    if (!stocks.length) return res.status(400).json({ error: 'No stocks available — runRSScan returned empty' });
 
     const scan = await runDeepScan({ stocks, mode, sectorEtfs });
 
@@ -178,7 +207,33 @@ Return JSON array:
   });
 
   // GET /api/trade-setups/cached — retrieve last deep scan results (survives refresh)
+  // GET /api/trade-setups/cached?mode=both&fresh=1
+  //
+  // ?fresh=1 → bypass cache, run a live scan, return the fresh result.
+  // Useful for "always fresh on tab click" UI behavior. Caller can also
+  // hit POST /trade-setups/scan directly for the same effect; this is
+  // sugar that keeps the existing GET endpoint backward-compatible.
   router.get('/trade-setups/cached', async (req, res) => {
+    if (req.query.fresh === '1' || req.query.fresh === 'true') {
+      try {
+        const allStocks = await runRSScanFn();
+        const scan = await runDeepScan({ stocks: allStocks, mode: req.query.mode || 'both', sectorEtfs });
+        persistDeepScan({
+          mode: req.query.mode || 'both',
+          results: scan.results,
+          regime: scan.regime,
+          scannedCount: scan.candidates,
+          totalInput: scan.totalInput,
+        });
+        return res.json({
+          results: scan.results, regime: scan.regime, liveRegime: scan.regime,
+          regimeStale: false, cached: false, cachedAt: new Date().toISOString(),
+          ageMinutes: 0, mode: req.query.mode || 'both',
+          scannedCount: scan.candidates, totalInput: scan.totalInput,
+          convictionOverrides: scan.convictionOverrides,
+        });
+      } catch (e) { return res.status(500).json({ error: e.message }); }
+    }
     try {
       const db = getDB();
       const mode = req.query.mode || null;
