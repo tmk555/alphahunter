@@ -1043,10 +1043,17 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
       const allEvents = [];
       for (const h of earningsHistory) {
         if (h && h.date) {
-          // Snap quarter-end → nearest preceding trading day for marker
-          // placement, but keep `data.date` (the original quarter-end)
-          // so the tooltip still shows "Quarter ended 2026-01-31".
-          allEvents.push({ kind: 'earnings_past', date: snapToTradingDay(h.date), data: h });
+          // Marker placement priority:
+          //   1. h.filedAt — actual SEC 10-Q filing date when the news hit
+          //                  the wire (this is where the price REACTED).
+          //                  Sourced from src/data/providers/secEdgar.js.
+          //   2. h.date    — fiscal quarter end (Yahoo-only fallback).
+          // Always snap to the nearest preceding trading day for placement
+          // (handles Saturday filings, holidays). Tooltip wording adapts:
+          // "Filed YYYY-MM-DD" when SEC available vs "Quarter ended ..."
+          // when only Yahoo's quarter-end date is known.
+          const placementDate = h.filedAt || h.date;
+          allEvents.push({ kind: 'earnings_past', date: snapToTradingDay(placementDate), data: h });
         }
       }
       // Upcoming earnings — only add if distinct from the most recent
@@ -1082,35 +1089,40 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
           // Style per event kind
           let label, bg, border, fg, tickColor, tip;
           if (ev.kind === 'earnings_past') {
-            label = 'Q';
+            // ER label when we know the filing date (price reaction-aligned),
+            // Q label when only quarter-end is known (legacy Yahoo).
+            label = ev.data?.filedAt ? 'ER' : 'Q';
             bg = 'rgba(240,165,0,0.12)';
             border = '1px solid rgba(240,165,0,0.4)';
             fg = '#f0a500';
             tickColor = 'rgba(240,165,0,0.35)';
             const d = ev.data || {};
-            // Honest labeling: the date is the FISCAL QUARTER END, not the
-            // earnings announcement. Yahoo's free earningsHistory doesn't
-            // expose announcement dates — for TXN, Q1 2026 ended 03/31 but
-            // they actually reported on 04/22 (22-day gap). Use 'Q' marker +
-            // explicit "Quarter ended" wording so the user doesn't expect
-            // the price reaction to align with this marker.
-            //
-            // Tooltip shows the ORIGINAL quarter-end (d.date), not the
-            // marker's placement date (ev.date — which may have been
-            // snapped to the prior trading day for HPE's Saturday Q1-end).
-            // Add a hint when the marker was snapped so the user
-            // understands why the visual position differs from Levels.
-            const trueDate = d.date || ev.date;
-            const parts = [`Quarter ended ${trueDate}`];
-            if (trueDate !== ev.date) {
+            // Tooltip wording adapts to data quality.
+            //   • SEC-augmented (d.filedAt set): "Filed YYYY-MM-DD —
+            //     Quarter ended YYYY-MM-DD" — both dates honest.
+            //   • Yahoo-only: "Quarter ended YYYY-MM-DD" + caveat that
+            //     the actual announcement is typically 2-4 weeks later.
+            const parts = [];
+            if (d.filedAt) {
+              parts.push(`Filed ${d.filedAt}`);
+              parts.push(`(Quarter ended ${d.date})`);
+            } else {
+              parts.push(`Quarter ended ${d.date || ev.date}`);
+            }
+            // Distinguish marker-snap from event date when they differ
+            const placementDate = d.filedAt || d.date;
+            if (placementDate && placementDate !== ev.date) {
               parts.push(`(marker shown on ${ev.date} — last trading day before weekend/holiday)`);
             }
             if (d.epsActual != null)   parts.push(`Actual EPS $${d.epsActual.toFixed(2)}`);
+            if (d.actual != null && d.epsActual == null)
+                                       parts.push(`Actual EPS $${d.actual.toFixed(2)}`);
             if (d.epsEstimate != null) parts.push(`(est $${d.epsEstimate.toFixed(2)})`);
             if (d.surprisePct != null) {
               parts.push(`${d.surprisePct > 0 ? '+' : ''}${d.surprisePct.toFixed(1)}% vs est`);
             }
-            parts.push('(announcement date typically 2-4 weeks after quarter end)');
+            if (d.source === 'sec') parts.push('via SEC EDGAR');
+            else if (!d.filedAt) parts.push('(announcement date typically 2-4 weeks after quarter end)');
             tip = parts.join(' · ');
           } else if (ev.kind === 'earnings_next') {
             label = 'E';

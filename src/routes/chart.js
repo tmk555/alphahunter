@@ -590,6 +590,53 @@ module.exports = function () {
       let events = { earningsDate: null, exDividendDate: null };
       try { events = await yahooChartEvents(symbol); } catch (_) {}
 
+      // Augment with SEC EDGAR filing dates. Yahoo's earningsHistory dates
+      // are quarter-ends (e.g. 2025-12-31 for Q4 2025) but the actual EARNINGS
+      // RELEASE happens 4-6 weeks later when the 10-Q is filed. SEC has the
+      // exact filing date — that's where the price reaction occurred, so
+      // marker placement should anchor to that. Adds a `filedAt` field per
+      // earnings entry when SEC matched it; UI prefers `filedAt` over `date`
+      // for marker placement.
+      try {
+        const { getFilingMarkers, getQuarterlyEPS } = require('../data/providers/secEdgar');
+        const [secFilings, secEPS] = await Promise.all([
+          getFilingMarkers(symbol, ['10-Q', '10-K']).catch(() => null),
+          getQuarterlyEPS(symbol, 8).catch(() => null),
+        ]);
+        if (Array.isArray(secEPS) && Array.isArray(events.earningsHistory)) {
+          // Index SEC by period-end date so we can join with Yahoo
+          const secByEnd = new Map(secEPS.map(s => [s.date, s]));
+          events.earningsHistory = events.earningsHistory.map(h => {
+            const secMatch = secByEnd.get(h.date);
+            if (secMatch) return { ...h, filedAt: secMatch.filedAt, secActual: secMatch.eps };
+            return h;
+          });
+          // Append any SEC quarters that aren't in Yahoo's 4-quarter window
+          // (this is how AMZN's Q1 2026 print gets a marker the day Yahoo
+          // hasn't caught up yet).
+          for (const s of secEPS) {
+            if (!events.earningsHistory.find(h => h.date === s.date)) {
+              events.earningsHistory.push({
+                date: s.date,
+                actual: s.eps,
+                estimate: null,
+                surprise: null,
+                surprisePct: null,
+                filedAt: s.filedAt,
+                source: 'sec',
+              });
+            }
+          }
+          // Sort newest first to match the UI's existing convention.
+          events.earningsHistory.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        }
+        // Surface 10-K filings as a separate marker list — the UI can render
+        // them in a different color/shape ("annual report" vs quarterly).
+        if (Array.isArray(secFilings)) {
+          events.tenKFilings = secFilings.filter(f => f.form === '10-K').slice(0, 10);
+        }
+      } catch (_) { /* SEC augmentation optional */ }
+
       res.json({
         symbol,
         timeframe: 'daily',
