@@ -229,6 +229,71 @@ async function getFundamentals(symbol) {
     // FMP and AV don't have CAN SLIM fundamentals — skip
     return null;
   });
+  if (!data) return data;
+
+  // SEC EDGAR augmentation. Yahoo's earningsHistory lags 24-72h after a
+  // 10-Q filing; SEC has the data minutes after the company files. When
+  // SEC reports a more-recent quarter than Yahoo's freshest, splice the
+  // SEC data into epsActualQuarterly so the Levels card shows today's
+  // print instead of last quarter's.
+  //
+  // Foreign ADRs (TSM, ASML, ARM) and very recent IPOs return null from
+  // SEC — augmentation skips silently and the Yahoo data flows through.
+  // 6h cache on SEC company-facts means this adds <50ms per call when
+  // warm; ~2s on cold cache (one-time per symbol per 6 hours).
+  try {
+    const { getQuarterlyEPS, getAnnualEPS, getFilingMarkers } = require('./secEdgar');
+    const [secQ, secA, secMarkers] = await Promise.all([
+      getQuarterlyEPS(symbol, 8).catch(() => null),
+      getAnnualEPS(symbol, 4).catch(() => null),
+      getFilingMarkers(symbol, ['10-Q', '10-K']).catch(() => null),
+    ]);
+
+    // Quarterly EPS freshness check: only override if SEC has a more
+    // recent period than Yahoo's freshest. Otherwise Yahoo's surprise
+    // % data (which SEC doesn't provide) stays.
+    if (Array.isArray(secQ) && secQ.length) {
+      const yahooLatest = data.epsActualQuarterly?.[0]?.date;
+      const secLatest = secQ[0]?.date;
+      if (!yahooLatest || (secLatest && secLatest > yahooLatest)) {
+        // Splice SEC quarters in for the dates SEC has, keep Yahoo's
+        // surprise % for older overlapping quarters.
+        const yahooByDate = new Map((data.epsActualQuarterly || []).map(q => [q.date, q]));
+        data.epsActualQuarterly = secQ.map(s => ({
+          date: s.date,
+          actual: s.eps,
+          // Carry Yahoo's analyst estimate + surprise % when we have them
+          // for the same period — SEC doesn't include analyst estimates.
+          estimate:    yahooByDate.get(s.date)?.estimate    ?? null,
+          surprise:    yahooByDate.get(s.date)?.surprise    ?? null,
+          surprisePct: yahooByDate.get(s.date)?.surprisePct ?? null,
+          // SEC-specific provenance — UI can show "filed YYYY-MM-DD" badge
+          filedAt: s.filedAt,
+          form:    s.form,
+          source:  'sec_edgar',
+        }));
+        data.epsDataSource = 'sec_edgar';
+      }
+    }
+
+    // Annual EPS YoY: SEC's growthYoY uses true per-share diluted EPS,
+    // strictly more honest than Yahoo's net-income proxy. Override when
+    // SEC has it.
+    if (secA?.growthYoY != null) {
+      data.epsGrowthYoY = secA.growthYoY;
+      data.epsGrowthYoY_source = 'sec_per_share';
+      data.epsAnnualValuesSEC = secA.years; // for UI tooltips/charts
+    }
+
+    // Filing markers — surface the actual 10-Q / 10-K file dates so the
+    // chart layer can render vertical "ER" markers per quarter.
+    if (Array.isArray(secMarkers) && secMarkers.length) {
+      data.filingMarkers = secMarkers;
+    }
+  } catch (_) {
+    // Augmentation is opt-in — Yahoo data already in `data`, return as-is.
+  }
+
   return data;
 }
 
