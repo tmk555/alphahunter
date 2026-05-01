@@ -18,7 +18,13 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || '';
 const anthropic = ANTHROPIC_KEY ? new Anthropic({ apiKey: ANTHROPIC_KEY }) : null;
 
 app.use(cors());
-app.use(express.json({ limit: '2mb' }));
+// 10mb because the UI's POST /api/trade-setups/scan currently echoes the
+// full RS scan payload back as `stocks` (~4-5MB on the 1620-symbol
+// universe). Server-side only the ticker names matter — see the route
+// comment — but until the UI is updated to send tickers only, the larger
+// limit prevents PayloadTooLargeError. When the UI ships that change, this
+// can drop back to 2mb (or less).
+app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser);
 
 // ─── Authentication ─────────────────────────────────────────────────────────

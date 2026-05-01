@@ -5418,7 +5418,11 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
         console.log('[TradeSetups] Cache regime', d.regime?.regime, 'stale vs live', d.liveRegime?.regime, '— auto-refresh');
         const r = await api('/api/trade-setups/scan', {
           method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ stocks: rsData, mode: 'both' }),
+          // Send tickers only — server uses `stocks` solely as a shortlist
+// filter (it always re-fetches fresh quotes server-side). Sending
+// the full rsData here was a 4-5MB body for no benefit and tripped
+// PayloadTooLargeError once the universe grew past ~1500 names.
+body: JSON.stringify({ stocks: rsData.map(s => s.ticker), mode: 'both' }),
         });
         setPicks(r.results || []);
         setConvictionOverrides(r.convictionOverrides || []);
@@ -5437,7 +5441,11 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
       } else if (rsLoaded && rsData?.length) {
         const r = await api('/api/trade-setups/scan', {
           method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ stocks: rsData, mode: 'both' }),
+          // Send tickers only — server uses `stocks` solely as a shortlist
+// filter (it always re-fetches fresh quotes server-side). Sending
+// the full rsData here was a 4-5MB body for no benefit and tripped
+// PayloadTooLargeError once the universe grew past ~1500 names.
+body: JSON.stringify({ stocks: rsData.map(s => s.ticker), mode: 'both' }),
         });
         setPicks(r.results || []);
         setConvictionOverrides(r.convictionOverrides || []);
@@ -5484,7 +5492,8 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
     try {
       const d = await api('/api/trade-setups/scan', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ stocks: rsData, mode }),
+        // Send tickers only — see note above.
+body: JSON.stringify({ stocks: rsData.map(s => s.ticker), mode }),
       });
       setResults(d.results || []);
       setRegime(d.regime || null);
