@@ -386,7 +386,34 @@ async function _runRSScanBody(UNIVERSE, SECTOR_MAP) {
 }
 
 // ─── Sector/Industry scan helper ─────────────────────────────────────────────
+//
+// Cache + singleflight keyed on (histType, prefix). Multiple routes call into
+// runETFScan with the same args back-to-back — /api/sectors,
+// /api/sectors/rotation, /api/trade-setups (via deep-scan), each hitting the
+// SECTOR_ETFS list with histType='sector', prefix='SEC_'. Pre-fix, every
+// caller did a fresh provider sweep + DB writes for what turned out to be
+// identical data within the same scan window.
+const _etfCache    = new Map();   // key → { ts, result }
+const _etfInFlight = new Map();   // key → Promise<result>
+const ETF_TTL_MS   = TTL_QUOTE;   // shadow rs:full cadence
+
 async function runETFScan(etfs, histType, prefix, extraMap) {
+  const cacheKey = `${histType}:${prefix}`;
+  const hit = _etfCache.get(cacheKey);
+  if (hit && Date.now() - hit.ts < ETF_TTL_MS) return hit.result;
+  const inFlight = _etfInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
+  const p = _runETFScanBody(etfs, histType, prefix, extraMap)
+    .then(result => {
+      _etfCache.set(cacheKey, { ts: Date.now(), result });
+      return result;
+    })
+    .finally(() => _etfInFlight.delete(cacheKey));
+  _etfInFlight.set(cacheKey, p);
+  return p;
+}
+
+async function _runETFScanBody(etfs, histType, prefix, extraMap) {
   const symbols = etfs.map(s => s.t);
   const quotes  = await getQuotes(symbols);
   const histResults = await pLimit([...symbols, 'SPY'].map(sym => async () => ({ sym, closes: await getHistory(sym) })), 5);
