@@ -1660,6 +1660,12 @@ function App() {
   const [rsLoading, setRsLoading] = useState(false); // true while auto-load or REFRESH ALL in flight
   const rsLoadInFlight = useRef(false); // dedupes concurrent loads across App + RSTab
   const [minRS,     setMinRS]     = useState(50);   // lifted — persists across tabs
+  // Minimum market cap filter ($ billions). Default 1 = drop micro-caps and
+  // most small-caps that would never make a position trader's watchlist
+  // (illiquid, gappy, news-driven). Lifted to App so the same threshold
+  // applies to both Scanner and Trade Setups consistently — a stock
+  // filtered out of one shouldn't be a candidate in the other.
+  const [minMktCap, setMinMktCap] = useState(1);    // billions of $
   const [swingResults, setSwingResults] = useState([]);
   const [swingRegime,  setSwingRegime]  = useState(null);
   const [swingScanned, setSwingScanned] = useState(0);
@@ -2001,8 +2007,8 @@ function App() {
         {tab==='pulse'      && <MarketPulseTab />}
         {tab==='macro'      && <MacroTab />}
         {tab==='rotation'   && <RotationTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
-        {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} rsLoading={rsLoading} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} sigFilters={rsSigFilters} setSigFilters={setRsSigFilters} quickFilter={rsQuickFilter} setQuickFilter={setRsQuickFilter} scannerTarget={scannerTarget} clearScannerTarget={() => setScannerTarget(null)}/>}
-        {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} rsLoading={rsLoading} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary} setupSigFilters={setupSigFilters} setSetupSigFilters={setSetupSigFilters} mode={setupMode} setMode={setSetupMode} sortBy={setupSortBy} setSortBy={setSetupSortBy} exitStrategy={setupExitStrategy} setExitStrategy={setSetupExitStrategy}/>}
+        {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} rsLoading={rsLoading} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} minMktCap={minMktCap} setMinMktCap={setMinMktCap} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} sigFilters={rsSigFilters} setSigFilters={setRsSigFilters} quickFilter={rsQuickFilter} setQuickFilter={setRsQuickFilter} scannerTarget={scannerTarget} clearScannerTarget={() => setScannerTarget(null)}/>}
+        {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} rsLoading={rsLoading} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary} setupSigFilters={setupSigFilters} setSetupSigFilters={setSetupSigFilters} mode={setupMode} setMode={setSetupMode} sortBy={setupSortBy} setSortBy={setSetupSortBy} exitStrategy={setupExitStrategy} setExitStrategy={setSetupExitStrategy} minMktCap={minMktCap} setMinMktCap={setMinMktCap}/>}
         {tab==='hedge'      && <HedgeTab />}
         {tab==='trades'     && <TradesTab rsData={rsData} badgeCounts={badgeCounts}/>}
         {tab==='replay'     && <ReplayTab />}
@@ -4288,7 +4294,7 @@ function IndustriesTab({ selectedSectors, setSelectedSectors }) {
 }
 
 // ─── RS SCANNER TAB ───────────────────────────────────────────────────────────
-function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, setMinRS, selectedSectors, setSelectedSectors, sigFilters, setSigFilters, scannerTarget, clearScannerTarget }) {
+function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, setMinRS, minMktCap, setMinMktCap, selectedSectors, setSelectedSectors, sigFilters, setSigFilters, scannerTarget, clearScannerTarget }) {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   const [rsStaging, setRsStaging] = useState(null);
@@ -4718,9 +4724,18 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
 
   const { filtered, replayTop5, replayRank } = (() => {
     const q = searchQuery.trim().toLowerCase();
+    // Cap threshold in dollars. minMktCap is stored in $B for UX clarity;
+    // mktCap on each row comes from Yahoo's quote endpoint as raw $.
+    // Stocks with no mktCap reported (rare — recent IPOs, illiquid micro-
+    // caps) get the benefit of the doubt and pass when the user wants 0,
+    // but get filtered out as soon as a positive threshold is set.
+    const minMktCapDollars = (minMktCap || 0) * 1e9;
     let list = rsData.filter(s => {
       if (!baseFilter(s)) return false;
       if (selectedSectors && selectedSectors.size > 0 && !selectedSectors.has(s.sector)) return false;
+      // Market cap filter — drops sub-threshold names (default $1B excludes
+      // most small/micro-caps that a position trader wouldn't size into).
+      if (minMktCapDollars > 0 && (s.mktCap == null || s.mktCap < minMktCapDollars)) return false;
       // Universe-as-of filter — only applied when asOfMembers is a live Set.
       // We uppercase once above, so compare uppercase here too.
       if (asOfMembers && !asOfMembers.has((s.ticker || '').toUpperCase())) return false;
@@ -4770,6 +4785,12 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             <label style={{fontSize:11,color:'var(--text3)'}}>Min RS</label>
             <input type="number" value={minRS} onChange={e=>setMinRS(+e.target.value)} min={1} max={99}
               style={{width:60,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',padding:'5px 8px',fontSize:12,fontFamily:'var(--font-mono)'}}/>
+            {/* Min market cap (in $B). 0 disables. Default 1 = drop micro-caps
+                + most small-caps. Lifted to App so Trade Setups inherits the
+                same threshold — what's filtered here is filtered there too. */}
+            <label style={{fontSize:11,color:'var(--text3)'}} title="Minimum market cap (billions of $). 0 = no filter. Default 1 = drop micro-caps and most small-caps a position trader wouldn't size into.">Min Cap $B</label>
+            <input type="number" value={minMktCap} onChange={e=>setMinMktCap(Math.max(0, +e.target.value || 0))} min={0} step={0.5}
+              style={{width:60,background:'var(--bg3)',border:`1px solid ${minMktCap>0?'var(--cyan)':'var(--border)'}`,borderRadius:3,color:minMktCap>0?'var(--cyan)':'var(--text)',padding:'5px 8px',fontSize:12,fontFamily:'var(--font-mono)'}}/>
             {/* Universe-as-of picker — filters the live scan to S&P 500 membership on a historical date. */}
             <label style={{fontSize:11,color:'var(--text3)',marginLeft:6}} title="Show only stocks that were in the S&P 500 on this date (survivorship-bias lens)">Universe as-of</label>
             <input type="date" value={asOfDate} onChange={e=>setAsOfDate(e.target.value)}
@@ -5222,7 +5243,7 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
 }
 
 // ─── TRADE SETUPS (redesigned: unified card layout with filter chips, sort, and inline staging) ──
-function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regime, setRegime, scanned, setScanned, summary, setSummary, setupSigFilters, setSetupSigFilters, mode, setMode, sortBy, setSortBy, exitStrategy, setExitStrategy }) {
+function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regime, setRegime, scanned, setScanned, summary, setSummary, setupSigFilters, setSetupSigFilters, mode, setMode, sortBy, setSortBy, exitStrategy, setExitStrategy, minMktCap, setMinMktCap }) {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   const [picks,   setPicks]   = useState(null);
@@ -5265,19 +5286,31 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
     return true;
   }
 
+  // Market-cap gate. minMktCap is App-level state (shared with Scanner) so
+  // a stock excluded on one tab is excluded on the other. minMktCap is in
+  // billions of $; mktCap on each row is raw $ from Yahoo's quote endpoint.
+  // Names with no mktCap reported (rare) get filtered out as soon as the
+  // user sets a positive threshold — clearly missing beats falsely included.
+  const minMktCapDollars = (minMktCap || 0) * 1e9;
+  function passesMktCap(s) {
+    if (minMktCapDollars <= 0) return true;
+    return s.mktCap != null && s.mktCap >= minMktCapDollars;
+  }
+
   // Pending pullback: strong stocks too extended for position entry.
   // Rendered in its own section below the Deep Scan grid — not part of the
   // Swing/Position modes, since these are "watch, don't trade yet" candidates.
   const pendingPullback = useMemo(() => {
     if (!rsLoaded || !rsData.length) return [];
     return rsData.filter(s =>
+      passesMktCap(s) &&
       s.rsRank >= 70 &&
       (s.rsTrend?.vs1m > 0 || s.rsTrend?.vs4w > 0) &&
       s.vsMA200 > 0 &&
       s.vsMA50 > 5 && s.vsMA50 <= 20 &&
       (s.sepaScore >= 4 || s.vcpForming || s.stage === 2)
     ).sort((a, b) => a.vsMA50 - b.vsMA50).slice(0, 15);
-  }, [rsData, rsLoaded]);
+  }, [rsData, rsLoaded, minMktCap]);
 
   // Unified filtered + sorted picks. Mode is always 'swing' or 'position' —
   // pullback lives in its own section below Deep Scan, never in this grid.
@@ -5289,6 +5322,8 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
       if (mode === 'position') {
         if (!(s.vsMA50 != null && s.vsMA50 >= -2 && s.vsMA50 <= 5 && s.rsRank >= 70 && (s.sepaScore >= 4 || s.vcpForming || s.stage === 2))) return false;
       }
+      // Cap gate — same threshold the Scanner uses (App-level state).
+      if (!passesMktCap(s)) return false;
       return passesChipFilters(s);
     });
     // Sort
@@ -5298,7 +5333,7 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
     else if (sortBy === 'sector') list.sort((a, b) => (a.sector || '').localeCompare(b.sector || ''));
     else if (sortBy === 'sepa') list.sort((a, b) => (b.sepaScore || 0) - (a.sepaScore || 0));
     return list.slice(0, picksLimit);
-  }, [picks, pendingPullback, setupSigFilters, picksLimit, mode, sortBy]);
+  }, [picks, pendingPullback, setupSigFilters, picksLimit, mode, sortBy, minMktCap]);
 
   // Load picks once on mount, and again when RS data finally arrives (needed
   // for the inline-scan fallback when the cache is cold). Mode switching is
@@ -5606,6 +5641,15 @@ body: JSON.stringify({ stocks: rsData.map(s => s.ticker), mode }),
           <option value="full_in_scale_out">Full / Scale Out</option>
           <option value="full_in_full_out">Full / Full Out</option>
         </select>
+
+        <div className="ts-toolbar-sep" />
+
+        {/* Min market cap filter — App-level state shared with Scanner so the
+            same threshold applies to both views. 0 disables. Default 1 = drop
+            micro-caps + most small-caps a position trader wouldn't size into. */}
+        <span className="ts-toolbar-label" title="Minimum market cap (billions of $). 0 disables. Shared with Scanner — what's filtered there is filtered here.">Min Cap $B</span>
+        <input type="number" value={minMktCap} onChange={e=>setMinMktCap(Math.max(0, +e.target.value || 0))} min={0} step={0.5}
+          style={{width:60,background:'var(--bg3)',border:`1px solid ${minMktCap>0?'var(--cyan)':'var(--border)'}`,borderRadius:3,color:minMktCap>0?'var(--cyan)':'var(--text)',padding:'5px 8px',fontSize:12,fontFamily:'var(--font-mono)'}}/>
 
         <div className="ts-toolbar-sep" />
 
