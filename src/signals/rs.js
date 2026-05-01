@@ -1,5 +1,5 @@
 // ─── IBD Relative Strength calculations ──────────────────────────────────────
-const { loadHistory, saveHistory, RS_HISTORY } = require('../data/store');
+const { saveHistory, getHistoryStats, getHistoryDates, getSnapshotOnDate, RS_HISTORY } = require('../data/store');
 
 // Real IBD RS: weighted 12-month performance
 function calcRS(closes) {
@@ -141,11 +141,16 @@ function getRSTrend(ticker, history) {
 
 // Pre-generate RS history from 1-year price data (no extra API calls)
 function preGenerateHistoryFor(histMap, keyFn, histType, label, minSnapshots = 3) {
-  const history = loadHistory(histType);
-  const existingDates = Object.keys(history).length;
+  // Targeted reads instead of materializing the full {date: {symbol: rank}}
+  // tree. We only need: count of distinct dates, the most recent date's
+  // snapshot (to find missing symbols), and a Set of known dates for the
+  // existence check inside the loop.
+  const stats          = getHistoryStats(histType);
+  const existingDates  = stats.dateCount;
+  const lastDate       = stats.lastDate;
+  const lastSnap       = lastDate ? getSnapshotOnDate(histType, lastDate) : {};
+  const knownDates     = new Set(getHistoryDates(histType));
 
-  const lastDate = Object.keys(history).sort().pop();
-  const lastSnap = lastDate ? (history[lastDate] || {}) : {};
   const missingSymbols = Object.keys(histMap).filter(sym => {
     const k = keyFn(sym);
     return !(k in lastSnap) && histMap[sym]?.length >= 63;
@@ -164,7 +169,7 @@ function preGenerateHistoryFor(histMap, keyFn, histType, label, minSnapshots = 3
     const snapDate = new Date(today);
     snapDate.setDate(snapDate.getDate() - weeksBack * 7);
     const dateStr = snapDate.toISOString().split('T')[0];
-    if (history[dateStr]) continue;
+    if (knownDates.has(dateStr)) continue;
 
     const daysBack  = weeksBack * 5;
     const tempItems = [];

@@ -35,9 +35,9 @@ function isTradingDay(dateStr) {
   const dow = d.getUTCDay(); // 0=Sun..6=Sat
   return dow !== 0 && dow !== 6;
 }
-const { loadHistory, saveHistory, RS_HISTORY, SEC_HISTORY, IND_HISTORY } = require('./data/store');
+const { saveHistory, RS_HISTORY, SEC_HISTORY, IND_HISTORY } = require('./data/store');
 const { getQuotes, getHistory, getHistoryFull, pLimit } = require('./data/providers/manager');
-const { calcRS, calcRSWeekly, calcRSMonthly, rankToRS, rankBySector, getRSTrend, preGenerateHistoryFor, getTimeframeAlignment } = require('./signals/rs');
+const { calcRS, calcRSWeekly, calcRSMonthly, rankToRS, rankBySector, preGenerateHistoryFor, getTimeframeAlignment } = require('./signals/rs');
 const { calcSwingMomentum, calcPeriodReturns, calcATR, volumeTrend, calcVolumeProfile } = require('./signals/momentum');
 const { calcVCP }    = require('./signals/vcp');
 const { calcRSLine } = require('./signals/rsline');
@@ -334,14 +334,16 @@ async function runRSScan(UNIVERSE, SECTOR_MAP) {
     try {
       const { getDB } = require('./data/database');
       const { calcConviction } = require('./signals/conviction');
-      const rsHist = loadHistory(RS_HISTORY);
-      const { getRSTrend } = require('./signals/rs');
+      const { getRSTrendsBulk } = require('./data/store');
+      // Bulk-fetch trends for all 1620 results in one 100-day-window scan,
+      // instead of materializing the full 3.7M-row history per-call.
+      const trends = getRSTrendsBulk(RS_HISTORY, results.map(r => r.ticker));
       const scanInsert = getDB().prepare(
         'INSERT OR REPLACE INTO scan_results (date, symbol, data, conviction_score) VALUES (?, ?, ?, ?)'
       );
       const scanTxn = getDB().transaction(() => {
         for (const s of results) {
-          const rsTrend = getRSTrend(s.ticker, rsHist);
+          const rsTrend = trends.get(s.ticker) || null;
           const { convictionScore } = calcConviction(s, rsTrend);
           scanInsert.run(today, s.ticker, JSON.stringify(s), convictionScore);
         }
@@ -422,10 +424,13 @@ async function runETFScan(etfs, histType, prefix, extraMap) {
     saveHistory(histType, snap, todayStr);
   }
 
-  // Attach RS trends
-  const hist = loadHistory(histType);
+  // Attach RS trends — bulk fetch via the targeted reader. Map keys are
+  // the clean symbols (no SEC_/IND_ prefix), since the bulk helper strips
+  // any prefix on the way in.
+  const { getRSTrendsBulk } = require('./data/store');
+  const trends = getRSTrendsBulk(histType, result.map(r => r.symbol));
   return result.map(r => ({
-    ...r, rsTrend: getRSTrend(prefix + r.symbol, hist),
+    ...r, rsTrend: trends.get(r.symbol) || null,
   }));
 }
 
