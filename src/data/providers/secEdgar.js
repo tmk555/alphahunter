@@ -253,6 +253,10 @@ async function getFilingMarkers(ticker, formTypes = ['10-Q', '10-K', '8-K']) {
         reportPeriod: recent.reportDate[i] || null,
         accession: recent.accessionNumber[i],
         primaryDoc: recent.primaryDocument[i],
+        // 8-K item codes (e.g. "2.02,9.01") tell you WHAT triggered the
+        // 8-K — earnings press release, M&A announcement, exec change, etc.
+        // For 10-Q / 10-K this field is empty.
+        items: recent.items?.[i] || null,
         url: `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${cik.cik}&type=${recent.form[i]}&dateb=&owner=include&count=40`,
       });
     }
@@ -261,10 +265,57 @@ async function getFilingMarkers(ticker, formTypes = ['10-Q', '10-K', '8-K']) {
   return markers;
 }
 
+// ─── 8-K item code → human label map ─────────────────────────────────────
+//
+// 8-K is a "material events" form companies file between quarterly reports.
+// The Item code identifies what's being disclosed. Most are noise (FD
+// disclosure, exhibits-only). A small subset moves prices: earnings PR,
+// M&A, executive change. We tag those for chart rendering.
+//
+// Reference: https://www.sec.gov/files/8K-Form-Instructions.pdf
+
+const TRADER_RELEVANT_8K_ITEMS = {
+  '1.01': 'M&A signed',
+  '1.02': 'M&A terminated',
+  '2.01': 'Acquisition closed',
+  '2.02': 'Earnings release',     // ← most common reason for an 8-K
+  '2.03': 'Direct financial obligation',
+  '2.04': 'Triggering event — debt acceleration',
+  '2.05': 'Restructuring costs',
+  '2.06': 'Material impairment',
+  '3.01': 'Listing standard fail / transfer',
+  '3.02': 'Unregistered equity sale',
+  '4.01': 'Auditor change',
+  '4.02': 'Restated financials — non-reliance',
+  '5.01': 'Change in control',
+  '5.02': 'Director / officer change',
+  '5.03': 'Bylaw / charter amendment',
+  '7.01': 'Reg FD disclosure',
+  '8.01': 'Other material events',
+};
+
+// Determine if an 8-K's items make it interesting for a trader's chart.
+// Returns the friendliest item label or null to skip rendering.
+function classify8KItems(itemsStr) {
+  if (!itemsStr) return null;
+  const items = itemsStr.split(',').map(s => s.trim());
+  // Walk in priority order so an 8-K with both 2.02 + 9.01 (typical earnings
+  // release) gets labeled "Earnings release" not "Other"
+  const priority = ['2.02', '1.01', '1.02', '2.01', '2.05', '2.06', '4.02', '5.02', '5.01', '3.01', '4.01'];
+  for (const code of priority) {
+    if (items.includes(code) && TRADER_RELEVANT_8K_ITEMS[code]) {
+      return { code, label: TRADER_RELEVANT_8K_ITEMS[code], allItems: items };
+    }
+  }
+  // Skip pure-noise 8-Ks (only 7.01 / 8.01 / 9.01 = exhibits)
+  return null;
+}
+
 module.exports = {
   getCIK,
   getCompanyFacts,
   getQuarterlyEPS,
   getAnnualEPS,
   getFilingMarkers,
+  classify8KItems,
 };

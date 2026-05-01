@@ -1014,7 +1014,7 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
     let unsubscribeEvents = null;
     if (overlayEl) overlayEl.innerHTML = '';
     if (overlayEl && chartData.events && !isIntraday) {
-      const { earningsDate, exDividendDate, earningsHistory = [], tenKFilings = [] } = chartData.events;
+      const { earningsDate, exDividendDate, earningsHistory = [], tenKFilings = [], eightKFilings = [] } = chartData.events;
       const todayISO = new Date().toISOString().slice(0, 10);
 
       // Build a Set of trading-day dates from the bars so we can snap
@@ -1077,6 +1077,19 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
       for (const f of tenKFilings) {
         if (!f?.filedAt) continue;
         allEvents.push({ kind: 'tenK_filing', date: snapToTradingDay(f.filedAt), data: f });
+      }
+      // 8-K material events — earnings press releases, M&A, exec changes.
+      // Backend has already filtered to "trader-relevant" item codes (SEC's
+      // 1.01, 2.01, 2.02, 5.02, etc.) — pure-noise 8-Ks (Reg FD, exhibits-
+      // only) are dropped server-side. Skip when an 8-K's filing date matches
+      // an existing ER marker (Earnings Release 8-K + 10-Q file the same
+      // day — collapse to one ER marker, the more informative one).
+      const existingDates = new Set(allEvents.map(e => e.date));
+      for (const f of eightKFilings) {
+        if (!f?.filedAt) continue;
+        const d = snapToTradingDay(f.filedAt);
+        if (existingDates.has(d)) continue;  // dedupe with ER / 10-K markers
+        allEvents.push({ kind: 'eightK_filing', date: d, data: f });
       }
 
       const renderMarkers = () => {
@@ -1156,6 +1169,27 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
             if (d.url) parts.push(`SEC: ${d.url}`);
             tip = parts.join(' · ');
             // Make the marker a clickable link to the SEC filing index
+            if (d.url) {
+              marker.style.cursor = 'pointer';
+              marker.addEventListener('click', () => window.open(d.url, '_blank'));
+            }
+          } else if (ev.kind === 'eightK_filing') {
+            // 8-K material event — small slim marker, distinct mint/teal.
+            // Label is the 8-K item code (e.g. "2.02" earnings release,
+            // "1.01" M&A signed, "5.02" exec change) — reads as a 3-char
+            // tag in monospace. Tooltip expands the item code to full
+            // human-readable label classified server-side.
+            const d = ev.data || {};
+            label = d.code || '8K';
+            bg = 'rgba(76,217,217,0.10)';
+            border = '1px solid rgba(76,217,217,0.55)';
+            fg = '#4cd9d9';
+            tickColor = 'rgba(76,217,217,0.45)';
+            const parts = [`8-K · ${d.label || 'material event'}`];
+            parts.push(`Filed ${d.filedAt}`);
+            if (d.allItems?.length) parts.push(`Items: ${d.allItems.join(', ')}`);
+            if (d.url) parts.push('Click → SEC filing');
+            tip = parts.join(' · ');
             if (d.url) {
               marker.style.cursor = 'pointer';
               marker.addEventListener('click', () => window.open(d.url, '_blank'));

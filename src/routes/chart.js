@@ -598,10 +598,11 @@ module.exports = function () {
       // earnings entry when SEC matched it; UI prefers `filedAt` over `date`
       // for marker placement.
       try {
-        const { getFilingMarkers, getQuarterlyEPS } = require('../data/providers/secEdgar');
-        const [secFilings, secEPS] = await Promise.all([
+        const { getFilingMarkers, getQuarterlyEPS, classify8KItems } = require('../data/providers/secEdgar');
+        const [secFilings, secEPS, sec8K] = await Promise.all([
           getFilingMarkers(symbol, ['10-Q', '10-K']).catch(() => null),
           getQuarterlyEPS(symbol, 8).catch(() => null),
+          getFilingMarkers(symbol, ['8-K']).catch(() => null),
         ]);
         if (Array.isArray(secEPS) && Array.isArray(events.earningsHistory)) {
           // Index SEC by period-end date so we can join with Yahoo
@@ -634,6 +635,22 @@ module.exports = function () {
         // them in a different color/shape ("annual report" vs quarterly).
         if (Array.isArray(secFilings)) {
           events.tenKFilings = secFilings.filter(f => f.form === '10-K').slice(0, 10);
+        }
+
+        // 8-K material events — earnings releases, M&A, exec changes, etc.
+        // We classify each 8-K by its item code and SKIP the ones that
+        // are pure noise (Reg FD, exhibits-only). Without the filter, busy
+        // companies (TSLA, NVDA) would crowd the strip with weekly 8-Ks
+        // that have no price impact. Limit to 20 most recent to avoid
+        // overflow on chart even after filtering.
+        if (Array.isArray(sec8K)) {
+          events.eightKFilings = sec8K
+            .map(f => {
+              const c = classify8KItems(f.items);
+              return c ? { ...f, ...c } : null;
+            })
+            .filter(Boolean)
+            .slice(0, 20);
         }
       } catch (_) { /* SEC augmentation optional */ }
 
