@@ -3166,11 +3166,24 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
     api(`/api/fundamentals/${s.ticker}`)
       .then(d => {
         if (d?.error || d == null) {
-          setFundsError(d?.error || 'No fundamental data available from Yahoo Finance');
-        } else if (d.canSlimScore != null || d.epsGrowthQoQ != null || d.revenueGrowthYoY != null) {
+          // Surface route's friendly detail when present; otherwise generic.
+          // Don't say "Yahoo Finance" — we cascade SEC EDGAR + Yahoo now.
+          setFundsError(d?.error || 'No fundamental data available');
+        } else if (
+          // Has any meaningful field — Yahoo-shape OR SEC-augmented.
+          // Pre-fix only checked Yahoo fields, so SEC-only responses
+          // (Yahoo down + SEC up) would wrongly trigger the empty-data
+          // branch even though epsActualQuarterly was fully populated.
+          d.canSlimScore != null ||
+          d.epsGrowthQoQ != null ||
+          d.revenueGrowthYoY != null ||
+          (Array.isArray(d.epsActualQuarterly) && d.epsActualQuarterly.length > 0) ||
+          (Array.isArray(d.revActualQuarterly) && d.revActualQuarterly.length > 0) ||
+          (Array.isArray(d.filingMarkers)      && d.filingMarkers.length > 0)
+        ) {
           setFunds(d);
         } else {
-          setFundsError('Yahoo Finance returned data but all fields are empty — ticker may not have coverage');
+          setFundsError('No fundamental data available — neither Yahoo nor SEC EDGAR has coverage for this ticker');
         }
       })
       .catch(e => setFundsError(e.message || 'Network error fetching fundamentals'))

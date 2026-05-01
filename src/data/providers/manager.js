@@ -248,13 +248,32 @@ async function getHistoryFull(symbol, { minBars, preferConsolidatedVolume = fals
 }
 
 async function getFundamentals(symbol) {
-  const { data } = await withFallback(`fundamentals(${symbol})`, (mod, key) => {
-    if (key === 'polygon') return () => mod.polygonFundamentals(symbol);
-    if (key === 'yahoo') return () => mod.getYahooFundamentals(symbol);
-    // FMP and AV don't have CAN SLIM fundamentals — skip
-    return null;
-  });
-  if (!data) return data;
+  // ── Step 1: Try the base provider cascade (Yahoo / Polygon) ───────────
+  //
+  // We deliberately swallow the "all providers failed" throw here rather
+  // than let it propagate. Reason: when Yahoo has a transient hiccup
+  // (rate limit, 5xx, crumb-rotation race) we don't want the user to see
+  // a hard failure for a symbol that SEC EDGAR has perfectly fresh data
+  // for. The augmentation step below can construct a useful response
+  // from SEC alone for any US-domiciled ticker.
+  //
+  // For foreign ADRs (TSM, ASML, ARM, SAP) the inverse is true — SEC
+  // returns null and we depend on Yahoo. The SEC-only build below also
+  // returns null in that case, which is the correct behavior: the route
+  // surfaces a "no data" 404 instead of a half-built response.
+  let data = null;
+  try {
+    const result = await withFallback(`fundamentals(${symbol})`, (mod, key) => {
+      if (key === 'polygon') return () => mod.polygonFundamentals(symbol);
+      if (key === 'yahoo') return () => mod.getYahooFundamentals(symbol);
+      // FMP and AV don't have CAN SLIM fundamentals — skip
+      return null;
+    });
+    data = result.data;
+  } catch (e) {
+    // All base providers failed — log it but keep going so SEC can fill in.
+    console.warn(`  Fundamentals base cascade failed for ${symbol}: ${e.message} — attempting SEC-only build`);
+  }
 
   // SEC EDGAR augmentation. Yahoo's earningsHistory lags 24-72h after a
   // 10-Q filing; SEC has the data minutes after the company files. When
@@ -279,6 +298,45 @@ async function getFundamentals(symbol) {
       getAnnualRevenue(symbol, 4).catch(() => null),
       getFilingMarkers(symbol, ['10-Q', '10-K']).catch(() => null),
     ]);
+
+    // If the base cascade failed but SEC has data, build a minimal `data`
+    // object with the Yahoo-shape fields initialized so the augmentation
+    // splices below can populate them. Yahoo-only fields (short interest,
+    // institutional %, forward estimates) stay null — clearly missing
+    // beats wrong, and the UI tolerates nulls gracefully (the C/A/N cards
+    // render from SEC fields, the S/I cards render "—" without crashing).
+    const hasSEC = (Array.isArray(secQ) && secQ.length) ||
+                   (Array.isArray(secRevQ) && secRevQ.length) ||
+                   (secA && secA.years?.length);
+    if (!data && hasSEC) {
+      console.log(`  Fundamentals ${symbol}: SEC-only build (Yahoo unavailable)`);
+      data = {
+        // Yahoo-shape skeleton — augmentation block below fills the SEC fields
+        epsGrowthQoQ: null,
+        epsGrowthYoY: null,
+        epsAccelerating: false,
+        netIncomeGrowthYoY: null,
+        epsGrowth_Q0_yoy: null, epsGrowth_Q1_yoy: null, epsGrowth_Q2_yoy: null,
+        c_pass_q0: false, c_pass_q1: false, c_pass_q2: false,
+        epsAccelerating_qoq: false,
+        epsAnnualGrowth: [],
+        annualEpsAccelerating: false,
+        epsTurnaround: false,
+        epsAnnualValues: [],
+        epsActualQuarterly: [],
+        revGrowth_Q0_yoy: null, revGrowth_Q1_yoy: null,
+        revenueGrowthYoY: null,
+        // Yahoo-only fields — null sentinel so UI shows "—" instead of crashing
+        sharesFloat: null, sharesShort: null,
+        shortPercentFloat: null, shortRatio: null,
+        institutionPct: null, insiderPct: null,
+        grossMargins: null, returnOnEquity: null, debtToEquity: null,
+        forwardPE: null, canSlimScore: null,
+        epsDataSource: 'sec_only',
+      };
+    }
+    // If still no data (no SEC, no Yahoo), bail before the splices touch null.
+    if (!data) return null;
 
     // Quarterly EPS: SEC is the primary source whenever it has data. SEC
     // gives us per-share diluted EPS (the true CANSLIM "C" metric) plus
