@@ -395,6 +395,37 @@ function initSchema() {
       ON universe_membership (index_name, start_date, end_date);
   `);
 
+  // ─── Daily OHLCV bars cache (persistent, survives restart) ────────────────
+  //
+  // Pre-cache, every server restart wiped getHistoryFull's in-memory cache,
+  // so the first scan after boot paid the full 1620-symbol provider sweep
+  // (~7-8 min, Alpaca rate-limited). With this table, each symbol's bars
+  // are persisted on first fetch and re-served from disk on every subsequent
+  // call — including across restarts. Today's bar is updated daily by the
+  // scheduler/scan path; older bars are immutable.
+  //
+  // Schema mirrors the in-memory bar shape (open/high/low/close/volume/date).
+  // PK (symbol, date) lets us use INSERT OR REPLACE for idempotent upserts —
+  // re-fetching a window that overlaps existing rows just refreshes them.
+  //
+  // Size estimate: 1620 symbols × 2500 days × ~80 bytes ≈ 320 MB on disk.
+  // Acceptable for a single-user app; query patterns are
+  //   SELECT ... WHERE symbol=? ORDER BY date — well-served by the PK.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS daily_bars (
+      symbol TEXT NOT NULL,
+      date   TEXT NOT NULL,
+      open   REAL,
+      high   REAL,
+      low    REAL,
+      close  REAL,
+      volume INTEGER,
+      PRIMARY KEY (symbol, date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_daily_bars_symbol_date
+      ON daily_bars (symbol, date);
+  `);
+
   // ─── FRED Macro Series (point-in-time historical economic data) ──────────
   //
   // Stores observations for FRED series like DGS10 (10yr yield), CPIAUCSL

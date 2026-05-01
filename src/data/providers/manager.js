@@ -174,6 +174,24 @@ async function getHistoryFull(symbol, { minBars, preferConsolidatedVolume = fals
     : providers;
 
   if (!minBars) {
+    // ── Persistent SQLite cache: serve from disk when fresh ────────────────
+    // Falls back to the provider cascade only when the cache is missing or
+    // stale (last bar older than the most recent trading day). After a
+    // provider fetch, persist the result so the next call (and every call
+    // after a server restart) is instant.
+    //
+    // Skipped when preferConsolidatedVolume=true — that path is volume-
+    // sensitive and callers want freshly-sourced bars from a non-IEX feed.
+    const barsCache = require('../bars-cache');
+    if (!preferConsolidatedVolume) {
+      try {
+        if (barsCache.isFresh(symbol)) {
+          const cached = barsCache.getCachedBars(symbol);
+          if (cached && cached.length > 0) return cached;
+        }
+      } catch (_) { /* DB unavailable — fall through to providers */ }
+    }
+
     const { data } = await withFallbackOrdered(orderedProviders, `historyFull(${symbol})`, (mod, key) => {
       if (!providerAcceptsSymbol(mod, symbol)) return null;  // don't trip CB on unsupported symbols
       if (key === 'polygon') return () => mod.polygonHistoryFull(symbol);
@@ -183,6 +201,13 @@ async function getHistoryFull(symbol, { minBars, preferConsolidatedVolume = fals
       if (key === 'alphavantage') return () => mod.avHistoryFull(symbol);
       return null;
     });
+
+    // Persist successful provider responses to the disk cache so the next
+    // restart-after-fetch is instant. Errors swallowed — the provider data
+    // is still returned to the caller.
+    if (!preferConsolidatedVolume && Array.isArray(data) && data.length > 0) {
+      try { require('../bars-cache').saveBars(symbol, data); } catch (_) {}
+    }
     return data;
   }
 
