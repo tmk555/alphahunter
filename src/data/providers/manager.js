@@ -274,31 +274,35 @@ async function getFundamentals(symbol) {
       getFilingMarkers(symbol, ['10-Q', '10-K']).catch(() => null),
     ]);
 
-    // Quarterly EPS freshness check: only override if SEC has a more
-    // recent period than Yahoo's freshest. Otherwise Yahoo's surprise
-    // % data (which SEC doesn't provide) stays.
+    // Quarterly EPS: SEC is the primary source whenever it has data. SEC
+    // gives us per-share diluted EPS (the true CANSLIM "C" metric) plus
+    // the actual filing date so the chart can anchor markers to where the
+    // price reacted. We blend in Yahoo's `estimate` / `surprisePct` /
+    // `surprise` for any overlapping period since SEC doesn't carry analyst
+    // estimates.
+    //
+    // Pre-fix this only ran when SEC had a FRESHER period than Yahoo —
+    // meaning quarters where both providers had the same latest period
+    // kept Yahoo's structure (no filedAt → chart markers placed at
+    // calendar quarter-end, not the actual price-reaction date). The new
+    // unconditional override gives every chart's earnings markers a
+    // proper EDGAR anchor regardless of who reported first.
     if (Array.isArray(secQ) && secQ.length) {
-      const yahooLatest = data.epsActualQuarterly?.[0]?.date;
-      const secLatest = secQ[0]?.date;
-      if (!yahooLatest || (secLatest && secLatest > yahooLatest)) {
-        // Splice SEC quarters in for the dates SEC has, keep Yahoo's
-        // surprise % for older overlapping quarters.
-        const yahooByDate = new Map((data.epsActualQuarterly || []).map(q => [q.date, q]));
-        data.epsActualQuarterly = secQ.map(s => ({
-          date: s.date,
-          actual: s.eps,
-          // Carry Yahoo's analyst estimate + surprise % when we have them
-          // for the same period — SEC doesn't include analyst estimates.
-          estimate:    yahooByDate.get(s.date)?.estimate    ?? null,
-          surprise:    yahooByDate.get(s.date)?.surprise    ?? null,
-          surprisePct: yahooByDate.get(s.date)?.surprisePct ?? null,
-          // SEC-specific provenance — UI can show "filed YYYY-MM-DD" badge
-          filedAt: s.filedAt,
-          form:    s.form,
-          source:  'sec_edgar',
-        }));
-        data.epsDataSource = 'sec_edgar';
-      }
+      const yahooByDate = new Map((data.epsActualQuarterly || []).map(q => [q.date, q]));
+      data.epsActualQuarterly = secQ.map(s => ({
+        date: s.date,
+        actual: s.eps,
+        // Carry Yahoo's analyst estimate + surprise % when we have them
+        // for the same period — SEC doesn't include analyst estimates.
+        estimate:    yahooByDate.get(s.date)?.estimate    ?? null,
+        surprise:    yahooByDate.get(s.date)?.surprise    ?? null,
+        surprisePct: yahooByDate.get(s.date)?.surprisePct ?? null,
+        // SEC-specific provenance — UI can show "filed YYYY-MM-DD" badge
+        filedAt: s.filedAt,
+        form:    s.form,
+        source:  'sec_edgar',
+      }));
+      data.epsDataSource = 'sec_edgar';
     }
 
     // Annual EPS YoY: SEC's growthYoY uses true per-share diluted EPS,

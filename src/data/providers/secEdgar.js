@@ -148,10 +148,19 @@ async function getQuarterlyEPS(ticker, n = 8) {
   const quarters = (series.rows || [])
     .filter(r => r.form === '10-Q' || (r.form === '10-K' && r.fp === 'Q4'))
     .filter(r => r.end && r.val != null)
-    // Dedupe by period end (some quarters get amended — keep latest filed)
+    // Dedupe by period end. Subsequent 10-Qs include prior quarters as
+    // *comparative* line items — same `end` date, same `val`, but a later
+    // `filed` date. We want the ORIGINAL filing (when the news first hit
+    // the wire), so keep the EARLIEST filed for each period end.
+    //
+    // Edge case: a 10-Q/A amendment legitimately updates a prior period.
+    // Those are rare; if/when we see one, we'd want the amendment's value.
+    // For now we prefer "first reported" since that matches the chart's
+    // price-reaction-anchored marker — the amendment date isn't typically
+    // a price-moving event.
     .reduce((acc, r) => {
       const cur = acc.get(r.end);
-      if (!cur || (r.filed > cur.filed)) acc.set(r.end, r);
+      if (!cur || (r.filed < cur.filed)) acc.set(r.end, r);
       return acc;
     }, new Map());
 
@@ -183,26 +192,26 @@ async function getAnnualEPS(ticker, n = 4) {
               || _extractConcept(facts, 'EarningsPerShareBasic');
   if (!series) return null;
 
-  // Filter to ROWS WHERE end-date's calendar year matches fy. Without this,
-  // 10-Ks include comparative restatements (e.g. AAPL's FY2025 10-K includes
-  // 2023/2024/2025 EPS all tagged fy=2025 for comparative presentation).
-  // Filtering by `end` matching fy isolates the actual current-year value.
+  // Filter to FY rows. 10-Ks include 2-3 prior fiscal years as comparative
+  // columns — same `end` date appears multiple times with different `fy`
+  // tags (e.g. AMZN's FY2024 EPS appears once with fy=2024 in the original
+  // 2025-02 filing AND again with fy=2025 in the FY2025 10-K filed 2026-02).
+  //
+  // Dedupe by `end` (period-end date) — that's the natural unique key for a
+  // fiscal year — and keep the EARLIEST `filed` date so we anchor to the
+  // original 10-K filing (where the price reacted), not a comparative line.
   const annual = (series.rows || [])
     .filter(r => r.form === '10-K' && r.fp === 'FY' && r.val != null && r.end)
-    .filter(r => {
-      const endYear = +r.end.slice(0, 4);
-      // Allow ±1 year for non-calendar fiscal years (Apple's FY2025 ends
-      // 2025-09 → endYear 2025; some companies' FY ends in Jan of the
-      // following calendar year).
-      return Math.abs(endYear - r.fy) <= 1;
-    })
     .reduce((acc, r) => {
-      const cur = acc.get(r.fy);
-      if (!cur || (r.filed > cur.filed)) acc.set(r.fy, r);
+      const cur = acc.get(r.end);
+      if (!cur || (r.filed < cur.filed)) acc.set(r.end, r);
       return acc;
     }, new Map());
 
-  const sorted = [...annual.values()].sort((a, b) => b.fy - a.fy).slice(0, n);
+  // Sort by period-end descending (newest fiscal year first) and slice top N.
+  const sorted = [...annual.values()]
+    .sort((a, b) => (b.end || '').localeCompare(a.end || ''))
+    .slice(0, n);
   if (sorted.length < 2) return { years: sorted, growthYoY: null };
 
   // True per-share growth: (this_year_EPS / prior_year_EPS) - 1.

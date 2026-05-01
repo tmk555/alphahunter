@@ -3,19 +3,31 @@ const express = require('express');
 const router  = express.Router();
 const fetch   = require('node-fetch');
 
-const { getYahooFundamentals, yahooQuote, getYahooCrumb } = require('../data/providers/yahoo');
+const { yahooQuote, getYahooCrumb } = require('../data/providers/yahoo');
+// Route through the multi-provider manager — NOT Yahoo directly. The manager
+// runs the Yahoo cascade and then SEC EDGAR augmentation:
+//   • splices in SEC's latest 10-Q EPS when it post-dates Yahoo's freshest
+//     (Yahoo lags 24-72h after a 10-Q filing — e.g. AMZN's Q1 2026 print is
+//     missing from Yahoo for days while SEC has it minutes after filing)
+//   • overrides epsGrowthYoY with true per-share diluted EPS YoY (Yahoo's
+//     net-income proxy distorts buyback-heavy names)
+//   • exposes filingMarkers with actual 10-Q/10-K filed dates for the UI
+//
+// Pre-fix this route called getYahooFundamentals directly, so the SEC plumbing
+// existed in manager.js but never reached the Levels card.
+const { getFundamentals } = require('../data/providers/manager');
 
 // GET /api/fundamentals/:ticker
 router.get('/fundamentals/:ticker', async (req, res) => {
   try {
     const sym  = req.params.ticker.toUpperCase();
     console.log(`  Fetching fundamentals for ${sym}...`);
-    const data = await getYahooFundamentals(sym);
+    const data = await getFundamentals(sym);
     if (!data) {
       console.warn(`  Fundamentals: no data for ${sym}`);
       return res.status(404).json({ error: `No fundamental data for ${sym} — Yahoo v11 may not cover this ticker` });
     }
-    console.log(`  ✓ Fundamentals ${sym}: EPS=${data.epsGrowthQoQ}% Rev=${data.revenueGrowthYoY}% Short=${data.shortPercentFloat}%`);
+    console.log(`  ✓ Fundamentals ${sym}: EPS=${data.epsGrowthQoQ}% Rev=${data.revenueGrowthYoY}% Short=${data.shortPercentFloat}% src=${data.epsDataSource||'yahoo'}`);
     res.json({ ticker: sym, ...data });
   } catch(e) {
     console.error(`  Fundamentals error ${req.params.ticker}:`, e.message);
