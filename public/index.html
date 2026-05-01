@@ -1014,7 +1014,7 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
     let unsubscribeEvents = null;
     if (overlayEl) overlayEl.innerHTML = '';
     if (overlayEl && chartData.events && !isIntraday) {
-      const { earningsDate, exDividendDate, earningsHistory = [] } = chartData.events;
+      const { earningsDate, exDividendDate, earningsHistory = [], tenKFilings = [] } = chartData.events;
       const todayISO = new Date().toISOString().slice(0, 10);
 
       // Build a Set of trading-day dates from the bars so we can snap
@@ -1068,6 +1068,15 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
       }
       if (exDividendDate) {
         allEvents.push({ kind: 'exdiv_next', date: snapToTradingDay(exDividendDate), data: null });
+      }
+      // 10-K annual reports — distinct marker (different from quarterly ER).
+      // Sourced from SEC EDGAR via events.tenKFilings (chart.js: 96bc93d).
+      // Anchored at the actual filing date (where the price reacted), not
+      // fiscal-year end. Skipped silently for non-EDGAR symbols (foreign
+      // ADRs return empty tenKFilings — no markers, no error).
+      for (const f of tenKFilings) {
+        if (!f?.filedAt) continue;
+        allEvents.push({ kind: 'tenK_filing', date: snapToTradingDay(f.filedAt), data: f });
       }
 
       const renderMarkers = () => {
@@ -1131,6 +1140,26 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
             fg = '#000';
             tickColor = '#f0a500';
             tip = `Next earnings: ${ev.date}`;
+          } else if (ev.kind === 'tenK_filing') {
+            // 10-K annual report — distinct purple/violet to differentiate
+            // from quarterly ER (amber) and ex-div (cyan). Hollow style
+            // because annual reports tend to coincide with Q4 ER markers
+            // and we don't want to crowd the strip — outline only.
+            label = '10K';
+            bg = 'rgba(196,77,255,0.10)';
+            border = '1px solid rgba(196,77,255,0.65)';
+            fg = '#c44dff';
+            tickColor = 'rgba(196,77,255,0.55)';
+            const d = ev.data || {};
+            const parts = [`10-K filed ${d.filedAt}`];
+            if (d.reportPeriod) parts.push(`(FY ending ${d.reportPeriod})`);
+            if (d.url) parts.push(`SEC: ${d.url}`);
+            tip = parts.join(' · ');
+            // Make the marker a clickable link to the SEC filing index
+            if (d.url) {
+              marker.style.cursor = 'pointer';
+              marker.addEventListener('click', () => window.open(d.url, '_blank'));
+            }
           } else { // exdiv_next
             label = 'D';
             bg = 'rgba(0,212,255,0.8)';
@@ -1140,8 +1169,12 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
             tip = `Ex-dividend: ${ev.date}`;
           }
           marker.title = tip;
+          // Width adapts to label length so 3-char labels like "10K" don't
+          // overflow the 18px ER/D box. Min 18px so single-letter markers
+          // keep their existing footprint.
+          const boxWidth = Math.max(18, label.length * 7 + 4);
           marker.innerHTML = `
-            <div style="width:18px;height:14px;background:${bg};border:${border};color:${fg};font:700 9px/14px 'IBM Plex Mono',monospace;text-align:center;border-radius:2px;">${label}</div>
+            <div style="width:${boxWidth}px;height:14px;background:${bg};border:${border};color:${fg};font:700 9px/14px 'IBM Plex Mono',monospace;text-align:center;border-radius:2px;">${label}</div>
             <div style="width:1px;height:5px;margin:0 auto;background:${tickColor};"></div>
           `;
           overlayEl.appendChild(marker);
