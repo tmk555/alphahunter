@@ -51,6 +51,16 @@ function saveHistory(type, scores, dateStr) {
   });
   txn();
 
+  // Drop the bulk-trends Map for this type so the next getRSTrendsBulk
+  // rebuilds against the just-written ranks. Without this an intraday
+  // re-scan (which UPSERTs today's row, lastDate unchanged) would keep
+  // serving the previous scan's trends — direction is stable but the
+  // numeric deltas drift. Cost is one ~100ms rebuild on the next caller;
+  // every read after that is back to ~1ms from the freshly-cached Map.
+  // _statsCache uses a different invariant (keyed on lastDate, which
+  // doesn't move on upsert) so it's left alone.
+  delete _bulkTrendCache[type];
+
   // Note: pruning handled by rs_history_cleanup scheduler job (default keepDays: 365)
   // Removed aggressive 95-day prune that was destroying replay/backtest data
 }
