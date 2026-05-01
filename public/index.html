@@ -4408,7 +4408,7 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
           `  Add 2 → Runner:   $${t.add2Tp||'—'}  (trailing stop handles real exit)\n` +
           `  Stop (shared):    $${preview.stop}  (-${preview.stopDistPct}%)\n\n` +
           `Total qty: ${totalQty} shares (split 1/3 each, ~${Math.floor(totalQty/3)} per tranche)\n` +
-          `Volume gate: 1.2x pace minimum per tranche${pace}\n\n` +
+          `Volume gate: 1.4x pace minimum per tranche (O'Neil CANSLIM rule)${pace}\n\n` +
           `Gap guard: reduces pilot qty if gap +3-7%, aborts if >7%.\n` +
           `Gap-down guard: abort if base breaks down 3%+ below pivot.\n\n` +
           `Confirm create pyramid plan?`
@@ -14704,13 +14704,28 @@ function ReplayTab() {
   async function runBackfill() {
     setBfLoading(true); setError(''); setBfResult(null);
     try {
-      // Universe-wide backfill at 2500 days hits the provider layer for
-      // every symbol — easily 5–15 minutes wall time. 45s default would
-      // abort almost any non-trivial backfill. 30 minutes is conservative.
+      // Pull the live runtime universe (~1620 after the SP1500 expansion)
+      // rather than letting the backend fall back to FULL_UNIVERSE (360
+      // leadership names). Without this, "click backfill" was silently
+      // skipping the 1,213 newly-merged SP1500 names that need history
+      // most. /edge/universe returns { universeSize, bySector } — flatten
+      // to a symbols list.
+      let symbols = [];
+      try {
+        const u = await api('/api/edge/universe');
+        symbols = Object.values(u.bySector || {}).flat();
+      } catch(_) { /* fall back to backend's FULL_UNIVERSE if fetch fails */ }
+
+      // Universe-wide backfill at 2500 days × 1600+ symbols hits the
+      // provider layer hard — easily 30-60 minutes wall time. Generous
+      // timeout here; backend runs concurrency-limited so it won't crash.
       const r = await api('/api/replay/backfill', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        timeout: 30 * 60 * 1000,
-        body: JSON.stringify({ lookbackDays: +bfForm.lookbackDays }),
+        timeout: 60 * 60 * 1000,
+        body: JSON.stringify({
+          lookbackDays: +bfForm.lookbackDays,
+          ...(symbols.length ? { symbols } : {}),
+        }),
       });
       setBfResult(r);
       // After backfill: refresh range, then update form defaults to match
