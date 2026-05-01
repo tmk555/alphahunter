@@ -247,236 +247,279 @@ async function getHistoryFull(symbol, { minBars, preferConsolidatedVolume = fals
   return best.data;
 }
 
+// ─── Helpers for getFundamentals ─────────────────────────────────────────
+//
+// Same-fiscal-quarter-prior-year matcher: walk a series (newest-first)
+// looking for the row whose period-end is 350-380 days before `cur`.
+// Window covers leap years and 13/14-week fiscal quarters cleanly without
+// hardcoding fiscal-calendar shifts (Apple Sep year-end, Walmart Jan, etc).
+function _findPriorYearMatch(series, idx) {
+  const cur = series?.[idx];
+  if (!cur?.date) return null;
+  const curEnd = new Date(cur.date + 'T00:00:00Z');
+  for (let j = idx + 1; j < series.length; j++) {
+    const cand = series[j];
+    if (!cand?.date) continue;
+    const candEnd = new Date(cand.date + 'T00:00:00Z');
+    const daysDiff = (curEnd - candEnd) / (1000 * 60 * 60 * 24);
+    if (daysDiff >= 350 && daysDiff <= 380) return cand;
+    if (daysDiff > 380) break;
+  }
+  return null;
+}
+function _yoyPct(cur, prior) {
+  if (cur == null || prior == null || prior <= 0) return null;
+  return +((cur / prior - 1) * 100).toFixed(1);
+}
+
 async function getFundamentals(symbol) {
-  // ── Step 1: Try the base provider cascade (Yahoo / Polygon) ───────────
+  // ─────────────────────────────────────────────────────────────────────
+  // Source-of-truth contract for fundamentals
   //
-  // We deliberately swallow the "all providers failed" throw here rather
-  // than let it propagate. Reason: when Yahoo has a transient hiccup
-  // (rate limit, 5xx, crumb-rotation race) we don't want the user to see
-  // a hard failure for a symbol that SEC EDGAR has perfectly fresh data
-  // for. The augmentation step below can construct a useful response
-  // from SEC alone for any US-domiciled ticker.
+  //   SEC EDGAR is PRIMARY (computed from SEC when SEC available):
+  //     epsActualQuarterly      ─ per-share diluted, with filedAt
+  //     epsAnnualValuesSEC      ─ per-share diluted FY values
+  //     epsGrowthYoY            ─ annual YoY (true per-share)
+  //     epsGrowth_Q{0,1,2}_yoy  ─ quarterly YoY (same fiscal qtr prior yr)
+  //     c_pass_q{0,1,2}         ─ CANSLIM "C" pass flags (≥25%)
+  //     epsAccelerating_qoq     ─ Q0 YoY > Q1 YoY
+  //     revActualQuarterly      ─ quarterly $, with filedAt
+  //     revAnnualValuesSEC      ─ FY $
+  //     revGrowth_Q{0,1}_yoy    ─ quarterly revenue YoY
+  //     revenueGrowthYoY        ─ headline revenue YoY (CANSLIM "N")
+  //     filingMarkers           ─ 10-Q/10-K filing dates
   //
-  // For foreign ADRs (TSM, ASML, ARM, SAP) the inverse is true — SEC
-  // returns null and we depend on Yahoo. The SEC-only build below also
-  // returns null in that case, which is the correct behavior: the route
-  // surfaces a "no data" 404 instead of a half-built response.
-  let data = null;
-  try {
-    const result = await withFallback(`fundamentals(${symbol})`, (mod, key) => {
-      if (key === 'polygon') return () => mod.polygonFundamentals(symbol);
-      if (key === 'yahoo') return () => mod.getYahooFundamentals(symbol);
-      // FMP and AV don't have CAN SLIM fundamentals — skip
-      return null;
-    });
-    data = result.data;
-  } catch (e) {
-    // All base providers failed — log it but keep going so SEC can fill in.
-    console.warn(`  Fundamentals base cascade failed for ${symbol}: ${e.message} — attempting SEC-only build`);
+  //   YAHOO is PRIMARY (SEC has no equivalent):
+  //     shortPercentFloat, shortRatio, sharesFloat, sharesShort
+  //     institutionPct, insiderPct
+  //     grossMargins, returnOnEquity, debtToEquity
+  //     forwardPE
+  //     analyst estimate / surprise / surprisePct (overlay onto SEC quarters)
+  //     epsAnnualValues (net-income $B series, used by net-income chart)
+  //
+  //   FALLBACK rules:
+  //     SEC-primary field, SEC empty   → fall back to Yahoo's value if any
+  //     Yahoo-primary field, Yahoo empty → null (clearly missing)
+  //
+  // Both providers fire in PARALLEL. Yahoo throwing is non-fatal as long
+  // as SEC returned something; SEC empty is non-fatal as long as Yahoo has
+  // data (foreign ADRs, recent IPOs). Both empty → null → route 404.
+  // ─────────────────────────────────────────────────────────────────────
+
+  const sec = require('./secEdgar');
+
+  const yahooP = withFallback(`fundamentals(${symbol})`, (mod, key) => {
+    if (key === 'polygon') return () => mod.polygonFundamentals(symbol);
+    if (key === 'yahoo')   return () => mod.getYahooFundamentals(symbol);
+    return null;
+  }).then(r => r.data).catch(e => {
+    console.warn(`  Fundamentals: Yahoo cascade failed for ${symbol}: ${e.message}`);
+    return null;
+  });
+
+  const [yahoo, secQ, secA, secRevQ, secRevA, secMarkers] = await Promise.all([
+    yahooP,
+    sec.getQuarterlyEPS(symbol, 8).catch(() => null),
+    sec.getAnnualEPS(symbol, 4).catch(() => null),
+    sec.getQuarterlyRevenue(symbol, 8).catch(() => null),
+    sec.getAnnualRevenue(symbol, 4).catch(() => null),
+    sec.getFilingMarkers(symbol, ['10-Q', '10-K']).catch(() => null),
+  ]);
+
+  const hasSEC = (Array.isArray(secQ)    && secQ.length) ||
+                 (Array.isArray(secRevQ) && secRevQ.length) ||
+                 (secA && Array.isArray(secA.years) && secA.years.length);
+
+  // Both empty → genuine no-coverage. Route surfaces a friendly 404.
+  if (!yahoo && !hasSEC) return null;
+
+  // Provenance map — UI badges + diagnostics. Updated as we choose sources.
+  const dataSources = {
+    epsQuarterly:     null,
+    epsAnnual:        null,
+    revQuarterly:     null,
+    revAnnual:        null,
+    filingDates:      null,
+    shortInterest:    yahoo ? 'yahoo' : null,
+    ownership:        yahoo ? 'yahoo' : null,
+    forwardEstimates: yahoo ? 'yahoo' : null,
+    ttmRatios:        yahoo ? 'yahoo' : null,
+    analystEstimates: yahoo ? 'yahoo' : null,
+  };
+
+  // ─── SEC-PRIMARY FIELDS ──────────────────────────────────────────────
+  //
+  // For each, we COMPUTE FROM SEC FIRST. If SEC has the data we use it
+  // directly. If SEC is empty (foreign ADR, etc.) we fall back to Yahoo's
+  // equivalent. Nothing gets "spliced on top" — each field is chosen once.
+
+  // Quarterly EPS list. SEC actual + Yahoo's analyst estimate/surprise overlay.
+  let epsActualQuarterly = [];
+  if (Array.isArray(secQ) && secQ.length) {
+    const yahooByDate = new Map((yahoo?.epsActualQuarterly || []).map(q => [q.date, q]));
+    epsActualQuarterly = secQ.map(s => ({
+      date:        s.date,
+      actual:      s.eps,
+      estimate:    yahooByDate.get(s.date)?.estimate    ?? null,
+      surprise:    yahooByDate.get(s.date)?.surprise    ?? null,
+      surprisePct: yahooByDate.get(s.date)?.surprisePct ?? null,
+      filedAt:     s.filedAt,
+      form:        s.form,
+      source:      'sec_edgar',
+    }));
+    dataSources.epsQuarterly = 'sec_edgar';
+  } else if (Array.isArray(yahoo?.epsActualQuarterly) && yahoo.epsActualQuarterly.length) {
+    epsActualQuarterly = yahoo.epsActualQuarterly;
+    dataSources.epsQuarterly = 'yahoo';
   }
 
-  // SEC EDGAR augmentation. Yahoo's earningsHistory lags 24-72h after a
-  // 10-Q filing; SEC has the data minutes after the company files. When
-  // SEC reports a more-recent quarter than Yahoo's freshest, splice the
-  // SEC data into epsActualQuarterly so the Levels card shows today's
-  // print instead of last quarter's.
-  //
-  // Foreign ADRs (TSM, ASML, ARM) and very recent IPOs return null from
-  // SEC — augmentation skips silently and the Yahoo data flows through.
-  // 6h cache on SEC company-facts means this adds <50ms per call when
-  // warm; ~2s on cold cache (one-time per symbol per 6 hours).
-  try {
-    const {
-      getQuarterlyEPS, getAnnualEPS,
-      getQuarterlyRevenue, getAnnualRevenue,
-      getFilingMarkers,
-    } = require('./secEdgar');
-    const [secQ, secA, secRevQ, secRevA, secMarkers] = await Promise.all([
-      getQuarterlyEPS(symbol, 8).catch(() => null),
-      getAnnualEPS(symbol, 4).catch(() => null),
-      getQuarterlyRevenue(symbol, 8).catch(() => null),
-      getAnnualRevenue(symbol, 4).catch(() => null),
-      getFilingMarkers(symbol, ['10-Q', '10-K']).catch(() => null),
-    ]);
-
-    // If the base cascade failed but SEC has data, build a minimal `data`
-    // object with the Yahoo-shape fields initialized so the augmentation
-    // splices below can populate them. Yahoo-only fields (short interest,
-    // institutional %, forward estimates) stay null — clearly missing
-    // beats wrong, and the UI tolerates nulls gracefully (the C/A/N cards
-    // render from SEC fields, the S/I cards render "—" without crashing).
-    const hasSEC = (Array.isArray(secQ) && secQ.length) ||
-                   (Array.isArray(secRevQ) && secRevQ.length) ||
-                   (secA && secA.years?.length);
-    if (!data && hasSEC) {
-      console.log(`  Fundamentals ${symbol}: SEC-only build (Yahoo unavailable)`);
-      data = {
-        // Yahoo-shape skeleton — augmentation block below fills the SEC fields
-        epsGrowthQoQ: null,
-        epsGrowthYoY: null,
-        epsAccelerating: false,
-        netIncomeGrowthYoY: null,
-        epsGrowth_Q0_yoy: null, epsGrowth_Q1_yoy: null, epsGrowth_Q2_yoy: null,
-        c_pass_q0: false, c_pass_q1: false, c_pass_q2: false,
-        epsAccelerating_qoq: false,
-        epsAnnualGrowth: [],
-        annualEpsAccelerating: false,
-        epsTurnaround: false,
-        epsAnnualValues: [],
-        epsActualQuarterly: [],
-        revGrowth_Q0_yoy: null, revGrowth_Q1_yoy: null,
-        revenueGrowthYoY: null,
-        // Yahoo-only fields — null sentinel so UI shows "—" instead of crashing
-        sharesFloat: null, sharesShort: null,
-        shortPercentFloat: null, shortRatio: null,
-        institutionPct: null, insiderPct: null,
-        grossMargins: null, returnOnEquity: null, debtToEquity: null,
-        forwardPE: null, canSlimScore: null,
-        epsDataSource: 'sec_only',
-      };
+  // Quarterly EPS YoY (Q0/Q-1/Q-2) + CANSLIM "C" pass flags.
+  // SEC: compute from 8-quarter series matched to same fiscal qtr prior yr.
+  // Yahoo: use whatever it computed (may be sequential Q/Q mislabelled when
+  // Yahoo only has 4 quarters — better than nothing for foreign ADRs).
+  let epsGrowth_Q0_yoy = null, epsGrowth_Q1_yoy = null, epsGrowth_Q2_yoy = null;
+  let c_pass_q0 = false, c_pass_q1 = false, c_pass_q2 = false;
+  if (Array.isArray(secQ) && secQ.length) {
+    for (const slot of [0, 1, 2]) {
+      const cur = secQ[slot];
+      const prior = _findPriorYearMatch(secQ, slot);
+      const pct = cur && prior ? _yoyPct(cur.eps, prior.eps) : null;
+      if (slot === 0) { epsGrowth_Q0_yoy = pct; c_pass_q0 = pct != null && pct >= 25; }
+      if (slot === 1) { epsGrowth_Q1_yoy = pct; c_pass_q1 = pct != null && pct >= 25; }
+      if (slot === 2) { epsGrowth_Q2_yoy = pct; c_pass_q2 = pct != null && pct >= 25; }
     }
-    // If still no data (no SEC, no Yahoo), bail before the splices touch null.
-    if (!data) return null;
+  } else if (yahoo) {
+    epsGrowth_Q0_yoy = yahoo.epsGrowth_Q0_yoy ?? null;
+    epsGrowth_Q1_yoy = yahoo.epsGrowth_Q1_yoy ?? null;
+    epsGrowth_Q2_yoy = yahoo.epsGrowth_Q2_yoy ?? null;
+    c_pass_q0 = !!yahoo.c_pass_q0;
+    c_pass_q1 = !!yahoo.c_pass_q1;
+    c_pass_q2 = !!yahoo.c_pass_q2;
+  }
+  const epsAccelerating_qoq =
+    epsGrowth_Q0_yoy != null && epsGrowth_Q1_yoy != null &&
+    epsGrowth_Q0_yoy > epsGrowth_Q1_yoy;
+  const epsGrowthQoQ = epsGrowth_Q0_yoy ?? yahoo?.epsGrowthQoQ ?? null;
 
-    // Quarterly EPS: SEC is the primary source whenever it has data. SEC
-    // gives us per-share diluted EPS (the true CANSLIM "C" metric) plus
-    // the actual filing date so the chart can anchor markers to where the
-    // price reacted. We blend in Yahoo's `estimate` / `surprisePct` /
-    // `surprise` for any overlapping period since SEC doesn't carry analyst
-    // estimates.
-    if (Array.isArray(secQ) && secQ.length) {
-      const yahooByDate = new Map((data.epsActualQuarterly || []).map(q => [q.date, q]));
-      data.epsActualQuarterly = secQ.map(s => ({
-        date: s.date,
-        actual: s.eps,
-        estimate:    yahooByDate.get(s.date)?.estimate    ?? null,
-        surprise:    yahooByDate.get(s.date)?.surprise    ?? null,
-        surprisePct: yahooByDate.get(s.date)?.surprisePct ?? null,
-        filedAt: s.filedAt,
-        form:    s.form,
-        source:  'sec_edgar',
-      }));
-      data.epsDataSource = 'sec_edgar';
+  // Annual EPS YoY (CANSLIM "A"). SEC = true per-share diluted; Yahoo
+  // fallback = net-income proxy (less honest, distorts on buybacks).
+  let epsGrowthYoY = null, epsGrowthYoY_source = null;
+  if (secA?.growthYoY != null) {
+    epsGrowthYoY        = secA.growthYoY;
+    epsGrowthYoY_source = 'sec_per_share';
+    dataSources.epsAnnual = 'sec_edgar';
+  } else if (yahoo?.epsGrowthYoY != null) {
+    epsGrowthYoY        = yahoo.epsGrowthYoY;
+    epsGrowthYoY_source = yahoo.epsGrowthYoY_source || 'yahoo';
+    dataSources.epsAnnual = 'yahoo';
+  }
+  const epsAnnualValuesSEC = secA?.years || null;
 
-      // ── Re-derive Q0/Q-1/Q-2 YoY from SEC's true 8-quarter series ──
-      //
-      // Yahoo's `epsGrowth_Q*_yoy` fields are computed in yahoo.js from
-      // `incomeStatementHistoryQuarterly`, which only carries 4 quarters.
-      // When that's not enough, the code falls back to SEQUENTIAL Q/Q
-      // while keeping the YoY label — that's how AMZN's Q0 ended up at
-      // "0%" (Q4 2025 vs Q3 2025 sequential, both $1.95) instead of the
-      // true +75% YoY (Q1 2026 $2.78 vs Q1 2025 $1.59).
-      //
-      // SEC gives us 8 quarters reliably. Match each quarter to the same
-      // fiscal quarter one year earlier by month-day window (±15 days
-      // tolerance for fiscal-year shift / 13-week vs 4-4-5 cadence).
-      const findYoYMatch = (idx) => {
-        const cur = secQ[idx];
-        if (!cur) return null;
-        const curEnd = new Date(cur.date + 'T00:00:00Z');
-        for (let j = idx + 1; j < secQ.length; j++) {
-          const cand = secQ[j];
-          const candEnd = new Date(cand.date + 'T00:00:00Z');
-          const daysDiff = (curEnd - candEnd) / (1000 * 60 * 60 * 24);
-          // Same fiscal quarter prior year ≈ 365 days (350-380 window
-          // covers leap years and 13-week vs 14-week quarters).
-          if (daysDiff >= 350 && daysDiff <= 380) return cand;
-          if (daysDiff > 380) break;  // gone past — no match exists
-        }
-        return null;
-      };
-      const yoyPct = (cur, prior) => {
-        if (cur == null || prior == null) return null;
-        // Defensive on zero / negative prior — sign-flip makes % meaningless
-        if (prior <= 0) return null;
-        return +((cur / prior - 1) * 100).toFixed(1);
-      };
-      for (const slot of [0, 1, 2]) {
-        const cur = secQ[slot];
-        const prior = findYoYMatch(slot);
-        const pct = cur && prior ? yoyPct(cur.eps, prior.eps) : null;
-        data[`epsGrowth_Q${slot}_yoy`] = pct;
-        data[`c_pass_q${slot}`] = pct != null && pct >= 25;
-      }
-      // Re-derive headline epsGrowthQoQ + acceleration from the SEC-aligned
-      // YoY values. Pre-fix these used Yahoo's mislabelled sequential.
-      data.epsGrowthQoQ = data.epsGrowth_Q0_yoy ?? data.epsGrowthQoQ;
-      data.epsAccelerating_qoq =
-        data.epsGrowth_Q0_yoy != null && data.epsGrowth_Q1_yoy != null &&
-        data.epsGrowth_Q0_yoy > data.epsGrowth_Q1_yoy;
+  // Quarterly revenue list + YoY.
+  let revActualQuarterly = [];
+  let revGrowth_Q0_yoy = null, revGrowth_Q1_yoy = null;
+  let revenueGrowthYoY = null, revenueGrowthYoY_source = null;
+  if (Array.isArray(secRevQ) && secRevQ.length) {
+    revActualQuarterly = secRevQ.map(r => ({
+      date: r.date, revenue: r.revenue,
+      filedAt: r.filedAt, form: r.form, source: 'sec_edgar',
+    }));
+    for (const slot of [0, 1]) {
+      const cur = secRevQ[slot];
+      const prior = _findPriorYearMatch(secRevQ, slot);
+      const pct = cur && prior ? _yoyPct(cur.revenue, prior.revenue) : null;
+      if (slot === 0) revGrowth_Q0_yoy = pct;
+      if (slot === 1) revGrowth_Q1_yoy = pct;
     }
+    revenueGrowthYoY        = revGrowth_Q0_yoy;
+    revenueGrowthYoY_source = 'sec_per_quarter';
+    dataSources.revQuarterly = 'sec_edgar';
+  } else if (yahoo) {
+    revGrowth_Q0_yoy = yahoo.revGrowth_Q0_yoy ?? null;
+    revGrowth_Q1_yoy = yahoo.revGrowth_Q1_yoy ?? null;
+    revenueGrowthYoY = yahoo.revenueGrowthYoY ?? null;
+    revenueGrowthYoY_source = revenueGrowthYoY != null ? 'yahoo' : null;
+    dataSources.revQuarterly = revenueGrowthYoY != null ? 'yahoo' : null;
+  }
+  const revAnnualValuesSEC = (Array.isArray(secRevA) && secRevA.length) ? secRevA : null;
+  if (revAnnualValuesSEC) dataSources.revAnnual = 'sec_edgar';
 
-    // Annual EPS YoY: SEC's growthYoY uses true per-share diluted EPS,
-    // strictly more honest than Yahoo's net-income proxy.
-    if (secA?.growthYoY != null) {
-      data.epsGrowthYoY = secA.growthYoY;
-      data.epsGrowthYoY_source = 'sec_per_share';
-      data.epsAnnualValuesSEC = secA.years;
-    }
+  // Filing markers — SEC-only (Yahoo doesn't have filing dates).
+  const filingMarkers = (Array.isArray(secMarkers) && secMarkers.length) ? secMarkers : null;
+  if (filingMarkers) dataSources.filingDates = 'sec_edgar';
 
-    // ── Quarterly REVENUE: same Yahoo-staleness problem as EPS ─────────
-    //
-    // Yahoo's revGrowth_Q*_yoy is computed from incomeStatementHistory-
-    // Quarterly which has the 4-quarter ceiling, so it falls back to
-    // sequential Q/Q with the YoY label. AMZN currently shows
-    // revenueGrowthYoY = -14.9% (actually Q1-2025 vs Q4-2024 sequential)
-    // when the true YoY is +9%. SEC has 8 quarters of revenue under one
-    // of three concept names (Revenues / RevenueFromContractWith… /
-    // SalesRevenueNet), enough to compute proper YoY.
-    if (Array.isArray(secRevQ) && secRevQ.length) {
-      data.revActualQuarterly = secRevQ.map(r => ({
-        date: r.date,
-        revenue: r.revenue,
-        filedAt: r.filedAt,
-        form: r.form,
-        source: 'sec_edgar',
-      }));
-      data.revDataSource = 'sec_edgar';
+  // ─── YAHOO-PRIMARY FIELDS (SEC has no equivalent) ────────────────────
+  // Pass through directly; null when Yahoo unavailable.
+  const sharesFloat        = yahoo?.sharesFloat        ?? null;
+  const sharesShort        = yahoo?.sharesShort        ?? null;
+  const shortPercentFloat  = yahoo?.shortPercentFloat  ?? null;
+  const shortRatio         = yahoo?.shortRatio         ?? null;
+  const institutionPct     = yahoo?.institutionPct     ?? null;
+  const insiderPct         = yahoo?.insiderPct         ?? null;
+  const grossMargins       = yahoo?.grossMargins       ?? null;
+  const returnOnEquity     = yahoo?.returnOnEquity     ?? null;
+  const debtToEquity       = yahoo?.debtToEquity       ?? null;
+  const forwardPE          = yahoo?.forwardPE          ?? null;
 
-      // Match each quarter to its same-fiscal-quarter-prior-year.
-      const findRevYoY = (idx) => {
-        const cur = secRevQ[idx];
-        if (!cur) return null;
-        const curEnd = new Date(cur.date + 'T00:00:00Z');
-        for (let j = idx + 1; j < secRevQ.length; j++) {
-          const candEnd = new Date(secRevQ[j].date + 'T00:00:00Z');
-          const daysDiff = (curEnd - candEnd) / (1000 * 60 * 60 * 24);
-          if (daysDiff >= 350 && daysDiff <= 380) return secRevQ[j];
-          if (daysDiff > 380) break;
-        }
-        return null;
-      };
-      const revYoy = (cur, prior) => {
-        if (cur == null || prior == null || prior <= 0) return null;
-        return +((cur / prior - 1) * 100).toFixed(1);
-      };
-      for (const slot of [0, 1]) {
-        const cur = secRevQ[slot];
-        const prior = findRevYoY(slot);
-        data[`revGrowth_Q${slot}_yoy`] = cur && prior ? revYoy(cur.revenue, prior.revenue) : null;
-      }
-      // Headline revenueGrowthYoY → SEC's Q0 YoY (true number).
-      if (data.revGrowth_Q0_yoy != null) {
-        data.revenueGrowthYoY = data.revGrowth_Q0_yoy;
-        data.revenueGrowthYoY_source = 'sec_per_quarter';
-      }
-    }
+  // Yahoo-derived series the UI still consumes (net-income chart strip).
+  const epsAnnualValues       = yahoo?.epsAnnualValues       || [];
+  const epsAnnualGrowth       = yahoo?.epsAnnualGrowth       || [];
+  const annualEpsAccelerating = !!yahoo?.annualEpsAccelerating;
+  const epsTurnaround         = !!yahoo?.epsTurnaround;
+  const netIncomeGrowthYoY    = yahoo?.netIncomeGrowthYoY    ?? null;
 
-    // Annual revenue values (parallel to epsAnnualValuesSEC). Used by the
-    // Levels card for the trend strip alongside per-share EPS.
-    if (Array.isArray(secRevA) && secRevA.length) {
-      data.revAnnualValuesSEC = secRevA;
-    }
+  // ─── DERIVED: CANSLIM score (recomputed from MERGED values) ──────────
+  // Pre-fix this came from Yahoo's score using its mislabeled sequential.
+  // Now computed from the actually-correct merged values above.
+  const canSlimScore = [
+    epsGrowth_Q0_yoy != null && epsGrowth_Q0_yoy >= 25,    // C: latest qtr ≥25% YoY
+    epsGrowthYoY     != null && epsGrowthYoY     >= 25,    // A: annual ≥25%
+    revenueGrowthYoY != null && revenueGrowthYoY >= 15,    // N: rev ≥15%
+    shortPercentFloat != null && shortPercentFloat <= 40,  // S: short float ≤40%
+    institutionPct   != null && institutionPct   >= 10,    // I: inst ≥10%
+    returnOnEquity   != null && returnOnEquity   >= 15,    // ROE ≥15%
+  ].filter(Boolean).length;
 
-    // Filing markers for the chart layer (vertical "ER" markers).
-    if (Array.isArray(secMarkers) && secMarkers.length) {
-      data.filingMarkers = secMarkers;
-    }
-  } catch (_) {
-    // Augmentation is opt-in — Yahoo data already in `data`, return as-is.
+  // ─── ASSEMBLE FINAL RESPONSE ─────────────────────────────────────────
+  const epsDataSource = dataSources.epsQuarterly === 'sec_edgar'
+    ? 'sec_edgar'
+    : (yahoo?.epsDataSource || (hasSEC ? 'sec_only' : 'yahoo'));
+
+  if (!yahoo) {
+    console.log(`  Fundamentals ${symbol}: SEC-only build (Yahoo unavailable)`);
   }
 
-  return data;
+  return {
+    canSlimScore,
+    epsDataSource,
+    dataSources,
+
+    // SEC-primary block
+    epsActualQuarterly,
+    epsGrowthQoQ,
+    epsGrowth_Q0_yoy, epsGrowth_Q1_yoy, epsGrowth_Q2_yoy,
+    c_pass_q0, c_pass_q1, c_pass_q2,
+    epsAccelerating_qoq,
+    epsAccelerating: epsAccelerating_qoq,
+    epsGrowthYoY, epsGrowthYoY_source,
+    epsAnnualValuesSEC,
+    revActualQuarterly,
+    revGrowth_Q0_yoy, revGrowth_Q1_yoy,
+    revenueGrowthYoY, revenueGrowthYoY_source,
+    revAnnualValuesSEC,
+    revDataSource: dataSources.revQuarterly,
+    filingMarkers,
+
+    // Yahoo-primary block
+    sharesFloat, sharesShort, shortPercentFloat, shortRatio,
+    institutionPct, insiderPct,
+    grossMargins, returnOnEquity, debtToEquity,
+    forwardPE,
+
+    // Yahoo derivative series (legacy net-income display)
+    epsAnnualValues, epsAnnualGrowth, annualEpsAccelerating, epsTurnaround,
+    netIncomeGrowthYoY,
+  };
 }
 
 // ─── Intraday bars (Phase 2: entry timing) ─────────────────────────────────
