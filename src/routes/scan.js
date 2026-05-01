@@ -3,22 +3,21 @@ const express = require('express');
 const router  = express.Router();
 
 const { runRSScan } = require('../scanner');
-const { getRSTrend } = require('../signals/rs');
-const { loadHistory, RS_HISTORY } = require('../data/store');
+const { getRSTrendsBulk, RS_HISTORY } = require('../data/store');
 const { calcConviction } = require('../signals/conviction');
 const pitUniverse = require('../signals/pit-universe');
 const { getActiveUniverseForDate } = require('../signals/universe-tracker');
-
-function loadRSHistory() { return loadHistory(RS_HISTORY); }
 
 module.exports = function(UNIVERSE, SECTOR_MAP) {
   // /api/rs-scan
   router.get('/rs-scan', async (req, res) => {
     try {
-      const stocks  = await runRSScan(UNIVERSE, SECTOR_MAP);
-      const history = loadRSHistory();
+      const stocks = await runRSScan(UNIVERSE, SECTOR_MAP);
+      // Bulk-fetch trends for the whole scan in one 100-day window query
+      // instead of materializing the full history per request.
+      const trends = getRSTrendsBulk(RS_HISTORY, stocks.map(s => s.ticker));
       const withTrend = stocks.map(s => {
-        const rsTrend = getRSTrend(s.ticker, history);
+        const rsTrend = trends.get(s.ticker) || null;
         const { convictionScore, reasons: convictionReasons } = calcConviction(s, rsTrend);
         return { ...s, rsTrend, convictionScore, convictionReasons };
       });
@@ -99,9 +98,9 @@ module.exports = function(UNIVERSE, SECTOR_MAP) {
   // (e.g. consolidating breakouts) as avoid/short candidates.
   router.get('/leaders-laggards', async (req, res) => {
     try {
-      const stocks  = await runRSScan(UNIVERSE, SECTOR_MAP);
-      const history = loadRSHistory();
-      const all = stocks.map(s => ({ ...s, rsTrend: getRSTrend(s.ticker, history) }));
+      const stocks = await runRSScan(UNIVERSE, SECTOR_MAP);
+      const trends = getRSTrendsBulk(RS_HISTORY, stocks.map(s => s.ticker));
+      const all = stocks.map(s => ({ ...s, rsTrend: trends.get(s.ticker) || null }));
       const leaders  = all
         .filter(s => s.vsMA50 != null && s.vsMA50 > 0 && s.rsRank != null && s.rsRank >= 70)
         .sort((a, b) => b.rsRank - a.rsRank)

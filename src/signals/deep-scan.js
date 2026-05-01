@@ -5,8 +5,7 @@
 
 const { isSwingCandidate, isPositionCandidate, computeTradeSetup } = require('./candidates');
 const { calcConviction, evaluateConvictionOverride } = require('./conviction');
-const { getRSTrend } = require('./rs');
-const { loadHistory, RS_HISTORY, SEC_HISTORY } = require('../data/store');
+const { getRSTrendsBulk, RS_HISTORY, SEC_HISTORY } = require('../data/store');
 const { computeRotation, computeIndustryRotation, getIndustryTilt } = require('./rotation');
 const { getMarketRegime } = require('../risk/regime');
 const { getDB } = require('../data/database');
@@ -35,11 +34,11 @@ async function runDeepScan({ stocks, mode = 'both', sectorEtfs = null, industryE
   // sees `s.rsTrend === undefined` and the `rsRising` / `rsRisingMonth`
   // checks collapse to false, returning 0 candidates for every mode.
   // This was the root cause of "Deep Scan shows 0 results in Position mode".
-  let rsHistory = null;
-  try { rsHistory = loadHistory(RS_HISTORY); } catch (_) {}
+  let trendMap = null;
+  try { trendMap = getRSTrendsBulk(RS_HISTORY, stocks.map(s => s.ticker)); } catch (_) {}
   const withTrend = stocks.map(s => ({
     ...s,
-    rsTrend: s.rsTrend || (rsHistory ? getRSTrend(s.ticker, rsHistory) : null),
+    rsTrend: s.rsTrend || (trendMap ? (trendMap.get(s.ticker) || null) : null),
   }));
 
   // Tag each stock with which filter(s) it passed so the UI can render a

@@ -13,16 +13,19 @@ module.exports = function(runScan) {
   router.get('/hedge/shorts', async (req, res) => {
     try {
       const results = await runScan();
-      const { loadHistory, RS_HISTORY } = require('../data/store');
-      const { getRSTrend } = require('../signals/rs');
-      const rsHist = loadHistory(RS_HISTORY);
+      const { getRSTrendsBulk, RS_HISTORY } = require('../data/store');
 
-      // Filter for short candidates, excluding hedge instruments
-      const shorts = results
+      // Pre-filter, then bulk-fetch trends only for the surviving names.
+      // The old path loaded the full rs_snapshots table for what's
+      // typically <50 short candidates.
+      const shortsFiltered = results
         .filter(s => s.sector !== 'Hedge')
-        .filter(s => isShortCandidate(s))
+        .filter(s => isShortCandidate(s));
+      const trends = getRSTrendsBulk(RS_HISTORY, shortsFiltered.map(s => s.ticker));
+
+      const shorts = shortsFiltered
         .map(s => {
-          const rsTrend = getRSTrend(s.ticker, rsHist);
+          const rsTrend = trends.get(s.ticker) || null;
           const { shortConviction, reasons } = calcShortConviction(s, rsTrend);
           const setup = computeShortSetup(s);
           return { ...s, shortConviction, shortReasons: reasons, shortSetup: setup, rsTrend };

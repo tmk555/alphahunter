@@ -10,8 +10,7 @@ const { notifyTradeEvent } = require('../notifications/channels');
 const { computeTradeSetup } = require('../signals/candidates');
 const { calculatePositionSize } = require('../risk/position-sizer');
 const { calcConviction, evaluateConvictionOverride } = require('../signals/conviction');
-const { getRSTrend } = require('../signals/rs');
-const { loadHistory, RS_HISTORY } = require('../data/store');
+const { getRSTrendsBulk, RS_HISTORY } = require('../data/store');
 const { getConfig } = require('../risk/portfolio');
 const { getMarketRegime } = require('../risk/regime');
 
@@ -106,8 +105,10 @@ module.exports = function(db, runScan) {
       // Evaluate conviction override for weak regimes
       let convictionOverride = null;
       try {
-        const history = loadHistory(RS_HISTORY);
-        const trend = getRSTrend(stock.ticker, history);
+        // Single-ticker trend — bulk helper with one symbol returns just
+        // the rows for that symbol's last 100 days, not the full history.
+        const trends = getRSTrendsBulk(RS_HISTORY, [stock.ticker]);
+        const trend = trends.get(stock.ticker) || null;
         const { convictionScore } = calcConviction(stock, trend, null);
         convictionOverride = evaluateConvictionOverride(stock, convictionScore, regime);
       } catch (_) { /* non-critical */ }

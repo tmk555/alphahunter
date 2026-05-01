@@ -3,11 +3,10 @@ const express = require('express');
 const router  = express.Router();
 
 const { getDB } = require('../data/database');
-const { getRSTrend } = require('../signals/rs');
 const { calcConviction, evaluateConvictionOverride } = require('../signals/conviction');
 const { computeTradeSetup } = require('../signals/candidates');
 const { getMarketRegime } = require('../risk/regime');
-const { loadHistory, RS_HISTORY, SEC_HISTORY } = require('../data/store');
+const { getRSTrendsBulk, RS_HISTORY, SEC_HISTORY } = require('../data/store');
 const { computeRotation } = require('../signals/rotation');
 const { runETFScan } = require('../scanner');
 
@@ -18,7 +17,6 @@ function db() { return getDB(); }
 // "Top Picks" and the "☀️ Morning Brief → TOP PICKS" list show the same names.
 async function computeTopPicks(runRSScanFn, SECTOR_ETFS_ARG, { limit = 12 } = {}) {
   const stocks  = await runRSScanFn();
-  const history = loadHistory(RS_HISTORY);
   const regime  = await getMarketRegime();
 
   let rotationModel = null;
@@ -29,10 +27,15 @@ async function computeTopPicks(runRSScanFn, SECTOR_ETFS_ARG, { limit = 12 } = {}
     }
   } catch (_) {}
 
-  const ranked = stocks
-    .filter(s => s.rsRank >= 60 && s.swingMomentum >= 40)
+  // Pre-fetch RS trends for the qualified subset only — avoids the old
+  // pattern of loading every rs_snapshots row to look up trends for ~50
+  // tickers. The IN-clause path keeps the query under a few hundred rows.
+  const qualified = stocks.filter(s => s.rsRank >= 60 && s.swingMomentum >= 40);
+  const trends    = getRSTrendsBulk(RS_HISTORY, qualified.map(s => s.ticker));
+
+  const ranked = qualified
     .map(s => {
-      const trend = getRSTrend(s.ticker, history);
+      const trend = trends.get(s.ticker) || null;
       const { convictionScore, reasons } = calcConviction(s, trend, rotationModel);
       const swingSetup    = computeTradeSetup(s, 'swing');
       const positionSetup = computeTradeSetup(s, 'position');

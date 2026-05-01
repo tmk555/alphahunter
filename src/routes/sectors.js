@@ -3,8 +3,7 @@ const express = require('express');
 const router  = express.Router();
 
 const { runRSScan, runETFScan } = require('../scanner');
-const { getRSTrend } = require('../signals/rs');
-const { loadHistory, RS_HISTORY, SEC_HISTORY, IND_HISTORY } = require('../data/store');
+const { getRSTrendsBulk, RS_HISTORY, SEC_HISTORY, IND_HISTORY } = require('../data/store');
 const { computeRotation, getSectorRotationHistory } = require('../signals/rotation');
 
 module.exports = function(SECTOR_ETFS, INDUSTRY_ETFS, INDUSTRY_STOCKS, UNIVERSE, SECTOR_MAP) {
@@ -49,11 +48,15 @@ module.exports = function(SECTOR_ETFS, INDUSTRY_ETFS, INDUSTRY_STOCKS, UNIVERSE,
       const etf    = req.params.etf.toUpperCase();
       const tickers = INDUSTRY_STOCKS[etf] || [];
       const stocks  = await runRSScan(UNIVERSE, SECTOR_MAP);
-      const history = loadHistory(RS_HISTORY);
-      const result  = tickers
+      const filtered = tickers
         .map(t => stocks.find(s => s.ticker === t))
-        .filter(Boolean)
-        .map(s => ({ ...s, rsTrend: getRSTrend(s.ticker, history) }))
+        .filter(Boolean);
+      // Bulk trend lookup scoped to this industry's tickers — typically a
+      // few dozen names, so the IN-clause path stays well under 200 rows
+      // instead of loading the full 3.7M-row history.
+      const trends = getRSTrendsBulk(RS_HISTORY, filtered.map(s => s.ticker));
+      const result = filtered
+        .map(s => ({ ...s, rsTrend: trends.get(s.ticker) || null }))
         .sort((a,b) => b.rsRank - a.rsRank);
       res.json({ etf, stocks: result, total: result.length });
     } catch(e) { res.status(500).json({ error: e.message }); }
