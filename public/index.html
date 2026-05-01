@@ -5225,12 +5225,31 @@ function TradeSetupsTab({ rsData, rsLoaded, rsLoading, results, setResults, regi
     setPicksLoad(true);
     try {
       const d = await api('/api/trade-setups/cached?mode=both');
-      if (d.cached && d.results?.length) {
+      // If the cached scan's regime differs from live regime, the cache is
+      // showing stale conviction overrides and outdated sizing math.
+      // Auto-trigger a fresh scan instead of rendering the stale results.
+      // Surfaces nothing to the user if rsData isn't loaded yet (rare —
+      // first paint scenario); we'll still render the cached blob then.
+      if (d.cached && d.regimeStale && rsLoaded && rsData?.length) {
+        console.log('[TradeSetups] Cache regime', d.regime?.regime, 'stale vs live', d.liveRegime?.regime, '— auto-refresh');
+        const r = await api('/api/trade-setups/scan', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ stocks: rsData, mode: 'both' }),
+        });
+        setPicks(r.results || []);
+        setConvictionOverrides(r.convictionOverrides || []);
+        if (r.regime) setRegime(r.regime);
+        setScanned(r.scannedCount || 0);
+        setSummary(`Auto-refreshed (regime changed ${d.regime?.regime} → ${d.liveRegime?.regime} since cache)`);
+      } else if (d.cached && d.results?.length) {
         setPicks(d.results);
         setConvictionOverrides(d.results.filter(r => r.convictionOverride).slice(0, 10));
         if (d.regime) setRegime(d.regime);
         setScanned(d.scannedCount || 0);
-        setSummary(`Cached scan from ${new Date(d.cachedAt + 'Z').toLocaleString()} (${d.ageMinutes} min ago)`);
+        const stalePill = d.regimeStale
+          ? ` ⚠ regime stale: cached ${d.regime?.regime} vs live ${d.liveRegime?.regime}`
+          : '';
+        setSummary(`Cached scan from ${new Date(d.cachedAt + 'Z').toLocaleString()} (${d.ageMinutes} min ago)${stalePill}`);
       } else if (rsLoaded && rsData?.length) {
         const r = await api('/api/trade-setups/scan', {
           method:'POST', headers:{'Content-Type':'application/json'},

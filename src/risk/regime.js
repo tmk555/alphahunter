@@ -428,6 +428,20 @@ async function getMarketRegime() {
       const prevRegime = prevRow?.value || '';
 
       if (prevRegime && prevRegime !== regime) {
+        // Regime changed — invalidate dependent caches.
+        //
+        // deep_scan_cache stores the regime snapshot AT THE TIME the scan
+        // ran. When regime flips (e.g. NEUTRAL → BULL after intraday
+        // breadth recovery), Trade Setups was showing the OLD scan with
+        // OLD regime — so conviction-override badges fired even though
+        // BULL doesn't trigger the override (sizeMultiplier 1.0 → no
+        // adjustment). User-flagged: "why is conviction override showing
+        // when bull risk on" — this fixes it.
+        try {
+          _db.prepare('DELETE FROM deep_scan_cache').run();
+          console.log(`  Regime change ${prevRegime} → ${regime}: deep_scan_cache cleared`);
+        } catch (_) { /* table may not exist on first install */ }
+
         // Regime changed — send notification
         const { notifyTradeEvent } = require('../notifications/channels');
         notifyTradeEvent({

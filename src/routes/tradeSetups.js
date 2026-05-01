@@ -178,7 +178,7 @@ Return JSON array:
   });
 
   // GET /api/trade-setups/cached — retrieve last deep scan results (survives refresh)
-  router.get('/trade-setups/cached', (req, res) => {
+  router.get('/trade-setups/cached', async (req, res) => {
     try {
       const db = getDB();
       const mode = req.query.mode || null;
@@ -194,9 +194,26 @@ Return JSON array:
       const regime = row.regime ? JSON.parse(row.regime) : null;
       const ageMinutes = Math.round((Date.now() - new Date(row.created_at + 'Z').getTime()) / 60000);
 
+      // Surface live regime alongside the cached one so the UI can warn
+      // when they differ — previously a NEUTRAL-cached scan kept showing
+      // conviction-override badges even after regime improved to BULL.
+      // If they differ, regimeStale=true and the UI prompts a refresh.
+      let liveRegime = null;
+      let regimeStale = false;
+      try {
+        const { getMarketRegime } = require('../risk/regime');
+        const live = await getMarketRegime();
+        liveRegime = live ? { regime: live.regime, sizeMultiplier: live.sizeMultiplier, color: live.color } : null;
+        if (live?.regime && regime?.regime && live.regime !== regime.regime) {
+          regimeStale = true;
+        }
+      } catch (_) { /* fall back to cached only */ }
+
       res.json({
         results,
         regime,
+        liveRegime,
+        regimeStale,
         cached: true,
         cachedAt: row.created_at,
         ageMinutes,
