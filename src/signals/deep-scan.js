@@ -83,15 +83,15 @@ async function runDeepScan({ stocks, mode = 'both', sectorEtfs = null, industryE
     }
   } catch (_) { /* industry rotation is additive; carry on without it */ }
 
-  // rsHistory already loaded above (used for the pre-filter rsTrend attach).
+  // trendMap already built above (used for the pre-filter rsTrend attach).
 
   const results = candidates.map(s => {
     let rsTrend = s.rsTrend || null;
     let convictionScore = s.convictionScore || 0;
     let reasons = [];
-    if (rsHistory) {
+    if (trendMap) {
       try {
-        rsTrend = rsTrend || getRSTrend(s.ticker, rsHistory);
+        rsTrend = rsTrend || trendMap.get(s.ticker) || null;
         const r = calcConviction(s, rsTrend, rotationModel, industryRotationModel);
         if (r.convictionScore != null) convictionScore = r.convictionScore;
         if (r.reasons) reasons = r.reasons;
