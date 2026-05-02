@@ -15864,7 +15864,7 @@ function ReplayTab() {
                   <div key={name} style={{background:'var(--bg3)',border:`1px solid ${color}30`,borderLeft:`3px solid ${color}`,borderRadius:4,padding:'10px 12px'}}>
                     <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)'}}>{name.toUpperCase()}</div>
                     <div style={{fontSize:13,fontFamily:'var(--font-mono)',fontWeight:700,color,marginTop:3}}>
-                      {beat}/{f.count} beat SPY ({pct}%)
+                      {beat}/{f.count} beat {s.benchmark || 'SPY'} ({pct}%)
                     </div>
                     <div style={{fontSize:10,color:'var(--text2)',marginTop:3,fontFamily:'var(--font-mono)'}}>
                       best after-tax alpha: <strong style={{color: f.bestAfterTaxAlpha > 0 ? 'var(--green)' : 'var(--red)'}}>{f.bestAfterTaxAlpha != null ? `${f.bestAfterTaxAlpha>0?'+':''}${f.bestAfterTaxAlpha}%` : '—'}</strong>
@@ -15969,7 +15969,7 @@ function ReplayTab() {
                         </td>
                         <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:r.totalReturn>=0?'var(--green)':'var(--red)'}}>{r.totalReturn>0?'+':''}{r.totalReturn}%</td>
                         <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--text3)'}}
-                            title={afterTaxSpy != null ? `Pre-tax. After-tax SPY = ${afterTaxSpy>0?'+':''}${afterTaxSpy}%` : 'SPY pre-tax buy-and-hold'}>{r.spyReturn>0?'+':''}{r.spyReturn}%</td>
+                            title={afterTaxSpy != null ? `Pre-tax. After-tax ${s.benchmark || 'SPY'} = ${afterTaxSpy>0?'+':''}${afterTaxSpy}%` : `${s.benchmark || 'SPY'} pre-tax buy-and-hold`}>{r.spyReturn>0?'+':''}{r.spyReturn}%</td>
                         <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:(r.preTaxAlpha||0)>0?'var(--green)':'var(--red)'}}>{r.preTaxAlpha!=null?(r.preTaxAlpha>0?'+':'')+r.preTaxAlpha+'%':'—'}</td>
                         <td title={taxTip} style={{textAlign:'right',fontFamily:'var(--font-mono)',color:atxColor,fontWeight:700,cursor: taxTip ? 'help' : 'default'}}>{r.afterTaxAlpha!=null?(r.afterTaxAlpha>0?'+':'')+r.afterTaxAlpha+'%':'—'}</td>
                         <td style={{textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--red)'}}>{r.maxDrawdown}%</td>
