@@ -242,7 +242,27 @@ registerJobType('rs_history_cleanup', {
   },
 });
 
-// ─── 7. Insider Scan — pull Form 4s for the universe ──────────────────────
+// ─── 7a. Daily Plan cutoff — flip lingering 'pending' to 'auto_skip' ──────
+//
+// Runs once at 10:30 AM ET on weekdays. Without this cron, a user who
+// never opens the Daily Plan tab leaves yesterday's pending decisions
+// in 'pending' state forever. The cutoff is the design's commitment
+// device — it has to fire whether the page is open or not.
+//
+// Idempotent: running twice in the same day does nothing the second
+// time (the first run flipped all rows; nothing pending remains).
+
+registerJobType('daily_plan_cutoff', {
+  description: 'Auto-skip lingering pending Daily Plan rows past 10:30 AM ET cutoff',
+  defaultConfig: {},
+  handler: async () => {
+    const { autoSkipExpiredPending } = require('../data/daily-decisions-store');
+    const result = autoSkipExpiredPending();
+    return result;
+  },
+});
+
+// ─── 7b. Insider Scan — pull Form 4s for the universe ──────────────────────
 //
 // Runs once per weekday post-close. For each universe ticker, fetch the
 // last `lookbackDays` of Form 4 filings and persist new transactions to
@@ -1160,6 +1180,16 @@ const DEFAULT_JOBS = [
     job_type: 'insider_scan',
     cron_expression: '30 17 * * 1-5',  // 5:30 PM server local, weekdays
     config: { lookbackDays: 30, maxFilingsPerSymbol: 30, concurrency: 5 },
+  },
+
+  // Daily Plan cutoff — flip pending decisions to auto_skip at 10:30 AM ET.
+  // Server timezone: assumes Eastern. Runs once per weekday morning.
+  {
+    name: 'daily_plan_cutoff',
+    description: 'Auto-skip lingering Daily Plan pending rows at 10:30 AM ET',
+    job_type: 'daily_plan_cutoff',
+    cron_expression: '30 10 * * 1-5',  // 10:30 AM server local (assume ET), weekdays
+    config: {},
   },
 
   // Intraday 3-state 50 SMA pullback monitor. Runs every 2 minutes on

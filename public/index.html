@@ -1684,7 +1684,15 @@ function InstitutionalBadge({ data }) {
 
 // ─── ROOT APP ─────────────────────────────────────────────────────────────────
 function App() {
-  const [tab, setTab] = useState('pulse');
+  // Default tab is 'plan' — the action surface, not 'pulse' (context).
+  // The app opens to "what should I act on today?" rather than dropping
+  // the user into 200 data points. Persisted across reloads via localStorage
+  // so a user mid-workflow stays where they were.
+  const [tab, setTab] = useState(() => {
+    try { return localStorage.getItem('alphahunter:tab') || 'plan'; }
+    catch (_) { return 'plan'; }
+  });
+  useEffect(() => { try { localStorage.setItem('alphahunter:tab', tab); } catch (_) {} }, [tab]);
   const [tickerData, setTickerData] = useState([]);
   const [isLive, setIsLive] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
@@ -1901,26 +1909,37 @@ function App() {
   // Open-position count goes inside as a sub-tab badge.
   const tradesUrgent = badgeCounts.review || badgeCounts.staged || badgeCounts.positions || 0;
   // Tab groups — visually separated bands that communicate the workflow
-  // (top-down → discover → execute → validate → admin) instead of a flat
-  // 10-tab strip. Order WITHIN each group is by usage frequency: most-used
-  // tab first. The flat-array style was readable enough at 5 tabs but
-  // became a menu rather than a workflow at 10.
+  // (today → decide → deep → admin) instead of a flat tab strip.
+  //
+  // Tab philosophy shift from prior arrangement:
+  //   The OLD ordering opened with TOP-DOWN (Rotation/Pulse/Macro) — three
+  //   "context absorption" tabs before any action surface. By the time the
+  //   user reached Trade Setups they'd already cycled through 200+ data
+  //   points — decision fatigue made commitment harder.
+  //
+  //   NEW: TODAY group opens the day. Daily Plan is the action interface;
+  //   Yesterday is the closure surface. DECIDE group is the workspace where
+  //   the watchlist gets populated. DEEP group is the once-a-week setup work
+  //   (Sunday Routine: rotation/pulse/macro/replay all live here).
+  //
+  //   Default tab is 'plan' — the app opens to "what do I act on today"
+  //   not "what's the macro context."
   const TAB_GROUPS = [
-    { label: 'TOP-DOWN', tabs: [
-      { id:'rotation',  label:'🔄 Rotation' },        // most-used Sunday tool
+    { label: 'TODAY', tabs: [
+      { id:'plan',      label:'🌅 Daily Plan' },        // NEW — action loop
+      { id:'trades',    label:'💼 Trades', badge: tradesUrgent || null, badgeWarn: !!badgeCounts.review },
+      { id:'yesterday', label:'✅ Yesterday' },          // NEW — review loop
+    ] },
+    { label: 'DECIDE', tabs: [
+      { id:'watchlist', label:'⭐ Watchlist' },           // tier-1/2/3 commit list
+      { id:'setups',    label:'🎯 Trade Setups' },
+      { id:'rs',        label:'📊 Scanner' },
+    ] },
+    { label: 'DEEP', tabs: [
+      { id:'rotation',  label:'🔄 Rotation' },
       { id:'pulse',     label:'⚡ Market Pulse' },
       { id:'macro',     label:'📉 Macro' },
-    ] },
-    { label: 'DISCOVER', tabs: [
-      { id:'setups',    label:'🎯 Trade Setups' },     // daily-use
-      { id:'rs',        label:'📊 Scanner' },          // deep-use
-      { id:'watchlist', label:'⭐ Watchlist' },         // NEW — persists tier-1 names
-    ] },
-    { label: 'EXECUTE', tabs: [
-      { id:'trades',    label:'💼 Trades', badge: tradesUrgent || null, badgeWarn: !!badgeCounts.review },
       { id:'hedge',     label:'🛡 Hedge' },
-    ] },
-    { label: 'VALIDATE', tabs: [
       { id:'replay',    label:'🔁 Replay' },
       { id:'diagnostics', label:'📈 Diagnostics' },
     ] },
@@ -2075,6 +2094,8 @@ function App() {
         {tab==='hedge'      && <HedgeTab />}
         {tab==='trades'     && <TradesTab rsData={rsData} badgeCounts={badgeCounts}/>}
         {tab==='watchlist'  && <WatchlistTab rsData={rsData} rsLoaded={rsLoaded} navigateToScanner={navigateToScanner}/>}
+        {tab==='plan'       && <DailyPlanTab rsData={rsData} rsLoaded={rsLoaded}/>}
+        {tab==='yesterday'  && <YesterdayTab rsData={rsData}/>}
         {tab==='replay'     && <ReplayTab />}
         {tab==='diagnostics' && <DiagnosticsTab />}
         {tab==='settings'   && <SettingsTab />}
@@ -13941,6 +13962,463 @@ function OptionsHedgeSection() {
             </tbody>
           </table>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ─── DAILY PLAN TAB — the action loop ─────────────────────────────────
+//
+// Converts tier-1 watchlist names into binary daily decisions:
+// SUBMIT (commit + auto-stage), WAIT (defer to tomorrow), SKIP (with
+// optional reason). After 10:30 AM ET cutoff, lingering 'pending' rows
+// flip to 'auto_skip' which counts AGAINST adherence rate — the design
+// forces commitment behavior, not optionality.
+//
+// Default tab on app open. The surface a position trader sees first
+// every morning is "what am I acting on today" not "what's the macro
+// context."
+//
+// Data sources:
+//   - localStorage Watchlist (tier-1 names + thesis)
+//   - rsData (live price, conviction, insider clusters, RS, pattern flags)
+//   - /api/daily-plan/today (decision state from server)
+//   - POST /api/daily-plan/decision per click
+function DailyPlanTab({ rsData, rsLoaded }) {
+  const [plan, setPlan] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+  const [skipReasonFor, setSkipReasonFor] = useState(null);  // symbol or null
+  const [skipReasonText, setSkipReasonText] = useState('');
+
+  // Pull tier-1 names from Watchlist localStorage and seed today's plan.
+  // Re-runs whenever the watchlist changes (cross-tab event from
+  // WatchlistTab) or rsData arrives (so we have live conviction for the
+  // ranking + cap-to-8).
+  const ensureSeed = React.useCallback(async () => {
+    if (!rsLoaded || !rsData?.length) return;
+    const watchlist = (() => {
+      try { return JSON.parse(localStorage.getItem('alphahunter:watchlist') || '{}')?.items || []; }
+      catch (_) { return []; }
+    })();
+    const tier1 = watchlist.filter(it => it.tier === 1);
+    if (tier1.length === 0) return;
+    const liveByTicker = new Map(rsData.map(s => [s.ticker, s]));
+    const tier1Items = tier1.map(it => {
+      const live = liveByTicker.get(it.ticker);
+      return {
+        symbol: it.ticker,
+        convictionAtDecision: live?.convictionScore || 0,
+        priceAtDecision:      live?.price || null,
+        // Pivot from the auto-staged setup if available, else fall back to
+        // distFromHigh-derived approximation. Future: read from staged_orders.
+        pivotPrice:           live?.pivotPrice || (live?.w52h ? +(live.w52h * 0.99).toFixed(2) : null),
+        thesis:               it.thesis || '',
+      };
+    });
+    try {
+      await api('/api/daily-plan/today/ensure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tier1Items }),
+      });
+    } catch (e) { /* non-fatal — getTodayPlan still works without seed */ }
+  }, [rsData, rsLoaded]);
+
+  const load = React.useCallback(async () => {
+    setLoading(true); setErr('');
+    try {
+      await ensureSeed();
+      const d = await api('/api/daily-plan/today');
+      setPlan(d);
+    } catch (e) { setErr(e.message); }
+    setLoading(false);
+  }, [ensureSeed]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Re-load when watchlist changes (cross-tab event) so promoting a name
+  // to Tier 1 in WatchlistTab makes it appear here without a manual
+  // refresh.
+  useEffect(() => {
+    const onChange = () => load();
+    window.addEventListener('watchlist-changed', onChange);
+    return () => window.removeEventListener('watchlist-changed', onChange);
+  }, [load]);
+
+  // Decision handlers. Each fires the API + optimistically updates UI.
+  async function decide(symbol, decision, reason = null) {
+    const live = rsData?.find(s => s.ticker === symbol);
+    try {
+      await api('/api/daily-plan/decision', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol, decision,
+          skipReason: reason,
+          priceAtDecision: live?.price || null,
+        }),
+      });
+      // Update the row inline without a full reload
+      setPlan(p => p ? {
+        ...p,
+        items: p.items.map(it => it.symbol === symbol
+          ? { ...it, decision, skipReason: reason, decidedAt: new Date().toISOString() }
+          : it),
+        summary: (() => {
+          const items = p.items.map(it => it.symbol === symbol
+            ? { ...it, decision } : it);
+          const decided = items.filter(d => ['submit', 'wait', 'skip'].includes(d.decision)).length;
+          const pending = items.filter(d => d.decision === 'pending').length;
+          const autoSkipped = items.filter(d => d.decision === 'auto_skip').length;
+          const total = items.length;
+          const adh = total > 0 ? +(decided / total * 100).toFixed(1) : null;
+          return { total, decided, pending, autoSkipped, adherenceRate: adh };
+        })(),
+      } : p);
+      window.showToast?.(symbol, `Decision: ${decision.toUpperCase()}`);
+    } catch (e) {
+      window.showToast?.(symbol, e.message, true);
+    }
+  }
+
+  // Submit also stages a bracket order. If the user has an existing
+  // staging endpoint we call it; otherwise just record the decision.
+  async function submit(symbol) {
+    await decide(symbol, 'submit');
+    // Best-effort: trigger stage from setup if available. The endpoint
+    // exists in tradeSetups routes — we call by ticker.
+    try {
+      await api('/api/trade-setups/stage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker: symbol, mode: 'position', exitStrategy: 'pyramid_auto' }),
+      });
+      window.showToast?.(symbol, 'Bracket staged · open Trades to submit');
+    } catch (e) { /* staging is optional — decision was the primary record */ }
+  }
+
+  function startSkip(symbol) { setSkipReasonFor(symbol); setSkipReasonText(''); }
+  function cancelSkip() { setSkipReasonFor(null); setSkipReasonText(''); }
+  async function confirmSkip(symbol) {
+    await decide(symbol, 'skip', skipReasonText.trim() || null);
+    cancelSkip();
+  }
+
+  // ─── Render ────────────────────────────────────────────────────────────
+  const summary = plan?.summary || { total: 0, decided: 0, pending: 0, autoSkipped: 0, adherenceRate: null };
+  const cutoffPassed = plan?.cutoffPassed;
+
+  return (
+    <div>
+      <div className="panel" style={{marginBottom:14}}>
+        <div className="panel-title">🌅 <span>Daily Plan · {plan?.date || '—'}</span></div>
+        <div className="panel-sub">
+          Today's tier-1 decisions. Each name needs a binary commit: <strong style={{color:'var(--green)'}}>SUBMIT</strong> (stage bracket), <strong style={{color:'var(--amber)'}}>WAIT</strong> (defer to tomorrow), or <strong style={{color:'var(--red)'}}>SKIP</strong> (dead with reason). Cutoff at 10:30 AM ET — pending names auto-skip and count against adherence.
+        </div>
+
+        {/* Adherence band */}
+        <div style={{display:'flex',gap:14,marginTop:14,alignItems:'center',flexWrap:'wrap'}}>
+          <div style={{display:'inline-flex',alignItems:'center',gap:8}}>
+            <span style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5}}>ADHERENCE</span>
+            <span style={{fontFamily:'var(--font-mono)',fontSize:22,fontWeight:700,
+              color: summary.adherenceRate>=95 ? 'var(--green)' :
+                     summary.adherenceRate>=70 ? 'var(--amber)' : 'var(--red)'}}>
+              {summary.adherenceRate != null ? `${summary.adherenceRate}%` : '—'}
+            </span>
+          </div>
+          <div style={{display:'flex',gap:14,fontSize:12,fontFamily:'var(--font-mono)'}}>
+            <span><span style={{color:'var(--text3)'}}>Decided</span> <strong style={{color:'var(--green)'}}>{summary.decided}</strong></span>
+            <span><span style={{color:'var(--text3)'}}>Pending</span> <strong style={{color:'var(--amber)'}}>{summary.pending}</strong></span>
+            <span><span style={{color:'var(--text3)'}}>Auto-skip</span> <strong style={{color:'var(--red)'}}>{summary.autoSkipped}</strong></span>
+            <span><span style={{color:'var(--text3)'}}>Total</span> <strong>{summary.total}</strong></span>
+          </div>
+          {cutoffPassed && (
+            <span style={{marginLeft:'auto',padding:'3px 10px',background:'rgba(255,61,87,0.12)',color:'var(--red)',border:'1px solid rgba(255,61,87,0.4)',borderRadius:3,fontSize:11,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:0.5}}>
+              🔒 PAST 10:30 AM ET — late decisions still recorded
+            </span>
+          )}
+          {!cutoffPassed && summary.pending > 0 && (
+            <span style={{marginLeft:'auto',fontSize:11,color:'var(--amber)',fontFamily:'var(--font-mono)'}}>
+              ⏰ Decide before 10:30 AM ET
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Empty / loading state */}
+      {loading && <div className="panel"><Loader msg="Loading today's plan..."/></div>}
+      {err && <div className="panel" style={{borderLeft:'3px solid var(--red)'}}><span style={{color:'var(--red)'}}>⚠ {err}</span></div>}
+      {!loading && !err && plan?.items?.length === 0 && (
+        <div className="panel" style={{textAlign:'center',padding:'40px 20px',color:'var(--text3)'}}>
+          <div style={{fontSize:48,marginBottom:10}}>🌅</div>
+          <div style={{fontSize:14,marginBottom:4,color:'var(--text2)'}}>No tier-1 names for today</div>
+          <div style={{fontSize:11}}>Promote names to <strong>Tier 1</strong> in the ⭐ Watchlist tab. They'll appear here on next refresh.</div>
+        </div>
+      )}
+
+      {/* Decision rows */}
+      {!loading && plan?.items?.length > 0 && (
+        <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          {plan.items.map(it => {
+            const decisionColor =
+              it.decision === 'submit'    ? 'var(--green)' :
+              it.decision === 'wait'      ? 'var(--amber)' :
+              it.decision === 'skip'      ? 'var(--red)'   :
+              it.decision === 'auto_skip' ? 'var(--text3)' : 'var(--cyan)';
+            const decisionLabel =
+              it.decision === 'submit'    ? '✅ SUBMITTED' :
+              it.decision === 'wait'      ? '⏸ WAITING'   :
+              it.decision === 'skip'      ? '❌ SKIPPED'  :
+              it.decision === 'auto_skip' ? '⏰ AUTO-SKIPPED' : 'PENDING';
+            const isPending = it.decision === 'pending';
+            const gap = it.gapFromPivotPct;
+            return (
+              <div key={it.symbol}
+                style={{padding:'14px 16px',background:'var(--bg3)',border:'1px solid var(--border)',borderLeft:`4px solid ${decisionColor}`,borderRadius:4}}>
+                {/* Top row: ticker + live data */}
+                <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',marginBottom:10}}>
+                  <span style={{fontFamily:'var(--font-mono)',fontWeight:800,fontSize:18,color:'var(--text)',cursor:'pointer'}}
+                    onClick={() => window.openStockBrief?.(it.symbol)}
+                    title="Open stock brief">
+                    {it.symbol}
+                  </span>
+                  <span style={{fontSize:11,color:'var(--text3)'}}>{it.sector || '—'}</span>
+                  {it.currentPrice != null && (
+                    <span style={{fontFamily:'var(--font-mono)',fontSize:13,color:'var(--text)'}}>
+                      ${it.currentPrice.toFixed(2)}
+                    </span>
+                  )}
+                  {gap != null && (
+                    <span style={{fontFamily:'var(--font-mono)',fontSize:11,
+                      color: gap >= 0 && gap <= 2 ? 'var(--green)' :
+                             gap > 2 ? 'var(--amber)' :
+                             gap < -3 ? 'var(--red)' : 'var(--text3)'}}
+                      title={`Pivot ${it.pivotPrice?.toFixed(2)}, current ${it.currentPrice?.toFixed(2)}`}>
+                      {gap > 0 ? '+' : ''}{gap}% vs pivot
+                    </span>
+                  )}
+                  <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--cyan)'}}>
+                    Conv {it.currentConviction ?? it.convictionAtDecision}
+                  </span>
+                  {it.rsRank != null && (
+                    <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:(it.rsRank>=80?'var(--green)':'var(--text3)')}}>
+                      RS {it.rsRank}
+                    </span>
+                  )}
+                  {it.insiderClusterBuy && (
+                    <span style={{fontSize:10,color:'var(--green)',fontFamily:'var(--font-mono)',fontWeight:700,padding:'2px 6px',background:'rgba(0,230,118,0.12)',borderRadius:3}}>
+                      ⚡ INSIDER BUY
+                    </span>
+                  )}
+                  {it.insiderClusterSell && (
+                    <span style={{fontSize:10,color:'var(--red)',fontFamily:'var(--font-mono)',fontWeight:700,padding:'2px 6px',background:'rgba(255,61,87,0.10)',borderRadius:3}}>
+                      ⚠ INSIDER SELL
+                    </span>
+                  )}
+                  {it.daysToEarnings != null && it.daysToEarnings >= 0 && it.daysToEarnings <= 14 && (
+                    <span style={{fontSize:10,color:'var(--amber)',fontFamily:'var(--font-mono)'}}>
+                      ⚠ ER in {it.daysToEarnings}d
+                    </span>
+                  )}
+
+                  <span style={{marginLeft:'auto',fontFamily:'var(--font-mono)',fontSize:11,fontWeight:700,color:decisionColor}}>
+                    {decisionLabel}
+                  </span>
+                </div>
+
+                {/* Thesis line */}
+                {it.thesis && (
+                  <div style={{fontSize:11,color:'var(--text2)',marginBottom:10,fontStyle:'italic'}}>
+                    "{it.thesis}"
+                  </div>
+                )}
+
+                {/* Skip reason (if skipped) */}
+                {(it.decision === 'skip' || it.decision === 'auto_skip') && it.skipReason && (
+                  <div style={{fontSize:11,color:'var(--text3)',marginBottom:10,padding:'6px 8px',background:'var(--bg)',borderLeft:'2px solid var(--text3)',borderRadius:2}}>
+                    Reason: {it.skipReason}
+                  </div>
+                )}
+
+                {/* Decision buttons (only when pending) */}
+                {isPending && skipReasonFor !== it.symbol && (
+                  <div style={{display:'flex',gap:8}}>
+                    <button onClick={() => submit(it.symbol)}
+                      style={{padding:'8px 18px',fontSize:12,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:0.5,background:'var(--green)',color:'#000',border:'none',borderRadius:4,cursor:'pointer'}}>
+                      ✅ SUBMIT
+                    </button>
+                    <button onClick={() => decide(it.symbol, 'wait')}
+                      style={{padding:'8px 18px',fontSize:12,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:0.5,background:'transparent',color:'var(--amber)',border:'1px solid var(--amber)',borderRadius:4,cursor:'pointer'}}>
+                      ⏸ WAIT
+                    </button>
+                    <button onClick={() => startSkip(it.symbol)}
+                      style={{padding:'8px 18px',fontSize:12,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:0.5,background:'transparent',color:'var(--red)',border:'1px solid var(--red)',borderRadius:4,cursor:'pointer'}}>
+                      ❌ SKIP
+                    </button>
+                  </div>
+                )}
+
+                {/* Skip-reason inline form */}
+                {isPending && skipReasonFor === it.symbol && (
+                  <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                    <input autoFocus
+                      placeholder="Skip reason (e.g. 'extended above pivot', 'earnings too close')"
+                      value={skipReasonText}
+                      onChange={e => setSkipReasonText(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') confirmSkip(it.symbol); if (e.key === 'Escape') cancelSkip(); }}
+                      style={{flex:1,padding:'8px 10px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',fontSize:12,fontFamily:'var(--font-mono)',outline:'none'}}/>
+                    <button onClick={() => confirmSkip(it.symbol)}
+                      style={{padding:'8px 14px',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:700,background:'var(--red)',color:'#000',border:'none',borderRadius:4,cursor:'pointer'}}>
+                      Confirm Skip
+                    </button>
+                    <button onClick={cancelSkip}
+                      style={{padding:'8px 14px',fontSize:11,fontFamily:'var(--font-mono)',background:'transparent',color:'var(--text3)',border:'1px solid var(--border)',borderRadius:4,cursor:'pointer'}}>
+                      Cancel
+                    </button>
+                  </div>
+                )}
+
+                {/* Re-decide buttons for non-pending rows (in case user wants to change mind before cutoff) */}
+                {!isPending && !cutoffPassed && it.decision !== 'auto_skip' && (
+                  <div style={{display:'flex',gap:6,marginTop:6}}>
+                    <button onClick={() => decide(it.symbol, 'pending')}
+                      title="Re-open this decision"
+                      style={{padding:'4px 10px',fontSize:10,fontFamily:'var(--font-mono)',background:'transparent',color:'var(--text3)',border:'1px solid var(--border)',borderRadius:3,cursor:'pointer'}}>
+                      ↻ Reset
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── YESTERDAY TAB — review loop ───────────────────────────────────────
+//
+// Closes the action loop. Yesterday's decisions + behavioral feedback:
+//   - Missed winners: stocks I SKIPPED that ran (regret events)
+//   - Skipped losers: stocks I SKIPPED that fell (good calls)
+// This is the single most-important surface for evolving as a trader —
+// without it the user keeps repeating skip patterns that lose money.
+function YesterdayTab({ rsData }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true); setErr('');
+      try { setData(await api('/api/daily-plan/yesterday')); }
+      catch (e) { setErr(e.message); }
+      setLoading(false);
+    })();
+  }, []);
+
+  return (
+    <div>
+      <div className="panel" style={{marginBottom:14}}>
+        <div className="panel-title">✅ <span>Yesterday — {data?.date || '—'}</span></div>
+        <div className="panel-sub">
+          Yesterday's decisions and what happened. <strong>Missed winners</strong> = names you skipped that ran (review your skip reasons).
+          <strong> Skipped losers</strong> = good calls that confirm your discipline.
+        </div>
+      </div>
+
+      {loading && <div className="panel"><Loader msg="Loading yesterday's outcomes..."/></div>}
+      {err && <div className="panel" style={{borderLeft:'3px solid var(--red)'}}><span style={{color:'var(--red)'}}>⚠ {err}</span></div>}
+
+      {!loading && !err && data && (
+        <>
+          {/* Missed-winners regret panel */}
+          {data.behavioral?.missedWinners?.length > 0 && (
+            <div className="panel" style={{borderLeft:'3px solid var(--red)',marginBottom:10}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,marginBottom:8}}>⚠ MISSED WINNERS (skipped, ran anyway)</div>
+              <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                {data.behavioral.missedWinners.map(it => (
+                  <div key={it.symbol} style={{display:'flex',gap:14,fontSize:12,fontFamily:'var(--font-mono)',padding:'6px 10px',background:'rgba(255,61,87,0.06)',borderRadius:3}}>
+                    <strong style={{color:'var(--text)'}}>{it.symbol}</strong>
+                    <span style={{color:'var(--text3)'}}>{it.decision}</span>
+                    <span style={{color:'var(--green)',fontWeight:700}}>+{it.moveSinceDecisionPct}%</span>
+                    {it.skipReason && <span style={{color:'var(--text3)',flex:1,fontStyle:'italic'}}>"{it.skipReason}"</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Skipped-losers (good calls) panel */}
+          {data.behavioral?.skippedLosers?.length > 0 && (
+            <div className="panel" style={{borderLeft:'3px solid var(--green)',marginBottom:10}}>
+              <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,marginBottom:8}}>✓ GOOD SKIPS (skipped, fell anyway)</div>
+              <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                {data.behavioral.skippedLosers.map(it => (
+                  <div key={it.symbol} style={{display:'flex',gap:14,fontSize:12,fontFamily:'var(--font-mono)',padding:'6px 10px',background:'rgba(0,230,118,0.06)',borderRadius:3}}>
+                    <strong style={{color:'var(--text)'}}>{it.symbol}</strong>
+                    <span style={{color:'var(--text3)'}}>{it.decision}</span>
+                    <span style={{color:'var(--red)',fontWeight:700}}>{it.moveSinceDecisionPct}%</span>
+                    {it.skipReason && <span style={{color:'var(--text3)',flex:1,fontStyle:'italic'}}>"{it.skipReason}"</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Full plan as table */}
+          <div className="panel">
+            <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,marginBottom:10}}>FULL PLAN</div>
+            {data.items?.length === 0 ? (
+              <div style={{color:'var(--text3)',fontSize:12,padding:'12px 0'}}>No plan recorded for yesterday.</div>
+            ) : (
+              <table style={{width:'100%',fontSize:11,fontFamily:'var(--font-mono)'}}>
+                <thead>
+                  <tr style={{borderBottom:'1px solid var(--border)',color:'var(--text3)',fontSize:10}}>
+                    <th style={{textAlign:'left',padding:'6px 8px'}}>SYMBOL</th>
+                    <th style={{textAlign:'left',padding:'6px 8px'}}>DECISION</th>
+                    <th style={{textAlign:'right',padding:'6px 8px'}}>CONV</th>
+                    <th style={{textAlign:'right',padding:'6px 8px'}}>PRICE@DEC</th>
+                    <th style={{textAlign:'right',padding:'6px 8px'}}>NOW</th>
+                    <th style={{textAlign:'right',padding:'6px 8px'}}>MOVE</th>
+                    <th style={{textAlign:'left',padding:'6px 8px'}}>NOTE</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.items.map(it => {
+                    const move = it.moveSinceDecisionPct;
+                    const moveColor = move == null ? 'var(--text3)' : move > 0 ? 'var(--green)' : 'var(--red)';
+                    const decColor =
+                      it.decision === 'submit'    ? 'var(--green)' :
+                      it.decision === 'wait'      ? 'var(--amber)' :
+                      it.decision === 'skip'      ? 'var(--red)'   :
+                      it.decision === 'auto_skip' ? 'var(--text3)' : 'var(--cyan)';
+                    return (
+                      <tr key={it.symbol} style={{borderBottom:'1px solid var(--border)'}}>
+                        <td style={{padding:'6px 8px',fontWeight:700,color:'var(--text)',cursor:'pointer'}}
+                            onClick={() => window.openStockBrief?.(it.symbol)}>
+                          {it.symbol}
+                        </td>
+                        <td style={{padding:'6px 8px',color:decColor}}>{it.decision}</td>
+                        <td style={{padding:'6px 8px',textAlign:'right',color:'var(--text)'}}>{it.convictionAtDecision ?? '—'}</td>
+                        <td style={{padding:'6px 8px',textAlign:'right',color:'var(--text)'}}>{it.priceAtDecision ? '$'+it.priceAtDecision.toFixed(2) : '—'}</td>
+                        <td style={{padding:'6px 8px',textAlign:'right',color:'var(--text)'}}>{it.currentPrice ? '$'+it.currentPrice.toFixed(2) : '—'}</td>
+                        <td style={{padding:'6px 8px',textAlign:'right',color:moveColor,fontWeight:700}}>
+                          {move != null ? (move > 0 ? '+' : '') + move + '%' : '—'}
+                        </td>
+                        <td style={{padding:'6px 8px',color:'var(--text3)',fontStyle:'italic',maxWidth:300,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                          {it.skipReason || it.thesis || ''}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
       )}
     </div>
   );

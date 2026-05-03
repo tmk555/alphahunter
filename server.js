@@ -214,8 +214,10 @@ const telemetryRoutes     = require('./src/routes/telemetry');
 const pyramidPlansRoutes  = require('./src/routes/pyramidPlans')(runScan);
 const marketRoutes        = require('./src/routes/market');
 const paperTradesRoutes   = require('./src/routes/paper-trades');
+const dailyPlanRoutes     = require('./src/routes/daily-plan')();
 
 app.use('/api', scanRoutes);
+app.use('/api', dailyPlanRoutes);
 app.use('/api', sectorRoutes);
 app.use('/api', macroRoutes);
 app.use('/api', tradeSetupsRoutes);

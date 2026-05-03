@@ -550,6 +550,44 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_cusip_ticker ON cusip_ticker_map (ticker);
   `);
 
+  // ─── Daily decisions — the action loop ──────────────────────────────────
+  //
+  // Per-day decisions on tier-1 watchlist names. Closes the "scan vs decide
+  // vs act" loop: every Tier-1 name MUST be decided each trading day, with
+  // the decision recorded for later adherence/forecasting analysis.
+  //
+  // Decisions:
+  //   'pending'    — in the daily plan but not decided yet
+  //   'submit'     — user committed to the trade today (bracket auto-stages)
+  //   'wait'       — defer to tomorrow (carries to next day's plan)
+  //   'skip'       — explicit no, with reason
+  //   'auto_skip'  — 10:30 AM ET cutoff hit before user decided. Counts
+  //                  against adherence rate (forces the commitment habit)
+  //
+  // Adherence = decisions made BY THE USER (submit + wait + skip) ÷ total.
+  // Auto-skips fail the adherence ratio — that's the design.
+  //
+  // The pivot_price + conviction_at_decision snapshots the state at the
+  // moment of decision so post-hoc review can compare "did the price
+  // actually break the pivot I committed to?" vs current market.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS daily_decisions (
+      date                   TEXT NOT NULL,           -- 'YYYY-MM-DD' (ET)
+      symbol                 TEXT NOT NULL,
+      decision               TEXT NOT NULL DEFAULT 'pending',
+      conviction_at_decision INTEGER,                 -- score when decision was made
+      price_at_decision      REAL,                    -- last quote at decision time
+      pivot_price            REAL,                    -- entry trigger from staged setup
+      decided_at             TEXT,                    -- ISO timestamp of decision
+      thesis                 TEXT,                    -- 1-line reasoning (from watchlist)
+      skip_reason            TEXT,                    -- when decision='skip' or 'auto_skip'
+      tier                   INTEGER DEFAULT 1,        -- usually 1 (tier-1 only) but allowed
+      PRIMARY KEY (date, symbol)
+    );
+    CREATE INDEX IF NOT EXISTS idx_daily_decisions_date ON daily_decisions (date DESC);
+    CREATE INDEX IF NOT EXISTS idx_daily_decisions_symbol ON daily_decisions (symbol, date DESC);
+  `);
+
   // ─── FRED Macro Series (point-in-time historical economic data) ──────────
   //
   // Stores observations for FRED series like DGS10 (10yr yield), CPIAUCSL
