@@ -21,8 +21,18 @@ function getDB() {
   db.pragma('journal_mode = WAL');        // Write-Ahead Logging for concurrency
   db.pragma('foreign_keys = ON');
   db.pragma('synchronous = NORMAL');      // Safe with WAL, fewer fsync calls
-  db.pragma('cache_size = 10000');         // ~40MB cache for faster reads
+  // Cache: 200 MB (negative N = absolute KB). Fits most of rs_snapshots'
+  // working set in RAM — that table is the hot path for replay sweeps which
+  // re-scan it once per parameter combination. Pre-bump (10 MB) the sweep
+  // was paging out roughly half its reads to disk on every combo.
+  db.pragma('cache_size = -200000');
   db.pragma('temp_store = MEMORY');        // Temp tables in RAM
+  // Memory-mapped I/O for the whole DB file. Lets the OS page cache serve
+  // reads instead of going through SQLite's userspace cache. Especially
+  // valuable for sequential scans (the replay sweep's dominant pattern).
+  // 1 GB ceiling — well above current DB size, so the entire file is
+  // effectively in OS cache after warm-up.
+  db.pragma('mmap_size = 1073741824');
   initSchema();
   return db;
 }
