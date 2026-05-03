@@ -448,6 +448,18 @@ async function getFundamentals(symbol) {
   const filingMarkers = (Array.isArray(secMarkers) && secMarkers.length) ? secMarkers : null;
   if (filingMarkers) dataSources.filingDates = 'sec_edgar';
 
+  // ─── Insider activity (Form 4 — SEC EDGAR only) ─────────────────────
+  // Read from local insider_transactions table (populated by the daily
+  // cron). The fundamentals call doesn't trigger a Form 4 fetch — that
+  // would add ~2-5s of latency per request. The cron keeps the table
+  // fresh; we just read aggregated 30-day metrics.
+  let insiderActivity = null;
+  try {
+    const { getInsiderActivity } = require('../insider-store');
+    insiderActivity = getInsiderActivity(symbol, { lookbackDays: 30 });
+    if (insiderActivity) dataSources.insiderActivity = 'sec_edgar';
+  } catch (_) { /* table missing on older DBs — silent */ }
+
   // ─── YAHOO-PRIMARY FIELDS (SEC has no equivalent) ────────────────────
   // Pass through directly; null when Yahoo unavailable.
   const sharesFloat        = yahoo?.sharesFloat        ?? null;
@@ -509,6 +521,7 @@ async function getFundamentals(symbol) {
     revAnnualValuesSEC,
     revDataSource: dataSources.revQuarterly,
     filingMarkers,
+    insiderActivity,
 
     // Yahoo-primary block
     sharesFloat, sharesShort, shortPercentFloat, shortRatio,

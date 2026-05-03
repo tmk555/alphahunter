@@ -242,7 +242,94 @@ registerJobType('rs_history_cleanup', {
   },
 });
 
-// ─── 7. Job History Cleanup — Prune old execution logs ──────────────────────
+// ─── 7. Insider Scan — pull Form 4s for the universe ──────────────────────
+//
+// Runs once per weekday post-close. For each universe ticker, fetch the
+// last `lookbackDays` of Form 4 filings and persist new transactions to
+// insider_transactions. INSERT OR IGNORE absorbs duplicates so the cron
+// is idempotent.
+//
+// Rate-limit aware: SEC's ceiling is ~10 req/sec; we cap concurrency at
+// 5 in-flight requests across the universe. For a 1620-symbol universe
+// each pulling submissions + ~30 Form 4 XML docs that's at most ~50K
+// requests. The cron throttles itself with a small per-batch delay.
+//
+// The first run is the heaviest (full backfill window). Subsequent
+// daily runs only fetch filings since the last filed_at we have, so
+// they complete in a few minutes.
+
+registerJobType('insider_scan', {
+  description: 'Pull SEC Form 4 (insider transactions) for the universe and persist deltas',
+  defaultConfig: { lookbackDays: 30, maxFilingsPerSymbol: 30, concurrency: 5 },
+  handler: async (config) => {
+    const { getInsiderTransactions } = require('../data/providers/secEdgar');
+    const { saveInsiderTransactions, getLastInsiderFilingDate, getInsiderTableStats } = require('../data/insider-store');
+
+    // Read universe from runtime singleton (so we use the live, expanded
+    // 1,620-symbol set, not the static FULL_UNIVERSE fallback).
+    const { getRuntimeUniverse } = require('../data/runtime-universe');
+    const { universe } = getRuntimeUniverse();
+    if (!universe || universe.length === 0) {
+      return { error: 'Runtime universe not yet populated; skipping insider scan' };
+    }
+
+    const lookbackDays = config.lookbackDays || 30;
+    const maxFilings   = config.maxFilingsPerSymbol || 30;
+    const concurrency  = config.concurrency || 5;
+
+    const cutoff = new Date(Date.now() - lookbackDays * 86400_000);
+    const cutoffIso = cutoff.toISOString().slice(0, 10);
+
+    let totalInserted = 0;
+    let totalProcessed = 0;
+    const errors = [];
+
+    // Promise pool — up to `concurrency` symbols in flight at once.
+    const queue = universe.slice();
+    async function worker() {
+      while (queue.length) {
+        const sym = queue.shift();
+        if (!sym) break;
+        try {
+          // Optimization: if we already have data for this symbol, only
+          // fetch filings newer than our last-seen filed_at. This makes
+          // daily runs cheap (~50 lookups/symbol drop to ~1).
+          const lastSeen = getLastInsiderFilingDate(sym);
+          const sinceDate = lastSeen && lastSeen > cutoffIso ? lastSeen : cutoffIso;
+
+          const txs = await getInsiderTransactions(sym, {
+            maxFilings,
+            sinceDate,
+          });
+          if (Array.isArray(txs) && txs.length) {
+            const n = saveInsiderTransactions(txs);
+            totalInserted += n;
+          }
+          totalProcessed++;
+        } catch (e) {
+          errors.push({ symbol: sym, error: e.message });
+        }
+      }
+    }
+
+    const t0 = Date.now();
+    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    const elapsedMs = Date.now() - t0;
+
+    const stats = getInsiderTableStats();
+    return {
+      universeSize: universe.length,
+      processed: totalProcessed,
+      inserted: totalInserted,
+      errors: errors.length,
+      sampleErrors: errors.slice(0, 3),
+      elapsedSec: Math.round(elapsedMs / 1000),
+      tableStats: stats,
+    };
+  },
+});
+
+// ─── 8. Job History Cleanup — Prune old execution logs ──────────────────────
 
 registerJobType('job_history_cleanup', {
   description: 'Remove job execution history older than configured days',
@@ -1060,6 +1147,19 @@ const DEFAULT_JOBS = [
     job_type: 'rs_scan',
     cron_expression: '30 16 * * 1-5',  // 4:30 PM server local, weekdays
     config: { persist: true },
+  },
+
+  // Daily Form 4 (insider transactions) scan. Runs at 5:30 PM after
+  // the RS scan completes. Fetches recent insider trades for each
+  // universe ticker and INSERT OR IGNOREs into insider_transactions.
+  // Most universe symbols have zero new Form 4s on any given day, so
+  // typical run completes in a few minutes after the initial backfill.
+  {
+    name: 'insider_scan_daily',
+    description: 'Daily SEC Form 4 (insider transactions) ingest for the universe',
+    job_type: 'insider_scan',
+    cron_expression: '30 17 * * 1-5',  // 5:30 PM server local, weekdays
+    config: { lookbackDays: 30, maxFilingsPerSymbol: 30, concurrency: 5 },
   },
 
   // Intraday 3-state 50 SMA pullback monitor. Runs every 2 minutes on
