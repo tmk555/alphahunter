@@ -124,5 +124,39 @@ module.exports = function() {
     }
   });
 
+  // Live trail-state endpoints — surface the live MA-trail computation
+  // that the EOD cron writes to position_trail_state. Daily Plan tab
+  // reads these to show the morning "EXITS PENDING" + "STOPS TO RAISE"
+  // panels — the bridge between backtest strategy and live execution.
+  router.get('/daily-plan/trail-state', (req, res) => {
+    try {
+      const {
+        getAllPositionTrailStates,
+        getActiveExitSignals,
+        getStopRaiseSuggestions,
+      } = require('../data/trail-state-store');
+      res.json({
+        positions:    getAllPositionTrailStates(),
+        exitSignals:  getActiveExitSignals(),
+        stopRaises:   getStopRaiseSuggestions(),
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Manual trigger — lets the user (or a test) force a trail-state
+  // recompute outside the cron schedule. Useful when bars are
+  // backfilled mid-day or when verifying the workflow before EOD.
+  router.post('/daily-plan/trail-state/recompute', (req, res) => {
+    try {
+      const { updateAllTrailStates } = require('../data/trail-state-store');
+      const result = updateAllTrailStates();
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   return router;
 };

@@ -550,6 +550,44 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_cusip_ticker ON cusip_ticker_map (ticker);
   `);
 
+  // ─── Position trail state — live MA-trail translation ────────────────────
+  //
+  // Per open position, tracks the staged-trail state computed daily after
+  // market close. The strategy uses MA close-below for exits; this table
+  // is what makes that strategy work in PRODUCTION (not just backtest).
+  //
+  // Stage progression mirrors src/signals/replay.js evaluateExit's
+  // staged_position logic:
+  //   birth        — first 5% gain OR first 10 days
+  //   adolescence  — gain ≥5% OR days ≥10  → trail 13EMA close-below
+  //   intermediate — gain ≥12% OR days ≥25 → trail 26EMA close-below
+  //   mature       — gain ≥20% OR days ≥45 → trail 50SMA close-below
+  //
+  // Once mature, never downgrade — max_gain_pct sticks so a temporary
+  // pullback doesn't loosen the trail.
+  //
+  // Updated by 'eod_trail_update' cron at 4:15 PM ET weekdays.
+  // Read by Daily Plan tab to surface exit signals + suggested stop updates.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS position_trail_state (
+      symbol             TEXT NOT NULL,
+      trade_id           INTEGER,                     -- FK to trades.id when applicable
+      entry_date         TEXT NOT NULL,
+      entry_price        REAL NOT NULL,
+      current_stage      TEXT,                        -- 'birth' | 'adolescence' | 'intermediate' | 'mature'
+      max_gain_pct       REAL DEFAULT 0,              -- ratchet — only goes up
+      ema13              REAL,                        -- last computed values (post-EOD)
+      ema26              REAL,
+      sma50              REAL,
+      suggested_stop     REAL,                        -- the trail MA for the current stage
+      exit_signal        INTEGER DEFAULT 0,           -- 1 = today's close broke trail, exit tomorrow
+      exit_reason        TEXT,                        -- e.g. 'closed below 26EMA at $172'
+      updated_at         TEXT,
+      PRIMARY KEY (symbol, entry_date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_trail_state_exit ON position_trail_state (exit_signal) WHERE exit_signal = 1;
+  `);
+
   // ─── Daily decisions — the action loop ──────────────────────────────────
   //
   // Per-day decisions on tier-1 watchlist names. Closes the "scan vs decide

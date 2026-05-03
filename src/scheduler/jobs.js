@@ -242,6 +242,30 @@ registerJobType('rs_history_cleanup', {
   },
 });
 
+// ─── EOD Trail Update — live MA-trail translation for open positions ─────
+//
+// Runs at 4:15 PM ET each weekday. For every open position:
+//   1. Pulls 120 days of daily bars
+//   2. Computes today's 13EMA / 26EMA / 50SMA
+//   3. Determines stage (birth/adolescence/intermediate/mature) based on
+//      gain% + days held, with max-gain ratchet
+//   4. If today's close < relevant trail MA → flag exit_signal=true
+//   5. Otherwise → store suggested_stop = trail MA value (so the Daily
+//      Plan UI can suggest raising the broker stop)
+//
+// Without this cron, the staged_position MA-trail strategy lives only
+// in backtest. This is the bridge to live trading.
+
+registerJobType('eod_trail_update', {
+  description: 'Compute daily MA-trail state for every open position; flag exit signals',
+  defaultConfig: {},
+  handler: async () => {
+    const { updateAllTrailStates } = require('../data/trail-state-store');
+    const result = updateAllTrailStates();
+    return result;
+  },
+});
+
 // ─── 7a. Daily Plan cutoff — flip lingering 'pending' to 'auto_skip' ──────
 //
 // Runs once at 10:30 AM ET on weekdays. Without this cron, a user who
@@ -1189,6 +1213,17 @@ const DEFAULT_JOBS = [
     description: 'Auto-skip lingering Daily Plan pending rows at 10:30 AM ET',
     job_type: 'daily_plan_cutoff',
     cron_expression: '30 10 * * 1-5',  // 10:30 AM server local (assume ET), weekdays
+    config: {},
+  },
+
+  // EOD trail update — runs at 4:15 PM ET (15 min after close) so that
+  // day's official close has settled in daily_bars. Updates trail state
+  // for every open position and flags exits.
+  {
+    name: 'eod_trail_update',
+    description: 'Compute MA-trail state + exit signals for open positions (post-close)',
+    job_type: 'eod_trail_update',
+    cron_expression: '15 16 * * 1-5',  // 4:15 PM server local (assume ET), weekdays
     config: {},
   },
 

@@ -13993,6 +13993,22 @@ function DailyPlanTab({ rsData, rsLoaded }) {
   const [skipReasonFor, setSkipReasonFor] = useState(null);  // symbol or null
   const [skipReasonText, setSkipReasonText] = useState('');
 
+  // Live MA-trail state for OPEN positions (separate from the tier-1
+  // decision plan). The EOD cron computes this each weekday after
+  // close; the UI surfaces "exit signals" + "stops to raise" so the
+  // user can act on them in their broker the next morning.
+  const [trailState, setTrailState] = useState(null);
+  const [trailLoading, setTrailLoading] = useState(false);
+
+  const loadTrailState = React.useCallback(async () => {
+    setTrailLoading(true);
+    try { setTrailState(await api('/api/daily-plan/trail-state')); }
+    catch (_) { /* non-fatal — Daily Plan still works without trail data */ }
+    setTrailLoading(false);
+  }, []);
+
+  useEffect(() => { loadTrailState(); }, [loadTrailState]);
+
   // Pull tier-1 names from Watchlist localStorage and seed today's plan.
   // Re-runs whenever the watchlist changes (cross-tab event from
   // WatchlistTab) or rsData arrives (so we have live conviction for the
@@ -14176,6 +14192,85 @@ function DailyPlanTab({ rsData, rsLoaded }) {
           )}
         </div>
       </div>
+
+      {/* ── EXITS PENDING (live MA-trail) ──────────────────────────────
+          Open positions whose end-of-day close broke their staged trail
+          MA (13EMA / 26EMA / 50SMA depending on stage). Action: close
+          the position at next open in your broker. The system can't
+          execute autonomously — but it will not let the signal go
+          unseen on the morning page. */}
+      {trailState?.exitSignals?.length > 0 && (
+        <div className="panel" style={{marginBottom:14,borderLeft:'4px solid var(--red)',background:'rgba(255,61,87,0.06)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+            <span style={{fontSize:13,fontWeight:700,color:'var(--red)',letterSpacing:0.5}}>
+              🚨 EXITS PENDING — {trailState.exitSignals.length} position{trailState.exitSignals.length>1?'s':''} closed below trail MA
+            </span>
+            <span style={{fontSize:10,color:'var(--text3)',marginLeft:'auto'}}>
+              Action: close at tomorrow's open
+            </span>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:6}}>
+            {trailState.exitSignals.map(ex => (
+              <div key={`${ex.symbol}-${ex.entry_date}`}
+                style={{display:'flex',alignItems:'center',gap:14,padding:'8px 12px',background:'var(--bg)',border:'1px solid rgba(255,61,87,0.25)',borderRadius:4,flexWrap:'wrap'}}>
+                <span style={{fontFamily:'var(--font-mono)',fontWeight:700,fontSize:14,color:'var(--text)',cursor:'pointer'}}
+                  onClick={() => window.openStockBrief?.(ex.symbol)}>
+                  {ex.symbol}
+                </span>
+                <span style={{fontSize:11,color:'var(--text3)'}}>
+                  entered {ex.entry_date} @ ${ex.entry_price?.toFixed(2)}
+                </span>
+                {ex.max_gain_pct != null && (
+                  <span style={{fontSize:11,fontFamily:'var(--font-mono)',color:ex.max_gain_pct>=0?'var(--green)':'var(--red)'}}>
+                    peak {ex.max_gain_pct>=0?'+':''}{ex.max_gain_pct.toFixed(1)}%
+                  </span>
+                )}
+                <span style={{fontSize:11,fontFamily:'var(--font-mono)',color:'var(--text2)'}}>
+                  stage: {ex.current_stage}
+                </span>
+                <span style={{flex:1,minWidth:200,fontSize:11,color:'var(--red)',fontStyle:'italic'}}>
+                  {ex.exit_reason}
+                </span>
+                <button onClick={() => {
+                  if (window.navigateToTrading) window.navigateToTrading();
+                  else window.showToast?.(ex.symbol, 'Open Trades tab and close this position manually');
+                }} style={{padding:'4px 12px',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:700,background:'var(--red)',color:'#000',border:'none',borderRadius:3,cursor:'pointer'}}>
+                  → Trades
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── STOPS TO RAISE — open positions where trail MA > broker stop.
+          These aren't exits; they're stop-raises that lock in more
+          profit as the trade matures. User must update Alpaca manually
+          since brackets are static price levels. */}
+      {trailState?.stopRaises?.length > 0 && (
+        <div className="panel" style={{marginBottom:14,borderLeft:'4px solid var(--cyan)',background:'rgba(0,180,255,0.04)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+            <span style={{fontSize:12,fontWeight:700,color:'var(--cyan)',letterSpacing:0.5}}>
+              📈 STOPS TO RAISE — {trailState.stopRaises.length} position{trailState.stopRaises.length>1?'s':''} ready for trail-up
+            </span>
+            <span style={{fontSize:10,color:'var(--text3)',marginLeft:'auto'}}>
+              Update broker stop manually
+            </span>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:4}}>
+            {trailState.stopRaises.slice(0, 10).map(r => (
+              <div key={r.trade_id} style={{display:'flex',gap:14,fontSize:11,fontFamily:'var(--font-mono)',padding:'4px 10px',background:'var(--bg)',borderRadius:3,alignItems:'center'}}>
+                <strong style={{color:'var(--text)',cursor:'pointer'}} onClick={() => window.openStockBrief?.(r.symbol)}>{r.symbol}</strong>
+                <span style={{color:'var(--text3)'}}>broker stop ${r.broker_stop_price?.toFixed(2)}</span>
+                <span style={{color:'var(--text3)'}}>→</span>
+                <span style={{color:'var(--cyan)',fontWeight:700}}>${r.suggested_stop?.toFixed(2)}</span>
+                <span style={{color:'var(--green)',fontWeight:700}}>+{r.raise_pct}%</span>
+                <span style={{color:'var(--text3)',marginLeft:'auto'}}>{r.current_stage}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Empty / loading state */}
       {loading && <div className="panel"><Loader msg="Loading today's plan..."/></div>}
