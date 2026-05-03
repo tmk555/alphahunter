@@ -35,8 +35,8 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 #tabs-row { background:var(--bg2); border-bottom:1px solid var(--border); display:flex; align-items:flex-end; overflow-x:auto; flex-shrink:0; }
 .tab-group { display:flex; align-items:flex-end; padding-bottom:0; position:relative; }
 .tab-group + .tab-group { border-left:1px solid var(--border); margin-left:8px; padding-left:8px; }
-.tab-group-label { position:absolute; top:2px; left:8px; font-size:8px; font-family:var(--font-mono); color:var(--text3); letter-spacing:1.5px; font-weight:700; pointer-events:none; }
-.tab-group .tab { margin-top:14px; }   /* leave room for the group label band above */
+.tab-group-label { position:absolute; top:2px; left:10px; font-size:10px; font-family:var(--font-mono); color:var(--cyan); letter-spacing:2px; font-weight:700; pointer-events:none; opacity:0.85; }
+.tab-group .tab { margin-top:18px; }   /* leave room for the group label band above */
 #main { flex:1; overflow-y:auto; padding:20px; }
 
 /* ── Header ──────────────────────────────────── */
@@ -1942,9 +1942,12 @@ function App() {
       { id:'macro',     label:'📉 Macro' },
       { id:'hedge',     label:'🛡 Hedge' },
       { id:'replay',    label:'🔁 Replay' },
-      { id:'diagnostics', label:'📈 Diagnostics' },
     ] },
     { label: 'ADMIN', tabs: [
+      // Diagnostics moved here from DEEP — system health / performance
+      // attribution / edge telemetry are admin-flavored, not market-
+      // analysis. Better visual balance (5/2 vs the prior 6/1).
+      { id:'diagnostics', label:'📈 Diagnostics' },
       { id:'settings',  label:'⚙ Settings' },
     ] },
   ];
