@@ -250,12 +250,267 @@ function getYesterdaysOutcomes(liveByTicker = null) {
   };
 }
 
+// ─── Weekly review with behavioral pattern detection ────────────────────
+//
+// Pre-fix the "Friday review" was manual — the user would scroll through
+// 5 days of Yesterday-tab data eyeballing patterns. That's the kind of
+// chore that doesn't get done. This function does the eyeballing
+// algorithmically and surfaces the meaningful patterns as one-line
+// callouts the user can act on.
+//
+// What we detect (each is an independent module so additions are easy):
+//   - skip-reason clustering (keyword themes in user-written reasons)
+//   - day-of-week adherence variance (Wednesday slump, etc.)
+//   - sector skew (overcorrelated skips/submits in one sector)
+//   - conviction-bucket outcomes (was your skip rate calibrated?)
+//   - tier-1 conversion funnel (candidates → submitted → filled)
+//   - missed-winners rollup (skipped names that ran)
+//
+// `liveByTicker` is optional — passed by the route from the latest
+// scanner cache so we can compute current-vs-decision price moves.
+
+function getWeeklyReview(liveByTicker = null, { lookbackDays = 7 } = {}) {
+  const today = _today();
+  const cutoff = new Date(Date.now() - lookbackDays * 86400_000)
+    .toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const db = getDB();
+
+  // Pull the week's decisions WITH live decoration
+  const rows = db.prepare(`
+    SELECT date, symbol, decision, conviction_at_decision, price_at_decision,
+           pivot_price, decided_at, thesis, skip_reason, tier
+    FROM daily_decisions
+    WHERE date >= ? AND date <= ?
+    ORDER BY date DESC, symbol ASC
+  `).all(cutoff, today);
+
+  if (!rows.length) {
+    return { window: { from: cutoff, to: today }, sampleSize: 0, patterns: [], summary: null, items: [] };
+  }
+
+  // Decorate with current price + move
+  const items = rows.map(r => {
+    const live = liveByTicker?.get?.(r.symbol);
+    const currentPrice = live?.price ?? null;
+    const moveSinceDecision = (currentPrice && r.price_at_decision)
+      ? +(((currentPrice - r.price_at_decision) / r.price_at_decision) * 100).toFixed(2)
+      : null;
+    return {
+      date: r.date,
+      symbol: r.symbol,
+      decision: r.decision,
+      convictionAtDecision: r.conviction_at_decision,
+      priceAtDecision: r.price_at_decision,
+      currentPrice,
+      moveSinceDecisionPct: moveSinceDecision,
+      decidedAt: r.decided_at,
+      thesis: r.thesis,
+      skipReason: r.skip_reason,
+      sector: live?.sector,
+      rsRank: live?.rsRank,
+    };
+  });
+
+  // ── Aggregate summary ────────────────────────────────────────────────
+  const total = items.length;
+  const submitted = items.filter(i => i.decision === 'submit').length;
+  const waited    = items.filter(i => i.decision === 'wait').length;
+  const skipped   = items.filter(i => i.decision === 'skip').length;
+  const autoSkipped = items.filter(i => i.decision === 'auto_skip').length;
+  const decided   = submitted + waited + skipped;
+  const adherenceRate = total > 0 ? +(decided / total * 100).toFixed(1) : null;
+
+  // ── Pattern detection — each function returns a callout or null ────
+  const patterns = [];
+
+  // Pattern A: skip-reason clustering. Group user-written reasons by
+  // keyword themes. Threshold: 2+ skips citing same theme.
+  const SKIP_THEMES = [
+    { theme: 'extended', kw: /extend|stretched|too high|above pivot/i },
+    { theme: 'earnings', kw: /earnings|er |report|print/i },
+    { theme: 'low volume', kw: /low vol|thin|illiquid/i },
+    { theme: 'gap', kw: /gap|opened up|opened above/i },
+    { theme: 'sector concern', kw: /sector|rotation|weak sector/i },
+    { theme: 'risk-off', kw: /risk|volatil|cautious|wait/i },
+    { theme: 'pattern doubt', kw: /pattern|chart|setup unclear/i },
+  ];
+  const allSkips = items.filter(i => i.decision === 'skip' || i.decision === 'auto_skip');
+  const themeCounts = {};
+  for (const s of allSkips) {
+    if (!s.skipReason) continue;
+    for (const t of SKIP_THEMES) {
+      if (t.kw.test(s.skipReason)) {
+        themeCounts[t.theme] = themeCounts[t.theme] || { count: 0, ranAfter: 0, names: [] };
+        themeCounts[t.theme].count++;
+        themeCounts[t.theme].names.push(s.symbol);
+        if (s.moveSinceDecisionPct != null && s.moveSinceDecisionPct > 2) {
+          themeCounts[t.theme].ranAfter++;
+        }
+      }
+    }
+  }
+  for (const [theme, c] of Object.entries(themeCounts)) {
+    if (c.count >= 2) {
+      const wrongRate = c.count > 0 ? Math.round(c.ranAfter / c.count * 100) : 0;
+      patterns.push({
+        kind: c.ranAfter > 0 ? 'warning' : 'observation',
+        title: `Skip pattern: "${theme}"`,
+        body: `${c.count} skips citing "${theme}" theme${c.ranAfter > 0 ? `; ${c.ranAfter} of those (${wrongRate}%) ran +2%+ since decision.` : '.'}`,
+        names: c.names,
+        priority: c.ranAfter * 10 + c.count,
+      });
+    }
+  }
+
+  // Pattern B: day-of-week adherence variance.
+  const byDow = {};  // Mon=1..Fri=5
+  for (const i of items) {
+    const dow = new Date(i.date + 'T12:00:00Z').getUTCDay();
+    if (dow === 0 || dow === 6) continue;  // shouldn't have weekend rows but defensive
+    const k = dow;
+    byDow[k] = byDow[k] || { total: 0, decided: 0 };
+    byDow[k].total++;
+    if (['submit','wait','skip'].includes(i.decision)) byDow[k].decided++;
+  }
+  const dowRates = Object.entries(byDow)
+    .map(([d, v]) => ({ dow: +d, rate: v.total > 0 ? v.decided / v.total * 100 : 0, total: v.total }))
+    .filter(r => r.total >= 2);
+  if (dowRates.length >= 3) {
+    const avgRate = dowRates.reduce((a, r) => a + r.rate, 0) / dowRates.length;
+    const dayName = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    for (const r of dowRates) {
+      if (r.rate < avgRate - 20) {
+        patterns.push({
+          kind: 'warning',
+          title: `${dayName[r.dow]} adherence slump`,
+          body: `Your ${dayName[r.dow]} adherence is ${Math.round(r.rate)}% vs ${Math.round(avgRate)}% average across other days. Consider scheduling decisions earlier on ${dayName[r.dow]}s.`,
+          priority: 50,
+        });
+      }
+    }
+  }
+
+  // Pattern C: sector skew in skips. If a single sector accounts for
+  // >50% of skips AND that sector is high-conviction in current rsData
+  // (live decoration check), flag it.
+  if (liveByTicker && allSkips.length >= 4) {
+    const skipSectorCount = {};
+    for (const s of allSkips) {
+      if (!s.sector) continue;
+      skipSectorCount[s.sector] = (skipSectorCount[s.sector] || 0) + 1;
+    }
+    const dominantSector = Object.entries(skipSectorCount)
+      .sort((a, b) => b[1] - a[1])[0];
+    if (dominantSector && (dominantSector[1] / allSkips.length) >= 0.5) {
+      patterns.push({
+        kind: 'observation',
+        title: `Skip skew: ${dominantSector[0]}`,
+        body: `${dominantSector[1]} of ${allSkips.length} (${Math.round(dominantSector[1]/allSkips.length*100)}%) skips this week were in ${dominantSector[0]}. If that sector is leading the rotation, you may be unconsciously avoiding the leaders.`,
+        priority: 30,
+      });
+    }
+  }
+
+  // Pattern D: conviction-bucket outcomes. Check if you've been mis-
+  // calibrated on high-conviction skips (≥70 conv that ran).
+  const highConvSkips = allSkips.filter(s => (s.convictionAtDecision || 0) >= 70 && s.moveSinceDecisionPct != null && s.moveSinceDecisionPct > 2);
+  if (highConvSkips.length >= 2) {
+    const avgMove = highConvSkips.reduce((a, s) => a + s.moveSinceDecisionPct, 0) / highConvSkips.length;
+    patterns.push({
+      kind: 'warning',
+      title: 'High-conviction skips ran',
+      body: `${highConvSkips.length} skips with conviction ≥70 ran +${avgMove.toFixed(1)}% on average. The system flagged these as quality setups; reconsider what "skip" criteria override conviction.`,
+      names: highConvSkips.map(s => s.symbol),
+      priority: 80,
+    });
+  }
+
+  // Pattern E: missed-winners rollup (skipped that ran +2%+)
+  const missedWinners = items.filter(i =>
+    (i.decision === 'skip' || i.decision === 'auto_skip')
+    && i.moveSinceDecisionPct != null && i.moveSinceDecisionPct > 2
+  ).sort((a, b) => b.moveSinceDecisionPct - a.moveSinceDecisionPct);
+  // Don't add as a pattern — already surfaced as a separate panel in the UI.
+
+  // Pattern F: good skips (validation of discipline)
+  const skippedLosers = items.filter(i =>
+    (i.decision === 'skip' || i.decision === 'auto_skip')
+    && i.moveSinceDecisionPct != null && i.moveSinceDecisionPct < -2
+  ).sort((a, b) => a.moveSinceDecisionPct - b.moveSinceDecisionPct);
+
+  // Sort patterns by priority desc — highest-impact at top
+  patterns.sort((a, b) => (b.priority || 0) - (a.priority || 0));
+
+  return {
+    window: { from: cutoff, to: today },
+    sampleSize: total,
+    summary: {
+      total, submitted, waited, skipped, autoSkipped, decided, adherenceRate,
+    },
+    patterns,
+    missedWinners,
+    skippedLosers,
+    items,
+  };
+}
+
+// 30-day rolling adherence baseline.
+//
+// Pre-fix the DailyPlanTab badge used opinion-coded thresholds (≥95% green,
+// ≥70% amber). They had no empirical basis — pure Claude-as-judge.
+// The honest version is to score TODAY relative to YOUR rolling baseline:
+//   "you're +6 points over your 30-day average" or "−12 below average."
+// This way every user finds their own equilibrium and improvement is
+// measured as a delta, not against an external standard.
+//
+// Returns { sampleDays, baselineRate, last7Rate } where:
+//   sampleDays   — how many distinct days have ≥1 decision (0 = no history)
+//   baselineRate — adherence rate over those days (decided ÷ total)
+//   last7Rate    — same metric over the last 7 distinct decision-days
+function getAdherenceBaseline({ days = 30 } = {}) {
+  const cutoff = new Date(Date.now() - days * 86400_000)
+    .toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const today = _today();
+  const db = getDB();
+
+  // Per-day adherence — exclude today (still in flight) and any future-dated rows.
+  const rows = db.prepare(`
+    SELECT date,
+           SUM(CASE WHEN decision IN ('submit','wait','skip') THEN 1 ELSE 0 END) AS decided,
+           COUNT(*) AS total
+    FROM daily_decisions
+    WHERE date >= ? AND date < ?
+    GROUP BY date
+    ORDER BY date DESC
+  `).all(cutoff, today);
+
+  if (!rows.length) return { sampleDays: 0, baselineRate: null, last7Rate: null };
+
+  const totalDecided = rows.reduce((a, r) => a + r.decided, 0);
+  const totalDue     = rows.reduce((a, r) => a + r.total, 0);
+  const baselineRate = totalDue > 0 ? +(totalDecided / totalDue * 100).toFixed(1) : null;
+
+  // Last 7 distinct decision-days (not 7 calendar days — handles weekends).
+  const last7 = rows.slice(0, 7);
+  const last7Decided = last7.reduce((a, r) => a + r.decided, 0);
+  const last7Total   = last7.reduce((a, r) => a + r.total, 0);
+  const last7Rate    = last7Total > 0 ? +(last7Decided / last7Total * 100).toFixed(1) : null;
+
+  return {
+    sampleDays: rows.length,
+    baselineRate,
+    last7Rate,
+  };
+}
+
 module.exports = {
   ensureTodayPlan,
   recordDecision,
   autoSkipExpiredPending,
   getTodayPlan,
   getYesterdaysOutcomes,
+  getAdherenceBaseline,
+  getWeeklyReview,
   // Exposed for cron + tests
   _today,
   _yesterday,

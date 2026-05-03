@@ -32,6 +32,8 @@ const {
   autoSkipExpiredPending,
   getTodayPlan,
   getYesterdaysOutcomes,
+  getAdherenceBaseline,
+  getWeeklyReview,
 } = require('../data/daily-decisions-store');
 
 // We need the latest scan results to decorate decision rows with live
@@ -66,6 +68,10 @@ module.exports = function() {
       // viewing the page.
       autoSkipExpiredPending();
       const plan = getTodayPlan(_liveByTicker());
+      // Attach 30-day rolling baseline so the UI can color today's
+      // adherence relative to YOUR history, not against arbitrary
+      // opinion-coded thresholds.
+      plan.baseline = getAdherenceBaseline({ days: 30 });
       res.json(plan);
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -99,6 +105,20 @@ module.exports = function() {
     try {
       const out = getYesterdaysOutcomes(_liveByTicker());
       res.json(out);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Weekly review endpoint — aggregates the past 7 days of decisions
+  // and runs behavioral pattern detection (skip-theme clustering,
+  // day-of-week variance, sector skew, conviction-bucket calibration).
+  // Optional ?days=14 to widen the window.
+  router.get('/daily-plan/weekly-review', (req, res) => {
+    try {
+      const lookbackDays = Math.max(1, Math.min(30, parseInt(req.query.days) || 7));
+      const review = getWeeklyReview(_liveByTicker(), { lookbackDays });
+      res.json(review);
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
