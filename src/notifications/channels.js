@@ -425,7 +425,107 @@ const senders = {
   pushover: sendPushover,
 };
 
+// ─── Notification filter — "only positions I took" ────────────────────
+//
+// User feedback was clear: too many alerts were noise during the trading
+// day. Pullback alerts on watchlist names, VCP pivot discoveries on
+// stocks they didn't own, regime-change on the broad market, daily
+// digests — all distracting from the actual signal: events on positions
+// they're CURRENTLY HOLDING.
+//
+// Filter modes (env var NOTIFY_LEVEL, default 'position'):
+//   verbose       — every alert delivered (legacy behavior)
+//   position      — owned-position events + critical portfolio events
+//                   (regime_change, drift_detected, breadth_warning)
+//   position_only — only owned-position events; even regime warnings
+//                   are dropped. Quietest mode.
+//
+// Owned-position check: query trades WHERE exit_date IS NULL for the
+// alert's symbol. Cached for 30s to avoid one query per alert.
+
+let _ownedSymbolsCache = null;
+let _ownedSymbolsCachedAt = 0;
+function _getOwnedSymbols() {
+  const now = Date.now();
+  if (_ownedSymbolsCache && (now - _ownedSymbolsCachedAt) < 30_000) {
+    return _ownedSymbolsCache;
+  }
+  try {
+    const rows = db().prepare(`
+      SELECT DISTINCT symbol FROM trades WHERE exit_date IS NULL
+    `).all();
+    _ownedSymbolsCache = new Set(rows.map(r => r.symbol));
+    _ownedSymbolsCachedAt = now;
+    return _ownedSymbolsCache;
+  } catch (_) {
+    return new Set();
+  }
+}
+// Invalidate cache when a position opens/closes — called from monitor.js
+// and broker fill paths so the filter reflects new fills immediately
+// rather than waiting 30s.
+function invalidateOwnedSymbolsCache() {
+  _ownedSymbolsCache = null;
+}
+
+// Portfolio-level events that aren't tied to a specific symbol but
+// still warrant attention in 'position' mode (NOT position_only).
+const PORTFOLIO_LEVEL_TYPES = new Set([
+  'regime_change',
+  'breadth_warning',
+  'drift_detected',
+  'drift_resolved',
+  'zombie_reconciled',
+]);
+
+// Always-suppressed in non-verbose mode regardless of symbol — these
+// are scheduled digests, not events. Re-enable by setting NOTIFY_LEVEL=verbose
+// or by individually toggling the cron job's notification.
+const DIGEST_TYPES = new Set([
+  'morning_brief',
+  'weekly_digest',
+]);
+
+function _stripTradePrefix(type) {
+  return (type || '').startsWith('trade_') ? type.slice(6) : (type || '');
+}
+
+function _passesPositionFilter(alert) {
+  const level = (process.env.NOTIFY_LEVEL || 'position').toLowerCase();
+  if (level === 'verbose') return true;
+
+  const baseType = _stripTradePrefix(alert.type);
+
+  // Digests are always dropped in non-verbose mode
+  if (DIGEST_TYPES.has(baseType)) return false;
+
+  const owned = _getOwnedSymbols();
+  const isOwned = alert.symbol && owned.has(alert.symbol);
+
+  if (level === 'position_only') {
+    return isOwned;
+  }
+
+  // Default 'position' mode: owned-symbol events + portfolio-level
+  return isOwned || PORTFOLIO_LEVEL_TYPES.has(baseType);
+}
+
 async function deliverAlert(alert, channels) {
+  // Position-aware filter — drops noise alerts before they reach any
+  // channel sender. Logs the suppression to alerts table so users can
+  // audit what got filtered.
+  if (!_passesPositionFilter(alert)) {
+    try {
+      // Log the suppression at trace level so the user can see what
+      // was filtered if they wonder why something didn't ping. Only
+      // logged when DEBUG_NOTIFICATIONS is set to avoid spam.
+      if (process.env.DEBUG_NOTIFICATIONS) {
+        console.log(`[notifications] suppressed by NOTIFY_LEVEL filter: ${alert.type} ${alert.symbol || '(no symbol)'}`);
+      }
+    } catch (_) {}
+    return [{ filtered: true, reason: `NOTIFY_LEVEL=${process.env.NOTIFY_LEVEL || 'position'} filter` }];
+  }
+
   const results = [];
 
   for (const ch of channels) {
@@ -725,6 +825,11 @@ function getAvailableChannels() {
 
 module.exports = {
   deliverAlert,
+  // Position-filter cache invalidator — call after a fill/exit so the
+  // "owned symbols" set used by the filter reflects new state immediately.
+  invalidateOwnedSymbolsCache,
+  // Filter inspection — useful for diagnostics and tests
+  _passesPositionFilter,
   getNotificationChannels, getEnabledChannels,
   createNotificationChannel, updateNotificationChannel, deleteNotificationChannel,
   testChannel,

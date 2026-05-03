@@ -195,6 +195,10 @@ async function syncBrokerFills({ lookbackDays = 7, limit = 100 } = {}) {
       order.id,
       `[AUTO-SYNCED] Filled at $${(+order.filled_avg_price).toFixed(2)} via ${staged?.source || 'broker'}. Add your trade thesis and setup notes.`,
     );
+    // Invalidate the owned-symbols cache so the very next notification on
+    // this symbol passes the position filter immediately rather than
+    // waiting for the 30s cache TTL to expire.
+    try { require('../notifications/channels').invalidateOwnedSymbolsCache(); } catch (_) {}
 
     if (staged) {
       // initial_stop_price mirrors stop_price at insert time but is NEVER updated
