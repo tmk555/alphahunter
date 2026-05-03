@@ -143,6 +143,23 @@ function calcConviction(stock, rsTrend, rotationModel, industryRotationModel = n
   }
   if (stock.distFromHigh > 0.15) score -= 10;
 
+  // ─── Insider activity (Form 4) ────────────────────────────────────────────
+  // Cluster buy: 3+ insiders each transacted >$500K open-market in the
+  // last 30 days. Empirically signals 6-12 month outperformance vs market
+  // (Cohen/Malloy/Pomorski 2012). +12 puts it on par with our highest-
+  // confidence pattern bonus (high-tight-flag).
+  //
+  // Cluster sell: same threshold inverted. -10 not -12 because insiders
+  // selling is more ambiguous (could be diversification, tax planning,
+  // 10b5-1 plan auto-exercises) — but a 3+ insider cluster over $500K
+  // each is meaningful enough to demote conviction.
+  if (stock.insiderClusterBuy)  score += 12;
+  if (stock.insiderClusterSell) score -= 10;
+  // Net-flow boost outside cluster (rewards single big buyers, penalizes
+  // single big sellers). Capped to avoid double-counting cluster bonus.
+  if (!stock.insiderClusterBuy && stock.insiderNetDollar > 1_000_000) score += 4;
+  if (!stock.insiderClusterSell && stock.insiderNetDollar < -2_000_000) score -= 4;
+
   const reasons = [];
   if (stock.rsRank >= 80 && accel > 5) reasons.push(`RS ${stock.rsRank} rising +${accel} pts`);
   if (sectorRs >= 90) reasons.push(`Top ${100 - sectorRs + 1}% of ${stock.sector || 'sector'}`);
@@ -165,6 +182,20 @@ function calcConviction(stock, rsTrend, rotationModel, industryRotationModel = n
   if (rev?.tier === 'strong_upgrade') reasons.push(`Estimates revised UP (score ${rev.revisionScore})`);
   else if (rev?.tier === 'downgrade') reasons.push(`⚠ Estimates revised DOWN`);
   if (stock.earningsRisk) reasons.push(`⚠ Earnings in ${stock.daysToEarnings} days`);
+
+  // Insider Form 4 reasons. Cluster signals are the primary alpha; net-flow
+  // notes are the secondary context for single-actor moves.
+  if (stock.insiderClusterBuy) {
+    const m = stock.insiderNetDollar > 0 ? `(+$${(stock.insiderNetDollar / 1_000_000).toFixed(1)}M net)` : '';
+    reasons.push(`⚡ Insider cluster buy ${m}`.trim());
+  } else if (stock.insiderClusterSell) {
+    const m = stock.insiderNetDollar < 0 ? `(−$${(Math.abs(stock.insiderNetDollar) / 1_000_000).toFixed(1)}M net)` : '';
+    reasons.push(`⚠ Insider cluster sell ${m}`.trim());
+  } else if (stock.insiderNetDollar > 1_000_000) {
+    reasons.push(`Insider buying +$${(stock.insiderNetDollar / 1_000_000).toFixed(1)}M`);
+  } else if (stock.insiderNetDollar < -2_000_000) {
+    reasons.push(`⚠ Insider selling −$${(Math.abs(stock.insiderNetDollar) / 1_000_000).toFixed(1)}M`);
+  }
 
   // Stage reasons
   if (stg === 2 && stock.priorStage === 1) reasons.push('🆕 Stage 1→2 breakout — fresh uptrend');

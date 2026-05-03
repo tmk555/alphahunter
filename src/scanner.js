@@ -127,6 +127,58 @@ async function _runRSScanBody(UNIVERSE, SECTOR_MAP) {
   const tQuotes = Date.now();
   console.log(`  RS scan: quotes done in ${((tQuotes - t0)/1000).toFixed(1)}s (${Object.keys(allQuotes).length}/${uniq.length} symbols)`);
 
+  // Pre-load insider-activity rollups for the universe in ONE pass. Per-row
+  // lookups would do 1620+ getInsiderActivity() calls and each does a
+  // separate SELECT; this single-query bulk fetch is ~50× faster.
+  // Rows are decorated below in the per-symbol loop with stock.insiderXxx
+  // fields so conviction.js can score cluster events without the symbol
+  // having to know about the table.
+  const insiderBySymbol = {};
+  try {
+    const { getDB } = require('./data/database');
+    const cutoff = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
+    const rows = getDB().prepare(`
+      SELECT symbol, transaction_code, total_value, insider_name
+      FROM insider_transactions
+      WHERE trade_date >= ?
+    `).all(cutoff);
+    // Aggregate into per-symbol rollup matching insider-store's shape
+    for (const r of rows) {
+      const o = insiderBySymbol[r.symbol] = insiderBySymbol[r.symbol] || {
+        buys: 0, sells: 0, netDollar: 0,
+        buyByInsider: new Map(), sellByInsider: new Map(),
+      };
+      const isBuy = r.transaction_code === 'P';
+      const isSell = r.transaction_code === 'S';
+      if (isBuy) {
+        o.buys++;
+        o.netDollar += (r.total_value || 0);
+        const k = r.insider_name || 'unknown';
+        o.buyByInsider.set(k, (o.buyByInsider.get(k) || 0) + (r.total_value || 0));
+      } else if (isSell) {
+        o.sells++;
+        o.netDollar += (r.total_value || 0);  // already negative
+        const k = r.insider_name || 'unknown';
+        o.sellByInsider.set(k, (o.sellByInsider.get(k) || 0) + Math.abs(r.total_value || 0));
+      }
+    }
+    // Compute cluster flags
+    const CLUSTER_DOLLAR = 500_000;
+    const CLUSTER_DISTINCT = 3;
+    for (const o of Object.values(insiderBySymbol)) {
+      const buyersOver = [...o.buyByInsider.values()].filter(v => v >= CLUSTER_DOLLAR).length;
+      const sellersOver = [...o.sellByInsider.values()].filter(v => v >= CLUSTER_DOLLAR).length;
+      o.clusterBuy = buyersOver >= CLUSTER_DISTINCT;
+      o.clusterSell = sellersOver >= CLUSTER_DISTINCT;
+      // Drop intermediate Maps before exposing
+      delete o.buyByInsider;
+      delete o.sellByInsider;
+    }
+    console.log(`  RS scan: insider rollup loaded for ${Object.keys(insiderBySymbol).length} symbols`);
+  } catch (e) {
+    // Table missing on older DBs — silent. Scanner runs without insider data.
+  }
+
   // Fetch full OHLCV history (concurrent, multi-provider).
   // Full bars needed for True ATR calculation; closes extracted for RS/momentum/VCP.
   // Bumped concurrency 5 → 10 — Yahoo's /v8/finance/chart endpoint tolerates
@@ -271,6 +323,16 @@ async function _runRSScanBody(UNIVERSE, SECTOR_MAP) {
       institutionalData,
       institutionalScore: institutionalData?.institutionalScore || null,
       institutionalTier: institutionalData?.tier || null,
+
+      // Insider activity rollup from the bulk pre-load. Empty for symbols
+      // with no Form 4 transactions in the last 30 days (most universe
+      // members on any given day). Conviction scoring (below) reads
+      // these flags to surface cluster signals as reasons.
+      insiderBuys30d:    insiderBySymbol[sym]?.buys ?? 0,
+      insiderSells30d:   insiderBySymbol[sym]?.sells ?? 0,
+      insiderNetDollar:  insiderBySymbol[sym]?.netDollar ?? 0,
+      insiderClusterBuy: insiderBySymbol[sym]?.clusterBuy ?? false,
+      insiderClusterSell: insiderBySymbol[sym]?.clusterSell ?? false,
     });
   }
 
