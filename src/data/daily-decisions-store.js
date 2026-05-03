@@ -18,13 +18,42 @@ const { getDB } = require('./database');
 
 // ET 'YYYY-MM-DD' for "today" — uses America/New_York to avoid the late-night
 // UTC drift that put the trading-day boundary at 8 PM ET.
+//
+// Weekend handling: on Sat/Sun the "today" the user is planning FOR is
+// actually next Monday. The Sunday-evening setup workflow stages tier-1
+// rows for the upcoming trading day, not for Sunday itself. Without this
+// snap, Sunday-evening planning created rows dated Sunday, which then
+// got auto-skipped (because _isPastCutoff used to treat any time past
+// 10:30 AM as "past cutoff" regardless of day).
 function _today() {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const fmt = (d) => d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const now = new Date();
+  // ET day-of-week 0=Sun .. 6=Sat
+  const etDay = +new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' })
+    .formatToParts(now).find(p => p.type === 'weekday').value
+    .replace(/^Sun$/,'0').replace(/^Mon$/,'1').replace(/^Tue$/,'2').replace(/^Wed$/,'3')
+    .replace(/^Thu$/,'4').replace(/^Fri$/,'5').replace(/^Sat$/,'6');
+  if (etDay === 6) {  // Saturday → next Monday (+2 days)
+    const d = new Date(now); d.setDate(d.getDate() + 2); return fmt(d);
+  }
+  if (etDay === 0) {  // Sunday → next Monday (+1 day)
+    const d = new Date(now); d.setDate(d.getDate() + 1); return fmt(d);
+  }
+  return fmt(now);
 }
 function _yesterday() {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  return d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  // Mirror _today's weekend snapping: from Monday "yesterday" is Friday,
+  // not Sunday (Sat/Sun have no plan). Same trick — find the prior trading
+  // day relative to _today().
+  const today = _today();
+  const t = new Date(today + 'T12:00:00Z');  // noon UTC for stable arithmetic
+  // Walk back at least 1 day; on Monday step back 3 to land on Friday.
+  let back = 1;
+  const day = t.getUTCDay();
+  if (day === 1) back = 3;       // Mon → Fri
+  else if (day === 0) back = 2;  // Sun → Fri (defensive — _today shouldn't return Sun)
+  t.setUTCDate(t.getUTCDate() - back);
+  return t.toISOString().slice(0, 10);
 }
 
 // Tier-1 cap. Hard limit prevents the list from sprawling. If the user
@@ -33,13 +62,23 @@ function _yesterday() {
 const TIER1_HARD_CAP = 8;
 
 // 10:30 AM ET cutoff. Stored as a function so testing can stub.
+//
+// Weekend / non-trading-day handling: the cutoff only applies on weekdays.
+// On Sat/Sun the user is in pre-planning mode for next Monday — pending
+// rows must NOT auto-skip. Pre-fix bug: Sunday 7 PM ET evaluated as "past
+// 10:30 AM" (true) and flipped Sunday-evening tier-1 rows to auto_skip
+// before the user had a chance to decide on Monday morning.
 function _isPastCutoff() {
-  // Use ET wall clock. If we're past 10:30 AM ET, decisions for today are
-  // locked. Pending rows get auto-skipped on next call.
+  const now = new Date();
+  // ET day-of-week 0=Sun..6=Sat
+  const wkday = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' })
+    .formatToParts(now).find(p => p.type === 'weekday').value;
+  if (wkday === 'Sat' || wkday === 'Sun') return false;
+
   const fmt = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit',
   });
-  const parts = fmt.formatToParts(new Date());
+  const parts = fmt.formatToParts(now);
   const hour   = +parts.find(p => p.type === 'hour').value;
   const minute = +parts.find(p => p.type === 'minute').value;
   return (hour > 10) || (hour === 10 && minute >= 30);
@@ -182,6 +221,11 @@ function getTodayPlan(liveByTicker = null) {
       // for $200 NVDA but huge for $30 PLTR).
       atr: live?.atr,
       atrPct: live?.atrPct,
+      // Institutional flow — accumulation/distribution tier from the
+      // 50-day up/down volume ratio + power days. Surfaced inline on
+      // Daily Plan rows so the user sees fund-flow signal alongside
+      // momentum/insider/RS without clicking through to Scanner.
+      institutionalData: live?.institutionalData || null,
     };
   });
 

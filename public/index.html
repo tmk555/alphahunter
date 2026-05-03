@@ -2327,6 +2327,35 @@ function StockBriefDrawer() {
                     ATR ${h.atr.toFixed(2)}{h.atrPct != null ? ` (${h.atrPct.toFixed(1)}%)` : ''}
                   </span>
                 )}
+                {/* Institutional flow — accumulation/distribution score 0-100
+                    based on 50-day up-volume / down-volume ratio + power days.
+                    Was previously only visible as a tiny badge on Scanner rows. */}
+                {h?.institutionalData && h.institutionalData.tier !== 'neutral' && (() => {
+                  const inst = h.institutionalData;
+                  const isAccum = inst.tier?.includes('accumulation');
+                  const heavy = inst.tier?.includes('heavy');
+                  const color = isAccum ? 'var(--green)' : 'var(--red)';
+                  const label = inst.tier?.replace('_', ' ');
+                  return (
+                    <span title={`Institutional ${label} (score ${inst.institutionalScore}/100). Signals: ${(inst.signals||[]).join(', ') || '—'}`}
+                          style={{fontSize:11,fontFamily:'var(--font-mono)',padding:'2px 6px',background:`${color}18`,border:`1px solid ${color}50`,borderRadius:3,color,fontWeight:700}}>
+                      {isAccum ? '▲' : '▼'} {label} {inst.institutionalScore}
+                    </span>
+                  );
+                })()}
+                {/* Form 4 insider — cluster buy/sell badges (system-built). */}
+                {h?.insiderClusterBuy && (
+                  <span title={`Cluster insider buying — net dollar ${h.insiderNetDollar > 0 ? '+' : ''}$${(h.insiderNetDollar/1e6).toFixed(2)}M last 30d`}
+                        style={{fontSize:10,fontFamily:'var(--font-mono)',padding:'2px 6px',background:'rgba(0,230,118,0.14)',border:'1px solid rgba(0,230,118,0.4)',borderRadius:3,color:'var(--green)',fontWeight:700}}>
+                    ⚡ INSIDER BUY
+                  </span>
+                )}
+                {h?.insiderClusterSell && (
+                  <span title={`Cluster insider selling — net dollar ${h.insiderNetDollar > 0 ? '+' : ''}$${(h.insiderNetDollar/1e6).toFixed(2)}M last 30d`}
+                        style={{fontSize:10,fontFamily:'var(--font-mono)',padding:'2px 6px',background:'rgba(255,61,87,0.10)',border:'1px solid rgba(255,61,87,0.4)',borderRadius:3,color:'var(--red)',fontWeight:700}}>
+                    ⚠ INSIDER SELL
+                  </span>
+                )}
               </div>
               {/* 52w range bar */}
               {h?.fiftyTwoWeekHigh && h?.fiftyTwoWeekLow && h?.price != null && (() => {
@@ -2345,6 +2374,20 @@ function StockBriefDrawer() {
                   </div>
                 );
               })()}
+            </div>
+
+            {/* Inline chart — full StockChart embedded in the drawer so the
+                user can read the technical setup without leaving for the
+                Scanner tab. Compact height (260px) keeps the rest of the
+                drawer (catalysts, news, SEC filings) above the fold for
+                most viewports. The "↗" link in the header still goes to
+                Scanner for the full analysis with toolbar / drawing tools. */}
+            <div style={{marginBottom:12,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:8}}>
+              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <span>CHART</span>
+                <span style={{color:'var(--text3)',fontSize:9}}>OHLC + 50/150/200 MAs · ATR(14) on caption</span>
+              </div>
+              <StockChart symbol={symbol} height={260} />
             </div>
 
             {/* Catalyst summary chips */}
@@ -14589,6 +14632,21 @@ function DailyPlanTab({ rsData, rsLoaded }) {
                       ⚠ INSIDER SELL
                     </span>
                   )}
+                  {/* Institutional flow tier — was previously only on Scanner.
+                      Accumulation = funds buying on 50d up/down vol ratio.
+                      Distribution = the inverse. neutral = no signal. */}
+                  {it.institutionalData && it.institutionalData.tier !== 'neutral' && (() => {
+                    const inst = it.institutionalData;
+                    const isAccum = inst.tier?.includes('accumulation');
+                    const color = isAccum ? 'var(--green)' : 'var(--red)';
+                    const label = inst.tier?.replace('_', ' ');
+                    return (
+                      <span title={`Institutional ${label} (score ${inst.institutionalScore}/100). Signals: ${(inst.signals||[]).join(', ') || '—'}`}
+                            style={{fontSize:10,fontFamily:'var(--font-mono)',padding:'2px 6px',background:`${color}18`,border:`1px solid ${color}50`,borderRadius:3,color,fontWeight:700}}>
+                        {isAccum ? '▲' : '▼'} {label} {inst.institutionalScore}
+                      </span>
+                    );
+                  })()}
                   {it.daysToEarnings != null && it.daysToEarnings >= 0 && it.daysToEarnings <= 14 && (
                     <span style={{fontSize:10,color:'var(--amber)',fontFamily:'var(--font-mono)'}}>
                       ⚠ ER in {it.daysToEarnings}d
