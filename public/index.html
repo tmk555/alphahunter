@@ -596,8 +596,14 @@ function GlobalReplayJobsBadge({ onJump }) {
 
   if (jobs.length === 0) return null;
 
+  // Format helpers used both per-row and in the header aggregate.
+  const fmt = (n) => (typeof n === 'number') ? n.toLocaleString('en-US') : n;
+  const fmtSec = (s) => s >= 3600 ? `${(s/3600).toFixed(1)}h` : s >= 60 ? `${Math.round(s/60)}m` : `${s}s`;
+
   // Compact row formatter — keeps each job to one line so the badge stays
-  // readable even with 3-4 sweeps running.
+  // readable even with 3-4 sweeps running. The "X done of Y total" framing
+  // is the primary visual — users want to see at a glance how far along
+  // each individual sweep is, with thousand separators for easy reading.
   const renderJob = (j) => {
     const elapsed = Math.max(0, Math.round(((Date.now() - (j.startedAt||Date.now()))/1000)));
     const p = j.progress || {};
@@ -608,10 +614,9 @@ function GlobalReplayJobsBadge({ onJump }) {
     const ed = j.params?.endDate;
     const bm = j.params?.benchmark || 'SPY';
     const pctStr = pctDone != null ? `${(pctDone * 100).toFixed(1)}%` : null;
-    const fmtSec = (s) => s >= 3600 ? `${(s/3600).toFixed(1)}h` : s >= 60 ? `${Math.round(s/60)}m` : `${s}s`;
     return (
       <div key={j.id} onClick={(e) => { e.stopPropagation(); onJump?.(); }}
-        style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',padding:'4px 8px',background:'rgba(0,180,255,0.06)',border:'1px solid rgba(0,180,255,0.25)',borderRadius:4,fontSize:11,cursor:'pointer'}}
+        style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',padding:'5px 8px',background:'rgba(0,180,255,0.06)',border:'1px solid rgba(0,180,255,0.25)',borderRadius:4,fontSize:11,cursor:'pointer'}}
         title={`Job #${j.id} (${j.kind}) — click to open Replay tab`}>
         <span style={{fontFamily:'var(--font-mono)',color:'var(--cyan)',fontWeight:700,minWidth:60}}>#{j.id} {j.kind}</span>
         {sd && ed && (
@@ -620,13 +625,16 @@ function GlobalReplayJobsBadge({ onJump }) {
           </span>
         )}
         {pctStr && p.total > 0 && (
-          <span style={{display:'inline-flex',alignItems:'center',gap:6}}>
+          <span style={{display:'inline-flex',alignItems:'center',gap:8}}>
             {/* Inline progress bar so each row visually communicates state */}
-            <span style={{position:'relative',width:80,height:6,background:'rgba(0,180,255,0.15)',borderRadius:3,overflow:'hidden'}}>
-              <span style={{position:'absolute',left:0,top:0,bottom:0,width:`${pctDone*100}%`,background:'var(--cyan)'}}/>
+            <span style={{position:'relative',width:90,height:8,background:'rgba(0,180,255,0.15)',borderRadius:4,overflow:'hidden'}}>
+              <span style={{position:'absolute',left:0,top:0,bottom:0,width:`${pctDone*100}%`,background:'var(--cyan)',transition:'width 0.5s'}}/>
             </span>
-            <span style={{fontFamily:'var(--font-mono)',color:'var(--text)',minWidth:60}}>
-              {p.done}/{p.total} ({pctStr})
+            {/* Primary readout: "X done of Y total · pct%" with thousand
+                separators. This is the number the user looks at when
+                deciding whether the sweep is making progress. */}
+            <span style={{fontFamily:'var(--font-mono)',color:'var(--text)',fontWeight:600}}>
+              {fmt(p.done)} <span style={{color:'var(--text3)',fontWeight:400}}>done of</span> {fmt(p.total)} <span style={{color:'var(--cyan)'}}>· {pctStr}</span>
             </span>
           </span>
         )}
@@ -635,7 +643,7 @@ function GlobalReplayJobsBadge({ onJump }) {
         </span>
         {p.outperforming != null && (
           <span style={{color: p.outperforming > 0 ? 'var(--green)' : 'var(--text3)',fontFamily:'var(--font-mono)',fontSize:10}}>
-            {p.outperforming} beating {bm}
+            {fmt(p.outperforming)} beating {bm}
           </span>
         )}
         {p.current && (
@@ -647,14 +655,26 @@ function GlobalReplayJobsBadge({ onJump }) {
     );
   };
 
+  // Aggregate counts across all running jobs — useful when 3+ sweeps are
+  // running and the user wants the "total work remaining" picture without
+  // mentally summing each row.
+  const totalDone = jobs.reduce((acc, j) => acc + (j.progress?.done || 0), 0);
+  const totalAll  = jobs.reduce((acc, j) => acc + (j.progress?.total || 0), 0);
+  const aggPct    = totalAll > 0 ? `${(totalDone / totalAll * 100).toFixed(1)}%` : null;
+
   return (
     <div style={{marginBottom:10,padding:'6px 10px',background:'rgba(0,180,255,0.08)',border:'1px solid var(--cyan)',borderRadius:5}}>
-      {/* Header: pulsing dot + count + jump-to-replay shortcut */}
-      <div onClick={onJump} style={{display:'flex',alignItems:'center',gap:10,marginBottom:jobs.length>0?6:0,fontSize:11,color:'var(--cyan)',cursor:'pointer'}} title="Click to open Replay tab for full detail">
+      {/* Header: pulsing dot + count + aggregate progress + jump shortcut */}
+      <div onClick={onJump} style={{display:'flex',alignItems:'center',gap:10,marginBottom:jobs.length>0?6:0,fontSize:11,color:'var(--cyan)',cursor:'pointer',flexWrap:'wrap'}} title="Click to open Replay tab for full detail">
         <span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:'var(--cyan)',animation:'pulse 1.5s ease-in-out infinite'}}/>
         <span style={{fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:1}}>
           ⏳ {jobs.length} REPLAY JOB{jobs.length>1?'S':''} RUNNING
         </span>
+        {aggPct && (
+          <span style={{fontFamily:'var(--font-mono)',color:'var(--text2)',fontSize:11}}>
+            · {fmt(totalDone)} <span style={{color:'var(--text3)'}}>of</span> {fmt(totalAll)} <span style={{color:'var(--cyan)'}}>combos · {aggPct}</span>
+          </span>
+        )}
         <span style={{marginLeft:'auto',fontSize:10,color:'var(--text3)'}}>tap any row to view →</span>
       </div>
       <div style={{display:'flex',flexDirection:'column',gap:4}}>
