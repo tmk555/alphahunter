@@ -35,9 +35,15 @@ const STRATEGY_GRIDS = {
   rs_momentum: {
     minRS: [70, 80, 90],
     minMomentum: [50, 65],
-    holdDays: [10, 20, 40],
+    // Expanded holdDays + targetATR ranges to test the "let winners run" thesis.
+    // Prior 3-window analysis showed PF=1.33-1.68 with avgWin/avgLoss=1.02 across
+    // 2017-19, 2020-22, 2024-26 — winners clipped at the same magnitude as
+    // losers because targetATR=2 hit before momentum names could compound.
+    // New ranges target 3-5R per win minimum and 60-120-day holds for position-
+    // grade trends, with 40 day kept as the lower-bound control.
+    holdDays: [40, 60, 90, 120],
     stopATR: [1.0, 1.5, 2.5],
-    targetATR: [2.0, 3.0, 5.0],
+    targetATR: [3, 5, 7, 10],
   },
   vcp_breakout: {
     minRS: [70, 80],

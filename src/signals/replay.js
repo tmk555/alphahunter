@@ -302,6 +302,132 @@ function loadDeepScanFactors(startDate, endDate) {
   return { inst, drift, rev };
 }
 
+// ─── Moving Average computation for trail stops ─────────────────────────
+//
+// Pre-computes 13 EMA / 26 EMA / 50 SMA per symbol per day at engine load
+// time, so evaluateExit() can do close-below-MA checks without re-walking
+// the price history per trade.
+//
+// EMAs use the standard recursion EMA_t = price_t * k + EMA_{t-1} * (1 - k)
+// with k = 2/(N+1). They're seeded with the first `N` prices' SMA so the
+// first valid EMA value lands at index N-1.
+//
+// SMA50 needs at least 50 prior trading days; callers should preload that
+// much history before the simulation startDate or the first ~50 days will
+// have null sma50 values (which the trail logic correctly skips).
+
+function computeMAsForPriceSeries(prices) {
+  // prices: array of { date, price } sorted ascending by date
+  // returns: array of { date, ema13, ema26, sma50 } same length
+  const N13 = 13, N26 = 26, N50 = 50;
+  const k13 = 2 / (N13 + 1);
+  const k26 = 2 / (N26 + 1);
+  const out = [];
+  let ema13 = null, ema26 = null;
+  // Rolling sum + buffer for SMA50
+  const last50 = [];
+  let sum50 = 0;
+
+  for (let i = 0; i < prices.length; i++) {
+    const p = prices[i].price;
+    if (p == null || !Number.isFinite(p) || p <= 0) {
+      out.push({ date: prices[i].date, ema13: null, ema26: null, sma50: null });
+      continue;
+    }
+
+    // EMA13: seed at i = 12 with SMA of first 13 prices
+    if (i === N13 - 1) {
+      let sum = 0;
+      for (let j = 0; j <= i; j++) sum += prices[j].price || 0;
+      ema13 = sum / N13;
+    } else if (i > N13 - 1 && ema13 != null) {
+      ema13 = p * k13 + ema13 * (1 - k13);
+    }
+
+    // EMA26: seed at i = 25 with SMA of first 26 prices
+    if (i === N26 - 1) {
+      let sum = 0;
+      for (let j = 0; j <= i; j++) sum += prices[j].price || 0;
+      ema26 = sum / N26;
+    } else if (i > N26 - 1 && ema26 != null) {
+      ema26 = p * k26 + ema26 * (1 - k26);
+    }
+
+    // SMA50: rolling window
+    last50.push(p);
+    sum50 += p;
+    if (last50.length > N50) sum50 -= last50.shift();
+    const sma50 = last50.length === N50 ? sum50 / N50 : null;
+
+    out.push({
+      date: prices[i].date,
+      ema13: i >= N13 - 1 ? ema13 : null,
+      ema26: i >= N26 - 1 ? ema26 : null,
+      sma50,
+    });
+  }
+  return out;
+}
+
+// Annotate snapshot rows in-place with computed MAs. After this call each
+// row has stock.ema13 / stock.ema26 / stock.sma50 (any can be null when not
+// yet enough history).
+//
+// `extraPriceHistory` is an optional Map<symbol, [{date, price}]> of bars
+// PRECEDING the simulation window (preloaded by the caller). Without those,
+// the first 50 simulation days have no SMA50 because we have no warm-up.
+function annotateSnapshotsWithMAs(snapshots, extraPriceHistory = null) {
+  // Group snapshots by symbol, preserving date order
+  const bySym = new Map();
+  for (const s of snapshots) {
+    if (!bySym.has(s.symbol)) bySym.set(s.symbol, []);
+    bySym.get(s.symbol).push(s);
+  }
+  for (const [sym, rows] of bySym) {
+    rows.sort((a, b) => a.date.localeCompare(b.date));
+    // Combine warm-up history (if any) with simulation rows so the EMA/SMA
+    // recursions have a valid seed by the time we hit the simulation start.
+    const warmup = extraPriceHistory?.get(sym) || [];
+    const combined = [
+      ...warmup.map(p => ({ date: p.date, price: p.price })),
+      ...rows.map(r => ({ date: r.date, price: r.price })),
+    ];
+    const mas = computeMAsForPriceSeries(combined);
+    // Map MAs back onto the snapshot rows (skip the warm-up prefix)
+    const offset = warmup.length;
+    for (let i = 0; i < rows.length; i++) {
+      const m = mas[offset + i];
+      if (m) {
+        rows[i].ema13 = m.ema13;
+        rows[i].ema26 = m.ema26;
+        rows[i].sma50 = m.sma50;
+      }
+    }
+  }
+}
+
+// Load up to ~60 trading days of price history before `startDate` so the
+// MA recursions are properly seeded by the time the simulation begins.
+// Returns Map<symbol, [{date, price}]>.
+function loadMAWarmupHistory(startDate, lookbackDays = 60) {
+  const ds = new Date(startDate + 'T00:00:00Z');
+  // 60 trading days ≈ 90 calendar days (weekends/holidays).
+  ds.setUTCDate(ds.getUTCDate() - Math.ceil(lookbackDays * 1.45));
+  const warmupStart = ds.toISOString().split('T')[0];
+  const rows = db().prepare(`
+    SELECT symbol, date, price
+    FROM rs_snapshots
+    WHERE type = 'stock' AND date >= ? AND date < ? AND price IS NOT NULL
+    ORDER BY symbol, date
+  `).all(warmupStart, startDate);
+  const bySym = new Map();
+  for (const r of rows) {
+    if (!bySym.has(r.symbol)) bySym.set(r.symbol, []);
+    bySym.get(r.symbol).push({ date: r.date, price: r.price });
+  }
+  return bySym;
+}
+
 // ─── Strategy Evaluators ───────────────────────────────────────────────────
 
 function evaluateEntry(stock, strategy, params) {
@@ -419,6 +545,86 @@ function evaluateExit(stock, entryStock, strategy, params, holdingDays, position
   const atrPct = entryStock.atr_pct || 2.5;
   const atr = entryStock.price * (atrPct / 100);
   const isShort = position?.isShort;
+
+  // ─── MA TRAIL EXITS (let-the-winners-run framework) ──────────────────────
+  //
+  // Activates when params.trailType is set to one of:
+  //   'fixed_ma13' / 'fixed_ma26' / 'fixed_ma50'
+  //       single-MA close-below trail throughout the trade
+  //   'staged_swing'
+  //       1×ATR initial stop → 13 EMA close-below for the rest (10-day swing)
+  //   'staged_position'
+  //       1.5×ATR initial → 13 EMA at +5% gain or 10d → 26 EMA at +12% or 25d
+  //                       → 50 SMA at +20% or 45d. The escalator.
+  //
+  // All trail exits require CLOSE BELOW the MA, not intraday touch. ATR
+  // initial stop still applies during the "birth" stage to catch hard
+  // breaks before the trade has earned space.
+  //
+  // Long-only: short_breakdown keeps its original ATR stop block below.
+  if (!isShort && entryStock.price && stock.price && params.trailType && params.trailType !== 'atr') {
+    const trailType = params.trailType;
+    const gainPct = ((stock.price - entryStock.price) / entryStock.price) * 100;
+
+    // Helper: which MA do we trail with at this stage?
+    let trailMA = null;       // 'ema13' | 'ema26' | 'sma50' | null = use ATR floor
+    let initialATRStop = null; // multiplier — null means no ATR floor
+
+    if (trailType === 'fixed_ma13') trailMA = 'ema13';
+    else if (trailType === 'fixed_ma26') trailMA = 'ema26';
+    else if (trailType === 'fixed_ma50') trailMA = 'sma50';
+    else if (trailType === 'staged_swing') {
+      // Birth: ATR stop only. Adolescence (any time): 13 EMA close-below.
+      // Birth is the period before the first daily close — ATR catches
+      // entry-day catastrophic moves. After that, MA trail takes over.
+      trailMA = 'ema13';
+      if (holdingDays === 0) initialATRStop = params.stopATR || 1.0;
+    }
+    else if (trailType === 'staged_position') {
+      // Stage escalator. Read maxGainPct from position state to ensure we
+      // don't downgrade the trail after a pullback (once mature, stay mature).
+      const stageGain = Math.max(gainPct, position?.maxGainPct || 0);
+      if (stageGain >= 20 || holdingDays >= 45) trailMA = 'sma50';
+      else if (stageGain >= 12 || holdingDays >= 25) trailMA = 'ema26';
+      else if (stageGain >= 5 || holdingDays >= 10) trailMA = 'ema13';
+      else {
+        // Birth stage — ATR initial stop, no MA trail yet
+        trailMA = null;
+        initialATRStop = params.stopATR || 1.5;
+      }
+    }
+
+    // Apply initial ATR stop (birth stage only, when defined)
+    if (initialATRStop != null) {
+      const stopPrice = entryStock.price - (initialATRStop * atr);
+      if (stock.price <= stopPrice) return { exit: true, reason: 'birth_atr_stop' };
+    }
+
+    // Apply MA close-below trail. `stock.price` IS the closing price for
+    // the day in our snapshot data, so direct comparison = close-below.
+    if (trailMA) {
+      const maValue = stock[trailMA];
+      // null MA = not enough history yet (e.g. SMA50 needs 50 prior days).
+      // In that case fall through to ATR exit below — better than running
+      // unprotected.
+      if (maValue != null && stock.price < maValue) {
+        return { exit: true, reason: `trail_${trailMA}_close` };
+      }
+    }
+
+    // When trailType is set, we OWN the stop logic. Skip the generic ATR
+    // stop/target block below so we don't double-clip. Targets still fire
+    // on staged paths if explicitly set via targetATR (defensive cap).
+    if (params.targetATR && stock.price >= entryStock.price + (params.targetATR * atr)) {
+      return { exit: true, reason: 'target_hit' };
+    }
+    // Update position's maxGainPct for next-day stage decisions
+    if (position && gainPct > (position.maxGainPct || 0)) {
+      position.maxGainPct = gainPct;
+    }
+    // Fallthrough: don't run the generic ATR block below — trail owns exits
+    return { exit: false };
+  }
 
   if (entryStock.price && stock.price && !isShort) {
     const stopATR = params.stopATR || 1.5;
@@ -736,6 +942,16 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
   const snapshots = loadSnapshotData(startDate, endDate);
   if (!snapshots.length) {
     return { error: 'No snapshot data in date range', strategy, startDate, endDate };
+  }
+
+  // Annotate snapshots with 13 EMA / 26 EMA / 50 SMA so the trail logic in
+  // evaluateExit can do close-below-MA checks. Only computed when at least
+  // one trail mode requires MAs (avoids the cost on pure-ATR runs).
+  const trailType = mergedParams.trailType || 'atr';
+  const needsMAs = trailType !== 'atr';
+  if (needsMAs) {
+    const warmup = loadMAWarmupHistory(startDate, 60);
+    annotateSnapshotsWithMAs(snapshots, warmup);
   }
 
   // Group by date
@@ -2514,6 +2730,7 @@ function deleteWFResult(id) {
 
 module.exports = {
   BUILT_IN_STRATEGIES,
+  computeMAsForPriceSeries,    // exported for unit testing
   getAvailableDateRange,
   getMacroSnapshotForDate,
   runReplay,
