@@ -360,6 +360,22 @@ function initSchema() {
   safeAddColumn('trades', 'trailing_stop_active', 'INTEGER DEFAULT 0');
   safeAddColumn('trades', 'beta', 'REAL');
 
+  // ─── Per-position trail strategy override ─────────────────────────────────
+  // Default (NULL) = use staged_position (birth → 13EMA → 26EMA → 50SMA).
+  // Other values supported by trail-state-store.js cron:
+  //   'fixed_ma50'  — always trail 50SMA from day 1 (the #31 sweep winner)
+  //   'fixed_ema13' — always trail 13EMA (tightest)
+  //   'fixed_ema26' — always trail 26EMA (medium)
+  //   'manual'      — user-set fixed dollar stop in manual_stop_value
+  // Set via the dual-trail "Lock as trail" button in Daily Plan.
+  // initial_stop_price is recorded at bracket-order open so the dual-trail
+  // panel can compute R-multiple per candidate stop ("if hit here, exit at
+  // +0.4R / −1.6R / etc."). Without it, R math is impossible after a stop
+  // move — the original stop is lost.
+  safeAddColumn('trades', 'trail_strategy', 'TEXT');
+  safeAddColumn('trades', 'manual_stop_value', 'REAL');
+  safeAddColumn('trades', 'initial_stop_price', 'REAL');
+
   // Tier 5: performance attribution
   db.exec(`
     CREATE TABLE IF NOT EXISTS performance_attribution (
