@@ -35,15 +35,34 @@ const STRATEGY_GRIDS = {
   rs_momentum: {
     minRS: [70, 80, 90],
     minMomentum: [50, 65],
-    // Expanded holdDays + targetATR ranges to test the "let winners run" thesis.
-    // Prior 3-window analysis showed PF=1.33-1.68 with avgWin/avgLoss=1.02 across
-    // 2017-19, 2020-22, 2024-26 — winners clipped at the same magnitude as
-    // losers because targetATR=2 hit before momentum names could compound.
-    // New ranges target 3-5R per win minimum and 60-120-day holds for position-
-    // grade trends, with 40 day kept as the lower-bound control.
-    holdDays: [40, 60, 90, 120],
+    // PHASE 3 GRID — MA-trail-first, no fixed targets, long holds as backstop.
+    //
+    // Why these ranges: the 3-window phase-2 sweep showed targetATR ∈ [3,5,7,10]
+    // produced IDENTICAL alpha across all 4 values for the same minRS/hold/stopATR
+    // — meaning fixed price targets never fired (time exit beat them). Removing
+    // targetATR from the grid + setting it to null in defaults lets the trade
+    // exit only via stop / signal / max-hold / MA trail.
+    //
+    // holdDays bumped to a backstop range. At hold=60 the time exit was the
+    // active exit (clipping winners). 60 is kept as control; 120 is mid;
+    // 180 is "MA trail does the work." Drops 40 (always loses) and 90 (middle
+    // ground that doesn't beat 60 or 180).
+    //
+    // trailType is the new 3-value axis we want to compare. atr = control,
+    // fixed_ma50 = the simple "trail 50 SMA" mode that single-replay tested
+    // at 2.83x W/L vs ATR's 1.02x, staged_position = the 13EMA→26EMA→50SMA
+    // escalator (the canonical Minervini approach).
+    //
+    // Combo count: 3 × 2 × 3 × 3 × 3 = 162 base × 18 variants × 3 slippage
+    // = 8748 — over HARD_CAP of 5000 (will be truncated to 5000 first-in).
+    // Most slippage variants get tested; trail combinations are interleaved
+    // before slippage so all 3 trail modes are represented in the queue.
+    holdDays: [60, 120, 180],
     stopATR: [1.0, 1.5, 2.5],
-    targetATR: [3, 5, 7, 10],
+    trailType: ['atr', 'fixed_ma50', 'staged_position'],
+    // targetATR intentionally not swept — set to null in defaults so all
+    // combos run with no fixed target. The MA trail and stop/signal/max-hold
+    // exits drive the trade lifecycle.
   },
   vcp_breakout: {
     minRS: [70, 80],
