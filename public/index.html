@@ -32,7 +32,11 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 #app { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 #ticker-bar { background:var(--bg2); border-bottom:1px solid var(--border); padding:0 16px; height:38px; display:flex; align-items:center; gap:20px; overflow-x:auto; flex-shrink:0; white-space:nowrap; }
 #header { background:var(--bg2); border-bottom:1px solid var(--border); padding:10px 16px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0; flex-wrap:wrap; gap:8px; }
-#tabs-row { background:var(--bg2); border-bottom:1px solid var(--border); display:flex; overflow-x:auto; flex-shrink:0; }
+#tabs-row { background:var(--bg2); border-bottom:1px solid var(--border); display:flex; align-items:flex-end; overflow-x:auto; flex-shrink:0; }
+.tab-group { display:flex; align-items:flex-end; padding-bottom:0; position:relative; }
+.tab-group + .tab-group { border-left:1px solid var(--border); margin-left:8px; padding-left:8px; }
+.tab-group-label { position:absolute; top:2px; left:8px; font-size:8px; font-family:var(--font-mono); color:var(--text3); letter-spacing:1.5px; font-weight:700; pointer-events:none; }
+.tab-group .tab { margin-top:14px; }   /* leave room for the group label band above */
 #main { flex:1; overflow-y:auto; padding:20px; }
 
 /* ── Header ──────────────────────────────────── */
@@ -1896,19 +1900,36 @@ function App() {
   //   • journal needs_review (red — money already exposed)
   // Open-position count goes inside as a sub-tab badge.
   const tradesUrgent = badgeCounts.review || badgeCounts.staged || badgeCounts.positions || 0;
-  const TABS = [
-    { id:'pulse',     label:'⚡ Market Pulse' },
-    { id:'macro',     label:'📉 Macro' },
-    { id:'rotation',  label:'🔄 Rotation' },
-    { id:'rs',        label:'📊 Scanner' },
-    { id:'setups',    label:'🎯 Trade Setups' },
-    { id:'trades',    label:'💼 Trades', badge: tradesUrgent || null,
-                       badgeWarn: !!badgeCounts.review },
-    { id:'replay',    label:'🔁 Replay' },
-    { id:'diagnostics', label:'📈 Diagnostics' },
-    { id:'hedge',     label:'🛡 Hedge' },
-    { id:'settings',  label:'⚙ Settings' },
+  // Tab groups — visually separated bands that communicate the workflow
+  // (top-down → discover → execute → validate → admin) instead of a flat
+  // 10-tab strip. Order WITHIN each group is by usage frequency: most-used
+  // tab first. The flat-array style was readable enough at 5 tabs but
+  // became a menu rather than a workflow at 10.
+  const TAB_GROUPS = [
+    { label: 'TOP-DOWN', tabs: [
+      { id:'rotation',  label:'🔄 Rotation' },        // most-used Sunday tool
+      { id:'pulse',     label:'⚡ Market Pulse' },
+      { id:'macro',     label:'📉 Macro' },
+    ] },
+    { label: 'DISCOVER', tabs: [
+      { id:'setups',    label:'🎯 Trade Setups' },     // daily-use
+      { id:'rs',        label:'📊 Scanner' },          // deep-use
+      { id:'watchlist', label:'⭐ Watchlist' },         // NEW — persists tier-1 names
+    ] },
+    { label: 'EXECUTE', tabs: [
+      { id:'trades',    label:'💼 Trades', badge: tradesUrgent || null, badgeWarn: !!badgeCounts.review },
+      { id:'hedge',     label:'🛡 Hedge' },
+    ] },
+    { label: 'VALIDATE', tabs: [
+      { id:'replay',    label:'🔁 Replay' },
+      { id:'diagnostics', label:'📈 Diagnostics' },
+    ] },
+    { label: 'ADMIN', tabs: [
+      { id:'settings',  label:'⚙ Settings' },
+    ] },
   ];
+  // Flat list for any consumer that still expects it (badge logic, etc.)
+  const TABS = TAB_GROUPS.flatMap(g => g.tabs);
 
   return (
     <div id="app">
@@ -2006,14 +2027,22 @@ function App() {
       {/* STOCK BRIEF DRAWER — global, opened by any tab via window.openStockBrief */}
       <StockBriefDrawer/>
 
-      {/* TABS */}
+      {/* TABS — grouped into bands by workflow stage. Each group renders
+          as a sub-row with a tiny header label so the user reads the page
+          as a workflow (top-down → discover → execute → validate) rather
+          than a flat 10-tab menu. Vertical separators between groups. */}
       <div id="tabs-row">
-        {TABS.map(t => (
-          <button key={t.id} className={`tab ${tab===t.id?'active':''}`}
-            onClick={() => setTab(t.id)}>
-            {t.label}
-            {t.badge && <span className="tab-badge" style={t.badgeWarn?{background:'rgba(240,165,0,0.15)',color:'var(--amber)'}:undefined}>{t.badge}</span>}
-          </button>
+        {TAB_GROUPS.map((g, gi) => (
+          <div key={g.label} className="tab-group">
+            <div className="tab-group-label">{g.label}</div>
+            {g.tabs.map(t => (
+              <button key={t.id} className={`tab ${tab===t.id?'active':''}`}
+                onClick={() => setTab(t.id)}>
+                {t.label}
+                {t.badge && <span className="tab-badge" style={t.badgeWarn?{background:'rgba(240,165,0,0.15)',color:'var(--amber)'}:undefined}>{t.badge}</span>}
+              </button>
+            ))}
+          </div>
         ))}
       </div>
 
@@ -2045,6 +2074,7 @@ function App() {
         {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} rsLoading={rsLoading} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary} setupSigFilters={setupSigFilters} setSetupSigFilters={setSetupSigFilters} mode={setupMode} setMode={setSetupMode} sortBy={setupSortBy} setSortBy={setSetupSortBy} exitStrategy={setupExitStrategy} setExitStrategy={setSetupExitStrategy} minMktCap={minMktCap} setMinMktCap={setMinMktCap}/>}
         {tab==='hedge'      && <HedgeTab />}
         {tab==='trades'     && <TradesTab rsData={rsData} badgeCounts={badgeCounts}/>}
+        {tab==='watchlist'  && <WatchlistTab rsData={rsData} rsLoaded={rsLoaded} navigateToScanner={navigateToScanner}/>}
         {tab==='replay'     && <ReplayTab />}
         {tab==='diagnostics' && <DiagnosticsTab />}
         {tab==='settings'   && <SettingsTab />}
@@ -2210,8 +2240,18 @@ function StockBriefDrawer() {
               </div>
             )}
           </div>
-          <button onClick={close} title="Close (Esc)"
-            style={{background:'transparent',border:'1px solid var(--border)',borderRadius:3,padding:'4px 10px',color:'var(--text3)',fontSize:12,cursor:'pointer'}}>✕</button>
+          <div style={{display:'flex',gap:6}}>
+            {/* Cross-tab action: add this ticker to the persistent Watchlist
+                without leaving the brief drawer. Default tier = 2 (watching).
+                User can edit tier/thesis/notes from the Watchlist tab. */}
+            <button onClick={() => window.addToWatchlist?.(symbol, { tier: 2 })}
+              title="Add to Watchlist (default tier 2 — watching for entry)"
+              style={{background:'transparent',border:'1px solid var(--cyan)',borderRadius:3,padding:'4px 10px',color:'var(--cyan)',fontSize:11,fontFamily:'var(--font-mono)',cursor:'pointer'}}>
+              ⭐ + Watch
+            </button>
+            <button onClick={close} title="Close (Esc)"
+              style={{background:'transparent',border:'1px solid var(--border)',borderRadius:3,padding:'4px 10px',color:'var(--text3)',fontSize:12,cursor:'pointer'}}>✕</button>
+          </div>
         </div>
 
         {loading && <div style={{padding:20,color:'var(--text3)',fontSize:12}}>Loading brief…</div>}
@@ -4125,6 +4165,26 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
                       title="Focus Industries + RS Dashboard on this sector"
                       style={{marginLeft:10,padding:'1px 6px',fontSize:10,border:`1px solid ${isFocused?'var(--green)':'var(--border2)'}`,borderRadius:3,background:isFocused?'rgba(0,230,118,0.12)':'transparent',color:isFocused?'var(--green)':'var(--text3)',cursor:'pointer'}}>
                       {isFocused?'🎯 focused':'🎯'}
+                    </button>
+                    {/* Drill-down: focus this sector AND jump to Scanner.
+                        One click instead of two — pre-fix the user had to
+                        click 🎯 here, then click the Scanner tab, then
+                        scroll past stocks from other sectors. */}
+                    <button
+                      onClick={e=>{
+                        e.stopPropagation();
+                        if (setSelectedSectors) setSelectedSectors(new Set([s.name]));
+                        // navigateToScanner is exposed on window by App
+                        if (typeof window !== 'undefined' && window.navigateToScanner) {
+                          // No specific ticker — pass null. setScannerTarget
+                          // tolerates null; the Scanner tab uses selectedSectors
+                          // to pre-filter automatically.
+                          window.navigateToScanner(null);
+                        }
+                      }}
+                      title={`Focus on ${s.name} and open Scanner pre-filtered to this sector`}
+                      style={{marginLeft:6,padding:'1px 6px',fontSize:10,border:'1px solid var(--cyan)',borderRadius:3,background:'transparent',color:'var(--cyan)',cursor:'pointer'}}>
+                      → Scanner
                     </button>
                   </td>
                   <td style={{whiteSpace:'nowrap',fontSize:11}}>
@@ -13805,6 +13865,280 @@ function OptionsHedgeSection() {
       )}
     </div>
   );
+}
+
+// ─── WATCHLIST TAB — Persisted tier-1/2/3 candidates with notes + thesis ──
+//
+// The user's Sunday-night routine produces a 5-15 name shortlist. Pre-Watchlist
+// that list lived in the user's head OR a notes app that didn't link back to
+// system data (price / RS / sector / conviction). The Watchlist tab persists
+// the list in localStorage with structured fields so each row stays linked to
+// the live snapshot from rsData.
+//
+// Schema (localStorage key 'alphahunter:watchlist'):
+//   { items: [ { ticker, tier (1|2|3), thesis, addedAt, notes } ] }
+//
+// Tier semantics (matches the Sunday routine):
+//   1 = "ready to buy this week" — full size when entry triggers
+//   2 = "watching for entry" — half size when ready
+//   3 = "thesis only" — track but no near-term entry
+//
+// Stays minimal on purpose. Anything fancier (charts, multi-list, sharing)
+// can come later. This is the smallest version that beats a notes-app.
+
+const WATCHLIST_KEY = 'alphahunter:watchlist';
+
+function readWatchlist() {
+  try {
+    const raw = localStorage.getItem(WATCHLIST_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed?.items) ? parsed.items : [];
+  } catch (_) { return []; }
+}
+
+function writeWatchlist(items) {
+  try { localStorage.setItem(WATCHLIST_KEY, JSON.stringify({ items })); } catch (_) {}
+}
+
+function WatchlistTab({ rsData, rsLoaded, navigateToScanner }) {
+  const [items, setItems] = useState(() => readWatchlist());
+  const [addTicker, setAddTicker] = useState('');
+  const [filter, setFilter] = useState('all');  // 'all' | '1' | '2' | '3'
+
+  // Cross-component sync: when other tabs add tickers via window.addToWatchlist
+  // they fire a 'watchlist-changed' event so the open Watchlist re-reads
+  // localStorage. Without this the user'd see "added!" toast but the new
+  // row wouldn't appear until they navigated away and back.
+  React.useEffect(() => {
+    const onChange = () => setItems(readWatchlist());
+    window.addEventListener('watchlist-changed', onChange);
+    window.addEventListener('storage', onChange);  // multi-tab sync (bonus)
+    return () => {
+      window.removeEventListener('watchlist-changed', onChange);
+      window.removeEventListener('storage', onChange);
+    };
+  }, []);
+
+  // Index rsData for O(1) per-ticker lookup of live fields
+  const liveByTicker = React.useMemo(() => {
+    const m = new Map();
+    for (const s of (rsData || [])) m.set(s.ticker, s);
+    return m;
+  }, [rsData]);
+
+  function persist(next) { setItems(next); writeWatchlist(next); }
+
+  function add() {
+    const t = addTicker.trim().toUpperCase();
+    if (!t) return;
+    if (items.find(it => it.ticker === t)) {
+      window.showToast?.('Watchlist', `${t} already on the list`, true);
+      return;
+    }
+    persist([...items, { ticker: t, tier: 2, thesis: '', notes: '', addedAt: new Date().toISOString() }]);
+    setAddTicker('');
+  }
+
+  function update(ticker, patch) {
+    persist(items.map(it => it.ticker === ticker ? { ...it, ...patch } : it));
+  }
+
+  function remove(ticker) {
+    persist(items.filter(it => it.ticker !== ticker));
+  }
+
+  // Sort: tier 1 first, then by RS rank desc within tier
+  const sorted = [...items].sort((a, b) => {
+    if (a.tier !== b.tier) return a.tier - b.tier;
+    const ra = liveByTicker.get(a.ticker)?.rsRank || 0;
+    const rb = liveByTicker.get(b.ticker)?.rsRank || 0;
+    return rb - ra;
+  });
+
+  const filtered = filter === 'all' ? sorted : sorted.filter(it => String(it.tier) === filter);
+
+  // Tier-1 alpha summary — "what's ready to trade THIS week"
+  const tier1 = items.filter(it => it.tier === 1);
+  const tier1Triggered = tier1.filter(it => {
+    const live = liveByTicker.get(it.ticker);
+    return live && (live.vcpForming || live.bestPattern || (live.distFromHigh != null && live.distFromHigh <= 0.02));
+  });
+
+  return (
+    <div>
+      {/* Header — describes the workflow this tab fits into */}
+      <div className="panel" style={{marginBottom:14}}>
+        <div className="panel-title">⭐ <span>Watchlist</span></div>
+        <div className="panel-sub">
+          Persistent tier-1/2/3 shortlist from your Sunday routine. Tier 1 = "ready this week" · Tier 2 = "watching" · Tier 3 = "thesis only". Live RS / pattern / distance-from-high comes from the latest scanner sweep.
+        </div>
+
+        {/* Quick add + filter row */}
+        <div style={{display:'flex',gap:10,marginTop:14,alignItems:'center',flexWrap:'wrap'}}>
+          <input
+            placeholder="Add ticker (e.g. NVDA)"
+            value={addTicker}
+            onChange={e => setAddTicker(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') add(); }}
+            autoCorrect="off" autoCapitalize="characters" spellCheck={false}
+            style={{padding:'7px 10px',width:180,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',fontSize:12,fontFamily:'var(--font-mono)',letterSpacing:0.5,outline:'none'}}/>
+          <button onClick={add} className="btn btn-primary btn-sm" disabled={!addTicker.trim()}>+ ADD</button>
+
+          <div style={{marginLeft:'auto',display:'flex',gap:6,alignItems:'center',fontSize:11,color:'var(--text3)'}}>
+            <span>Show:</span>
+            {[
+              { k: 'all', label: `All (${items.length})` },
+              { k: '1',   label: `Tier 1 (${items.filter(i=>i.tier===1).length})` },
+              { k: '2',   label: `Tier 2 (${items.filter(i=>i.tier===2).length})` },
+              { k: '3',   label: `Tier 3 (${items.filter(i=>i.tier===3).length})` },
+            ].map(b => (
+              <button key={b.k} onClick={() => setFilter(b.k)}
+                style={{padding:'3px 8px',fontSize:10,fontFamily:'var(--font-mono)',
+                  border:`1px solid ${filter===b.k?'var(--cyan)':'var(--border)'}`,
+                  background:filter===b.k?'rgba(0,180,255,0.15)':'transparent',
+                  color:filter===b.k?'var(--cyan)':'var(--text2)',
+                  borderRadius:3,cursor:'pointer'}}>{b.label}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Tier-1 ready summary banner */}
+        {tier1.length > 0 && (
+          <div style={{marginTop:12,padding:'8px 10px',background:'rgba(0,212,255,0.06)',border:'1px solid rgba(0,212,255,0.3)',borderRadius:4,fontSize:11}}>
+            <strong style={{color:'var(--cyan)'}}>{tier1Triggered.length}/{tier1.length} Tier-1 names</strong>
+            <span style={{color:'var(--text3)'}}> are showing pattern/breakout-ready conditions today: </span>
+            <strong style={{color:'var(--text)'}}>{tier1Triggered.map(it=>it.ticker).join(', ') || '—'}</strong>
+          </div>
+        )}
+      </div>
+
+      {/* Empty state */}
+      {filtered.length === 0 && (
+        <div className="panel" style={{textAlign:'center',padding:'40px 20px',color:'var(--text3)'}}>
+          <div style={{fontSize:48,marginBottom:10}}>⭐</div>
+          <div style={{fontSize:14,marginBottom:4,color:'var(--text2)'}}>
+            {items.length === 0 ? 'Your watchlist is empty' : `No tier-${filter} names`}
+          </div>
+          <div style={{fontSize:11}}>
+            {items.length === 0 && 'Add tickers above or use "→ Watchlist" buttons in the Scanner / Trade Setups tabs.'}
+          </div>
+        </div>
+      )}
+
+      {/* Watchlist rows */}
+      {filtered.length > 0 && (
+        <div style={{display:'flex',flexDirection:'column',gap:8}}>
+          {filtered.map(it => {
+            const live = liveByTicker.get(it.ticker);
+            const tierColor = it.tier === 1 ? 'var(--cyan)' : it.tier === 2 ? 'var(--amber)' : 'var(--text3)';
+            return (
+              <div key={it.ticker}
+                style={{padding:'10px 14px',background:'var(--bg3)',border:`1px solid var(--border)`,borderLeft:`3px solid ${tierColor}`,borderRadius:4}}>
+                {/* Top row: ticker + live data + tier dropdown + actions */}
+                <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',marginBottom:8}}>
+                  <span style={{fontFamily:'var(--font-mono)',fontWeight:700,fontSize:14,color:'var(--text)',cursor:'pointer'}}
+                        onClick={() => window.openStockBrief?.(it.ticker)}
+                        title="Click to open stock brief">
+                    {it.ticker}
+                  </span>
+                  {live ? (
+                    <>
+                      <span style={{fontSize:11,color:'var(--text3)'}}>{live.sector}</span>
+                      <span style={{fontFamily:'var(--font-mono)',fontSize:13,color:'var(--text)'}}>${live.price?.toFixed(2)}</span>
+                      <span style={{fontFamily:'var(--font-mono)',fontSize:11,color: (live.chg1d||0) >= 0 ? 'var(--green)':'var(--red)'}}>
+                        {live.chg1d!=null?(live.chg1d>0?'+':'')+live.chg1d.toFixed(2)+'%':'—'}
+                      </span>
+                      <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:(live.rsRank||0)>=80?'var(--green)':(live.rsRank||0)>=60?'var(--amber)':'var(--text3)'}} title="RS rank">
+                        RS {live.rsRank ?? '—'}
+                      </span>
+                      {live.bestPattern && <span style={{fontSize:10,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>★ {live.bestPattern}</span>}
+                      {live.vcpForming && <span style={{fontSize:10,color:'var(--green)',fontFamily:'var(--font-mono)'}}>VCP</span>}
+                      {live.daysToEarnings != null && live.daysToEarnings >= 0 && live.daysToEarnings <= 14 && (
+                        <span style={{fontSize:10,color:'var(--amber)',fontFamily:'var(--font-mono)'}}>⚠ ER in {live.daysToEarnings}d</span>
+                      )}
+                    </>
+                  ) : (
+                    <span style={{fontSize:11,color:'var(--text3)',fontStyle:'italic'}}>{rsLoaded ? 'not in current scan universe' : 'scanner not loaded yet'}</span>
+                  )}
+
+                  {/* Tier selector + jump-to-scanner + remove */}
+                  <span style={{marginLeft:'auto',display:'flex',gap:6,alignItems:'center'}}>
+                    <select value={it.tier} onChange={e => update(it.ticker, { tier: +e.target.value })}
+                      style={{padding:'3px 6px',fontSize:11,fontFamily:'var(--font-mono)',background:'var(--bg)',color:tierColor,border:`1px solid ${tierColor}`,borderRadius:3}}>
+                      <option value={1}>Tier 1</option>
+                      <option value={2}>Tier 2</option>
+                      <option value={3}>Tier 3</option>
+                    </select>
+                    <button onClick={() => navigateToScanner?.(it.ticker)}
+                      title="Open in Scanner with full row detail"
+                      style={{padding:'3px 8px',fontSize:10,fontFamily:'var(--font-mono)',background:'transparent',color:'var(--text3)',border:'1px solid var(--border)',borderRadius:3,cursor:'pointer'}}>
+                      → Scanner
+                    </button>
+                    <button onClick={() => { if (confirm(`Remove ${it.ticker} from watchlist?`)) remove(it.ticker); }}
+                      title="Remove from watchlist"
+                      style={{padding:'3px 8px',fontSize:10,fontFamily:'var(--font-mono)',background:'transparent',color:'var(--red)',border:'1px solid rgba(255,61,87,0.3)',borderRadius:3,cursor:'pointer'}}>
+                      ✕
+                    </button>
+                  </span>
+                </div>
+
+                {/* Thesis textarea — short, persistent reasoning */}
+                <textarea
+                  placeholder="Thesis (1 sentence): why is this a leader? sector/industry strength + breakout setup + catalyst"
+                  value={it.thesis || ''}
+                  onChange={e => update(it.ticker, { thesis: e.target.value })}
+                  rows={2}
+                  style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)',resize:'vertical',outline:'none',marginBottom:6}}
+                />
+
+                {/* Notes textarea — running log of observations */}
+                <textarea
+                  placeholder="Notes / running log (price action, weekly chart check, R/R, etc.)"
+                  value={it.notes || ''}
+                  onChange={e => update(it.ticker, { notes: e.target.value })}
+                  rows={2}
+                  style={{width:'100%',padding:'6px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text2)',fontSize:11,fontFamily:'var(--font-sans)',resize:'vertical',outline:'none'}}
+                />
+
+                <div style={{fontSize:9,color:'var(--text3)',marginTop:4,fontFamily:'var(--font-mono)'}}>
+                  added {new Date(it.addedAt).toLocaleDateString()}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Helper exposed on window for OTHER tabs to add a ticker to the watchlist.
+// Used by the "+ Watch" buttons added to Rotation / Scanner / Trade Setups.
+if (typeof window !== 'undefined') {
+  window.addToWatchlist = (ticker, opts = {}) => {
+    if (!ticker) return false;
+    const items = readWatchlist();
+    const t = String(ticker).toUpperCase();
+    if (items.find(it => it.ticker === t)) {
+      window.showToast?.('Watchlist', `${t} already on watchlist`, true);
+      return false;
+    }
+    const next = [...items, {
+      ticker: t,
+      tier: opts.tier || 2,
+      thesis: opts.thesis || '',
+      notes: opts.notes || '',
+      addedAt: new Date().toISOString(),
+    }];
+    writeWatchlist(next);
+    window.showToast?.('Watchlist', `${t} added (Tier ${opts.tier || 2})`);
+    // Force a re-render of any open WatchlistTab. Since the tab reads
+    // localStorage on mount, the cleanest cross-component signal is a
+    // storage-event poll-style ping. Use a custom event:
+    window.dispatchEvent(new CustomEvent('watchlist-changed'));
+    return true;
+  };
 }
 
 // ─── HEDGE TAB — Short candidates, hedge recommendations, instruments, stream ──
