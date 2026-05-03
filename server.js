@@ -259,7 +259,17 @@ if (_ENTRY_HTML === _DIST_HTML) {
 } else {
   console.log('   Serving public/index.html (in-browser Babel — run "npm run build" for a faster load)');
 }
-app.get('*', (_, res) => res.sendFile(_ENTRY_HTML));
+app.get('*', (_, res) => {
+  // The SPA-fallback HTML must never be cached. Without this header, browsers
+  // were occasionally serving a stale wrapper from disk cache after a rebuild
+  // — even when the wrapper's `?v=...` query string had updated, the browser
+  // never noticed because it was using its OWN cached copy of the wrapper.
+  // Force every request to revalidate. Cheap (29 KB) and decisive.
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.sendFile(_ENTRY_HTML);
+});
 
 // ─── Broker Monitor ─────────────────────────────────────────────────────────
 const { startStopMonitor } = require('./src/broker/monitor');
