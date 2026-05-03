@@ -182,9 +182,17 @@ function detectRegimeForDate(spyByDate, date, strict = true) {
     }
   }
 
-  if (distDays >= 5) return 'CORRECTION';     // 5+ = institutions clearly selling
-  if (distDays >= 4) return above50 ? 'CAUTION' : 'CORRECTION';
-  if (distDays >= 3 && above50 && above200) return 'CAUTION';
+  // RECALIBRATED 2026-05-03 (was 3/4/5 thresholds). The original O'Neil
+  // canonical thresholds (3+ = CAUTION, 4+ = CORRECTION) flagged virtually
+  // every healthy bull window across our 3-regime sweep. Result: 0/7503
+  // strict-gate combos beat QQQ across 2017-19, 2020-22, 2024-26 — the
+  // gate was firing during normal bull-market noise and force-exiting
+  // every long. Bumping to 7+/8+ keeps the gate as a real-correction
+  // alarm (Q4 2018, COVID Mar 2020, Q1 2022) without whipsawing in
+  // healthy uptrends.
+  if (distDays >= 8) return 'CORRECTION';     // 8+ = institutions clearly selling
+  if (distDays >= 7) return above50 ? 'CAUTION' : 'CORRECTION';
+  if (distDays >= 5 && above50 && above200) return 'CAUTION';
 
   if (above50 && above200) return 'BULL';
   if (!above50 && above200) return 'NEUTRAL';
@@ -628,14 +636,21 @@ function evaluateExit(stock, entryStock, strategy, params, holdingDays, position
 
   if (entryStock.price && stock.price && !isShort) {
     const stopATR = params.stopATR || 1.5;
-    const targetATR = params.targetATR || 3.0;
     const stopPrice = entryStock.price - (stopATR * atr);
-    const targetPrice = entryStock.price + (targetATR * atr);
     if (stock.price <= stopPrice) return { exit: true, reason: 'stop_hit' };
-    // BUG FIX: when scaleOut is enabled, the 3.0×ATR generic target would fire
-    // BEFORE scale-out T2 (3.5×ATR), collapsing Full→Scale to ~Full→Full. Skip
-    // the generic target when scaleOut is on — let the T1/T2/trail ladder run.
-    if (!params.scaleOut && stock.price >= targetPrice) return { exit: true, reason: 'target_hit' };
+    // Target check is OPTIONAL. Set targetATR to null/0/undefined to disable
+    // the fixed-target exit and let trades exit only via stop / signal /
+    // max-hold / trail. The 3-window sweep showed targetATR 3-10 produced
+    // identical results because time exits fired first; removing the static
+    // target lets winners actually run when paired with longer holds + MA trail.
+    //
+    // BUG FIX: when scaleOut is enabled, the generic target would fire
+    // BEFORE scale-out T2, collapsing Full→Scale to ~Full→Full. Skip the
+    // generic target when scaleOut is on — let the T1/T2/trail ladder run.
+    if (params.targetATR && !params.scaleOut) {
+      const targetPrice = entryStock.price + (params.targetATR * atr);
+      if (stock.price >= targetPrice) return { exit: true, reason: 'target_hit' };
+    }
   }
 
   // ─── Scale-out logic (if enabled) ─────────────────────────────────────────
