@@ -421,20 +421,30 @@ function writeActiveReplayJob(kind, jobId) {
   try { localStorage.setItem(REPLAY_JOBS_KEY, JSON.stringify(cur)); } catch (_) {}
 }
 
-// Per-kind AbortController so a fresh runReplayJob() call can supersede the
-// previous poll loop for the same kind. Without this, clicking "RUN REPLAY"
-// twice in a row left the old poll running; when the old job finished it
-// overwrote the new job's pending result. Module-scope (not per-component)
-// so resumption across mount cycles still cooperates with the same map.
-const _replayJobAborters = new Map(); // kind → AbortController
+// AbortController registry. Pre-fix this was keyed by `kind` only — meaning
+// two concurrent sweeps both registered as 'sweep', and each new poller
+// killed the previous one's AbortController. With three regime-comparison
+// sweeps in flight at once, two of them constantly emitted "Polling
+// superseded" because the third was always the survivor.
+//
+// Now we register PER (kind, jobId) once we know the jobId, and per
+// (kind, '_pending') for the brief window before submit returns. A fresh
+// click of "Run Sweep" still supersedes a previous *pending* submit (same
+// kind+_pending key) but doesn't touch active pollers for known jobIds.
+const _replayJobAborters = new Map(); // "kind:jobId" → AbortController
+
+function _aborterKey(kind, jobId) { return `${kind}:${jobId || '_pending'}`; }
 
 async function runReplayJob({ kind, body, onUpdate, signal, resumeJobId }) {
-  // Supersede any previous in-flight poll for this kind. The server-side
-  // job continues regardless — we just stop watching.
-  const prev = _replayJobAborters.get(kind);
+  // For NEW submits (no resumeJobId) we briefly use the _pending bucket so
+  // a double-click cancels the older pending submit. For resumes we go
+  // straight to the jobId bucket so siblings don't collide.
+  const initialKey = _aborterKey(kind, resumeJobId);
+  const prev = _replayJobAborters.get(initialKey);
   if (prev) prev.abort();
+  let aborterKey = initialKey;
   const ctrl = new AbortController();
-  _replayJobAborters.set(kind, ctrl);
+  _replayJobAborters.set(aborterKey, ctrl);
   if (signal) signal.addEventListener('abort', () => ctrl.abort(), { once: true });
 
   // The job runs in the background server-side; the client just submits +
@@ -475,6 +485,12 @@ async function runReplayJob({ kind, body, onUpdate, signal, resumeJobId }) {
       { label: 'submit job' }
     );
     jobId = submit.id;
+    // Re-key the controller from _pending → real jobId so a future
+    // double-click of the same button only cancels other _pending submits,
+    // not this now-active poller.
+    _replayJobAborters.delete(aborterKey);
+    aborterKey = _aborterKey(kind, jobId);
+    _replayJobAborters.set(aborterKey, ctrl);
     writeActiveReplayJob(kind, jobId);
     onUpdate?.({ id: jobId, kind, status: 'running', startedAt: submit.startedAt });
   } else {
@@ -536,7 +552,7 @@ async function runReplayJob({ kind, body, onUpdate, signal, resumeJobId }) {
       await new Promise(r => setTimeout(r, POLL_MS));
     }
   } finally {
-    if (_replayJobAborters.get(kind) === ctrl) _replayJobAborters.delete(kind);
+    if (_replayJobAborters.get(aborterKey) === ctrl) _replayJobAborters.delete(aborterKey);
   }
 }
 
