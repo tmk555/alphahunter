@@ -176,6 +176,12 @@ function getTodayPlan(liveByTicker = null) {
       vcpForming: !!live?.vcpForming,
       bestPattern: live?.bestPattern,
       daysToEarnings: live?.daysToEarnings,
+      // ATR for stop-distance math on the row badge — informs SUBMIT
+      // sizing without bouncing to Scanner. atrPct is more useful than
+      // dollar value when comparing across symbols (a $5 ATR is small
+      // for $200 NVDA but huge for $30 PLTR).
+      atr: live?.atr,
+      atrPct: live?.atrPct,
     };
   });
 

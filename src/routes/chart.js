@@ -654,6 +654,20 @@ module.exports = function () {
         }
       } catch (_) { /* SEC augmentation optional */ }
 
+      // ATR(14) for the chart caption + dual-trail panel. Computed from
+      // the same OHLCV bars rendered on the chart so the user sees the
+      // exact value that flows into stop-distance math elsewhere.
+      let atr14 = null, atr14Pct = null;
+      try {
+        const { calcATR } = require('../signals/momentum');
+        const recentBars = allBars.slice(-30); // 30 bars > 15 bars min for ATR
+        atr14 = calcATR(recentBars);
+        const lastClose = visibleBars[visibleBars.length - 1]?.close;
+        if (atr14 != null && lastClose > 0) {
+          atr14Pct = +((atr14 / lastClose) * 100).toFixed(2);
+        }
+      } catch (_) { /* ATR is best-effort — not all chart calls need it */ }
+
       res.json({
         symbol,
         timeframe: 'daily',
@@ -669,6 +683,8 @@ module.exports = function () {
           currentMa50,
           currentMa150,
           currentMa200,
+          atr14,
+          atr14Pct,
           rsRank,
           stage,
           lastDate: visibleBars[visibleBars.length - 1]?.date || null,

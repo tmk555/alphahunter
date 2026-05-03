@@ -220,6 +220,20 @@ async function getStockBrief(symbol) {
   ]);
   const quote = (Array.isArray(quoteArr) && quoteArr[0]) || null;
 
+  // ATR(14) — read from the latest scanner cache instead of refetching
+  // bars. The scanner already computes ATR for every symbol every 5 min
+  // and writes to rs:full. Re-reading is free; recomputing would add a
+  // 30-bar history fetch per drawer-open which is wasteful since the
+  // value barely moves intraday.
+  let atr = null, atrPct = null;
+  try {
+    const cachedRs = cacheGet('rs:full', 5 * 60 * 1000);  // 5 min
+    if (Array.isArray(cachedRs)) {
+      const row = cachedRs.find(r => r.ticker === symbol);
+      if (row) { atr = row.atr ?? null; atrPct = row.atrPct ?? null; }
+    }
+  } catch (_) { /* ATR is best-effort */ }
+
   // Catalyst summary — count by tag across the news set so the panel can
   // render "5 upgrades · 2 downgrades · 1 lawsuit" at a glance instead of
   // forcing the user to scan 20 headlines.
@@ -278,6 +292,8 @@ async function getStockBrief(symbol) {
         ? +(((quote.regularMarketPrice / quote.fiftyTwoWeekHigh) - 1) * 100).toFixed(1) : null,
       pctOff52wLow:  (quote?.regularMarketPrice && quote?.fiftyTwoWeekLow)
         ? +(((quote.regularMarketPrice / quote.fiftyTwoWeekLow ) - 1) * 100).toFixed(1) : null,
+      atr,
+      atrPct,
     },
     analyst,
     earningsTrack: earnings,

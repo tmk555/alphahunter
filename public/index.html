@@ -1630,6 +1630,21 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
                 </span>
               )}
             </span>
+            {/* ATR(14) — surfaces the same number that flows into stop-distance
+                math everywhere else (dual-trail panel, position sizer, scanner
+                expanded row). Without this on the chart, the user has to bounce
+                back to Scanner to read it before deciding a manual stop. */}
+            {chartData?.meta?.atr14 != null && (
+              <span className="ohlc-pair" title="ATR(14) — average true range over last 14 bars. Multiply by 1×/1.5×/2.5× to get stop distances commonly used in this system.">
+                <span className="ohlc-k">ATR</span>
+                <span className="ohlc-v" style={{color:'#ffb454'}}>${chartData.meta.atr14.toFixed(2)}</span>
+                {chartData.meta.atr14Pct != null && (
+                  <span style={{color:'#8888bb', marginLeft:4}}>
+                    ({chartData.meta.atr14Pct.toFixed(1)}%)
+                  </span>
+                )}
+              </span>
+            )}
           </div>
         )}
         <div style={{position:'relative'}}>
@@ -2302,6 +2317,14 @@ function StockBriefDrawer() {
                 {h?.dayChange != null && (
                   <span style={{fontSize:11,color:'var(--text3)'}}>
                     {h.dayChange>0?'+':''}{h.dayChange.toFixed(2)} today
+                  </span>
+                )}
+                {/* ATR pill — surfaces volatility for stop-distance math.
+                    Without it, the user has to bounce to Scanner to read it. */}
+                {h?.atr != null && (
+                  <span title="ATR(14) — average true range. 1× = 1 ATR stop ($X below price); 1.5× = 1.5 ATR; etc. Higher % = more volatile = wider stops needed."
+                        style={{fontSize:11,fontFamily:'var(--font-mono)',padding:'2px 6px',background:'rgba(255,180,84,0.12)',border:'1px solid rgba(255,180,84,0.3)',borderRadius:3,color:'#ffb454',fontWeight:600}}>
+                    ATR ${h.atr.toFixed(2)}{h.atrPct != null ? ` (${h.atrPct.toFixed(1)}%)` : ''}
                   </span>
                 )}
               </div>
@@ -13972,6 +13995,206 @@ function OptionsHedgeSection() {
   );
 }
 
+// ─── TRAIL DECISION PANEL — per-position dual-trail override ──────────
+//
+// Replaces the compact "STOPS TO RAISE" line with a decision-grade view:
+// every MA value + ATR multiple shown side-by-side with distance metrics
+// and R-multiple, plus two action buttons:
+//   • "Apply once"    → POST /api/positions/:id/move-stop  (Flavor A)
+//   • "Lock as trail" → POST /api/positions/:id/trail      (Flavor B)
+//
+// R-multiple math: R = entry_price − initial_stop_price. Falls back to
+// broker_stop_price if initial_stop_price is null (legacy positions).
+// Without R, the panel still renders — the column just shows '—'.
+function TrailDecisionPanel({ position, atr, currentPrice, onChanged }) {
+  const [customStop, setCustomStop] = useState('');
+  const [busy, setBusy]             = useState(false);
+  const [chosenLevel, setChosenLevel] = useState(null);   // string key of selected row
+  const [error, setError]           = useState('');
+
+  const entry  = +position.entry_price;
+  const broker = +position.broker_stop_price;
+  const initialStop = position.initial_stop_price != null ? +position.initial_stop_price : broker;
+  const R = (entry - initialStop) > 0 ? (entry - initialStop) : null;
+  const lockedStrategy = position.trail_strategy || 'staged_position';
+
+  // Build the list of candidate stops. Skip rows where the MA is null.
+  // Order: tightest first (highest stop price), so user reads top-to-bottom
+  // as "least give-back" to "most slack."
+  const candidates = [];
+  if (position.ema13 != null) candidates.push({ key:'ema13', label:'13EMA', value:+position.ema13, family:'fixed_ema13', note: lockedStrategy==='staged_position' && position.current_stage==='adolescence' ? 'current staged pick' : null });
+  if (position.ema26 != null) candidates.push({ key:'ema26', label:'26EMA', value:+position.ema26, family:'fixed_ema26', note: lockedStrategy==='staged_position' && position.current_stage==='intermediate' ? 'current staged pick' : null });
+  if (position.sma50 != null) candidates.push({ key:'sma50', label:'50SMA', value:+position.sma50, family:'fixed_ma50',  note: '#31 sweep winner (trend regime)' });
+  if (atr) {
+    candidates.push({ key:'atr1.0', label:'1.0×ATR', value:+(currentPrice - 1.0*atr).toFixed(2), family:null });
+    candidates.push({ key:'atr1.5', label:'1.5×ATR', value:+(currentPrice - 1.5*atr).toFixed(2), family:null });
+    candidates.push({ key:'atr2.5', label:'2.5×ATR', value:+(currentPrice - 2.5*atr).toFixed(2), family:null });
+  }
+  // Sort: tightest (highest) first
+  candidates.sort((a,b) => b.value - a.value);
+
+  function distFromCurrent(v) { return currentPrice ? +(((v - currentPrice) / currentPrice) * 100).toFixed(1) : null; }
+  function distFromEntry(v)   { return entry ? +(((v - entry) / entry) * 100).toFixed(1) : null; }
+  function rMultipleAt(v) {
+    if (!R) return null;
+    return +(((v - entry) / R)).toFixed(2);
+  }
+
+  async function applyOnce(stopValue, reason) {
+    if (!(stopValue > 0)) { setError('Pick or enter a valid stop value'); return; }
+    setBusy(true); setError('');
+    try {
+      await api(`/api/positions/${position.trade_id}/move-stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newStopPrice: stopValue, reason: reason || `dual-trail panel · ${chosenLevel || 'custom'}` }),
+      });
+      window.showToast?.(position.symbol, `Stop moved to $${stopValue.toFixed(2)}`);
+      onChanged?.();
+    } catch (e) { setError(e.message); }
+    setBusy(false);
+  }
+
+  async function lockTrail(strategy, manualValue) {
+    setBusy(true); setError('');
+    try {
+      await api(`/api/positions/${position.trade_id}/trail`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trailStrategy: strategy, manualStopValue: manualValue }),
+      });
+      window.showToast?.(position.symbol, `Trail locked: ${strategy}`);
+      onChanged?.();
+    } catch (e) { setError(e.message); }
+    setBusy(false);
+  }
+
+  const customNum = +customStop || 0;
+  const lockedColor = lockedStrategy === 'staged_position' ? 'var(--text3)' : 'var(--cyan)';
+
+  return (
+    <div style={{padding:'10px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,marginBottom:6}}>
+      {/* Header — symbol + position summary + locked-trail indicator */}
+      <div style={{display:'flex',gap:14,alignItems:'center',flexWrap:'wrap',marginBottom:8}}>
+        <strong style={{fontSize:14,color:'var(--text)',fontFamily:'var(--font-mono)',cursor:'pointer'}}
+          onClick={() => window.openStockBrief?.(position.symbol)}>
+          {position.symbol}
+        </strong>
+        <span style={{fontSize:11,color:'var(--text3)'}}>
+          {position.shares}sh @ ${entry.toFixed(2)} · stage <strong style={{color:'var(--text2)'}}>{position.current_stage}</strong>
+          {position.max_gain_pct != null && <> · peak <strong style={{color:position.max_gain_pct>=0?'var(--green)':'var(--red)'}}>{position.max_gain_pct>=0?'+':''}{position.max_gain_pct}%</strong></>}
+        </span>
+        <span style={{fontSize:10,fontFamily:'var(--font-mono)',color:lockedColor,padding:'2px 8px',background:'rgba(0,180,255,0.08)',border:`1px solid ${lockedColor}`,borderRadius:3}}>
+          trail: {lockedStrategy}
+        </span>
+        <span style={{marginLeft:'auto',fontSize:11,color:'var(--text3)'}}>
+          current ${currentPrice?.toFixed(2) || '—'} · broker stop ${broker?.toFixed(2) || '—'}
+          {atr != null && <> · ATR <span style={{color:'#ffb454'}}>${atr.toFixed(2)}</span></>}
+        </span>
+      </div>
+
+      {/* Candidate stops table */}
+      <div style={{border:'1px solid var(--border2)',borderRadius:3,overflow:'hidden'}}>
+        <div style={{display:'grid',gridTemplateColumns:'80px 90px 100px 100px 80px 1fr 90px',gap:0,fontSize:10,padding:'5px 8px',background:'var(--bg2)',color:'var(--text3)',fontFamily:'var(--font-mono)',letterSpacing:0.5,fontWeight:700}}>
+          <span>LEVEL</span><span>STOP</span><span>vs NOW</span><span>vs ENTRY</span><span>R-MULT</span><span>NOTE</span><span style={{textAlign:'right'}}>PICK</span>
+        </div>
+        {candidates.map(c => {
+          const dN = distFromCurrent(c.value);
+          const dE = distFromEntry(c.value);
+          const rM = rMultipleAt(c.value);
+          const tooLoose = dN > 0;  // stop above current → would insta-trigger
+          const subZero  = rM != null && rM < -1;  // exit worse than original stop
+          const isPick   = chosenLevel === c.key;
+          const rowColor = isPick ? 'rgba(0,180,255,0.10)' : 'transparent';
+          return (
+            <div key={c.key}
+              onClick={() => !tooLoose && setChosenLevel(c.key)}
+              style={{display:'grid',gridTemplateColumns:'80px 90px 100px 100px 80px 1fr 90px',gap:0,fontSize:11,padding:'5px 8px',
+                fontFamily:'var(--font-mono)',background:rowColor,
+                cursor:tooLoose?'not-allowed':'pointer',
+                opacity:tooLoose?0.4:1,
+                borderTop:'1px solid var(--border2)'}}>
+              <span style={{color:'var(--text2)',fontWeight:600}}>{c.label}</span>
+              <span style={{color:'var(--text)'}}>${c.value.toFixed(2)}</span>
+              <span style={{color:dN!=null?(dN<0?'var(--text3)':'var(--red)'):'var(--text3)'}}>{dN!=null?(dN>0?'+':'')+dN.toFixed(1)+'%':'—'}</span>
+              <span style={{color:dE!=null?(dE<0?'var(--red)':'var(--green)'):'var(--text3)'}}>{dE!=null?(dE>0?'+':'')+dE.toFixed(1)+'%':'—'}</span>
+              <span style={{color:rM!=null?(subZero?'var(--red)':rM<0?'var(--amber)':'var(--green)'):'var(--text3)',fontWeight:subZero?700:400}}>
+                {rM!=null?(rM>0?'+':'')+rM.toFixed(2)+'R':'—'}
+              </span>
+              <span style={{color:'var(--text3)',fontStyle:'italic'}}>{c.note || (tooLoose?'⚠ above current':subZero?'⚠ worse than initial stop':'')}</span>
+              <span style={{textAlign:'right'}}>
+                {isPick ? <span style={{color:'var(--cyan)',fontWeight:700}}>● picked</span> : <span style={{color:'var(--text3)'}}>○</span>}
+              </span>
+            </div>
+          );
+        })}
+        {/* Custom-value row */}
+        <div style={{display:'grid',gridTemplateColumns:'80px 1fr 90px',gap:0,fontSize:11,padding:'6px 8px',fontFamily:'var(--font-mono)',background:'var(--bg2)',borderTop:'1px solid var(--border2)'}}>
+          <span style={{color:'var(--text2)',fontWeight:600}}>custom</span>
+          <span>
+            <input type="number" step="0.01" placeholder="enter $" value={customStop}
+              onChange={e => { setCustomStop(e.target.value); setChosenLevel('custom'); }}
+              style={{padding:'3px 8px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)',width:120}}/>
+            {customNum > 0 && (
+              <span style={{marginLeft:10,color:'var(--text3)',fontSize:10}}>
+                vs now {distFromCurrent(customNum)>0?'+':''}{distFromCurrent(customNum)?.toFixed(1)}% · vs entry {distFromEntry(customNum)>0?'+':''}{distFromEntry(customNum)?.toFixed(1)}% · {rMultipleAt(customNum)!=null?(rMultipleAt(customNum)>0?'+':'')+rMultipleAt(customNum).toFixed(2)+'R':'—R'}
+              </span>
+            )}
+          </span>
+          <span style={{textAlign:'right'}}>
+            {chosenLevel === 'custom' ? <span style={{color:'var(--cyan)',fontWeight:700}}>● picked</span> : <span style={{color:'var(--text3)'}}>○</span>}
+          </span>
+        </div>
+      </div>
+
+      {/* Action buttons */}
+      <div style={{display:'flex',gap:8,marginTop:10,alignItems:'center',flexWrap:'wrap'}}>
+        <button
+          disabled={busy || !chosenLevel}
+          onClick={() => {
+            const c = chosenLevel === 'custom'
+              ? { value: customNum, family: null }
+              : candidates.find(x => x.key === chosenLevel);
+            if (!c) return;
+            applyOnce(c.value);
+          }}
+          style={{padding:'6px 14px',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:700,background:'var(--cyan)',color:'#000',border:'none',borderRadius:3,cursor:busy||!chosenLevel?'not-allowed':'pointer',opacity:busy||!chosenLevel?0.5:1}}>
+          Apply once → broker
+        </button>
+        <button
+          disabled={busy || !chosenLevel}
+          onClick={() => {
+            const c = chosenLevel === 'custom'
+              ? { value: customNum, family: 'manual' }
+              : candidates.find(x => x.key === chosenLevel);
+            if (!c) return;
+            // Only fixed_* / manual families are persistable; ATR multiples
+            // are one-shot only (system doesn't recompute ATR each day to
+            // re-trail). For ATR rows the lock-as-trail just falls back to
+            // 'manual' with the current $ value frozen.
+            const strat = c.family || 'manual';
+            const mv    = strat === 'manual' ? c.value : null;
+            lockTrail(strat, mv);
+          }}
+          title="Persist this trail strategy on the position. Future cron runs will use this trail (instead of the staged_position default) for exit-signal computation."
+          style={{padding:'6px 14px',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:700,background:'transparent',color:'var(--cyan)',border:'1px solid var(--cyan)',borderRadius:3,cursor:busy||!chosenLevel?'not-allowed':'pointer',opacity:busy||!chosenLevel?0.5:1}}>
+          Lock as trail strategy
+        </button>
+        {lockedStrategy !== 'staged_position' && (
+          <button
+            disabled={busy}
+            onClick={() => lockTrail('staged_position', null)}
+            title="Restore the default 13EMA → 26EMA → 50SMA escalator."
+            style={{padding:'5px 10px',fontSize:10,fontFamily:'var(--font-mono)',background:'transparent',color:'var(--text3)',border:'1px solid var(--border2)',borderRadius:3,cursor:'pointer'}}>
+            ↶ reset to default
+          </button>
+        )}
+        {error && <span style={{fontSize:11,color:'var(--red)',marginLeft:8}}>{error}</span>}
+      </div>
+    </div>
+  );
+}
+
 // ─── DAILY PLAN TAB — the action loop ─────────────────────────────────
 //
 // Converts tier-1 watchlist names into binary daily decisions:
@@ -14246,31 +14469,46 @@ function DailyPlanTab({ rsData, rsLoaded }) {
         </div>
       )}
 
-      {/* ── STOPS TO RAISE — open positions where trail MA > broker stop.
-          These aren't exits; they're stop-raises that lock in more
-          profit as the trade matures. User must update Alpaca manually
-          since brackets are static price levels. */}
-      {trailState?.stopRaises?.length > 0 && (
+      {/* ── DUAL-TRAIL DECISION PANEL — every open position, every day ──
+          Replaces the old compact "STOPS TO RAISE" list. For each open
+          position shows ALL candidate stops (13EMA / 26EMA / 50SMA +
+          ATR multiples + custom) with R-multiple per choice. Two
+          actions per position:
+            • Apply once  → moves broker stop only (Flavor A)
+            • Lock trail  → persists strategy for future cron runs (Flavor B)
+          The full panel is shown even for positions that don't need a
+          stop raise, because the user might want to TIGHTEN voluntarily
+          or to lock in a different trail mode while the trade matures. */}
+      {trailState?.positions?.length > 0 && (
         <div className="panel" style={{marginBottom:14,borderLeft:'4px solid var(--cyan)',background:'rgba(0,180,255,0.04)'}}>
-          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
             <span style={{fontSize:12,fontWeight:700,color:'var(--cyan)',letterSpacing:0.5}}>
-              📈 STOPS TO RAISE — {trailState.stopRaises.length} position{trailState.stopRaises.length>1?'s':''} ready for trail-up
+              📈 STOP / TRAIL DECISIONS — {trailState.positions.length} open position{trailState.positions.length>1?'s':''}
             </span>
             <span style={{fontSize:10,color:'var(--text3)',marginLeft:'auto'}}>
-              Update broker stop manually
+              Pick a level · "Apply once" moves broker stop · "Lock as trail" persists for future days
             </span>
           </div>
           <div style={{display:'flex',flexDirection:'column',gap:4}}>
-            {trailState.stopRaises.slice(0, 10).map(r => (
-              <div key={r.trade_id} style={{display:'flex',gap:14,fontSize:11,fontFamily:'var(--font-mono)',padding:'4px 10px',background:'var(--bg)',borderRadius:3,alignItems:'center'}}>
-                <strong style={{color:'var(--text)',cursor:'pointer'}} onClick={() => window.openStockBrief?.(r.symbol)}>{r.symbol}</strong>
-                <span style={{color:'var(--text3)'}}>broker stop ${r.broker_stop_price?.toFixed(2)}</span>
-                <span style={{color:'var(--text3)'}}>→</span>
-                <span style={{color:'var(--cyan)',fontWeight:700}}>${r.suggested_stop?.toFixed(2)}</span>
-                <span style={{color:'var(--green)',fontWeight:700}}>+{r.raise_pct}%</span>
-                <span style={{color:'var(--text3)',marginLeft:'auto'}}>{r.current_stage}</span>
-              </div>
-            ))}
+            {trailState.positions.map(p => {
+              const liveRow = rsData?.find(s => s.ticker === p.symbol);
+              const livePrice = liveRow?.price ?? null;
+              const liveAtr   = liveRow?.atr   ?? null;
+              return (
+                <TrailDecisionPanel
+                  key={p.trade_id}
+                  position={p}
+                  atr={liveAtr}
+                  currentPrice={livePrice}
+                  onChanged={() => {
+                    // Re-fetch trail state after a successful move/lock so
+                    // the panel reflects the new broker stop / trail strategy
+                    // without a manual page refresh.
+                    api('/api/daily-plan/trail-state').then(setTrailState).catch(() => {});
+                  }}
+                />
+              );
+            })}
           </div>
         </div>
       )}
@@ -14333,6 +14571,12 @@ function DailyPlanTab({ rsData, rsLoaded }) {
                   {it.rsRank != null && (
                     <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:(it.rsRank>=80?'var(--green)':'var(--text3)')}}>
                       RS {it.rsRank}
+                    </span>
+                  )}
+                  {it.atr != null && (
+                    <span title={`ATR(14) — at $${it.atr.toFixed(2)} (${it.atrPct?.toFixed(1)}%) per day, a 1.5×ATR initial stop = $${(it.atr*1.5).toFixed(2)} below entry.`}
+                          style={{fontFamily:'var(--font-mono)',fontSize:11,color:'#ffb454'}}>
+                      ATR ${it.atr.toFixed(2)}{it.atrPct != null ? ` (${it.atrPct.toFixed(1)}%)` : ''}
                     </span>
                   )}
                   {it.insiderClusterBuy && (
