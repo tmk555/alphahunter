@@ -436,6 +436,120 @@ function initSchema() {
       ON daily_bars (symbol, date);
   `);
 
+  // ─── Insider transactions (Form 4) — per-event ───────────────────────────
+  //
+  // Captures all insider trades for the universe. SEC requires officers,
+  // directors, and 10%+ owners to file Form 4 within 2 business days of
+  // any transaction. We store at per-transaction granularity so:
+  //   • The chart layer can render individual trade markers
+  //   • The scanner can roll up 30-day aggregates per stock
+  //   • The conviction score can detect cluster-buy events
+  //
+  // Transaction codes (from SEC Form 4 instructions):
+  //   P = open-market or private purchase (THE buy signal)
+  //   S = open-market or private sale (THE sell signal)
+  //   A = grant/award (compensation — IGNORE for signal)
+  //   M = exercise of derivative security (option exercise — IGNORE)
+  //   F = payment of exercise price or tax via security (IGNORE)
+  //   D = sale to issuer (10b5-1 plan typically)
+  //   G = bona fide gift
+  //   J = other (rare)
+  //   V = transaction reported voluntarily (rare)
+  //
+  // We store all codes; signal generation filters to P/S only.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS insider_transactions (
+      symbol           TEXT NOT NULL,
+      filed_at         TEXT NOT NULL,        -- when Form 4 was filed (T+1 to T+2)
+      trade_date       TEXT NOT NULL,        -- when the transaction actually happened
+      insider_name     TEXT,
+      insider_title    TEXT,                 -- 'CEO' / 'CFO' / 'Director' / '10% Owner'
+      is_director      INTEGER DEFAULT 0,
+      is_officer       INTEGER DEFAULT 0,
+      is_ten_percent   INTEGER DEFAULT 0,
+      transaction_code TEXT NOT NULL,        -- P, S, A, M, F, etc. (see comment above)
+      shares           INTEGER,
+      price_per_share  REAL,
+      total_value      REAL,                 -- shares × price (signed: + for buys, - for sells)
+      post_shares      INTEGER,              -- shares owned post-transaction
+      accession_number TEXT NOT NULL,        -- SEC unique filing ID
+      source_url       TEXT,
+      PRIMARY KEY (accession_number, insider_name, trade_date, transaction_code, shares)
+    );
+    CREATE INDEX IF NOT EXISTS idx_insider_symbol_filed
+      ON insider_transactions (symbol, filed_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_insider_filed
+      ON insider_transactions (filed_at DESC);
+  `);
+
+  // ─── Institutional holdings (13F) — per-quarter snapshot ──────────────────
+  //
+  // 13F-HR is filed quarterly by managers with >$100M AUM, due 45 days
+  // after quarter-end. Each filing is a snapshot of holdings — we store
+  // one row per (filer, symbol, quarter).
+  //
+  // Two tables:
+  //   institutional_holdings   — granular per-filing rows
+  //   institutional_aggregates — pre-computed per-stock-per-quarter rollups
+  //                              (the table the scanner / UI actually reads)
+  //
+  // Aggregation runs after each batch import (cron job). Scanner reads
+  // ONLY from aggregates so a stock-detail query doesn't fan out to
+  // thousands of holdings rows.
+  //
+  // CUSIP→ticker mapping: 13F filings use CUSIPs not tickers. We maintain
+  // a `cusip_ticker_map` table populated incrementally as we ingest.
+  // First seed comes from SEC company-facts (which we already pull) +
+  // a small bootstrap list. Many small-caps will lack mappings initially;
+  // those holdings rows store the raw CUSIP and resolve later as the map
+  // grows.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS institutional_holdings (
+      filer_cik     TEXT NOT NULL,
+      filer_name    TEXT,
+      cusip         TEXT NOT NULL,
+      symbol        TEXT,                  -- nullable until cusip_ticker_map resolves
+      quarter       TEXT NOT NULL,         -- 'Q1-2026' format
+      filed_at      TEXT NOT NULL,
+      shares        INTEGER,
+      market_value  REAL,
+      PRIMARY KEY (filer_cik, cusip, quarter)
+    );
+    CREATE INDEX IF NOT EXISTS idx_inst_holdings_symbol_quarter
+      ON institutional_holdings (symbol, quarter) WHERE symbol IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_inst_holdings_filer_quarter
+      ON institutional_holdings (filer_cik, quarter);
+    CREATE INDEX IF NOT EXISTS idx_inst_holdings_cusip
+      ON institutional_holdings (cusip);
+
+    CREATE TABLE IF NOT EXISTS institutional_aggregates (
+      symbol            TEXT NOT NULL,
+      quarter           TEXT NOT NULL,
+      total_value       REAL,             -- sum of market_value across all filers
+      num_holders       INTEGER,
+      num_new_buyers    INTEGER,          -- filers who initiated a position this Q
+      num_increased     INTEGER,
+      num_reduced       INTEGER,
+      num_sold_out      INTEGER,          -- filers who closed a prior position
+      net_share_change  INTEGER,          -- aggregate share delta vs prior quarter
+      top10_filers_json TEXT,             -- JSON array of top 10 by value
+      smart_money_count INTEGER,          -- holders within our tracked-filer whitelist
+      PRIMARY KEY (symbol, quarter)
+    );
+    CREATE INDEX IF NOT EXISTS idx_inst_agg_symbol
+      ON institutional_aggregates (symbol);
+
+    -- CUSIP → ticker lookup. Seeded incrementally; primary source is the
+    -- SEC company-facts endpoint (returns issuer CUSIP alongside ticker).
+    CREATE TABLE IF NOT EXISTS cusip_ticker_map (
+      cusip   TEXT PRIMARY KEY,
+      ticker  TEXT NOT NULL,
+      cik     TEXT,
+      added_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_cusip_ticker ON cusip_ticker_map (ticker);
+  `);
+
   // ─── FRED Macro Series (point-in-time historical economic data) ──────────
   //
   // Stores observations for FRED series like DGS10 (10yr yield), CPIAUCSL

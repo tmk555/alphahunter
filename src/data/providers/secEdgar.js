@@ -51,6 +51,28 @@ async function _secFetch(url, opts = {}) {
   return r.json();
 }
 
+// Same shape as _secFetch but returns the raw text body (for Form 4 XML,
+// 13F primary docs, etc.). The Accept header is widened so SEC knows we
+// can take XML/HTML/text.
+async function _secFetchText(url, opts = {}) {
+  const fetch = global.fetch || require('node-fetch');
+  const r = await fetch(url, {
+    headers: {
+      'User-Agent': SEC_USER_AGENT,
+      'Accept': 'application/xml, text/xml, text/html, */*',
+      'Accept-Encoding': 'gzip, deflate',
+      'Host': new URL(url).host,
+      ...(opts.headers || {}),
+    },
+  });
+  if (!r.ok) {
+    const err = new Error(`SEC ${r.status} for ${url}`);
+    err.status = r.status;
+    throw err;
+  }
+  return r.text();
+}
+
 // ─── Ticker → CIK mapping ────────────────────────────────────────────────
 // Cached for the same 23h as historical bars — SEC only adds new entries
 // when companies file their first 10-K (rare).
@@ -416,6 +438,198 @@ async function getFilingMarkers(ticker, formTypes = ['10-Q', '10-K', '8-K']) {
   return markers;
 }
 
+// ─── Form 4 (insider transactions) ───────────────────────────────────────
+//
+// Pulls insider trades for a ticker. SEC requires officers/directors/10%+
+// owners to file Form 4 within 2 business days of any transaction; we
+// re-fetch the submissions list (already cached 6h) to find Form 4
+// accession numbers, then fetch each filing's primary XML and parse out
+// the structured fields.
+//
+// Why regex parsing not a real XML library: Form 4 XML is small, well-
+// formed, and structurally deterministic. Adding xml2js for two ten-line
+// regexes isn't justified. Each Form 4 has at most ~5 transactions and
+// 1-3 reportingOwners; the regexes parse them in a single pass.
+//
+// Transaction codes captured (see database.js comment for full list):
+//   P = open-market purchase  (the actual buy signal)
+//   S = open-market sale       (the actual sell signal)
+//   A, M, F, D, G, J, V — non-trade transactions (grants, option ex, gifts,
+//                          etc.); stored but excluded from cluster-buy logic
+//
+// Returns array of normalized rows ready for INSERT into insider_transactions.
+
+const TTL_INSIDER = 6 * 60 * 60 * 1000;  // 6h — same as company facts
+
+// Strip a single XML tag's text content. Tolerates tags with attributes.
+// Returns null when not found. Form 4 wraps numbers in <value>X</value>
+// inside the field tag, so `_xmlField(xml, 'transactionShares')` still
+// needs a `_xmlValue` follow-up — separate helpers keep call sites clean.
+function _xmlField(xml, tag) {
+  const re = new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`);
+  const m = xml.match(re);
+  return m ? m[1] : null;
+}
+function _xmlText(xml, tag) {
+  const inner = _xmlField(xml, tag);
+  if (inner == null) return null;
+  // Strip any nested tags, return plain text trimmed.
+  return inner.replace(/<[^>]+>/g, '').trim();
+}
+function _xmlValue(xml, tag) {
+  // Field with <value>X</value> child. Returns the inner X as text.
+  const inner = _xmlField(xml, tag);
+  if (inner == null) return null;
+  const v = inner.match(/<value>([\s\S]*?)<\/value>/);
+  return v ? v[1].trim() : null;
+}
+
+// Parse one <reportingOwner> block.
+function _parseOwner(ownerXml) {
+  const name  = _xmlText(ownerXml, 'rptOwnerName') || _xmlText(ownerXml, 'reportingOwnerId') || null;
+  const rel   = _xmlField(ownerXml, 'reportingOwnerRelationship') || '';
+  const isDirector  = /<isDirector[^>]*>(?:1|true)/i.test(rel);
+  const isOfficer   = /<isOfficer[^>]*>(?:1|true)/i.test(rel);
+  const isTenPct    = /<isTenPercentOwner[^>]*>(?:1|true)/i.test(rel);
+  const titleM      = rel.match(/<officerTitle[^>]*>([\s\S]*?)<\/officerTitle>/);
+  const title       = titleM ? titleM[1].replace(/<[^>]+>/g, '').trim() : null;
+  return { name, title, isDirector, isOfficer, isTenPct };
+}
+
+// Parse all <nonDerivativeTransaction> blocks (common-stock buys/sells).
+// Derivative transactions (options) live in <derivativeTable> and are
+// usually compensation grants — we skip them for the signal layer.
+function _parseTransactions(xml) {
+  const blocks = [];
+  const re = /<nonDerivativeTransaction[^>]*>([\s\S]*?)<\/nonDerivativeTransaction>/g;
+  let m;
+  while ((m = re.exec(xml)) !== null) blocks.push(m[1]);
+
+  return blocks.map(b => {
+    const date  = _xmlValue(b, 'transactionDate');
+    const code  = _xmlText(b, 'transactionCode');
+    const shares = _xmlValue(b, 'transactionShares');
+    const price  = _xmlValue(b, 'transactionPricePerShare');
+    const post   = _xmlValue(b, 'sharesOwnedFollowingTransaction');
+    const acquiredCode = _xmlValue(b, 'transactionAcquiredDisposedCode');  // 'A' or 'D'
+    return {
+      tradeDate:    date,
+      transactionCode: code,
+      shares:       shares != null ? parseInt(shares, 10) : null,
+      pricePerShare: price != null ? parseFloat(price) : null,
+      postShares:   post != null ? parseInt(post, 10) : null,
+      // For 'P' transactions we expect acquiredDisposed='A' (acquired);
+      // 'S' should be 'D' (disposed). We trust the transactionCode primarily.
+      acquiredDisposed: acquiredCode,
+    };
+  });
+}
+
+async function getInsiderTransactions(ticker, { maxFilings = 30, sinceDate = null } = {}) {
+  const cik = await getCIK(ticker);
+  if (!cik) return null;
+
+  const cacheKey = `sec:insider:${cik.cik}:${maxFilings}:${sinceDate || 'all'}`;
+  const cached = cacheGet(cacheKey, TTL_INSIDER);
+  if (cached) return cached;
+
+  // Submissions endpoint already pulled by getFilingMarkers / getCompanyFacts.
+  // We hit it again here but it's cache-friendly within a session.
+  const data = await _secFetch(`https://data.sec.gov/submissions/CIK${cik.cik}.json`)
+    .catch(() => null);
+  if (!data?.filings?.recent) return [];
+
+  const recent = data.filings.recent;
+  const cikNum = String(parseInt(cik.cik, 10));  // un-padded for the Archives URL
+
+  // Find Form 4 indices — both 'plain' and amendments ('4/A') count.
+  const indices = [];
+  for (let i = 0; i < (recent.form || []).length; i++) {
+    if (recent.form[i] !== '4' && recent.form[i] !== '4/A') continue;
+    if (sinceDate && recent.filingDate[i] < sinceDate) continue;
+    indices.push(i);
+    if (indices.length >= maxFilings) break;
+  }
+  if (!indices.length) {
+    cacheSet(cacheKey, []);
+    return [];
+  }
+
+  // Fetch each Form 4's primary XML and parse. Done sequentially with a
+  // small delay to respect SEC's 10 req/sec ceiling — we share that
+  // budget with everything else hitting EDGAR.
+  //
+  // URL note: SEC's submissions endpoint returns `primaryDocument` like
+  //   xslF345X06/wk-form4_1774386816.xml
+  // The `xslF345X06/` segment is the HTML viewer wrapper SEC injects for
+  // browser viewing. The RAW XML — which is what we need to parse — lives
+  // at the same path WITHOUT the xslF345X06/ prefix:
+  //   wk-form4_1774386816.xml
+  // Strip that prefix before building the URL.
+  const rows = [];
+  for (const i of indices) {
+    const accDashed = recent.accessionNumber[i];
+    const accNoDash = accDashed.replace(/-/g, '');
+    let primary = recent.primaryDocument[i] || '';
+    if (!primary) continue;
+    // Strip xslF345X0(N)/ wrapper → raw XML path. Form 3, 4, 5 all use
+    // this rendering convention.
+    primary = primary.replace(/^xslF345X\d+\//, '');
+    const url = `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accNoDash}/${primary}`;
+    let xml;
+    try { xml = await _secFetchText(url); }
+    catch (e) { continue; /* one bad filing shouldn't kill the whole pull */ }
+
+    // Form 4 wraps payload in <ownershipDocument>. Anything else means
+    // SEC served the HTML rendering instead of the raw XML — skip it.
+    if (!/<ownershipDocument/.test(xml)) continue;
+
+    // Insider info: take FIRST reportingOwner. Multi-owner Form 4s
+    // (rare — filed by joint trusts) end up using the first as the
+    // representative; the granular owner names are available in the
+    // raw XML if a future feature wants them.
+    const ownerBlocks = [];
+    const ownerRe = /<reportingOwner[^>]*>([\s\S]*?)<\/reportingOwner>/g;
+    let om;
+    while ((om = ownerRe.exec(xml)) !== null) ownerBlocks.push(om[1]);
+    const owner = ownerBlocks.length ? _parseOwner(ownerBlocks[0]) : { name: null };
+
+    const filedAt = recent.filingDate[i];
+    const txs = _parseTransactions(xml);
+    for (const tx of txs) {
+      if (!tx.tradeDate || !tx.transactionCode) continue;
+      const shares = tx.shares || 0;
+      const price  = tx.pricePerShare || 0;
+      // Sign: buys positive, sells negative. Other codes (grants, gifts,
+      // option ex) keep the unsigned absolute value — UI/signal logic
+      // looks at transactionCode separately.
+      const signedValue = tx.transactionCode === 'P' ? shares * price :
+                          tx.transactionCode === 'S' ? -shares * price :
+                          shares * price;
+      rows.push({
+        symbol: ticker.toUpperCase(),
+        filedAt,
+        tradeDate: tx.tradeDate,
+        insiderName: owner.name,
+        insiderTitle: owner.title,
+        isDirector: owner.isDirector ? 1 : 0,
+        isOfficer:  owner.isOfficer  ? 1 : 0,
+        isTenPercent: owner.isTenPct ? 1 : 0,
+        transactionCode: tx.transactionCode,
+        shares,
+        pricePerShare: price,
+        totalValue: signedValue,
+        postShares: tx.postShares,
+        accessionNumber: accDashed,
+        sourceUrl: url,
+      });
+    }
+  }
+
+  cacheSet(cacheKey, rows);
+  return rows;
+}
+
 // ─── 8-K item code → human label map ─────────────────────────────────────
 //
 // 8-K is a "material events" form companies file between quarterly reports.
@@ -470,5 +684,6 @@ module.exports = {
   getQuarterlyRevenue,
   getAnnualRevenue,
   getFilingMarkers,
+  getInsiderTransactions,
   classify8KItems,
 };
