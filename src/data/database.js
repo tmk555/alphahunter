@@ -1318,32 +1318,6 @@ function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_stop_moves_symbol ON stop_moves(symbol, attempted_at DESC);
     CREATE INDEX IF NOT EXISTS idx_stop_moves_status ON stop_moves(status, attempted_at DESC);
-
-    CREATE TABLE IF NOT EXISTS paper_trades (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      symbol        TEXT NOT NULL,
-      theme_tag     TEXT,
-      status        TEXT NOT NULL DEFAULT 'open',
-      entry_date    TEXT NOT NULL,
-      entry_price   REAL NOT NULL,
-      stop_price    REAL NOT NULL,
-      target1_price REAL,
-      target2_price REAL,
-      shares        INTEGER NOT NULL,
-      exit_date     TEXT,
-      exit_price    REAL,
-      exit_reason   TEXT,
-      pnl_pct       REAL,
-      r_multiple    REAL,
-      max_favorable REAL,
-      max_adverse   REAL,
-      source        TEXT,
-      notes         TEXT,
-      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_paper_trades_status ON paper_trades(status, entry_date DESC);
-    CREATE INDEX IF NOT EXISTS idx_paper_trades_theme  ON paper_trades(theme_tag, entry_date DESC);
-    CREATE INDEX IF NOT EXISTS idx_paper_trades_symbol ON paper_trades(symbol);
   `);
 
   // ─── 39-min VWAP submission gate ──────────────────────────────────────────

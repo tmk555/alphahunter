@@ -213,7 +213,6 @@ const strategiesRoutes    = require('./src/routes/strategies')(db);
 const telemetryRoutes     = require('./src/routes/telemetry');
 const pyramidPlansRoutes  = require('./src/routes/pyramidPlans')(runScan);
 const marketRoutes        = require('./src/routes/market');
-const paperTradesRoutes   = require('./src/routes/paper-trades');
 const dailyPlanRoutes     = require('./src/routes/daily-plan')();
 
 app.use('/api', scanRoutes);
@@ -244,7 +243,6 @@ app.use('/api', strategiesRoutes);
 app.use('/api', telemetryRoutes);
 app.use('/api', pyramidPlansRoutes);
 app.use('/api', marketRoutes);
-app.use('/api', paperTradesRoutes);
 
 // ─── SPA fallback ────────────────────────────────────────────────────────────
 // Prefer the prebuilt bundle (public/index.dist.html + public/dist/app.js)
