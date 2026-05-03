@@ -2376,20 +2376,6 @@ function StockBriefDrawer() {
               })()}
             </div>
 
-            {/* Inline chart — full StockChart embedded in the drawer so the
-                user can read the technical setup without leaving for the
-                Scanner tab. Compact height (260px) keeps the rest of the
-                drawer (catalysts, news, SEC filings) above the fold for
-                most viewports. The "↗" link in the header still goes to
-                Scanner for the full analysis with toolbar / drawing tools. */}
-            <div style={{marginBottom:12,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:6,padding:8}}>
-              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginBottom:6,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                <span>CHART</span>
-                <span style={{color:'var(--text3)',fontSize:9}}>OHLC + 50/150/200 MAs · ATR(14) on caption</span>
-              </div>
-              <StockChart symbol={symbol} height={260} />
-            </div>
-
             {/* Catalyst summary chips */}
             {Object.keys(catalysts).length > 0 && (
               <div style={{marginBottom:12}}>
