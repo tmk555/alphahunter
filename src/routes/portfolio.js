@@ -1176,6 +1176,101 @@ module.exports = function(db) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ─── Dual-trail panel — Flavor A (manual one-shot stop move) ──────────
+  //
+  // POST /api/positions/:id/move-stop  body: { newStopPrice, reason? }
+  //
+  // Updates the journal `trades.stop_price` to the user's chosen value
+  // and triggers an immediate broker sync (instead of waiting up to 15
+  // min for the next cron pass). Records the move in stop_moves for
+  // post-mortem analysis. Returns the patch result.
+  //
+  // Safety: never accepts a stop ABOVE the most recent close (would
+  // trigger immediate market sell). Dual-trail panel UI also enforces
+  // this client-side; this is the server-side safety belt.
+  router.post('/positions/:id/move-stop', async (req, res) => {
+    try {
+      const tradeId = +req.params.id;
+      const newStop = +req.body?.newStopPrice;
+      const reason  = req.body?.reason || 'manual override (dual-trail panel)';
+      if (!(newStop > 0)) {
+        return res.status(400).json({ error: 'newStopPrice required (positive number)' });
+      }
+      const trade = db.prepare('SELECT * FROM trades WHERE id = ?').get(tradeId);
+      if (!trade) return res.status(404).json({ error: 'Trade not found' });
+      if (trade.exit_date) return res.status(400).json({ error: 'Trade already closed' });
+
+      // Safety check — block stops above last close (would insta-trigger).
+      const lastBar = db.prepare(`
+        SELECT close FROM daily_bars WHERE symbol = ?
+        ORDER BY date DESC LIMIT 1
+      `).get(trade.symbol);
+      if (lastBar && newStop >= lastBar.close) {
+        return res.status(400).json({
+          error: `Stop $${newStop} is at/above last close $${lastBar.close} — would trigger immediately. Refusing to move.`,
+        });
+      }
+
+      const oldStop = trade.stop_price;
+      // Update journal first (source of truth). Broker sync follows.
+      db.prepare(`UPDATE trades SET stop_price = ? WHERE id = ?`).run(newStop, tradeId);
+
+      // Audit row — status='journal_updated' until broker sync confirms.
+      const moveLogId = db.prepare(`
+        INSERT INTO stop_moves (symbol, trade_id, old_stop, new_stop, reason, level, status)
+        VALUES (?, ?, ?, ?, ?, 'journal', 'journal_updated')
+      `).run(trade.symbol, tradeId, oldStop, newStop, reason).lastInsertRowid;
+
+      // Best-effort immediate broker sync. Failure here doesn't fail the
+      // request — the next 15-min cron will catch up. The audit row is
+      // still authoritative because we updated journal first.
+      // (sync runs across all symbols; idempotent so harmless here, just
+      // slightly more work than necessary on a single-position move.)
+      let syncResult = null, syncError = null;
+      try {
+        const { syncJournalStopsToBroker } = require('../broker/stops-sync');
+        syncResult = await syncJournalStopsToBroker({});
+        db.prepare(`UPDATE stop_moves SET status = 'synced', legs_patched = ? WHERE id = ?`)
+          .run(syncResult?.patched || 0, moveLogId);
+      } catch (e) {
+        syncError = e.message;
+        db.prepare(`UPDATE stop_moves SET status = 'sync_failed', error_message = ? WHERE id = ?`)
+          .run(e.message.slice(0, 500), moveLogId);
+      }
+
+      res.json({
+        trade_id: tradeId, symbol: trade.symbol,
+        old_stop: oldStop, new_stop: newStop,
+        sync: syncResult ? 'ok' : 'pending',
+        sync_error: syncError,
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ─── Dual-trail panel — Flavor B (lock trail strategy) ───────────────
+  //
+  // POST /api/positions/:id/trail
+  //   body: { trailStrategy, manualStopValue? }
+  //
+  // Persists the user's chosen trail strategy on the trades row. The
+  // EOD cron will use this strategy to compute the per-stage trail MA
+  // (or honor the manual stop value if strategy='manual'). Re-runs the
+  // trail compute immediately so the next /daily-plan/trail-state poll
+  // shows the new suggestion.
+  router.post('/positions/:id/trail', (req, res) => {
+    try {
+      const tradeId = +req.params.id;
+      const { trailStrategy, manualStopValue } = req.body || {};
+      const { setTradeTrailStrategy } = require('../data/trail-state-store');
+      const result = setTradeTrailStrategy(tradeId, trailStrategy, manualStopValue);
+      res.json(result);
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
   router.get('/portfolio/alpha/rolling', (req, res) => {
     try {
       const { calculateRollingSharpe, calculateRollingSortino, getEquitySnapshots } = require('../risk/alpha-tracker');
