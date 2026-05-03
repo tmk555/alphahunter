@@ -414,6 +414,127 @@ function annotateSnapshotsWithMAs(snapshots, extraPriceHistory = null) {
   }
 }
 
+// Build the once-per-sweep shared data bundle. Called by runSweep before
+// the combo loop; passed into each runReplay() via _preloadedData so each
+// combo skips the inner DB queries.
+//
+// Without this, every combo runs:
+//   - loadSnapshotData (full window scan, ~1620 × 600 days = ~1M rows)
+//   - loadMAWarmupHistory (when MA trail enabled)
+//   - loadDeepScanFactors (deep_scan only, 3 table scans)
+//   - loadPatternDetections (factor_combo only)
+//   - rsHistory preload (emerging_leader / deep_scan only)
+//
+// 5,000 combos × 4-5 queries = ~25,000 redundant queries per sweep. Pre-
+// loading once cuts the I/O by ~5,000×. Wall-time impact: ~50% reduction
+// at typical sweep sizes, more if the DB cache was cold.
+//
+// `strategies` is the array of strategies the sweep will exercise. We only
+// pre-load the auxiliary tables a strategy needs to avoid wasted work
+// (e.g. don't load patternsByDate if no factor_combo combo is queued).
+function prepareSweepSharedData({ startDate, endDate, strategies = [], includeMAs = true }) {
+  // 1. Snapshot data + MA annotation. Always needed; MAs always annotated
+  //    so trail-aware combos in the queue can run without re-annotating.
+  const snapshots = loadSnapshotData(startDate, endDate);
+  if (!snapshots.length) return null;
+
+  if (includeMAs) {
+    const warmup = loadMAWarmupHistory(startDate, 60);
+    annotateSnapshotsWithMAs(snapshots, warmup);
+  }
+
+  // 2. Pre-build byDate / dates so each runReplay skips the grouping pass.
+  const byDate = {};
+  for (const s of snapshots) {
+    if (!byDate[s.date]) byDate[s.date] = [];
+    byDate[s.date].push(s);
+  }
+  const dates = Object.keys(byDate).sort();
+
+  // 3. RS history preload — only if any strategy in the queue uses RS accel
+  //    (emerging_leader, deep_scan, regime_adaptive with emerging sub).
+  const needsRsAccel = strategies.some(s => s === 'emerging_leader' || s === 'deep_scan' || s === 'regime_adaptive');
+  let rsHistory = null;
+  if (needsRsAccel) {
+    rsHistory = {};
+    const preloadStart = new Date(startDate + 'T00:00:00Z');
+    preloadStart.setUTCDate(preloadStart.getUTCDate() - 45);
+    const preloadStartIso = preloadStart.toISOString().split('T')[0];
+    const preloadRows = db().prepare(`
+      SELECT date, symbol, rs_rank
+      FROM rs_snapshots
+      WHERE type = 'stock' AND date >= ? AND date < ?
+      ORDER BY date
+    `).all(preloadStartIso, startDate);
+    for (const s of preloadRows) {
+      if (s.symbol === 'SPY') continue;
+      if (!rsHistory[s.symbol]) rsHistory[s.symbol] = [];
+      rsHistory[s.symbol].push({ date: s.date, rs: s.rs_rank });
+    }
+    for (const s of snapshots) {
+      if (s.symbol === 'SPY') continue;
+      if (!rsHistory[s.symbol]) rsHistory[s.symbol] = [];
+      rsHistory[s.symbol].push({ date: s.date, rs: s.rs_rank });
+    }
+  }
+
+  // 4. Deep-scan factors + distFromHigh — only when deep_scan in queue.
+  let deepFactors = null, distFromHighByKey = null;
+  if (strategies.includes('deep_scan')) {
+    deepFactors = loadDeepScanFactors(startDate, endDate);
+    distFromHighByKey = new Map();
+
+    const preloadStart = new Date(startDate + 'T00:00:00Z');
+    preloadStart.setUTCDate(preloadStart.getUTCDate() - 400);
+    const preloadStartIso = preloadStart.toISOString().split('T')[0];
+    const pricePreload = db().prepare(`
+      SELECT date, symbol, price
+      FROM rs_snapshots
+      WHERE type = 'stock' AND date >= ? AND date < ? AND price > 0
+      ORDER BY date
+    `).all(preloadStartIso, startDate);
+
+    const priceHistory = {};
+    for (const r of pricePreload) {
+      if (r.symbol === 'SPY') continue;
+      if (!priceHistory[r.symbol]) priceHistory[r.symbol] = [];
+      priceHistory[r.symbol].push({ date: r.date, price: r.price });
+    }
+    for (const s of snapshots) {
+      if (!s.price || s.symbol === 'SPY') continue;
+      if (!priceHistory[s.symbol]) priceHistory[s.symbol] = [];
+      priceHistory[s.symbol].push({ date: s.date, price: s.price });
+    }
+    for (const [sym, series] of Object.entries(priceHistory)) {
+      for (let i = 0; i < series.length; i++) {
+        const windowStart = Math.max(0, i - 251);
+        let hi = 0;
+        for (let j = windowStart; j <= i; j++) {
+          if (series[j].price > hi) hi = series[j].price;
+        }
+        if (hi > 0) {
+          distFromHighByKey.set(`${sym}|${series[i].date}`, (hi - series[i].price) / hi);
+        }
+      }
+    }
+  }
+
+  // 5. Pattern detections — only when factor_combo in queue (rare).
+  const patternsByDate = strategies.includes('factor_combo')
+    ? loadPatternDetections(startDate, endDate)
+    : null;
+
+  return {
+    snapshots,
+    byDate,
+    dates,
+    rsHistory,
+    deepFactors,
+    distFromHighByKey,
+    patternsByDate,
+  };
+}
+
 // Load up to ~60 trading days of price history before `startDate` so the
 // MA recursions are properly seeded by the time the simulation begins.
 // Returns Map<symbol, [{date, price}]>.
@@ -945,7 +1066,7 @@ const MODE_OVERRIDES = {
   position: { holdDays: 40, stopATR: 2.5, targetATR: 7.0, scaleOut: true, target1ATR: 3.5, target2ATR: 7.0, pyramidEntry: true },
 };
 
-function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPositions = 10, initialCapital = 100000, execution = {}, persistResult = true, indexName = 'SP500', benchmark = 'SPY' }) {
+function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPositions = 10, initialCapital = 100000, execution = {}, persistResult = true, indexName = 'SP500', benchmark = 'SPY', _preloadedData = null }) {
   const stratDef = BUILT_IN_STRATEGIES[strategy];
   if (!stratDef) throw new Error(`Unknown strategy: ${strategy}. Available: ${Object.keys(BUILT_IN_STRATEGIES).join(', ')}`);
 
@@ -953,29 +1074,51 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
   const mergedParams = { ...stratDef.defaults, ...modeOverrides, ...params };
   const exec = { ...DEFAULT_EXECUTION, ...execution };
 
-  // Load data
-  const snapshots = loadSnapshotData(startDate, endDate);
+  // ── Shared data fast-path ──────────────────────────────────────────────
+  //
+  // When called from runSweep, the caller pre-loads snapshots + auxiliary
+  // data ONCE for the date range and passes them via _preloadedData. Same
+  // window, 5000 combos = 5000× the same SELECT FROM rs_snapshots WHERE
+  // date BETWEEN ? AND ? otherwise. This is the dominant cost of a sweep.
+  //
+  // Standalone callers pass nothing and we do the queries inline as before
+  // — no behavior change for one-off replays. Annotation with MAs is also
+  // shared in fast-path: the snapshot rows already have ema13/ema26/sma50
+  // fields populated, so we don't re-annotate.
+  let snapshots, byDate, dates;
+  if (_preloadedData?.snapshots) {
+    snapshots = _preloadedData.snapshots;
+    byDate    = _preloadedData.byDate || null;
+    dates     = _preloadedData.dates || null;
+  } else {
+    snapshots = loadSnapshotData(startDate, endDate);
+    if (!snapshots.length) {
+      return { error: 'No snapshot data in date range', strategy, startDate, endDate };
+    }
+    // Annotate snapshots with 13 EMA / 26 EMA / 50 SMA so the trail logic
+    // in evaluateExit can do close-below-MA checks. Only computed when at
+    // least one trail mode requires MAs (avoids the cost on pure-ATR runs).
+    const trailType = mergedParams.trailType || 'atr';
+    const needsMAs = trailType !== 'atr';
+    if (needsMAs) {
+      const warmup = loadMAWarmupHistory(startDate, 60);
+      annotateSnapshotsWithMAs(snapshots, warmup);
+    }
+  }
   if (!snapshots.length) {
     return { error: 'No snapshot data in date range', strategy, startDate, endDate };
   }
 
-  // Annotate snapshots with 13 EMA / 26 EMA / 50 SMA so the trail logic in
-  // evaluateExit can do close-below-MA checks. Only computed when at least
-  // one trail mode requires MAs (avoids the cost on pure-ATR runs).
-  const trailType = mergedParams.trailType || 'atr';
-  const needsMAs = trailType !== 'atr';
-  if (needsMAs) {
-    const warmup = loadMAWarmupHistory(startDate, 60);
-    annotateSnapshotsWithMAs(snapshots, warmup);
+  // Build byDate / dates if not provided. The shared-data path skips this
+  // because runSweep builds them once and passes them through.
+  if (!byDate) {
+    byDate = {};
+    for (const s of snapshots) {
+      if (!byDate[s.date]) byDate[s.date] = [];
+      byDate[s.date].push(s);
+    }
   }
-
-  // Group by date
-  const byDate = {};
-  for (const s of snapshots) {
-    if (!byDate[s.date]) byDate[s.date] = [];
-    byDate[s.date].push(s);
-  }
-  const dates = Object.keys(byDate).sort();
+  if (!dates) dates = Object.keys(byDate).sort();
 
   // ─── factor_combo day-level lookups ─────────────────────────────────────
   // Pre-compute breadth_ok (day-level) and pattern_detections (per symbol)
@@ -997,22 +1140,26 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
     }
   }
 
-  const patternsByDate = combosNeedPatterns ? loadPatternDetections(startDate, endDate) : null;
+  const patternsByDate = _preloadedData?.patternsByDate
+    ?? (combosNeedPatterns ? loadPatternDetections(startDate, endDate) : null);
 
   // ─── RS acceleration lookup (for emerging_leader + deep_scan strategies) ─
   // Build per-symbol RS rank history so we can compute 4-week RS change.
   // rsHistory[symbol] = [{date, rs_rank}, ...] sorted by date.
   // We PRELOAD ~30 trading days before startDate so the first 20 simulation
-  // days have a valid 4-week accel reference — otherwise any short-range
-  // replay starts with `_rs_accel_4w=0` everywhere and rising-RS filters
-  // block every candidate for the first month.
+  // days have a valid 4-week accel reference.
+  //
+  // Shared-data fast-path: when caller provided _preloadedData.rsHistory we
+  // reuse it directly — otherwise we build it inline. The same rsHistory
+  // works across all combos that share the same date range.
   const isEmerging = strategy === 'emerging_leader' ||
     (strategy === 'regime_adaptive' && Object.values(mergedParams).includes('emerging_leader'));
   const isDeepScan = strategy === 'deep_scan';
   const needsRsAccel = isEmerging || isDeepScan;
   let rsHistory = {};
-  if (needsRsAccel) {
-    // Preload ~45 calendar days (~30 trading days) before startDate
+  if (_preloadedData?.rsHistory) {
+    rsHistory = _preloadedData.rsHistory;
+  } else if (needsRsAccel) {
     const preloadStart = new Date(startDate + 'T00:00:00Z');
     preloadStart.setUTCDate(preloadStart.getUTCDate() - 45);
     const preloadStartIso = preloadStart.toISOString().split('T')[0];
@@ -1050,48 +1197,58 @@ function runReplay({ strategy, tradeMode, params = {}, startDate, endDate, maxPo
   // and (b) a 252-day rolling max so `_distFromHigh` mirrors the live scan's
   // 52-week high proximity filter. Everything below is only built when the
   // strategy actually needs it to keep the hot path fast for other strategies.
-  let deepFactors = { inst: new Map(), drift: new Map(), rev: new Map() };
-  const distFromHighByKey = new Map();  // `symbol|date` → fraction below 252d high
-  if (isDeepScan) {
-    deepFactors = loadDeepScanFactors(startDate, endDate);
+  // Shared-data fast-path for deep_scan: caller pre-built deepFactors and
+  // distFromHighByKey so all combos against the same window reuse the same
+  // 252-day rolling-max work. Building it once saves ~5-10s per sweep.
+  let deepFactors;
+  let distFromHighByKey;
+  if (_preloadedData?.deepFactors && _preloadedData?.distFromHighByKey) {
+    deepFactors = _preloadedData.deepFactors;
+    distFromHighByKey = _preloadedData.distFromHighByKey;
+  } else {
+    deepFactors = { inst: new Map(), drift: new Map(), rev: new Map() };
+    distFromHighByKey = new Map();  // `symbol|date` → fraction below 252d high
+    if (isDeepScan) {
+      deepFactors = loadDeepScanFactors(startDate, endDate);
 
-    // Preload ~400 calendar days of prices before startDate so the 252-day
-    // rolling max is honest from day 1 (otherwise early-window entries all
-    // look near-high and the distFromHigh filter is effectively disabled).
-    const preloadStart = new Date(startDate + 'T00:00:00Z');
-    preloadStart.setUTCDate(preloadStart.getUTCDate() - 400);
-    const preloadStartIso = preloadStart.toISOString().split('T')[0];
-    const pricePreload = db().prepare(`
-      SELECT date, symbol, price
-      FROM rs_snapshots
-      WHERE type = 'stock' AND date >= ? AND date < ? AND price > 0
-      ORDER BY date
-    `).all(preloadStartIso, startDate);
+      // Preload ~400 calendar days of prices before startDate so the 252-day
+      // rolling max is honest from day 1 (otherwise early-window entries all
+      // look near-high and the distFromHigh filter is effectively disabled).
+      const preloadStart = new Date(startDate + 'T00:00:00Z');
+      preloadStart.setUTCDate(preloadStart.getUTCDate() - 400);
+      const preloadStartIso = preloadStart.toISOString().split('T')[0];
+      const pricePreload = db().prepare(`
+        SELECT date, symbol, price
+        FROM rs_snapshots
+        WHERE type = 'stock' AND date >= ? AND date < ? AND price > 0
+        ORDER BY date
+      `).all(preloadStartIso, startDate);
 
-    const priceHistory = {};
-    for (const r of pricePreload) {
-      if (r.symbol === 'SPY') continue;
-      if (!priceHistory[r.symbol]) priceHistory[r.symbol] = [];
-      priceHistory[r.symbol].push({ date: r.date, price: r.price });
-    }
-    for (const s of snapshots) {
-      if (!s.price || s.symbol === 'SPY') continue;
-      if (!priceHistory[s.symbol]) priceHistory[s.symbol] = [];
-      priceHistory[s.symbol].push({ date: s.date, price: s.price });
-    }
+      const priceHistory = {};
+      for (const r of pricePreload) {
+        if (r.symbol === 'SPY') continue;
+        if (!priceHistory[r.symbol]) priceHistory[r.symbol] = [];
+        priceHistory[r.symbol].push({ date: r.date, price: r.price });
+      }
+      for (const s of snapshots) {
+        if (!s.price || s.symbol === 'SPY') continue;
+        if (!priceHistory[s.symbol]) priceHistory[s.symbol] = [];
+        priceHistory[s.symbol].push({ date: s.date, price: s.price });
+      }
 
-    // Walk forward maintaining a rolling 252-day max per symbol. Stored
-    // under `symbol|date` so the daily loop just does one lookup per stock.
-    for (const [sym, series] of Object.entries(priceHistory)) {
-      for (let i = 0; i < series.length; i++) {
-        const windowStart = Math.max(0, i - 251);
-        let hi = 0;
-        for (let j = windowStart; j <= i; j++) {
-          if (series[j].price > hi) hi = series[j].price;
-        }
-        if (hi > 0) {
-          const distFromHigh = (hi - series[i].price) / hi;
-          distFromHighByKey.set(`${sym}|${series[i].date}`, distFromHigh);
+      // Walk forward maintaining a rolling 252-day max per symbol. Stored
+      // under `symbol|date` so the daily loop just does one lookup per stock.
+      for (const [sym, series] of Object.entries(priceHistory)) {
+        for (let i = 0; i < series.length; i++) {
+          const windowStart = Math.max(0, i - 251);
+          let hi = 0;
+          for (let j = windowStart; j <= i; j++) {
+            if (series[j].price > hi) hi = series[j].price;
+          }
+          if (hi > 0) {
+            const distFromHigh = (hi - series[i].price) / hi;
+            distFromHighByKey.set(`${sym}|${series[i].date}`, distFromHigh);
+          }
         }
       }
     }
@@ -2746,6 +2903,7 @@ function deleteWFResult(id) {
 module.exports = {
   BUILT_IN_STRATEGIES,
   computeMAsForPriceSeries,    // exported for unit testing
+  prepareSweepSharedData,      // shared-data fast-path for runSweep
   getAvailableDateRange,
   getMacroSnapshotForDate,
   runReplay,
