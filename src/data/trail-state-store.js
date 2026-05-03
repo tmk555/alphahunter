@@ -22,6 +22,27 @@
 //
 // The user reads this through Daily Plan's "EXITS PENDING" panel each
 // morning — one click closes flagged positions.
+//
+// ─── OPEN QUESTION: staged vs fixed_ma50 ──────────────────────────────
+// This module implements the canonical Minervini staged_position trail
+// (birth → 13EMA → 26EMA → 50SMA). That choice is currently a HYPOTHESIS,
+// not a confirmed winner. Sweep #31 (2024-26 window) showed `fixed_ma50`
+// (always-trail-50SMA-from-day-1) BEAT `staged_position` head-to-head.
+// The simpler trail printed +99% after-tax alpha; the staged escalator
+// did not make the leaderboard. Likely cause: 13EMA exits too tight on
+// normal 5-7% pullbacks that big winners need to survive.
+//
+// We're waiting on sweep #29 (2017-19) and #30 (2020-22) to settle the
+// regime question. If staged_position only wins in chop years and
+// fixed_ma50 wins in trend years, the right answer is regime-conditional
+// (read regime once at trade open, lock the trail mode for the trade's
+// life). If fixed_ma50 wins everywhere, this module should be rewritten
+// to drop the stage logic entirely.
+//
+// DO NOT delete the staged logic until #29 and #30 results land. But
+// don't take "this is what live uses" as evidence the staged approach
+// is right — it's what we built first, not what the data picked.
+// ──────────────────────────────────────────────────────────────────────
 
 const { getDB } = require('./database');
 const { computeMAsForPriceSeries } = require('../signals/replay');
