@@ -17,6 +17,47 @@ const { yahooQuote, getYahooCrumb } = require('../data/providers/yahoo');
 // existed in manager.js but never reached the Levels card.
 const { getFundamentals } = require('../data/providers/manager');
 
+// POST /api/fundamentals/bulk
+//
+// Triggers a getFundamentals() pass for each ticker in the body, which
+// populates fundamentals_snapshot via the upsert in providers/manager.js.
+// Used to bootstrap the snapshot table for the CAN SLIM 6/6 filter chip
+// — without it, only stocks the user has viewed individually appear.
+//
+// Rate-limited at 4 concurrent (Yahoo throttles aggressively; SEC EDGAR
+// is public-good so we keep it polite). 50 stocks ≈ ~30-60 sec.
+router.post('/fundamentals/bulk', async (req, res) => {
+  const tickers = Array.isArray(req.body?.tickers) ? req.body.tickers.map(t => String(t).toUpperCase()).slice(0, 100) : [];
+  if (!tickers.length) return res.status(400).json({ error: 'tickers array required' });
+
+  let fetched = 0, failed = 0;
+  const errors = [];
+  const concurrency = 4;
+  let idx = 0;
+  async function worker() {
+    while (idx < tickers.length) {
+      const i = idx++;
+      const sym = tickers[i];
+      try {
+        const data = await getFundamentals(sym);
+        if (data) fetched++;
+        else { failed++; errors.push({ sym, err: 'no_data' }); }
+      } catch (e) {
+        failed++;
+        errors.push({ sym, err: e.message?.slice(0, 80) || 'error' });
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: concurrency }, worker));
+
+  res.json({
+    requested: tickers.length,
+    fetched,
+    failed,
+    errors: errors.slice(0, 10),  // cap error list for response size
+  });
+});
+
 // GET /api/fundamentals/:ticker
 router.get('/fundamentals/:ticker', async (req, res) => {
   const sym = req.params.ticker.toUpperCase();

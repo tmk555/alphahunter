@@ -5251,6 +5251,47 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             </button>
           )}
           <span style={{fontSize:11,color:'var(--text3)',marginLeft:4}}>{filtered.length} shown</span>
+
+          {/* Bulk fundamentals refresh — populates fundamentals_snapshot
+              for top-conviction names so the CS6 chip filter works
+              across more than just stocks the user has individually
+              viewed. Visible only when CS6 chip is active so it doesn't
+              add noise for users who don't need it. */}
+          {sigFilters.has('CS6') && (() => {
+            const cs6Coverage = (rsData || []).filter(s => s.canSlimScore != null).length;
+            return (
+              <span style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
+                <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}
+                      title={`CS6 coverage: ${cs6Coverage} stocks have a cached canSlimScore. Click 'Refresh' to fetch top 50 by conviction (~30-60 sec).`}>
+                  data: <strong style={{color:cs6Coverage>=20?'var(--green)':cs6Coverage>=5?'var(--amber)':'var(--red)'}}>{cs6Coverage}</strong>/{(rsData||[]).length}
+                </span>
+                <button
+                  onClick={async () => {
+                    // Top 50 by convictionScore — they're the names most worth
+                    // gating on a real CAN SLIM check. Fetching all 2000+ would
+                    // take ~20 min and hit Yahoo throttles.
+                    const top = (rsData || []).slice().sort((a,b)=> (b.convictionScore||0) - (a.convictionScore||0)).slice(0, 50);
+                    const tickers = top.map(s => s.ticker);
+                    if (!tickers.length) return;
+                    window.showToast?.('CS6', `Fetching fundamentals for ${tickers.length} top names — takes ~30-60 sec...`);
+                    try {
+                      const r = await api('/api/fundamentals/bulk', {
+                        method: 'POST',
+                        headers: {'Content-Type':'application/json'},
+                        body: JSON.stringify({ tickers }),
+                      });
+                      window.showToast?.('CS6', `Fetched ${r.fetched}/${r.requested} · failed ${r.failed}. Re-run scan to see updated chip results.`);
+                    } catch (e) {
+                      window.showToast?.('CS6', e.message || 'Bulk fetch failed', true);
+                    }
+                  }}
+                  style={{padding:'3px 10px',fontSize:10,fontFamily:'var(--font-mono)',background:'transparent',color:'var(--gold)',border:'1px solid var(--gold)',borderRadius:3,cursor:'pointer',fontWeight:700}}
+                  title="Fetches CAN SLIM data for the top 50 stocks by conviction score. Updates fundamentals_snapshot table so the CS6 chip filter sees them. ~30-60 sec.">
+                  🔄 Refresh CS6 (top 50)
+                </button>
+              </span>
+            );
+          })()}
         </div>
 
         {/* Strategy filter — replay engine entry criteria + ranking */}
