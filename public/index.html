@@ -3424,7 +3424,47 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
       )}
       {ma50Note && <div style={{fontSize:10,color:'var(--text3)',marginBottom:6}} title="Structural reference only — no longer used as the stop anchor. Stops are pure ATR-based to match the backtest preset.">{ma50Note}</div>}
       <div style={{fontSize:10,color:'var(--text3)'}}>
-        IBD RS: <strong style={{color:'var(--text)'}}>{s.rsRank}</strong> ·
+        IBD RS: <strong style={{color:'var(--text)'}}>{s.rsRank}</strong>
+        {/* Multi-timeframe RS — daily(=IBD RS) / weekly / monthly bar
+            resolutions. tfAlign counts how many are ≥80. A stock strong
+            on all three is a durable leader; daily-only is a recent pop. */}
+        {(s.rsRankWeekly != null || s.rsRankMonthly != null) && (
+          <span title={`Daily RS ${s.rsRank} · Weekly RS ${s.rsRankWeekly ?? '—'} · Monthly RS ${s.rsRankMonthly ?? '—'} · TF align ${s.rsTimeframeAlignment ?? 0}/3 (count of timeframes ≥ 80)`}
+                style={{color:'var(--text3)'}}>
+            {' '}(W <strong style={{color:(s.rsRankWeekly||0)>=80?'var(--green)':'var(--text2)'}}>{s.rsRankWeekly ?? '—'}</strong>
+            {' '}M <strong style={{color:(s.rsRankMonthly||0)>=80?'var(--green)':'var(--text2)'}}>{s.rsRankMonthly ?? '—'}</strong>
+            {s.rsTimeframeAlignment != null && (
+              <span style={{color:s.rsTimeframeAlignment>=3?'var(--green)':s.rsTimeframeAlignment>=2?'var(--amber)':'var(--text3)',fontWeight:700}}>
+                {' '}TF{s.rsTimeframeAlignment}/3
+              </span>
+            )}
+            )
+          </span>
+        )}
+        {/* RS-rank change over time — emerging-leader signal.
+            vs4w +5 or higher with rsRank 65-79 = the canonical
+            "buy before RS hits 80" entry zone. */}
+        {(s.rsTrend?.vs4w != null || s.rsTrend?.vs3m != null) && (
+          <span title={`RS rank change: vs 1w ago ${s.rsTrend?.vs1w ?? '—'} · vs 4w ${s.rsTrend?.vs4w ?? '—'} · vs 3m ${s.rsTrend?.vs3m ?? '—'}. Positive = gaining ground vs all peers.`}
+                style={{color:'var(--text3)'}}>
+            {' '}[
+            {s.rsTrend?.vs4w != null && (
+              <span style={{color:s.rsTrend.vs4w>3?'var(--green)':s.rsTrend.vs4w<-3?'var(--red)':'var(--text2)',fontWeight:600}}>
+                4w {s.rsTrend.vs4w>0?'+':''}{s.rsTrend.vs4w}
+              </span>
+            )}
+            {s.rsTrend?.vs3m != null && (
+              <>
+                {' · '}
+                <span style={{color:s.rsTrend.vs3m>5?'var(--green)':s.rsTrend.vs3m<-5?'var(--red)':'var(--text2)',fontWeight:600}}>
+                  3m {s.rsTrend.vs3m>0?'+':''}{s.rsTrend.vs3m}
+                </span>
+              </>
+            )}
+            ]
+          </span>
+        )}
+        {' '}·{' '}
         SwingMom: <strong style={{color:'var(--text)'}}>{s.swingMomentum}</strong> ·
         Vol: <strong style={{color:'var(--text)'}}>{s.volumeRatio?.toFixed(2)}x</strong> ·
         {s.earningsDate && <span style={{color:'var(--amber)'}}> ⚠ Earnings: {s.earningsDate} ({s.daysToEarnings}d)</span>}
