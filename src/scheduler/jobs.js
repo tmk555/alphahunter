@@ -935,6 +935,72 @@ registerJobType('revision_scan', {
   },
 });
 
+// ─── Fundamentals Refresh — Nightly CAN SLIM cache populator ────────────────
+// Runs after market close to fetch fundamentals for top-N RS stocks. Each
+// fetch upserts into fundamentals_snapshot via providers/manager.js, which
+// the scanner then reads in bulk to attach canSlimScore to rsData rows.
+// Without this, the CS6 chip filter only sees stocks the user has individually
+// viewed via the Fundamentals card — so a name like MTZ that's legitimately
+// 6/6 doesn't appear in CS6 results.
+//
+// Why topN=200: the canSlimScore is decision-grade gating for the names
+// you actually act on. Top-200 by RS gives comfortable headroom over the
+// ~50 names you might tier-1/2 or scan-screen on a given week. Full universe
+// (~2000 stocks) at concurrency=4 + 250ms throttle would take ~17 min and
+// hit Yahoo's rate-limit; top-200 takes ~2-3 min and stays well under the
+// throttle ceiling. Yahoo also tends to return null for low-RS micro-caps
+// (Yahoo doesn't have analyst coverage), so the marginal coverage benefit
+// of going beyond top-200 is small.
+registerJobType('fundamentals_refresh', {
+  description: 'Pre-fetch CAN SLIM fundamentals for top-N RS stocks (powers CS6 chip filter)',
+  defaultConfig: { topN: 200 },
+  handler: async (config = {}) => {
+    const { getFundamentals } = require('../data/providers/manager');
+    const { cacheGet } = require('../data/cache');
+    const topN = +config.topN || 200;
+
+    const cached = cacheGet('rs:full', 60 * 60 * 1000);
+    if (!cached || !cached.length) {
+      return { error: 'No scan results cached. Run rs_scan first.' };
+    }
+
+    const tickers = cached
+      .slice()
+      .sort((a, b) => (b.rsRank || 0) - (a.rsRank || 0))
+      .slice(0, topN)
+      .map(s => s.ticker);
+
+    let fetched = 0, failed = 0, score6 = 0;
+    const concurrency = 4;
+    let idx = 0;
+    async function worker() {
+      while (idx < tickers.length) {
+        const i = idx++;
+        const sym = tickers[i];
+        try {
+          const data = await getFundamentals(sym);
+          if (data) {
+            fetched++;
+            if ((data.canSlimScore || 0) >= 6) score6++;
+          } else { failed++; }
+        } catch (_) { failed++; }
+        // Polite pause between calls within each worker (Yahoo gets touchy
+        // around 5/sec sustained; 250ms × 4 workers = 16 calls/sec peak,
+        // which Yahoo tolerates but tighter would invite throttling).
+        await new Promise(r => setTimeout(r, 250));
+      }
+    }
+    await Promise.all(Array.from({ length: concurrency }, worker));
+
+    return {
+      attempted: tickers.length,
+      fetched,
+      failed,
+      canSlimSix: score6,    // count of names that came back as 6/6
+    };
+  },
+});
+
 // ─── 14. Morning Brief — Pre-market push notification ─────────────────────
 // Assembles regime status, distribution days, FTD, open positions with P&L,
 // staged orders, and top scan picks into a single push to Telegram/Pushover.
@@ -1416,6 +1482,19 @@ const DEFAULT_JOBS = [
     job_type: 'revision_scan',
     cron_expression: '0 17 * * 1-5',  // 5:00 PM server local, weekdays
     config: { topN: 100 },
+  },
+
+  // Fundamentals refresh — nightly after market close. Pre-fetches CAN
+  // SLIM fundamentals for top-200 by RS so the CS6 chip filter on the
+  // Scanner has data without requiring the user to view each stock
+  // individually. Runs at 5:30 PM ET (after revision_scan finishes its
+  // 5:00 PM ET pass to avoid Yahoo throttle stacking).
+  {
+    name: 'fundamentals_refresh_daily',
+    description: 'Pre-fetch CAN SLIM fundamentals for top 200 by RS (powers CS6 chip)',
+    job_type: 'fundamentals_refresh',
+    cron_expression: '30 17 * * 1-5',  // 5:30 PM server local, weekdays
+    config: { topN: 200 },
   },
 
   // Industry rotation watcher — daily post-close. If an open position's
