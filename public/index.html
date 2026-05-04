@@ -15917,7 +15917,7 @@ function TradesTab({ rsData, badgeCounts }) {
   }, [sub]);
 
   const SUBS = [
-    { k:'staged', label:'📋 Staged', tip:'Pre-submission queue — orders staged from Trade Setups awaiting your final approval before they hit the broker.',
+    { k:'staged', label:'📋 Staged', tip:'Pre-submission queue — bracket orders auto-staged from Daily Plan SUBMIT or Trade Setups. Click "Submit to broker" on each row to fire it at Alpaca.',
       badge: badgeCounts.staged || null },
     { k:'open',   label:'💼 Open',   tip:'Live broker positions — what Alpaca actually holds right now plus the journal sibling-tranche detail.',
       badge: badgeCounts.positions || null },
@@ -15959,8 +15959,14 @@ function TradesTab({ rsData, badgeCounts }) {
         </div>
       </div>
 
-      {sub === 'staged' && <WatchlistTab rsData={rsData} />}
-      {sub === 'open'   && <><PortfolioTab /><StrategiesSection /><ExecutionTab /></>}
+      {/* "Staged" = bracket orders queued at the broker, NOT the watchlist.
+          Pre-fix: Staged sub-tab rendered WatchlistTab (tier-1/2/3 list)
+          which had nothing to do with broker order submission — and the
+          actual staged-orders list with the Submit button was buried
+          under "Open" alongside live positions. Watchlist still has its
+          own top-level tab in the DECIDE group. */}
+      {sub === 'staged' && <ExecutionTab />}
+      {sub === 'open'   && <><PortfolioTab /><StrategiesSection /></>}
       {sub === 'closed' && <><PerformanceTab /><TradeJournalTab /></>}
     </div>
   );
