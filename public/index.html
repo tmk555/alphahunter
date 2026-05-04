@@ -14495,20 +14495,38 @@ function DailyPlanTab({ rsData, rsLoaded }) {
     }
   }
 
-  // Submit also stages a bracket order. If the user has an existing
-  // staging endpoint we call it; otherwise just record the decision.
+  // Submit also stages a bracket order via the canonical staging endpoint.
+  //
+  // Pre-fix: this called /api/trade-setups/stage which does not exist
+  // (only /trade-setups/scan and /trade-setups/brief are real). The 404
+  // was caught and silently swallowed, so the user got an "Bracket staged"
+  // toast even though nothing actually staged. Result: SUBMIT recorded
+  // adherence but the Trades > Staged tab stayed empty.
+  //
+  // Now calls /api/staging/from-setup (the same endpoint Trade Setups +
+  // Scanner Stage buttons use) and surfaces real failures via toast so
+  // the user can see when staging fails (regime gate, sector cap, missing
+  // pivot for pyramid mode, etc.) and switch to manual.
   async function submit(symbol) {
     await decide(symbol, 'submit');
-    // Best-effort: trigger stage from setup if available. The endpoint
-    // exists in tradeSetups routes — we call by ticker.
     try {
-      await api('/api/trade-setups/stage', {
+      const r = await api('/api/staging/from-setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ticker: symbol, mode: 'position', exitStrategy: 'pyramid_auto' }),
       });
-      window.showToast?.(symbol, 'Bracket staged · open Trades to submit');
-    } catch (e) { /* staging is optional — decision was the primary record */ }
+      if (r?.staged?.id || r?.id) {
+        const shares = r?.sizing?.shares ?? r?.staged?.qty ?? '?';
+        const risk   = r?.sizing?.dollarRisk?.toFixed?.(0) ?? '?';
+        window.showToast?.(symbol, `Bracket staged · ${shares} sh · $${risk} risk · open Trades > Staged to submit`);
+      } else if (r?.error) {
+        window.showToast?.(symbol, `Stage failed: ${r.error}`, true);
+      } else {
+        window.showToast?.(symbol, 'Submit recorded; staging endpoint returned no order — stage manually from Trade Setups', true);
+      }
+    } catch (e) {
+      window.showToast?.(symbol, `Stage failed: ${e.message || 'unknown error'} — decision recorded; stage manually from Trade Setups`, true);
+    }
   }
 
   function startSkip(symbol) { setSkipReasonFor(symbol); setSkipReasonText(''); }
