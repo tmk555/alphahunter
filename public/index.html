@@ -4971,6 +4971,16 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     '🔥':  s => s.distFromHigh!=null && s.distFromHigh<=0.005,
     '⚡':  s => s.volumeSurge,
     'REV↑':s => (s.revisionScore||0) >= 50,
+    // CAN SLIM perfect score (6/6) — all six O'Neil checks pass: current
+    // earnings growth, annual earnings, new high/product/management,
+    // supply/demand (volume), leader status, institutional sponsorship,
+    // market direction. Conv:funds.canSlimScore is the source.
+    'CS6': s => (s.canSlimScore || 0) >= 6,
+    // SEPA perfect score (8/8) — Minervini's 8 stage-2 checks all pass:
+    // price > MA50, MA50 > MA150, MA150 > MA200, MA200 rising 1mo+,
+    // price >25% off 52w low, within 25% of 52w high, RS rank ≥70, base
+    // structure intact. The leader-archetype filter.
+    'SEPA8': s => (s.sepaScore || 0) >= 8,
   };
 
   const { filtered, replayTop5, replayRank } = (() => {
@@ -5171,6 +5181,8 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             {key:'🔥',  label:'🔥 At High',      title:'Within 0.5% of 52wk high right now',col:'var(--amber)'},
             {key:'⚡',  label:'⚡ Vol Surge',     title:'Volume surge ≥2× average near highs',col:'var(--amber)'},
             {key:'REV↑',label:'REV↑',            title:'Analyst estimate revisions score ≥50 — Wall Street raising EPS/revenue forecasts (future earnings catalyst)',col:'var(--green)'},
+            {key:'CS6',  label:'CAN SLIM 6/6',   title:'Perfect CAN SLIM score (6/6) — passes all six O\'Neil checks: EPS growth, annual earnings, new high/product, supply-demand, leader, institutional sponsorship.',col:'var(--gold)'},
+            {key:'SEPA8',label:'SEPA 8/8',        title:'Perfect SEPA score (8/8) — Minervini Stage-2 leader archetype: all MAs stacked + rising, price near highs, RS ≥70, base intact.',col:'var(--gold)'},
           ].map(({key,label,title,col})=>(
             <button key={key} title={title}
               onClick={()=>toggleSig(key)}
