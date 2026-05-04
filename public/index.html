@@ -4021,6 +4021,21 @@ function SectorStocks({ sectorName, rsData: propData, onClose }) {
                 {s.vcpForming && <span title={`VCP ${s.vcpCount}× contractions. Pivot $${s.vcpPivot}`} style={{color:'var(--purple)',fontWeight:700,marginRight:3}}>VCP</span>}
                 {s.stage===2 && <span title="Stage 2 Uptrend" style={{color:'var(--green)',fontWeight:700,marginRight:3}}>S2</span>}
                 {s.stage===4 && <span title="Stage 4 Downtrend — avoid" style={{color:'var(--red)',fontWeight:700,marginRight:3}}>S4</span>}
+                {/* Analyst revision signal — was previously only shown as a
+                    Strategy-table column. Now a row badge on Scanner so a
+                    "STRONG UPGRADE" name like ROKU is visible at a glance. */}
+                {s.revisionScore != null && s.revisionScore >= 70 && (
+                  <span title={`Analyst revisions ${s.revisionScore}/100 — STRONG UPGRADE. Wall Street raising EPS / revenue forecasts.`}
+                        style={{color:'var(--green)',fontWeight:700,marginRight:3}}>REV↑↑</span>
+                )}
+                {s.revisionScore != null && s.revisionScore >= 50 && s.revisionScore < 70 && (
+                  <span title={`Analyst revisions ${s.revisionScore}/100 — UPGRADE. Wall Street raising forecasts.`}
+                        style={{color:'var(--green)',fontWeight:700,marginRight:3}}>REV↑</span>
+                )}
+                {s.revisionScore != null && s.revisionScore <= 30 && (
+                  <span title={`Analyst revisions ${s.revisionScore}/100 — DOWNGRADE. Wall Street cutting forecasts.`}
+                        style={{color:'var(--red)',fontWeight:700,marginRight:3}}>REV↓</span>
+                )}
                 {s.sepaScore!=null && <span style={{color:s.sepaScore>=6?'var(--green)':s.sepaScore>=4?'var(--amber)':'var(--text3)',fontWeight:700}}>{s.sepaScore}/8</span>}
                 {!s.rsLineNewHigh&&!s.vcpForming&&s.stage!==2&&s.stage!==4&&!(s.rsRank>=70&&(s.rsTrend?.vs4w||0)>0&&s.swingMomentum>=60)&&!(s.rsTrend?.vs4w>5&&s.rsRank>=65&&s.rsRank<80)&&<span className="muted">—</span>}
               </td>
