@@ -501,6 +501,33 @@ async function getFundamentals(symbol) {
     console.log(`  Fundamentals ${symbol}: SEC-only build (Yahoo unavailable)`);
   }
 
+  // Cache the CAN-SLIM-relevant fields to fundamentals_snapshot so the
+  // scanner can attach canSlimScore to rsData rows without per-stock
+  // refetches. Best-effort; failure here doesn't break the response.
+  try {
+    const { getDB } = require('../database');
+    getDB().prepare(`
+      INSERT INTO fundamentals_snapshot
+        (symbol, can_slim_score, eps_growth_q0_yoy, eps_growth_yoy,
+         revenue_growth_yoy, short_pct_float, institution_pct,
+         return_on_equity, fetched_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(symbol) DO UPDATE SET
+        can_slim_score     = excluded.can_slim_score,
+        eps_growth_q0_yoy  = excluded.eps_growth_q0_yoy,
+        eps_growth_yoy     = excluded.eps_growth_yoy,
+        revenue_growth_yoy = excluded.revenue_growth_yoy,
+        short_pct_float    = excluded.short_pct_float,
+        institution_pct    = excluded.institution_pct,
+        return_on_equity   = excluded.return_on_equity,
+        fetched_at         = excluded.fetched_at
+    `).run(
+      symbol, canSlimScore,
+      epsGrowth_Q0_yoy, epsGrowthYoY, revenueGrowthYoY,
+      shortPercentFloat, institutionPct, returnOnEquity,
+    );
+  } catch (_) { /* snapshot write is best-effort */ }
+
   return {
     canSlimScore,
     epsDataSource,

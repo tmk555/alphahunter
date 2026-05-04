@@ -179,6 +179,28 @@ async function _runRSScanBody(UNIVERSE, SECTOR_MAP) {
     // Table missing on older DBs — silent. Scanner runs without insider data.
   }
 
+  // ─── BULK FUNDAMENTALS SNAPSHOT LOAD ──────────────────────────────────
+  // Read CAN SLIM score + supporting fields from fundamentals_snapshot in
+  // ONE query so the scanner can attach canSlimScore to rsData rows. Rows
+  // older than 7 days are ignored (stale). Symbols without a snapshot get
+  // canSlimScore=null — the CS6 chip filter will exclude them, which is
+  // correct behavior (we don't have data, can't claim a 6/6 pass).
+  const fundsBySymbol = {};
+  try {
+    const { getDB } = require('./data/database');
+    const fundsRows = getDB().prepare(`
+      SELECT symbol, can_slim_score, eps_growth_q0_yoy, eps_growth_yoy,
+             revenue_growth_yoy, short_pct_float, institution_pct,
+             return_on_equity
+        FROM fundamentals_snapshot
+       WHERE fetched_at >= datetime('now', '-7 days')
+    `).all();
+    for (const r of fundsRows) fundsBySymbol[r.symbol] = r;
+    console.log(`  RS scan: fundamentals snapshot loaded for ${fundsRows.length} symbols`);
+  } catch (e) {
+    // Table missing on older DBs — silent. Scanner runs without fundamentals snapshot.
+  }
+
   // Fetch full OHLCV history (concurrent, multi-provider).
   // Full bars needed for True ATR calculation; closes extracted for RS/momentum/VCP.
   // Bumped concurrency 5 → 10 — Yahoo's /v8/finance/chart endpoint tolerates
@@ -333,6 +355,13 @@ async function _runRSScanBody(UNIVERSE, SECTOR_MAP) {
       insiderNetDollar:  insiderBySymbol[sym]?.netDollar ?? 0,
       insiderClusterBuy: insiderBySymbol[sym]?.clusterBuy ?? false,
       insiderClusterSell: insiderBySymbol[sym]?.clusterSell ?? false,
+      // CAN SLIM score from fundamentals_snapshot (null when no recent
+      // fundamentals fetch for this symbol — chip filter excludes these
+      // since we can't claim a 6/6 pass without the data).
+      canSlimScore:    fundsBySymbol[sym]?.can_slim_score ?? null,
+      epsGrowthQ0YoY:  fundsBySymbol[sym]?.eps_growth_q0_yoy ?? null,
+      epsGrowthYoY:    fundsBySymbol[sym]?.eps_growth_yoy ?? null,
+      revenueGrowthYoY: fundsBySymbol[sym]?.revenue_growth_yoy ?? null,
     });
   }
 

@@ -376,6 +376,30 @@ function initSchema() {
   safeAddColumn('trades', 'manual_stop_value', 'REAL');
   safeAddColumn('trades', 'initial_stop_price', 'REAL');
 
+  // ─── Fundamentals snapshot ─────────────────────────────────────────────
+  // Per-symbol cache of CAN-SLIM-relevant fundamentals so the scanner can
+  // attach canSlimScore to rsData rows without re-fetching SEC + Yahoo per
+  // scan. getFundamentals() upserts into this on every call; scanner reads
+  // in bulk on each scan via a single SELECT.
+  //
+  // TTL handling: the freshness check is at read time (`fetched_at` ≥ 7
+  // days old → ignore) so a stale row doesn't poison the chip filter.
+  // Nothing to truncate; rows just become invisible after they expire.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS fundamentals_snapshot (
+      symbol            TEXT PRIMARY KEY,
+      can_slim_score    INTEGER,
+      eps_growth_q0_yoy REAL,
+      eps_growth_yoy    REAL,
+      revenue_growth_yoy REAL,
+      short_pct_float   REAL,
+      institution_pct   REAL,
+      return_on_equity  REAL,
+      fetched_at        TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_funds_snapshot_fetched ON fundamentals_snapshot(fetched_at DESC);
+  `);
+
   // Tier 5: performance attribution
   db.exec(`
     CREATE TABLE IF NOT EXISTS performance_attribution (
