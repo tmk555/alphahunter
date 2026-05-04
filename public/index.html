@@ -14332,11 +14332,15 @@ function DailyPlanTab({ rsData, rsLoaded }) {
           priceAtDecision: live?.price || null,
         }),
       });
-      // Update the row inline without a full reload
+      // Update the row inline without a full reload. For 'pending' (Reset),
+      // also clear decidedAt + skipReason so the row visually looks fresh.
       setPlan(p => p ? {
         ...p,
         items: p.items.map(it => it.symbol === symbol
-          ? { ...it, decision, skipReason: reason, decidedAt: new Date().toISOString() }
+          ? { ...it,
+              decision,
+              skipReason: decision === 'pending' ? null : reason,
+              decidedAt:  decision === 'pending' ? null : new Date().toISOString() }
           : it),
         summary: (() => {
           const items = p.items.map(it => it.symbol === symbol
@@ -14349,7 +14353,35 @@ function DailyPlanTab({ rsData, rsLoaded }) {
           return { total, decided, pending, autoSkipped, adherenceRate: adh };
         })(),
       } : p);
-      window.showToast?.(symbol, `Decision: ${decision.toUpperCase()}`);
+      window.showToast?.(symbol, decision === 'pending' ? `${symbol}: Reset to pending` : `Decision: ${decision.toUpperCase()}`);
+    } catch (e) {
+      window.showToast?.(symbol, e.message, true);
+    }
+  }
+
+  // Remove a row from today's plan entirely. Use case: name was tier-1
+  // when the plan was seeded, then user demoted it to tier-2/3 in the
+  // Watchlist after seeing it was extended / news broke / etc. Server
+  // refuses to delete already-decided rows (preserves journal history) —
+  // user must Reset to pending first if they want to remove a decided row.
+  async function removeRow(symbol) {
+    if (!window.confirm(`Remove ${symbol} from today's plan?\n\nThis is for names you've demoted from tier-1 in the Watchlist. Already-decided rows can't be removed (preserves the journal).`)) return;
+    try {
+      await api(`/api/daily-plan/today/${encodeURIComponent(symbol)}`, { method: 'DELETE' });
+      setPlan(p => p ? {
+        ...p,
+        items: p.items.filter(it => it.symbol !== symbol),
+        summary: (() => {
+          const items = p.items.filter(it => it.symbol !== symbol);
+          const decided = items.filter(d => ['submit', 'wait', 'skip'].includes(d.decision)).length;
+          const pending = items.filter(d => d.decision === 'pending').length;
+          const autoSkipped = items.filter(d => d.decision === 'auto_skip').length;
+          const total = items.length;
+          const adh = total > 0 ? +(decided / total * 100).toFixed(1) : null;
+          return { total, decided, pending, autoSkipped, adherenceRate: adh };
+        })(),
+      } : p);
+      window.showToast?.(symbol, 'Removed from today\'s plan');
     } catch (e) {
       window.showToast?.(symbol, e.message, true);
     }
@@ -14660,7 +14692,7 @@ function DailyPlanTab({ rsData, rsLoaded }) {
 
                 {/* Decision buttons (only when pending) */}
                 {isPending && skipReasonFor !== it.symbol && (
-                  <div style={{display:'flex',gap:8}}>
+                  <div style={{display:'flex',gap:8,alignItems:'center'}}>
                     <button onClick={() => submit(it.symbol)}
                       style={{padding:'8px 18px',fontSize:12,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:0.5,background:'var(--green)',color:'#000',border:'none',borderRadius:4,cursor:'pointer'}}>
                       ✅ SUBMIT
@@ -14672,6 +14704,14 @@ function DailyPlanTab({ rsData, rsLoaded }) {
                     <button onClick={() => startSkip(it.symbol)}
                       style={{padding:'8px 18px',fontSize:12,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:0.5,background:'transparent',color:'var(--red)',border:'1px solid var(--red)',borderRadius:4,cursor:'pointer'}}>
                       ❌ SKIP
+                    </button>
+                    {/* Remove row — for names demoted out of tier-1 mid-week.
+                        Doesn't count as a decision (no skip_reason / no
+                        adherence hit), just disappears from the plan. */}
+                    <button onClick={() => removeRow(it.symbol)}
+                      title="Remove from today's plan (use when you demoted this name from tier-1 in Watchlist after the plan was seeded). Different from SKIP — doesn't count against adherence."
+                      style={{marginLeft:4,padding:'6px 10px',fontSize:11,fontFamily:'var(--font-mono)',background:'transparent',color:'var(--text3)',border:'1px solid var(--border)',borderRadius:4,cursor:'pointer'}}>
+                      ×&nbsp;Remove
                     </button>
                   </div>
                 )}

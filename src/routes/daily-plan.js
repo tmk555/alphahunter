@@ -29,6 +29,7 @@ const router  = express.Router();
 const {
   ensureTodayPlan,
   recordDecision,
+  removeFromPlan,
   autoSkipExpiredPending,
   getTodayPlan,
   getYesterdaysOutcomes,
@@ -95,6 +96,19 @@ module.exports = function() {
         return res.status(400).json({ error: 'symbol and decision required' });
       }
       const result = recordDecision(symbol, decision, { skipReason, pivotPrice, priceAtDecision });
+      res.json(result);
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  // DELETE /api/daily-plan/today/:symbol — pull a row off today's plan.
+  // Used when the user demotes a name from tier-1 to tier-2/3 in the
+  // Watchlist after the daily plan was already seeded for that name.
+  // Refuses to delete already-decided rows (preserves journal history).
+  router.delete('/daily-plan/today/:symbol', (req, res) => {
+    try {
+      const result = removeFromPlan(req.params.symbol);
       res.json(result);
     } catch (e) {
       res.status(400).json({ error: e.message });

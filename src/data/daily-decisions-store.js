@@ -128,13 +128,23 @@ function ensureTodayPlan(tier1Items) {
 
 // Record a user decision. Idempotent on (date, symbol). After cutoff,
 // pending → submit/wait/skip is still allowed but flagged late_decision.
+//
+// 'pending' is also accepted — it's the "↻ Reset" path. Clears the
+// decision back to its initial state so the user can re-decide. Pre-fix
+// the validator rejected 'pending' with "Invalid decision: pending"
+// when the user clicked Reset on a name they wanted to reconsider.
 function recordDecision(symbol, decision, { skipReason = null, pivotPrice = null, priceAtDecision = null } = {}) {
-  if (!['submit', 'wait', 'skip'].includes(decision)) {
+  if (!['submit', 'wait', 'skip', 'pending'].includes(decision)) {
     throw new Error(`Invalid decision: ${decision}`);
   }
   const date = _today();
-  const decidedAt = new Date().toISOString();
   const db = getDB();
+
+  // 'pending' = reset path: clear decided_at and skip_reason so the row
+  // is back to its initial undecided state. Decision counters in the
+  // adherence calc treat decided_at IS NULL as "not yet decided."
+  const decidedAt = decision === 'pending' ? null : new Date().toISOString();
+  const finalSkipReason = decision === 'pending' ? null : skipReason;
 
   // Use UPDATE (not REPLACE) so we don't clobber the conviction snapshot
   // captured when the row was inserted as 'pending'.
@@ -146,7 +156,7 @@ function recordDecision(symbol, decision, { skipReason = null, pivotPrice = null
            pivot_price     = COALESCE(?, pivot_price),
            price_at_decision = COALESCE(?, price_at_decision)
      WHERE date = ? AND symbol = ?
-  `).run(decision, decidedAt, skipReason, pivotPrice, priceAtDecision, date, symbol);
+  `).run(decision, decidedAt, finalSkipReason, pivotPrice, priceAtDecision, date, symbol);
 
   if (result.changes === 0) {
     // Row didn't exist — caller may not have called ensureTodayPlan.
@@ -172,6 +182,30 @@ function autoSkipExpiredPending() {
      WHERE date = ? AND decision = 'pending'
   `).run(new Date().toISOString(), date);
   return { flipped: result.changes, atCutoff: true };
+}
+
+// Remove a row from today's plan entirely. Called when the user demotes
+// a name from tier-1 to tier-2/3 in the Watchlist after the daily plan
+// was already seeded — the previously-pending row should disappear from
+// Daily Plan, not auto-skip (which would unfairly count against adherence).
+//
+// Allowed only for rows that aren't yet decided ('pending') — once you've
+// hit submit/wait/skip on a name, that decision is part of the historical
+// record and shouldn't be silently deleted. Refuses with an error in that
+// case so the journal stays consistent.
+function removeFromPlan(symbol) {
+  if (!symbol) throw new Error('symbol required');
+  const date = _today();
+  const db = getDB();
+  const row = db.prepare(`
+    SELECT decision FROM daily_decisions WHERE date = ? AND symbol = ?
+  `).get(date, symbol);
+  if (!row) return { removed: 0, reason: 'not in today\'s plan' };
+  if (row.decision !== 'pending') {
+    throw new Error(`Cannot remove '${symbol}' — already decided as '${row.decision}'. Reset to pending first if you want to remove.`);
+  }
+  const r = db.prepare(`DELETE FROM daily_decisions WHERE date = ? AND symbol = ?`).run(date, symbol);
+  return { removed: r.changes, symbol };
 }
 
 // Fetch today's plan with current decision states, sorted by conviction desc.
@@ -556,6 +590,7 @@ function getAdherenceBaseline({ days = 30 } = {}) {
 module.exports = {
   ensureTodayPlan,
   recordDecision,
+  removeFromPlan,
   autoSkipExpiredPending,
   getTodayPlan,
   getYesterdaysOutcomes,
