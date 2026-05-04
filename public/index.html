@@ -14497,28 +14497,56 @@ function DailyPlanTab({ rsData, rsLoaded }) {
 
   // Submit also stages a bracket order via the canonical staging endpoint.
   //
-  // Pre-fix: this called /api/trade-setups/stage which does not exist
-  // (only /trade-setups/scan and /trade-setups/brief are real). The 404
-  // was caught and silently swallowed, so the user got an "Bracket staged"
-  // toast even though nothing actually staged. Result: SUBMIT recorded
-  // adherence but the Trades > Staged tab stayed empty.
-  //
-  // Now calls /api/staging/from-setup (the same endpoint Trade Setups +
-  // Scanner Stage buttons use) and surfaces real failures via toast so
-  // the user can see when staging fails (regime gate, sector cap, missing
-  // pivot for pyramid mode, etc.) and switch to manual.
+  // Bug history:
+  //   v1: called /api/trade-setups/stage (does not exist) → 404 silently
+  //       swallowed, user got fake "staged" toast, no DB row.
+  //   v2: called /api/staging/from-setup with mode='position' +
+  //       exitStrategy='pyramid_auto'. Two real bugs:
+  //         (a) position-mode default sets entry = MA50×1.002 when the
+  //             stock is more than 3% extended from MA50 — i.e. it stages
+  //             a "wait-for-pullback-to-MA50" order. AVGO at $417 with
+  //             MA50 ~$347 staged at $348.42 — a 17%-below-current limit
+  //             order that would never fill on a momentum breakout.
+  //         (b) /staging/from-setup doesn't actually route pyramid_auto
+  //             into the pyramid engine — it just stores the string.
+  //             Downstream falls back to full_in_scale_out anyway, so the
+  //             "pyramid" label was lying.
+  //   v3 (this): pass entryPrice override so the staging engine doesn't
+  //       fall back to MA50 pullback. Prefer the pivot from the Daily
+  //       Plan row (set when tier-1 was curated) — that's where the user
+  //       wants entry. Fall back to live price if no pivot. Use
+  //       full_in_scale_out (an exit strategy /staging/from-setup
+  //       actually implements) instead of the silently-degraded
+  //       'pyramid_auto'. True pyramid scale-in entries should go
+  //       through the dedicated /api/pyramid-plans flow — not Daily Plan.
   async function submit(symbol) {
     await decide(symbol, 'submit');
+    const live = rsData?.find(s => s.ticker === symbol);
+    const planRow = plan?.items?.find(it => it.symbol === symbol);
+    // Pivot first, then live price. Pivot is the user's pre-committed
+    // entry intent (where they decided to act); live price is the
+    // moment-of-submit fallback. Either way avoids the MA50-pullback fallback.
+    const entryPrice = planRow?.pivotPrice || live?.price || null;
+    if (!entryPrice) {
+      window.showToast?.(symbol, 'No price available — stage manually from Trade Setups', true);
+      return;
+    }
     try {
       const r = await api('/api/staging/from-setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticker: symbol, mode: 'position', exitStrategy: 'pyramid_auto' }),
+        body: JSON.stringify({
+          ticker: symbol,
+          mode: 'position',
+          exitStrategy: 'full_in_scale_out',
+          entryPrice,
+        }),
       });
       if (r?.staged?.id || r?.id) {
         const shares = r?.sizing?.shares ?? r?.staged?.qty ?? '?';
         const risk   = r?.sizing?.dollarRisk?.toFixed?.(0) ?? '?';
-        window.showToast?.(symbol, `Bracket staged · ${shares} sh · $${risk} risk · open Trades > Staged to submit`);
+        const entry  = r?.staged?.entry_price ?? entryPrice;
+        window.showToast?.(symbol, `Bracket staged @ $${(+entry).toFixed(2)} · ${shares} sh · $${risk} risk · open Trades > Staged to submit`);
       } else if (r?.error) {
         window.showToast?.(symbol, `Stage failed: ${r.error}`, true);
       } else {
