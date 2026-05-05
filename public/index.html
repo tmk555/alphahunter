@@ -5049,12 +5049,19 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     // Weekly variants — same patterns detected on weekly bars (cleaner
     // signal, fewer false positives from daily noise). Source:
     // patternDataWeekly attached by scanner.js
+    // Superset: ANY weekly pattern detected (cup OR asc OR pwr OR htf).
+    // Cleanest filter for "show me names with a weekly chart pattern" —
+    // covers all four detectors without forcing the user to pick.
+    'W':    s => !!s.patternDataWeekly?.bestPattern,
     'wCUP': s => s.patternDataWeekly?.patterns?.cupHandle?.detected,
     'wASC': s => s.patternDataWeekly?.patterns?.ascendingBase?.detected,
     'wPWR': s => s.patternDataWeekly?.patterns?.powerPlay?.detected,
     'wHTF': s => s.patternDataWeekly?.patterns?.highTightFlag?.detected,
     // RS-trend direction filters. ±3 threshold matches the RSTrendBadge
     // up/down/flat coloring elsewhere in the UI for consistency.
+    // Superset 'RS' = ANY meaningful direction (excludes flat noise) —
+    // surfaces stocks with active RS dynamics in either direction.
+    'RS':  s => Math.abs(s.rsTrend?.vs4w ?? 0) >= 3,
     'RS↑': s => (s.rsTrend?.vs4w ?? 0) >= 3,
     'RS→': s => Math.abs(s.rsTrend?.vs4w ?? 0) < 3,
     'RS↓': s => (s.rsTrend?.vs4w ?? 0) <= -3,
@@ -5268,6 +5275,8 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             // Weekly variants — same detectors on weekly-aggregated bars.
             // Cleaner signal (filters daily noise), more durable patterns
             // (e.g. weekly cup-handle is the canonical Minervini setup).
+            // Superset W catches ANY weekly pattern.
+            {key:'W',   label:'W (any)',          title:'ANY weekly pattern detected (cup OR asc OR pwr OR htf). Use this when you want "stocks with a weekly chart pattern" without picking which one.',col:'#ff80ab'},
             {key:'wCUP',label:'wCUP',            title:'Cup & Handle on WEEKLY bars — institutional-scale base. Cleaner than daily; longer-duration pattern. The Minervini canonical setup.',col:'#ff80ab'},
             {key:'wASC',label:'wASC',            title:'Ascending Base on WEEKLY bars — multi-month higher lows. Longer-duration than daily ASC.',col:'#ff80ab'},
             {key:'wPWR',label:'wPWR',            title:'Power Play on WEEKLY bars — tight 3+ week consolidation near highs. Stronger than daily PWR.',col:'#ff80ab'},
@@ -5275,6 +5284,8 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             // RS-trend direction chips — uses rsTrend.vs4w (4-week rank
             // change) to classify rising / flat / falling. Same data
             // shown inline on Levels caption; here as a quick filter.
+            // Superset RS catches ANY meaningful direction (filters out flat).
+            {key:'RS',  label:'RS (active)',      title:'ANY meaningful RS direction — rising OR falling (vs4w |Δ| ≥ 3). Filters out flat-RS names. Use when you want to see stocks with active RS dynamics regardless of direction.',col:'var(--cyan)'},
             {key:'RS↑', label:'RS↑',             title:'RS Trend RISING — 4-week rank gained ≥3 percentile points. Fresh momentum.',col:'var(--green)'},
             {key:'RS→', label:'RS→',             title:'RS Trend FLAT — 4-week rank changed less than ±3 points. Holding leadership.',col:'var(--text2)'},
             {key:'RS↓', label:'RS↓',             title:'RS Trend FALLING — 4-week rank lost ≥3 percentile points. Decaying leader.',col:'var(--red)'},
