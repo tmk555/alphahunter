@@ -1670,7 +1670,7 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
 // ─── v8: PATTERN BADGE ──────────────────────────────────────────────────────
 function PatternBadge({ patternData }) {
   if (!patternData || !patternData.bestPattern) return null;
-  const labels = { cupHandle: 'CUP', ascendingBase: 'ASC', powerPlay: 'PWR', highTightFlag: 'HTF' };
+  const labels = { cupHandle: 'CUP', ascendingBase: 'ASC', powerPlay: 'PWR', highTightFlag: 'HTF', wPattern: 'WP' };
   const classes = { cupHandle: 'badge-cup', ascendingBase: 'badge-asc', powerPlay: 'badge-pwr', highTightFlag: 'badge-htf' };
   const best = patternData.bestPattern;
   const p = patternData.patterns[best];
@@ -4061,7 +4061,7 @@ function SectorStocks({ sectorName, rsData: propData, onClose }) {
                 {/* Weekly pattern badge — pink to distinguish from daily PatternBadge.
                     Only one shown (the strongest weekly pattern detected). */}
                 {s.bestPatternWeekly && (() => {
-                  const labels = { cupHandle:'wCUP', ascendingBase:'wASC', powerPlay:'wPWR', highTightFlag:'wHTF' };
+                  const labels = { cupHandle:'wCUP', ascendingBase:'wASC', powerPlay:'wPWR', highTightFlag:'wHTF', wPattern:'wWP' };
                   const p = s.patternDataWeekly?.patterns?.[s.bestPatternWeekly];
                   const tip = `WEEKLY ${labels[s.bestPatternWeekly]} — pivot $${p?.pivotPrice?.toFixed(2) || '—'}. Stronger than daily variant.`;
                   return <span title={tip} style={{color:'#ff80ab',fontWeight:700,marginRight:3}}>{labels[s.bestPatternWeekly]}{s.patternCountWeekly > 1 ? `+${s.patternCountWeekly-1}` : ''}</span>;
@@ -5046,13 +5046,16 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     'ASC': s => s.patternData?.patterns?.ascendingBase?.detected,
     'PWR': s => s.patternData?.patterns?.powerPlay?.detected,
     'HTF': s => s.patternData?.patterns?.highTightFlag?.detected,
-    // Weekly variants — same patterns detected on weekly bars (cleaner
-    // signal, fewer false positives from daily noise). Source:
-    // patternDataWeekly attached by scanner.js
-    // Superset: ANY weekly pattern detected (cup OR asc OR pwr OR htf).
-    // Cleanest filter for "show me names with a weekly chart pattern" —
-    // covers all four detectors without forcing the user to pick.
-    'W':    s => !!s.patternDataWeekly?.bestPattern,
+    // W pattern (double bottom) — both DAILY and WEEKLY variants explicit.
+    // Pre-fix the only "W" chip was a misnamed any-weekly-pattern superset
+    // (now renamed wANY). User asked for W pattern on both timeframes:
+    'WP':  s => s.patternData?.patterns?.wPattern?.detected,
+    'wWP': s => s.patternDataWeekly?.patterns?.wPattern?.detected,
+    // Weekly variants — same detectors on weekly-aggregated bars.
+    // Cleaner signal, fewer false positives from daily noise.
+    // Superset wANY = ANY weekly pattern (cup OR asc OR pwr OR htf OR W).
+    // Renamed from 'W' to free that name for the W pattern proper.
+    'wANY': s => !!s.patternDataWeekly?.bestPattern,
     'wCUP': s => s.patternDataWeekly?.patterns?.cupHandle?.detected,
     'wASC': s => s.patternDataWeekly?.patterns?.ascendingBase?.detected,
     'wPWR': s => s.patternDataWeekly?.patterns?.powerPlay?.detected,
@@ -5272,11 +5275,14 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             {key:'ASC', label:'ASC',             title:'Ascending Base — 3+ rising lows with tightening range (DAILY bars)',col:'var(--cyan)'},
             {key:'PWR', label:'PWR',             title:'Power Play — tight consolidation near highs after strong advance (DAILY bars)',col:'var(--cyan)'},
             {key:'HTF', label:'HTF',             title:'High Tight Flag — 100%+ gain then 10-25% correction (DAILY bars)',col:'var(--cyan)'},
+            // W pattern (double bottom) on DAILY bars — rising or flat
+            // variant only (falling W filtered out). Pivot = neckline
+            // peak between the two bottoms.
+            {key:'WP',  label:'WP',              title:'W Pattern (double bottom) on DAILY bars — rising or flat lows. Reversal pattern requiring prior 10%+ decline. Pivot = neckline peak between the two bottoms.',col:'var(--cyan)'},
             // Weekly variants — same detectors on weekly-aggregated bars.
-            // Cleaner signal (filters daily noise), more durable patterns
-            // (e.g. weekly cup-handle is the canonical Minervini setup).
-            // Superset W catches ANY weekly pattern.
-            {key:'W',   label:'W (any)',          title:'ANY weekly pattern detected (cup OR asc OR pwr OR htf). Use this when you want "stocks with a weekly chart pattern" without picking which one.',col:'#ff80ab'},
+            // Cleaner signal, fewer false positives from daily noise.
+            {key:'wWP', label:'wWP',             title:'W Pattern (double bottom) on WEEKLY bars — institutional reversal scale. Same rules as daily WP but on smoother weekly bars.',col:'#ff80ab'},
+            {key:'wANY',label:'wANY',            title:'ANY weekly pattern detected (cup OR asc OR pwr OR htf OR W). Use this when you want "stocks with any weekly chart pattern" without picking which.',col:'#ff80ab'},
             {key:'wCUP',label:'wCUP',            title:'Cup & Handle on WEEKLY bars — institutional-scale base. Cleaner than daily; longer-duration pattern. The Minervini canonical setup.',col:'#ff80ab'},
             {key:'wASC',label:'wASC',            title:'Ascending Base on WEEKLY bars — multi-month higher lows. Longer-duration than daily ASC.',col:'#ff80ab'},
             {key:'wPWR',label:'wPWR',            title:'Power Play on WEEKLY bars — tight 3+ week consolidation near highs. Stronger than daily PWR.',col:'#ff80ab'},
