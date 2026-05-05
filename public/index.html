@@ -3467,6 +3467,28 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
         {' '}·{' '}
         SwingMom: <strong style={{color:'var(--text)'}}>{s.swingMomentum}</strong> ·
         Vol: <strong style={{color:'var(--text)'}}>{s.volumeRatio?.toFixed(2)}x</strong> ·
+        {/* P/E + Forward P/E + PEG — fundamentals at a glance.
+            Trailing P/E from rsData (Yahoo quote). Forward P/E shows
+            analyst-projected earnings multiple. PEG ratio puts P/E in
+            growth context (PEG ≤ 1 = cheap relative to growth, ≥ 2 =
+            expensive). Negatives ('—') for unprofitable companies (no
+            meaningful trailing P/E). */}
+        {s.trailingPE != null && s.trailingPE > 0 && (
+          <span title="Trailing P/E (last 12 months EPS). Negative or zero EPS shows as —. Combine with PEG for growth-adjusted view.">
+            P/E: <strong style={{color:s.trailingPE<=15?'var(--green)':s.trailingPE<=30?'var(--text)':s.trailingPE<=50?'var(--amber)':'var(--red)'}}>{s.trailingPE.toFixed(1)}</strong>
+          </span>
+        )}
+        {s.fwdPE != null && s.fwdPE > 0 && (
+          <span title="Forward P/E based on analyst-projected earnings. Forward < Trailing = analysts expect EPS growth (good); Forward > Trailing = expected EPS decline.">
+            {' '}fwd <strong style={{color:s.fwdPE<=15?'var(--green)':s.fwdPE<=30?'var(--text)':s.fwdPE<=50?'var(--amber)':'var(--red)'}}>{s.fwdPE.toFixed(1)}</strong>
+          </span>
+        )}
+        {s.pegRatio != null && s.pegRatio > 0 && (
+          <span title="PEG ratio = P/E ÷ EPS growth rate. ≤1 = undervalued vs growth (Lynch's classic threshold). 1-2 = fairly valued. >2 = expensive vs growth.">
+            {' '}PEG <strong style={{color:s.pegRatio<=1?'var(--green)':s.pegRatio<=2?'var(--text)':'var(--red)'}}>{s.pegRatio.toFixed(2)}</strong>
+          </span>
+        )}
+        {(s.trailingPE != null || s.fwdPE != null) && ' · '}
         {s.earningsDate && <span style={{color:'var(--amber)'}}> ⚠ Earnings: {s.earningsDate} ({s.daysToEarnings}d)</span>}
         {s.volumeTrend==='accumulating' && <span style={{color:'var(--green)'}}> · ACC (institutional buying)</span>}
         {s.volumeTrend==='distributing' && <span style={{color:'var(--red)'}}> · DIST (institutional selling)</span>}
@@ -4050,12 +4072,12 @@ function SectorStocks({ sectorName, rsData: propData, onClose }) {
           {sortSS(stocks).map(s => (
             <tr key={s.ticker} style={{background:(s.rsTrend?.vs4w>5&&s.rsRank>=65&&s.rsRank<80)?'rgba(0,212,255,0.04)':''}}>
               <td><RSBar rs={s.rsRank}/></td>
-              <td style={{fontFamily:'var(--font-mono)',fontSize:11,color:s.swingMomentum>=60?'var(--green)':s.swingMomentum>=45?'var(--amber)':'var(--red)',fontWeight:700}}>{s.swingMomentum||'—'}</td>
+              <td style={{fontFamily:'var(--font-mono)',fontSize:11,color:s.swingMomentum>=75?'var(--green)':s.swingMomentum>=55?'var(--amber)':'var(--red)',fontWeight:700}}>{s.swingMomentum||'—'}</td>
               <td style={{fontFamily:'var(--font-mono)',fontSize:11}}>
                 {s.rsTrend?.vs4w!=null?<span className={s.rsTrend.vs4w>3?'up':s.rsTrend.vs4w<-3?'dn':''}>{s.rsTrend.vs4w>0?'+':''}{s.rsTrend.vs4w}</span>:'—'}
               </td>
               <td style={{whiteSpace:'nowrap',fontSize:10}}>
-                {(s.rsRank>=70&&(s.rsTrend?.vs4w||0)>0&&s.swingMomentum>=60) && <span title="Triple: RS>70+Accel+Mom>60" style={{color:'var(--green)',fontWeight:700,marginRight:3}}>★</span>}
+                {(s.rsRank>=70&&(s.rsTrend?.vs4w||0)>0&&s.swingMomentum>=75) && <span title="Triple: RS>70+Accel+Mom>60" style={{color:'var(--green)',fontWeight:700,marginRight:3}}>★</span>}
                 {s.rsLineNewHigh && <span title="RS Line at 52wk high — outperforming SPY" style={{color:'var(--gold)',fontWeight:700,marginRight:3}}>⭐</span>}
                 {(s.rsTrend?.vs4w>5&&s.rsRank>=65&&s.rsRank<80) && <span title="Emerging: RS 65-79 rising fast" style={{color:'var(--cyan)',fontWeight:700,marginRight:3}}>↗</span>}
                 {/* Weekly pattern badge — pink to distinguish from daily PatternBadge.
@@ -4093,7 +4115,7 @@ function SectorStocks({ sectorName, rsData: propData, onClose }) {
                         style={{color:'var(--red)',fontWeight:700,marginRight:3}}>REV↓</span>
                 )}
                 {s.sepaScore!=null && <span style={{color:s.sepaScore>=6?'var(--green)':s.sepaScore>=4?'var(--amber)':'var(--text3)',fontWeight:700}}>{s.sepaScore}/8</span>}
-                {!s.rsLineNewHigh&&!s.vcpForming&&s.stage!==2&&s.stage!==4&&!(s.rsRank>=70&&(s.rsTrend?.vs4w||0)>0&&s.swingMomentum>=60)&&!(s.rsTrend?.vs4w>5&&s.rsRank>=65&&s.rsRank<80)&&<span className="muted">—</span>}
+                {!s.rsLineNewHigh&&!s.vcpForming&&s.stage!==2&&s.stage!==4&&!(s.rsRank>=70&&(s.rsTrend?.vs4w||0)>0&&s.swingMomentum>=75)&&!(s.rsTrend?.vs4w>5&&s.rsRank>=65&&s.rsRank<80)&&<span className="muted">—</span>}
               </td>
               <td><span className="td-ticker">{s.ticker}</span></td>
               <td className="td-name">{s.name}</td>
@@ -4181,21 +4203,21 @@ function IndustryStockDrill({ etf, etfName, rsData, onClose }) {
                 borderLeft: s.rsTrend?.vs4w>5&&s.rsRank>=65&&s.rsRank<80 ? '2px solid rgba(0,212,255,0.4)' : '',
               }}>
                 <td><RSBar rs={s.rsRank}/></td>
-                <td style={{fontFamily:'var(--font-mono)',fontSize:11,color:s.swingMomentum>=60?'var(--green)':s.swingMomentum>=45?'var(--amber)':'var(--red)',fontWeight:700}}>{s.swingMomentum||'—'}</td>
+                <td style={{fontFamily:'var(--font-mono)',fontSize:11,color:s.swingMomentum>=75?'var(--green)':s.swingMomentum>=55?'var(--amber)':'var(--red)',fontWeight:700}}>{s.swingMomentum||'—'}</td>
                 <td style={{fontFamily:'var(--font-mono)',fontSize:11}}>
                   {s.rsTrend?.vs4w!=null
                     ? <span className={s.rsTrend.vs4w>3?'up':s.rsTrend.vs4w<-3?'dn':''}>{s.rsTrend.vs4w>0?'+':''}{s.rsTrend.vs4w}</span>
                     : '—'}
                 </td>
                 <td style={{whiteSpace:'nowrap',fontSize:10}}>
-                  {(s.rsRank>=70&&(s.rsTrend?.vs4w||0)>0&&s.swingMomentum>=60) && <span title="Triple: RS>70+Accel+Mom>60" style={{color:'var(--green)',fontWeight:700,marginRight:3}}>★</span>}
+                  {(s.rsRank>=70&&(s.rsTrend?.vs4w||0)>0&&s.swingMomentum>=75) && <span title="Triple: RS>70+Accel+Mom>60" style={{color:'var(--green)',fontWeight:700,marginRight:3}}>★</span>}
                   {s.rsLineNewHigh && <span title="RS Line at 52wk high — outperforming SPY" style={{color:'var(--gold)',fontWeight:700,marginRight:3}}>⭐</span>}
                   {(s.rsTrend?.vs4w>5&&s.rsRank>=65&&s.rsRank<80) && <span title="Emerging: RS 65-79 rising fast" style={{color:'var(--cyan)',fontWeight:700,marginRight:3}}>↗</span>}
                   {s.vcpForming && <span title={`VCP ${s.vcpCount}× contractions`} style={{color:'var(--purple)',fontWeight:700,marginRight:3}}>VCP</span>}
                   {s.stage===2 && <span title="Stage 2 Uptrend" style={{color:'var(--green)',fontWeight:700,marginRight:3}}>S2</span>}
                   {s.stage===4 && <span title="Stage 4 Downtrend — avoid" style={{color:'var(--red)',fontWeight:700,marginRight:3}}>S4</span>}
                   {s.sepaScore!=null && <span style={{color:s.sepaScore>=6?'var(--green)':s.sepaScore>=4?'var(--amber)':'var(--text3)',fontWeight:700}}>{s.sepaScore}/8</span>}
-                  {!s.rsLineNewHigh&&!s.vcpForming&&s.stage!==2&&s.stage!==4&&!(s.rsRank>=70&&(s.rsTrend?.vs4w||0)>0&&s.swingMomentum>=60)&&!(s.rsTrend?.vs4w>5&&s.rsRank>=65&&s.rsRank<80)&&<span className="muted">—</span>}
+                  {!s.rsLineNewHigh&&!s.vcpForming&&s.stage!==2&&s.stage!==4&&!(s.rsRank>=70&&(s.rsTrend?.vs4w||0)>0&&s.swingMomentum>=75)&&!(s.rsTrend?.vs4w>5&&s.rsRank>=65&&s.rsRank<80)&&<span className="muted">—</span>}
                 </td>
                 <td><span className="td-ticker">{s.ticker}</span></td>
                 <td className="td-name">{s.name}</td>
@@ -4381,7 +4403,7 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
                   </td>
                   <td>
                     {s.swingMomentum != null
-                      ? <span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:s.swingMomentum>=60?'var(--green)':s.swingMomentum>=45?'var(--amber)':'var(--red)'}}>{s.swingMomentum}</span>
+                      ? <span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:s.swingMomentum>=75?'var(--green)':s.swingMomentum>=55?'var(--amber)':'var(--red)'}}>{s.swingMomentum}</span>
                       : <span className="muted">—</span>}
                   </td>
                   <td>
@@ -4850,7 +4872,10 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
 
   // Strategy entry criteria (matches replay engine evaluateEntry)
   const strategyEntryFilters = {
-    rs_momentum:      s => s.rsRank >= 80 && (s.swingMomentum || 0) >= 60,
+    // Tightened Mom threshold 60 → 75 (top quartile). Pre-fix Mom≥60
+    // fired on 44% of the universe — "above-average" not "fast." Mom≥75
+    // is the actual top 25% by distribution.
+    rs_momentum:      s => s.rsRank >= 80 && (s.swingMomentum || 0) >= 75,
     vcp_breakout:     s => s.rsRank >= 70 && s.vcpForming,
     sepa_trend:       s => (s.sepaScore || 0) >= 6 && s.rsRank >= 70,
     rs_line_new_high: s => s.rsRank >= 75 && s.rsLineNewHigh,
@@ -5063,14 +5088,43 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     'wASC': s => s.patternDataWeekly?.patterns?.ascendingBase?.detected,
     'wPWR': s => s.patternDataWeekly?.patterns?.powerPlay?.detected,
     'wHTF': s => s.patternDataWeekly?.patterns?.highTightFlag?.detected,
-    // RS-trend direction filters. ±3 threshold matches the RSTrendBadge
-    // up/down/flat coloring elsewhere in the UI for consistency.
-    // Superset 'RS' = ANY meaningful direction (excludes flat noise) —
-    // surfaces stocks with active RS dynamics in either direction.
-    'RS':  s => Math.abs(s.rsTrend?.vs4w ?? 0) >= 3,
-    'RS↑': s => (s.rsTrend?.vs4w ?? 0) >= 3,
-    'RS→': s => Math.abs(s.rsTrend?.vs4w ?? 0) < 3,
-    'RS↓': s => (s.rsTrend?.vs4w ?? 0) <= -3,
+    // RS-trend direction — TWO-HALVES confluence (catches sustained, not spikes).
+    //
+    // Bug history:
+    //   v1: single ±3 vs4w threshold → fires on 75% of universe = noise.
+    //   v2: vs4w AND vs3m both ≥+5 → still admits "flat 8wk, then spike
+    //       last 4wk" patterns because vs3m = vs4w when all the 12-week
+    //       change happened in the last 4 weeks. User correctly pointed
+    //       this out: a stock that's stuck for 8 weeks then jolts up
+    //       isn't "sustained rising RS."
+    //
+    // v3 (this): split 12-week window into "recent" (last 4w) and
+    // "earlier" (weeks 5-12). Require BOTH halves to move ≥3 in same
+    // direction. Rejects flat-then-spike. This is the actual "sustained
+    // multi-timeframe rise" signal.
+    //
+    //   recent  = vs4w
+    //   earlier = vs3m - vs4w   (rise in the 8 weeks BEFORE the recent 4)
+    //
+    // Stock that fires RS↑ has been rising in BOTH halves of the 12-week
+    // window: ≥3 points up in weeks 5-12 AND ≥3 points up in last 4 weeks.
+    'RS':  s => {
+      const v4 = s.rsTrend?.vs4w ?? 0, v3m = s.rsTrend?.vs3m ?? 0;
+      const recent = v4, earlier = v3m - v4;
+      return recent * earlier > 0 && Math.abs(recent) >= 3 && Math.abs(earlier) >= 3;
+    },
+    'RS↑': s => {
+      const v4 = s.rsTrend?.vs4w ?? 0, v3m = s.rsTrend?.vs3m ?? 0;
+      return v4 >= 3 && (v3m - v4) >= 3;     // BOTH halves rising
+    },
+    'RS→': s => {
+      const v4 = s.rsTrend?.vs4w ?? 0, v3m = s.rsTrend?.vs3m ?? 0;
+      return Math.abs(v4) < 3 && Math.abs(v3m - v4) < 3;  // both halves flat
+    },
+    'RS↓': s => {
+      const v4 = s.rsTrend?.vs4w ?? 0, v3m = s.rsTrend?.vs3m ?? 0;
+      return v4 <= -3 && (v3m - v4) <= -3;   // BOTH halves falling
+    },
     'S1':  s => s.stage===1,
     'S2':  s => s.stage===2,
     'S3':  s => s.stage===3,
@@ -5293,11 +5347,14 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             // RS-trend direction chips — uses rsTrend.vs4w (4-week rank
             // change) to classify rising / flat / falling. Same data
             // shown inline on Levels caption; here as a quick filter.
-            // Superset RS catches ANY meaningful direction (filters out flat).
-            {key:'RS',  label:'RS (active)',      title:'ANY meaningful RS direction — rising OR falling (vs4w |Δ| ≥ 3). Filters out flat-RS names. Use when you want to see stocks with active RS dynamics regardless of direction.',col:'var(--cyan)'},
-            {key:'RS↑', label:'RS↑',             title:'RS Trend RISING — 4-week rank gained ≥3 percentile points. Fresh momentum.',col:'var(--green)'},
-            {key:'RS→', label:'RS→',             title:'RS Trend FLAT — 4-week rank changed less than ±3 points. Holding leadership.',col:'var(--text2)'},
-            {key:'RS↓', label:'RS↓',             title:'RS Trend FALLING — 4-week rank lost ≥3 percentile points. Decaying leader.',col:'var(--red)'},
+            // Multi-timeframe confluence: 4-week AND 3-month rank changes
+            // must BOTH agree on direction and BOTH be ≥5 points. Filters
+            // single-event spikes. Empirically ~10-15% of universe per
+            // direction, vs 36-39% with the old ±3 single-window noise.
+            {key:'RS',  label:'RS (sustained)',   title:'SUSTAINED RS direction — vs4w AND vs3m both move ≥5 points in same direction. Filters out flat + single-event spikes. Use when you want stocks with multi-timeframe RS dynamics.',col:'var(--cyan)'},
+            {key:'RS↑', label:'RS↑',             title:'RS Trend RISING (sustained) — 4-week rank ≥+5 AND 3-month rank ≥+5. Both timeframes agree. Filters single-spike noise.',col:'var(--green)'},
+            {key:'RS→', label:'RS→',             title:'RS Trend FLAT — both 4-week and 3-month rank changes <5 points. Stable / holding leadership.',col:'var(--text2)'},
+            {key:'RS↓', label:'RS↓',             title:'RS Trend FALLING (sustained) — 4-week ≤-5 AND 3-month ≤-5. Both timeframes agree on decay.',col:'var(--red)'},
             {key:'S1',  label:'S1 Basing',       title:'Stage 1: basing below flat 150MA — post-downtrend, watch for breakout into S2',col:'var(--text3)'},
             {key:'S2',  label:'S2 Uptrend',      title:'Stage 2: price above rising 150MA — the ONLY stage to buy longs',col:'var(--green)'},
             {key:'S3',  label:'S3 Topping',      title:'Stage 3: above 150MA but MA flattening — institutional distribution, reduce/avoid',col:'var(--amber)'},
@@ -5411,7 +5468,7 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
           <span style={{fontSize:10,color:'var(--text3)',letterSpacing:1,textTransform:'uppercase',marginRight:2}}>Strategy</span>
           {[
             {id:'',                label:'None',            title:'No strategy filter — use quick filters and signal chips'},
-            {id:'rs_momentum',     label:'RS Momentum',     title:'RS≥80 + Momentum≥60. Sorted by RS+Momentum combined.'},
+            {id:'rs_momentum',     label:'RS Momentum',     title:'RS≥80 + Momentum≥75 (top 25% by Mom distribution). Sorted by RS+Momentum combined.'},
             {id:'vcp_breakout',    label:'VCP Breakout',    title:'RS≥70 + VCP forming. Sorted by lowest volume ratio (driest base).'},
             {id:'sepa_trend',      label:'SEPA Trend',      title:'SEPA≥6/8 + RS≥70. Sorted by highest SEPA score.'},
             {id:'rs_line_new_high',label:'RS Line NH',      title:'RS≥75 + RS Line at new high. Sorted by RS rank.'},
@@ -5522,7 +5579,7 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
                       <td><RSBar rs={s.rsRank}/></td>
                       <td>
                         {s.swingMomentum != null
-                          ? <span style={{fontFamily:'var(--font-mono)',fontSize:13,fontWeight:700,color:s.swingMomentum>=60?'var(--green)':s.swingMomentum>=45?'var(--amber)':'var(--red)'}}>{s.swingMomentum}</span>
+                          ? <span style={{fontFamily:'var(--font-mono)',fontSize:13,fontWeight:700,color:s.swingMomentum>=75?'var(--green)':s.swingMomentum>=55?'var(--amber)':'var(--red)'}}>{s.swingMomentum}</span>
                           : <span className="muted">—</span>}
                       </td>
                       <td style={{fontFamily:'var(--font-mono)',fontSize:12}}>
@@ -6563,7 +6620,7 @@ body: JSON.stringify({ stocks: rsData.map(s => s.ticker), mode }),
                     <div className="ts-card-price">${s.price?.toFixed(2)}</div>
                   </div>
                   <div className="ts-card-signals">
-                    {s.rsRank>=70&&(s.rsTrend?.vs4w||0)>0&&s.swingMomentum>=60 && <span className="ts-signal-tag" style={{background:'rgba(0,230,118,0.1)',color:'var(--green)',border:'1px solid rgba(0,230,118,0.3)'}}>Triple</span>}
+                    {s.rsRank>=70&&(s.rsTrend?.vs4w||0)>0&&s.swingMomentum>=75 && <span className="ts-signal-tag" style={{background:'rgba(0,230,118,0.1)',color:'var(--green)',border:'1px solid rgba(0,230,118,0.3)'}}>Triple</span>}
                     {s.vcpForming && <span className="ts-signal-tag" style={{background:'rgba(196,77,255,0.1)',color:'var(--purple)',border:'1px solid rgba(196,77,255,0.3)'}}>VCP</span>}
                     {s.stage===2 && <span className="ts-signal-tag" style={{background:'rgba(0,230,118,0.1)',color:'var(--green)',border:'1px solid rgba(0,230,118,0.3)'}}>Stage 2</span>}
                     {s.rsLineNewHigh && <span className="ts-signal-tag" style={{background:'rgba(255,215,0,0.12)',color:'var(--gold)',border:'1px solid rgba(255,215,0,0.3)'}}>RS High</span>}
