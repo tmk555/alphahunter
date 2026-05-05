@@ -5146,8 +5146,19 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     'S3':  s => s.stage===3,
     'S4':  s => s.stage===4,
     '1→2': s => s.stage===2 && s.priorStage===1,
-    'ACC': s => s.volumeTrend==='accumulating',
-    'DIST':s => s.volumeTrend==='distributing',
+    // ACC / DIST — 50-day institutional accumulation/distribution.
+    //
+    // Pre-fix: used s.volumeTrend which is a 1-DAY proxy (price > MA50
+    // AND today's volume ≥ 1.2× 3-month avg). That fires on a single
+    // pump-and-dump day. NOT a trend signal.
+    //
+    // Now: uses the 50-day up/down volume ratio grade computed in
+    // calcVolumeProfile(). A grade = U/D ratio ≥ 1.5 (heavy 10-week
+    // accumulation). B grade = ≥ 1.2 (moderate). Can't be faked by a
+    // single-day spike — requires 10+ weeks of more up-volume than
+    // down-volume. Same signal IBD's A-E grades use.
+    'ACC':  s => ['A','B'].includes(s.volumeProfile?.accumulation50),
+    'DIST': s => ['D','E'].includes(s.volumeProfile?.accumulation50),
     '🔥':  s => s.distFromHigh!=null && s.distFromHigh<=0.005,
     '⚡':  s => s.volumeSurge,
     'REV↑':s => (s.revisionScore||0) >= 50,
@@ -5377,8 +5388,8 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             {key:'S3',  label:'S3 Topping',      title:'Weinstein Stage 3: price still above 150MA but MA is FLATTENING. Distribution phase — institutions selling into strength. Reduce / avoid new longs.',col:'var(--amber)'},
             {key:'S4',  label:'S4 Decline',      title:'Weinstein Stage 4: price BELOW declining 150-day MA. Confirmed downtrend. Avoid all longs. Short candidates if you trade short.',col:'var(--red)'},
             {key:'1→2', label:'1→2 Breakout',    title:'Stage 1→2 transition (today vs yesterday\'s snapshot). Stock just broke from base into uptrend. Earliest institutional breakout signal — gets +10 conviction bonus.',col:'var(--gold)'},
-            {key:'ACC', label:'ACC',              title:'Accumulation TODAY: price > 50MA AND today\'s volume ratio ≥ 1.2× the 3-month average. Single-day status, not a trailing window. Institutional buying signature.',col:'var(--green)'},
-            {key:'DIST',label:'DIST',             title:'Distribution TODAY: price < 50MA AND today\'s volume ratio ≥ 1.2× the 3-month average. Single-day status. Institutional selling signature.',col:'var(--red)'},
+            {key:'ACC', label:'ACC',              title:'Accumulation (50-day) — IBD A or B grade: up-volume / down-volume ratio ≥ 1.2 over the last 50 trading days. CANNOT be faked by a single-day spike. A grade ≥ 1.5 = heavy institutional buying; B grade ≥ 1.2 = moderate. The real "stock under accumulation" signal.',col:'var(--green)'},
+            {key:'DIST',label:'DIST',             title:'Distribution (50-day) — IBD D or E grade: up-volume / down-volume ratio < 0.9 over the last 50 trading days. Sustained institutional selling. D grade < 0.9; E grade < 0.7 = heavy distribution.',col:'var(--red)'},
             {key:'🔥',  label:'🔥 At High',      title:'Within 0.5% of the 52-week high (252-day max close). New-high zone where breakouts and chases happen.',col:'var(--amber)'},
             {key:'⚡',  label:'⚡ Vol Surge',     title:'Today\'s volume ≥ 2× the 3-month average AND price within 5% of 52-week high. Volume confirmation of breakout / continuation.',col:'var(--amber)'},
             {key:'REV↑',label:'REV↑',            title:'Analyst estimate revision score ≥50 (out of 100). Aggregates EPS+revenue estimate changes for current+next year. Source: revision_scores cache, refreshed nightly by revision_scan_daily cron at 5 PM ET. Score ≥70 = strong upgrade, 50-69 = upgrade.',col:'var(--green)'},
