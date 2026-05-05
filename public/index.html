@@ -3467,13 +3467,11 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
         )}
         {' '}·{' '}
         SwingMom: <strong style={{color:'var(--text)'}}>{s.swingMomentum}</strong> ·
-        Vol: <strong style={{color:'var(--text)'}}>{s.volumeRatio?.toFixed(2)}x</strong> ·
-        {/* P/E + Forward P/E + PEG — always rendered with placeholder
-            so user knows whether data is missing vs zero. Trailing P/E
-            is null/zero for unprofitable companies (no meaningful TTM
-            multiple). Forward P/E from analyst estimates. PEG = P/E ÷
-            EPS growth rate (Lynch threshold ≤1 = cheap vs growth). */}
-        {' '}·{' '}
+        Vol: <strong style={{color:'var(--text)'}}>{s.volumeRatio?.toFixed(2)}x</strong>
+        {/* P/E + Forward P/E + PEG. Single separator before P/E (Vol's
+            trailing "·" was conflicting with P/E's leading "·" producing
+            the "Vol 0.34x · · P/E:" double-dot artifact). */}
+        {' · '}
         <span title="Trailing P/E (last 12 months EPS). '—' = company has negative or zero TTM earnings (unprofitable / loss-making). Many momentum stocks have no trailing P/E.">
           P/E: <strong style={{color:!s.trailingPE||s.trailingPE<=0?'var(--text3)':s.trailingPE<=15?'var(--green)':s.trailingPE<=30?'var(--text)':s.trailingPE<=50?'var(--amber)':'var(--red)'}}>
             {s.trailingPE && s.trailingPE > 0 ? s.trailingPE.toFixed(1) : '—'}
