@@ -5448,8 +5448,11 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
                   <col style={{width:'100px'}}/>{/* IBD RS */}
                   <col style={{width:'48px'}}/>{/* Mom */}
                   <col style={{width:'50px'}}/>{/* Accel */}
-                  <col style={{width:'38px'}}/>{/* Stage */}
-                  <col style={{width:'88px'}}/>{/* Signals */}
+                  {/* Stage + Signals columns removed — same data already
+                      surfaces via the chip filters above the table.
+                      Stage is filterable as S1/S2/S3/S4/1→2 chips,
+                      individual signals (★/⭐/↗/VCP/W/wCUP/RS↑/REV/etc.)
+                      are also chips. Per-row badges duplicated chip data. */}
                   <col style={{width:'58px'}}/>{/* Ticker */}
                   <col style={{width:'84px'}}/>{/* Name */}
                   <col style={{width:'58px'}}/>{/* Price */}
@@ -5466,8 +5469,10 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
                     <StrategySH k="rsRank"        label="IBD RS"    title="Percentile rank 1-99 vs universe (12M weighted). ≥ 70 = top 30% institutional quality."/>
                     <StrategySH k="swingMomentum" label="Mom"       title="Raw price velocity NOW — NOT vs peers. Base 50+(5d%×3)+(10d%×1.5)+(21d%×0.5)+5 if above MA10. Score 94≈13% in 5d. Score 50=flat. ≥60=fast, ≥45=ok, <40=stalling."/>
                     <StrategySH k="rsTrend.vs4w"  label="Accel"     title="RS Accel: percentile rank change vs 28 days ago. +12=passed 12% of peers. Sort ↓ to find fastest institutional accumulation."/>
-                    <StrategySH k="stage"         label="Stage"     title="Weinstein Stage (150MA trend). S1=Basing, S2=Uptrend (buy zone), S3=Topping (reduce), S4=Decline (avoid/short). Sort to cluster by stage."/>
-                    <th title="Signals: ★=Triple (RS>70+Accel+Mom>60). ⭐=RS Line 52wk high. ↗=Emerging RS65-79. VCP=coiling setup. SEPA/8=Minervini score.">Signals</th>
+                    {/* Stage + Signals columns removed (data is in the chip
+                        filters above). Use S1/S2/S3/S4 + signal chips to
+                        narrow the visible rows; per-row badges were
+                        duplicating that information. */}
                     <StrategySH k="ticker"        label="Ticker"    title="Ticker symbol. Click to sort alphabetically."/>
                     <StrategySH k="name"          label="Name"      title="Company name. Click to sort alphabetically."/>
                     <StrategySH k="price"         label="Price"     title="Current market price"/>
@@ -5520,45 +5525,8 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
                               : <span className={s.rsTrend.vs4w>3?'up':s.rsTrend.vs4w<-3?'dn':''}>{s.rsTrend.vs4w>0?'+':''}{s.rsTrend.vs4w}</span>)
                           : <span className="muted">—</span>}
                       </td>
-                      <td style={{textAlign:'center',fontFamily:'var(--font-mono)',fontSize:11,fontWeight:700}} title={s.stageName||''}>
-                        {s.stage===2 && s.priorStage===1
-                          ? <span style={{color:'var(--gold)',background:'rgba(255,215,0,0.15)',padding:'1px 4px',borderRadius:3,fontSize:10}}>1→2</span>
-                          : s.stage===2 ? <span style={{color:'var(--green)'}}>S2</span>
-                          : s.stage===3 ? <span style={{color:'var(--amber)'}}>S3</span>
-                          : s.stage===4 ? <span style={{color:'var(--red)'}}>S4</span>
-                          : s.stage===1 ? <span style={{color:'var(--text3)'}}>S1</span>
-                          : <span className="muted">—</span>}
-                      </td>
-                      <td style={{whiteSpace:'nowrap',fontSize:10}}>
-                        {(s.rsRank>=70 && (s.rsTrend?.vs4w||0)>0 && s.swingMomentum>=60) && (
-                          <span title="Triple: RS>70+Accel>0+Mom>60" style={{color:'var(--green)',fontWeight:700,marginRight:3}}>★</span>
-                        )}
-                        {s.rsLineNewHigh && (
-                          <span title="RS Line at 52wk high — stock outperforming SPY. IBD #1 signal." style={{color:'var(--gold)',fontWeight:700,marginRight:3}}>⭐</span>
-                        )}
-                        {(s.rsTrend?.vs4w>5 && s.rsRank>=65 && s.rsRank<80) && (
-                          <span title="Emerging: RS 65-79 rising fast. Entry zone before RS 80+." style={{color:'var(--cyan)',fontWeight:700,marginRight:3}}>↗</span>
-                        )}
-                        {s.vcpForming && (
-                          <span title={`VCP ${s.vcpCount}× contractions. Pivot $${s.vcpPivot}. Stop $${s.vcpStop}. Best with S2.`} style={{color:'var(--purple)',fontWeight:700,marginRight:3}}>VCP</span>
-                        )}
-                        {s.stage===2 && s.priorStage===1 && <span title="Stage 1→2 breakout — fresh uptrend from base. Earliest institutional entry signal. +10 conviction bonus." style={{color:'var(--gold)',fontWeight:700,marginRight:3,background:'rgba(255,215,0,0.15)',padding:'0 4px',borderRadius:2,fontSize:9}}>1→2</span>}
-                        {s.sepaScore!=null && <span title={s.sepa?Object.entries(s.sepa).map(([k,v])=>`${k}:${v===true?'✓':v===false?'✗':'?'}`).join(' '):'SEPA score'} style={{color:s.sepaScore>=6?'var(--green)':s.sepaScore>=4?'var(--amber)':'var(--text3)',fontWeight:700}}>{s.sepaScore}/8</span>}
-                        {(() => { const tf = s.rsTimeframeAlignment ?? s.rsTfAlignment; return tf != null && (
-                          <span title={`Timeframe alignment: ${tf}/3 — Daily RS ${s.rsRank||'?'}, Weekly RS ${s.rsRankWeekly||'?'}, Monthly RS ${s.rsRankMonthly||'?'}. Count of timeframes ≥ 80.`}
-                            style={{marginLeft:4,color:tf>=3?'var(--green)':tf>=2?'var(--amber)':'var(--text3)',fontWeight:700,fontSize:9,fontFamily:'var(--font-mono)'}}>
-                            TF {tf}/3
-                          </span>
-                        ); })()}
-                        {s.revisionScore != null && (
-                          <span title={`Analyst estimate revisions: ${s.revisionScore}/100 (${s.revisionTier?.replace(/_/g,' ')||'neutral'}). Rising estimates signal future earnings catalyst.`}
-                            style={{marginLeft:4,color:s.revisionScore>=70?'var(--green)':s.revisionScore>=50?'#8bc34a':s.revisionScore>=30?'var(--amber)':'var(--red)',fontWeight:700,fontSize:9,fontFamily:'var(--font-mono)'}}>
-                            {s.revisionScore>=50 ? 'REV↑' : s.revisionScore>=30 ? 'REV→' : 'REV↓'}
-                          </span>
-                        )}
-                          <PatternBadge patternData={s.patternData} />
-                          <InstitutionalBadge data={s.institutionalData} />
-                      </td>
+                      {/* Stage + Signals cells removed — data lives in the
+                          chip filters above. */}
                       <td style={{whiteSpace:'nowrap'}}>
                         {stratRank && <span style={{fontFamily:'var(--font-mono)',fontSize:9,fontWeight:700,color:isReplayPick?'var(--green)':'var(--text3)',marginRight:3}}>#{stratRank}</span>}
                         <span className="td-ticker" title={s.name}>{s.ticker}</span>
@@ -5597,7 +5565,7 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
                     </tr>
                     {expandedTicker===s.ticker && (
                       <tr ref={levelsRef}>
-                        <td colSpan={15} style={{padding:0,background:'var(--bg)',borderLeft:'3px solid var(--amber)',borderBottom:'2px solid var(--amber)'}}>
+                        <td colSpan={13} style={{padding:0,background:'var(--bg)',borderLeft:'3px solid var(--amber)',borderBottom:'2px solid var(--amber)'}}>
                           <div style={{padding:'16px 20px',animation:'fadeUp 0.2s ease'}}>
                             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
                               <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>

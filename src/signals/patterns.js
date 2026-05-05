@@ -400,13 +400,158 @@ function detectHighTightFlag(bars, closes) {
  *
  * @returns {{ patterns: Object, patternCount: number, bestPattern: string|null }}
  */
-function detectPatterns(bars, closes, ma50, ma150, ma200) {
+// ─── W Pattern (double bottom) ───────────────────────────────────────────
+// Two lows separated by a meaningful peak — looks like the letter W on
+// the chart. Reversal pattern signaling end of downtrend.
+//
+// Two variants returned as detected=true:
+//   • RISING W  (low2 > low1 by ≥1%)  — bullish ascending double bottom.
+//                                        Higher low = clear demand, the
+//                                        institutional accumulation tell.
+//                                        Highest-confidence variant.
+//   • FLAT W    (|low2 - low1| < 1%)  — classic textbook double bottom.
+//                                        Solid reversal, equal lows.
+//
+// FALLING W (low2 < low1 by >1%) is computed but NOT marked detected=true
+// — falling W is a bounce off a lower low, not a true reversal pattern.
+// The metadata is still returned (in case future analysis wants it) but
+// the chip filter and badges only fire on rising/flat.
+//
+// PRIOR-DOWNTREND GATE: a W is a *reversal* pattern, so we require the
+// 30 bars BEFORE the first low to contain a clear high-water mark that's
+// at least 10% above lo1. Otherwise a stock in steady uptrend with two
+// pullbacks could falsely trigger.
+//
+// Detection rules:
+//   • Last 60 bars (or N if shorter)
+//   • Local lows: bar i where low[i] ≤ each of 2 neighbors on either side
+//   • Spacing in BARS is parameterized — opts.minSpacing / opts.maxSpacing.
+//     Daily default 8–40 (≈ 1.5–8 weeks). Weekly caller passes 4–16
+//     (≈ 1–4 months — institutional W reversal scale).
+//   • Symmetry: |low2 - low1|/min(low1,low2) ≤ 8%
+//   • Peak between them: ≥ 5% above the lower of the two lows
+//   • Prior downtrend: highest high in 30 bars before lo1 is ≥10% above lo1
+//   • Current price: ≥ 98% of low2
+//
+// Pivot/breakout level = peak between the two bottoms (the neckline).
+function detectWPattern(bars, closes, opts = {}) {
+  if (!bars || bars.length < 30) return { detected: false, confidence: 0 };
+
+  const minSpacing = opts.minSpacing ?? 8;
+  const maxSpacing = opts.maxSpacing ?? 40;
+
+  const N = Math.min(60, bars.length);
+  const start = bars.length - N;
+  const window = bars.slice(start);
+
+  // Find local lows: bar i where low[i] ≤ each of the 2 bars on either side.
+  const lows = [];
+  for (let i = 2; i < window.length - 2; i++) {
+    const v = window[i].low;
+    if (v <= window[i-1].low && v <= window[i-2].low &&
+        v <= window[i+1].low && v <= window[i+2].low) {
+      lows.push({ idx: i, low: v });
+    }
+  }
+  if (lows.length < 2) return { detected: false, confidence: 0 };
+
+  // Take the two most recent significant lows.
+  const lo1 = lows[lows.length - 2];
+  const lo2 = lows[lows.length - 1];
+
+  const gap = lo2.idx - lo1.idx;
+  if (gap < minSpacing || gap > maxSpacing) return { detected: false, confidence: 0 };
+
+  const lowDelta = (lo2.low - lo1.low) / lo1.low;       // signed: + rising, - falling
+  if (Math.abs(lowDelta) > 0.08) return { detected: false, confidence: 0 };
+
+  // Peak (highest high) between the two lows = the neckline / pivot.
+  let peak = -Infinity;
+  for (let i = lo1.idx + 1; i < lo2.idx; i++) {
+    if (window[i].high > peak) peak = window[i].high;
+  }
+  const minLow = Math.min(lo1.low, lo2.low);
+  const peakRise = (peak - minLow) / minLow;
+  if (peakRise < 0.05) return { detected: false, confidence: 0 };
+
+  // Prior-downtrend gate. Look at the 30 bars in `bars` (full series, not
+  // sliced window) BEFORE the first low's absolute index. The first low's
+  // absolute index in the full series is start + lo1.idx.
+  const lo1AbsIdx = start + lo1.idx;
+  const lookbackStart = Math.max(0, lo1AbsIdx - 30);
+  let priorHigh = -Infinity;
+  for (let i = lookbackStart; i < lo1AbsIdx; i++) {
+    if (bars[i].high > priorHigh) priorHigh = bars[i].high;
+  }
+  // Need a meaningful prior peak — at least 10% above lo1 (i.e. lo1 was
+  // a real decline from somewhere). If we don't have 30 bars of prior
+  // history, skip the gate (early in the series — give benefit of doubt).
+  if (lo1AbsIdx >= 30 && priorHigh > 0) {
+    const priorDecline = (priorHigh - lo1.low) / priorHigh;
+    if (priorDecline < 0.10) {
+      return { detected: false, confidence: 0, reason: 'no_prior_downtrend' };
+    }
+  }
+
+  const currentPrice = closes[closes.length - 1];
+  if (currentPrice < lo2.low * 0.98) return { detected: false, confidence: 0 };
+
+  // Direction classification.
+  let direction;
+  if      (lowDelta >  0.01) direction = 'rising';
+  else if (lowDelta < -0.01) direction = 'falling';
+  else                       direction = 'flat';
+
+  // Falling W: compute metadata but don't flag as detected. It's a
+  // bounce off a lower low, not a reversal.
+  if (direction === 'falling') {
+    return {
+      detected: false,
+      confidence: 0,
+      direction,
+      reason: 'falling_w_not_a_reversal',
+      leftLow: +lo1.low.toFixed(2),
+      rightLow: +lo2.low.toFixed(2),
+      pivotPrice: +peak.toFixed(2),
+      lowsGapBars: gap,
+      lowDeltaPct: +(lowDelta * 100).toFixed(2),
+    };
+  }
+
+  // Confidence: 50 base + direction bonus + symmetry/peak/breakout/trend bonuses.
+  let confidence = 50;
+  if (direction === 'rising') confidence += 15;          // accumulation tell
+  else                        confidence += 5;           // flat W
+  const symAbs = Math.abs(lowDelta);
+  confidence += (0.08 - symAbs) * 100;                   // up to +8 for tight symmetry
+  confidence += Math.min(peakRise, 0.20) * 75;           // up to +15 for tall peak
+  if (currentPrice >= peak) confidence += 15;            // already breaking out
+  confidence = Math.max(0, Math.min(100, confidence));
+
+  return {
+    detected: true,
+    confidence: +confidence.toFixed(0),
+    direction,                                           // 'rising' | 'flat' (falling filtered out)
+    leftLow:    +lo1.low.toFixed(2),
+    rightLow:   +lo2.low.toFixed(2),
+    pivotPrice: +peak.toFixed(2),
+    lowsGapBars: gap,
+    peakRisePct: +(peakRise * 100).toFixed(1),
+    lowDeltaPct: +(lowDelta * 100).toFixed(2),
+  };
+}
+
+function detectPatterns(bars, closes, ma50, ma150, ma200, opts = {}) {
   const cupHandle     = detectCupHandle(bars, closes);
   const ascendingBase = detectAscendingBase(bars, closes);
   const powerPlay     = detectPowerPlay(bars, closes, ma50, ma150, ma200);
   const highTightFlag = detectHighTightFlag(bars, closes);
+  // W detector accepts spacing thresholds via opts. Daily caller leaves
+  // defaults (8-40 bars). Weekly caller passes tighter (4-16 bars =
+  // 1-4 months) to match institutional reversal scale.
+  const wPattern      = detectWPattern(bars, closes, opts.w || {});
 
-  const patterns = { cupHandle, ascendingBase, powerPlay, highTightFlag };
+  const patterns = { cupHandle, ascendingBase, powerPlay, highTightFlag, wPattern };
 
   // Count detected patterns and pick the highest-confidence one
   const detected = Object.entries(patterns).filter(([, v]) => v.detected);

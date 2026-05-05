@@ -343,7 +343,11 @@ async function _runRSScanBody(UNIVERSE, SECTOR_MAP) {
         const wMA10 = _smaLast(wCloses, 10);   // ≈ daily MA50
         const wMA30 = _smaLast(wCloses, 30);   // ≈ daily MA150
         const wMA40 = _smaLast(wCloses, 40);   // ≈ daily MA200
-        patternDataWeekly = detectPatterns(wBars, wCloses, wMA10, wMA30, wMA40);
+        // Weekly W spacing: 4-16 bars = 1-4 months (institutional reversal
+        // scale). Default 8-40 bars on weekly = 2-10 months which is too wide.
+        patternDataWeekly = detectPatterns(wBars, wCloses, wMA10, wMA30, wMA40, {
+          w: { minSpacing: 4, maxSpacing: 16 },
+        });
       }
     } catch(_) {}
 
