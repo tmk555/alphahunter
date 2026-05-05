@@ -46,6 +46,50 @@ const { calcSEPA }   = require('./signals/sepa');
 const { calcEarningsDrift } = require('./signals/earningsDrift');
 const { calcBeta } = require('./risk/position-sizer');
 const { detectPatterns } = require('./signals/patterns');
+
+// ─── Daily → Weekly bar aggregator ─────────────────────────────────────
+// Groups daily bars into weekly bars keyed by ISO Monday. Open = Monday's
+// open, High = max(week.high), Low = min(week.low), Close = Friday's close,
+// Volume = sum. Used for weekly pattern detection — same cup-handle /
+// ascending-base / power-play / HTF detectors but on a smoother bar series
+// where short-term noise can't trigger a false positive.
+function _dailyToWeekly(bars) {
+  if (!bars || !bars.length) return [];
+  const weekly = [];
+  let cur = null;
+  for (const b of bars) {
+    const d = new Date(b.date);
+    // ISO week starts Monday. Snap each bar's date to its week's Monday.
+    const day = d.getUTCDay();           // 0=Sun..6=Sat
+    const offset = day === 0 ? -6 : 1 - day;
+    const monday = new Date(d);
+    monday.setUTCDate(monday.getUTCDate() + offset);
+    const weekKey = monday.toISOString().slice(0, 10);
+    if (!cur || cur.date !== weekKey) {
+      if (cur) weekly.push(cur);
+      cur = {
+        date: weekKey,
+        open: +b.open, high: +b.high, low: +b.low, close: +b.close,
+        volume: +(b.volume || 0),
+      };
+    } else {
+      cur.high = Math.max(cur.high, +b.high);
+      cur.low  = Math.min(cur.low,  +b.low);
+      cur.close = +b.close;
+      cur.volume += +(b.volume || 0);
+    }
+  }
+  if (cur) weekly.push(cur);
+  return weekly;
+}
+
+// Simple SMA helper for weekly MAs (10/30/40 weeks ≈ 50/150/200 daily)
+function _smaLast(arr, period) {
+  if (!arr || arr.length < period) return null;
+  let sum = 0;
+  for (let i = arr.length - period; i < arr.length; i++) sum += arr[i];
+  return sum / period;
+}
 const { detectUnusualVolume, detectDarkPoolProxy, computeInstitutionalScore, calcInstitutionalAdjustment } = require('./signals/institutional');
 const { getDB } = require('./data/database');
 
@@ -279,11 +323,28 @@ async function _runRSScanBody(UNIVERSE, SECTOR_MAP) {
     const earningsDrift = calcEarningsDrift(barsMap[sym], daysToEarnings, q);
     const beta = calcBeta(closes, spyCloses, 252);
 
-    // Enhanced pattern detection (v8)
+    // Enhanced pattern detection (v8) — DAILY bars
     let patternData = { patterns: {}, patternCount: 0, bestPattern: null };
     try {
       patternData = detectPatterns(barsMap[sym] || [], closes, ma50, ma150, ma200);
       persistPatternDetections(sym, patternData);
+    } catch(_) {}
+
+    // WEEKLY pattern detection — same detectors on aggregated weekly bars.
+    // Weekly cup-handle / ascending-base / power-play / HTF are cleaner
+    // signals for position trading because day-to-day noise can't trigger
+    // false positives. A weekly cup with handle is the canonical Minervini
+    // / O'Neil setup. MA periods scale: 10/30/40 weeks ≈ 50/150/200 days.
+    let patternDataWeekly = { patterns: {}, patternCount: 0, bestPattern: null };
+    try {
+      const wBars = _dailyToWeekly(barsMap[sym] || []);
+      if (wBars.length >= 30) {
+        const wCloses = wBars.map(b => b.close);
+        const wMA10 = _smaLast(wCloses, 10);   // ≈ daily MA50
+        const wMA30 = _smaLast(wCloses, 30);   // ≈ daily MA150
+        const wMA40 = _smaLast(wCloses, 40);   // ≈ daily MA200
+        patternDataWeekly = detectPatterns(wBars, wCloses, wMA10, wMA30, wMA40);
+      }
     } catch(_) {}
 
     // Institutional flow proxy (v8)
@@ -341,6 +402,9 @@ async function _runRSScanBody(UNIVERSE, SECTOR_MAP) {
       beta,
       patternData,
       bestPattern: patternData.bestPattern,
+      patternDataWeekly,
+      bestPatternWeekly:  patternDataWeekly.bestPattern,
+      patternCountWeekly: patternDataWeekly.patternCount,
       patternCount: patternData.patternCount,
       institutionalData,
       institutionalScore: institutionalData?.institutionalScore || null,

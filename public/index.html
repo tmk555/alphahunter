@@ -4058,6 +4058,22 @@ function SectorStocks({ sectorName, rsData: propData, onClose }) {
                 {(s.rsRank>=70&&(s.rsTrend?.vs4w||0)>0&&s.swingMomentum>=60) && <span title="Triple: RS>70+Accel+Mom>60" style={{color:'var(--green)',fontWeight:700,marginRight:3}}>★</span>}
                 {s.rsLineNewHigh && <span title="RS Line at 52wk high — outperforming SPY" style={{color:'var(--gold)',fontWeight:700,marginRight:3}}>⭐</span>}
                 {(s.rsTrend?.vs4w>5&&s.rsRank>=65&&s.rsRank<80) && <span title="Emerging: RS 65-79 rising fast" style={{color:'var(--cyan)',fontWeight:700,marginRight:3}}>↗</span>}
+                {/* Weekly pattern badge — pink to distinguish from daily PatternBadge.
+                    Only one shown (the strongest weekly pattern detected). */}
+                {s.bestPatternWeekly && (() => {
+                  const labels = { cupHandle:'wCUP', ascendingBase:'wASC', powerPlay:'wPWR', highTightFlag:'wHTF' };
+                  const p = s.patternDataWeekly?.patterns?.[s.bestPatternWeekly];
+                  const tip = `WEEKLY ${labels[s.bestPatternWeekly]} — pivot $${p?.pivotPrice?.toFixed(2) || '—'}. Stronger than daily variant.`;
+                  return <span title={tip} style={{color:'#ff80ab',fontWeight:700,marginRight:3}}>{labels[s.bestPatternWeekly]}{s.patternCountWeekly > 1 ? `+${s.patternCountWeekly-1}` : ''}</span>;
+                })()}
+                {/* RS-trend direction — inline mini-badge using ±3 threshold */}
+                {s.rsTrend?.vs4w != null && (() => {
+                  const v = s.rsTrend.vs4w;
+                  if (v >= 3)  return <span title={`RS ↑ rising · 4w +${v}`} style={{color:'var(--green)',fontWeight:700,marginRight:3}}>RS↑</span>;
+                  if (v <= -3) return <span title={`RS ↓ falling · 4w ${v}`} style={{color:'var(--red)',fontWeight:700,marginRight:3}}>RS↓</span>;
+                  // Flat is the noisy default — only show explicitly when other signals exist
+                  return null;
+                })()}
                 {s.vcpForming && <span title={`VCP ${s.vcpCount}× contractions. Pivot $${s.vcpPivot}`} style={{color:'var(--purple)',fontWeight:700,marginRight:3}}>VCP</span>}
                 {s.stage===2 && <span title="Stage 2 Uptrend" style={{color:'var(--green)',fontWeight:700,marginRight:3}}>S2</span>}
                 {s.stage===4 && <span title="Stage 4 Downtrend — avoid" style={{color:'var(--red)',fontWeight:700,marginRight:3}}>S4</span>}
@@ -5030,6 +5046,18 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     'ASC': s => s.patternData?.patterns?.ascendingBase?.detected,
     'PWR': s => s.patternData?.patterns?.powerPlay?.detected,
     'HTF': s => s.patternData?.patterns?.highTightFlag?.detected,
+    // Weekly variants — same patterns detected on weekly bars (cleaner
+    // signal, fewer false positives from daily noise). Source:
+    // patternDataWeekly attached by scanner.js
+    'wCUP': s => s.patternDataWeekly?.patterns?.cupHandle?.detected,
+    'wASC': s => s.patternDataWeekly?.patterns?.ascendingBase?.detected,
+    'wPWR': s => s.patternDataWeekly?.patterns?.powerPlay?.detected,
+    'wHTF': s => s.patternDataWeekly?.patterns?.highTightFlag?.detected,
+    // RS-trend direction filters. ±3 threshold matches the RSTrendBadge
+    // up/down/flat coloring elsewhere in the UI for consistency.
+    'RS↑': s => (s.rsTrend?.vs4w ?? 0) >= 3,
+    'RS→': s => Math.abs(s.rsTrend?.vs4w ?? 0) < 3,
+    'RS↓': s => (s.rsTrend?.vs4w ?? 0) <= -3,
     'S1':  s => s.stage===1,
     'S2':  s => s.stage===2,
     'S3':  s => s.stage===3,
@@ -5233,10 +5261,23 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             {key:'↗',   label:'↗ Emerging',     title:'RS 65-79 rising fast (Accel>+5) — catch leaders early',col:'var(--cyan)'},
             {key:'PYR', label:'🔺 Pyramid-ready',title:'Has a pivot detectable by the pyramid engine (VCP or any chart pattern — cup/asc/power/HTF). pyramid_auto will build successfully on these.',col:'var(--cyan)'},
             {key:'VCP', label:'VCP',             title:'Volatility Contraction Pattern — coiling setup',col:'var(--purple)'},
-            {key:'CUP', label:'CUP',             title:'Cup & Handle — U-shaped base with handle pullback',col:'var(--cyan)'},
-            {key:'ASC', label:'ASC',             title:'Ascending Base — 3+ rising lows with tightening range',col:'var(--cyan)'},
-            {key:'PWR', label:'PWR',             title:'Power Play — tight consolidation near highs after strong advance',col:'var(--cyan)'},
-            {key:'HTF', label:'HTF',             title:'High Tight Flag — 100%+ gain then 10-25% correction',col:'var(--cyan)'},
+            {key:'CUP', label:'CUP',             title:'Cup & Handle — U-shaped base with handle pullback (DAILY bars)',col:'var(--cyan)'},
+            {key:'ASC', label:'ASC',             title:'Ascending Base — 3+ rising lows with tightening range (DAILY bars)',col:'var(--cyan)'},
+            {key:'PWR', label:'PWR',             title:'Power Play — tight consolidation near highs after strong advance (DAILY bars)',col:'var(--cyan)'},
+            {key:'HTF', label:'HTF',             title:'High Tight Flag — 100%+ gain then 10-25% correction (DAILY bars)',col:'var(--cyan)'},
+            // Weekly variants — same detectors on weekly-aggregated bars.
+            // Cleaner signal (filters daily noise), more durable patterns
+            // (e.g. weekly cup-handle is the canonical Minervini setup).
+            {key:'wCUP',label:'wCUP',            title:'Cup & Handle on WEEKLY bars — institutional-scale base. Cleaner than daily; longer-duration pattern. The Minervini canonical setup.',col:'#ff80ab'},
+            {key:'wASC',label:'wASC',            title:'Ascending Base on WEEKLY bars — multi-month higher lows. Longer-duration than daily ASC.',col:'#ff80ab'},
+            {key:'wPWR',label:'wPWR',            title:'Power Play on WEEKLY bars — tight 3+ week consolidation near highs. Stronger than daily PWR.',col:'#ff80ab'},
+            {key:'wHTF',label:'wHTF',            title:'High Tight Flag on WEEKLY bars — full multi-month rally + flag. Rare, very strong continuation pattern.',col:'#ff80ab'},
+            // RS-trend direction chips — uses rsTrend.vs4w (4-week rank
+            // change) to classify rising / flat / falling. Same data
+            // shown inline on Levels caption; here as a quick filter.
+            {key:'RS↑', label:'RS↑',             title:'RS Trend RISING — 4-week rank gained ≥3 percentile points. Fresh momentum.',col:'var(--green)'},
+            {key:'RS→', label:'RS→',             title:'RS Trend FLAT — 4-week rank changed less than ±3 points. Holding leadership.',col:'var(--text2)'},
+            {key:'RS↓', label:'RS↓',             title:'RS Trend FALLING — 4-week rank lost ≥3 percentile points. Decaying leader.',col:'var(--red)'},
             {key:'S1',  label:'S1 Basing',       title:'Stage 1: basing below flat 150MA — post-downtrend, watch for breakout into S2',col:'var(--text3)'},
             {key:'S2',  label:'S2 Uptrend',      title:'Stage 2: price above rising 150MA — the ONLY stage to buy longs',col:'var(--green)'},
             {key:'S3',  label:'S3 Topping',      title:'Stage 3: above 150MA but MA flattening — institutional distribution, reduce/avoid',col:'var(--amber)'},
@@ -5643,10 +5684,12 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
           </>
         )}
 
-        {/* ── RS TREND HISTORY (merged) ── */}
-        {rsLoaded && (
-          <RSTrendSection rsData={rsData} />
-        )}
+        {/* RSTrendSection (RS history standalone table) was here. Removed
+            — RS history (vs1w / vs4w / vs3m + multi-tf D/W/M ranks) is
+            now surfaced inline on every row's Levels caption and as the
+            RS↑ / RS→ / RS↓ chip filters above. The standalone table was
+            duplicating data already accessible elsewhere with no extra
+            sortability the row table doesn't already offer. */}
       </div>
     </div>
   );
