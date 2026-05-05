@@ -4863,11 +4863,14 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     vcp_breakout:     (a,b) => (a.volumeRatio||1) - (b.volumeRatio||1),
     sepa_trend:       (a,b) => (b.sepaScore||0) - (a.sepaScore||0),
     rs_line_new_high: (a,b) => (b.rsRank||0) - (a.rsRank||0),
-    conviction:       (a,b) => {
-      const score = s => (s.rsRank||0)*0.25+(s.swingMomentum||0)*0.20+(s.sepaScore||0)*2.5
-        +(s.rsLineNewHigh?8:0)+(s.vcpForming?6:0)+((s.rsTimeframeAlignment||0)>=3?8:(s.rsTimeframeAlignment||0)>=2?4:0);
-      return score(b)-score(a);
-    },
+    // Use the SCANNER'S canonical convictionScore (30+ factors:
+    // patterns, insider, stage, EPS revisions, sector RS, accumulation,
+    // institutional flow, etc.) — NOT a 6-factor approximation.
+    // Pre-fix this hand-rolled formula included only RS/Mom/SEPA/RS-Line/
+    // VCP/tfAlign and explicitly disagreed with s.convictionScore on
+    // every row, so selecting "Conviction" strategy produced a list that
+    // was visibly NOT sorted by conviction.
+    conviction:       (a,b) => (b.convictionScore || 0) - (a.convictionScore || 0),
     emerging_leader:  (a,b) => (b.rsTrend?.vs4w||0) - (a.rsTrend?.vs4w||0),
   };
 
