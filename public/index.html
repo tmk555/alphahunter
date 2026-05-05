@@ -3422,7 +3422,8 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
           <Cell label="R/R"        val={`${posRR}:1`}                                                 color={posRR>=2?'var(--green)':'var(--amber)'}/>
         </div>
       )}
-      {ma50Note && <div style={{fontSize:10,color:'var(--text3)',marginBottom:6}} title="Structural reference only — no longer used as the stop anchor. Stops are pure ATR-based to match the backtest preset.">{ma50Note}</div>}
+      {/* ma50Note line removed — was "Structural reference only, no longer
+          used as stop anchor." If it's not used, it shouldn't be displayed. */}
       <div style={{fontSize:10,color:'var(--text3)'}}>
         IBD RS: <strong style={{color:'var(--text)'}}>{s.rsRank}</strong>
         {/* Multi-timeframe RS — daily(=IBD RS) / weekly / monthly bar
@@ -3467,32 +3468,37 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
         {' '}·{' '}
         SwingMom: <strong style={{color:'var(--text)'}}>{s.swingMomentum}</strong> ·
         Vol: <strong style={{color:'var(--text)'}}>{s.volumeRatio?.toFixed(2)}x</strong> ·
-        {/* P/E + Forward P/E + PEG — fundamentals at a glance.
-            Trailing P/E from rsData (Yahoo quote). Forward P/E shows
-            analyst-projected earnings multiple. PEG ratio puts P/E in
-            growth context (PEG ≤ 1 = cheap relative to growth, ≥ 2 =
-            expensive). Negatives ('—') for unprofitable companies (no
-            meaningful trailing P/E). */}
-        {s.trailingPE != null && s.trailingPE > 0 && (
-          <span title="Trailing P/E (last 12 months EPS). Negative or zero EPS shows as —. Combine with PEG for growth-adjusted view.">
-            P/E: <strong style={{color:s.trailingPE<=15?'var(--green)':s.trailingPE<=30?'var(--text)':s.trailingPE<=50?'var(--amber)':'var(--red)'}}>{s.trailingPE.toFixed(1)}</strong>
-          </span>
-        )}
-        {s.fwdPE != null && s.fwdPE > 0 && (
-          <span title="Forward P/E based on analyst-projected earnings. Forward < Trailing = analysts expect EPS growth (good); Forward > Trailing = expected EPS decline.">
-            {' '}fwd <strong style={{color:s.fwdPE<=15?'var(--green)':s.fwdPE<=30?'var(--text)':s.fwdPE<=50?'var(--amber)':'var(--red)'}}>{s.fwdPE.toFixed(1)}</strong>
-          </span>
-        )}
+        {/* P/E + Forward P/E + PEG — always rendered with placeholder
+            so user knows whether data is missing vs zero. Trailing P/E
+            is null/zero for unprofitable companies (no meaningful TTM
+            multiple). Forward P/E from analyst estimates. PEG = P/E ÷
+            EPS growth rate (Lynch threshold ≤1 = cheap vs growth). */}
+        {' '}·{' '}
+        <span title="Trailing P/E (last 12 months EPS). '—' = company has negative or zero TTM earnings (unprofitable / loss-making). Many momentum stocks have no trailing P/E.">
+          P/E: <strong style={{color:!s.trailingPE||s.trailingPE<=0?'var(--text3)':s.trailingPE<=15?'var(--green)':s.trailingPE<=30?'var(--text)':s.trailingPE<=50?'var(--amber)':'var(--red)'}}>
+            {s.trailingPE && s.trailingPE > 0 ? s.trailingPE.toFixed(1) : '—'}
+          </strong>
+        </span>
+        <span title="Forward P/E based on analyst-projected next-year EPS. Forward < Trailing = analysts expect EPS growth. '—' = no analyst estimates available.">
+          {' '}fwd <strong style={{color:!s.fwdPE||s.fwdPE<=0?'var(--text3)':s.fwdPE<=15?'var(--green)':s.fwdPE<=30?'var(--text)':s.fwdPE<=50?'var(--amber)':'var(--red)'}}>
+            {s.fwdPE && s.fwdPE > 0 ? s.fwdPE.toFixed(1) : '—'}
+          </strong>
+        </span>
         {s.pegRatio != null && s.pegRatio > 0 && (
-          <span title="PEG ratio = P/E ÷ EPS growth rate. ≤1 = undervalued vs growth (Lynch's classic threshold). 1-2 = fairly valued. >2 = expensive vs growth.">
+          <span title="PEG = P/E ÷ EPS growth rate. ≤1 cheap vs growth (Lynch); 1-2 fair; >2 expensive.">
             {' '}PEG <strong style={{color:s.pegRatio<=1?'var(--green)':s.pegRatio<=2?'var(--text)':'var(--red)'}}>{s.pegRatio.toFixed(2)}</strong>
           </span>
         )}
-        {(s.trailingPE != null || s.fwdPE != null) && ' · '}
-        {s.earningsDate && <span style={{color:'var(--amber)'}}> ⚠ Earnings: {s.earningsDate} ({s.daysToEarnings}d)</span>}
-        {s.volumeTrend==='accumulating' && <span style={{color:'var(--green)'}}> · ACC (institutional buying)</span>}
-        {s.volumeTrend==='distributing' && <span style={{color:'var(--red)'}}> · DIST (institutional selling)</span>}
-        <span style={{color:'var(--text3)'}}> · Position size = (1% account) ÷ ${risk?.toFixed(2)} = shares</span>
+        {s.convictionScore != null && (
+          <span title="Conviction score (multi-factor composite, 30+ factors but 77% RS-rank-driven). Use as a sort key, not a filter.">
+            {' '}· Conv <strong style={{color:s.convictionScore>=70?'var(--green)':s.convictionScore>=45?'var(--amber)':'var(--red)'}}>{Math.round(s.convictionScore)}</strong>
+          </span>
+        )}
+        {s.earningsDate && <span style={{color:'var(--amber)'}}> · ⚠ Earnings: {s.earningsDate} ({s.daysToEarnings}d)</span>}
+        {s.volumeTrend==='accumulating' && <span style={{color:'var(--green)'}}> · ACC</span>}
+        {s.volumeTrend==='distributing' && <span style={{color:'var(--red)'}}> · DIST</span>}
+        {/* Position-size formula text removed — was instructional, not
+            per-stock. Position-size is computed elsewhere on the levels card. */}
       </div>
 
       {/* ── Analyst Revision badge (prominent, at top of levels) ──
@@ -5516,11 +5522,9 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
                   <col style={{width:'100px'}}/>{/* IBD RS */}
                   <col style={{width:'48px'}}/>{/* Mom */}
                   <col style={{width:'50px'}}/>{/* Accel */}
+                  <col style={{width:'52px'}}/>{/* Conv (NEW — sort key for tier-1 selection) */}
                   {/* Stage + Signals columns removed — same data already
-                      surfaces via the chip filters above the table.
-                      Stage is filterable as S1/S2/S3/S4/1→2 chips,
-                      individual signals (★/⭐/↗/VCP/W/wCUP/RS↑/REV/etc.)
-                      are also chips. Per-row badges duplicated chip data. */}
+                      surfaces via the chip filters above the table. */}
                   <col style={{width:'58px'}}/>{/* Ticker */}
                   <col style={{width:'84px'}}/>{/* Name */}
                   <col style={{width:'58px'}}/>{/* Price */}
@@ -5537,10 +5541,11 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
                     <StrategySH k="rsRank"        label="IBD RS"    title="Percentile rank 1-99 vs universe (12M weighted: 40% last 12w, 20% each in prior three 13w buckets). ≥80 = top 20%, ≥70 = top 30%. CAVEAT: lagging — a stock that just started rallying 2-3 weeks ago won't show high RS yet. Past leaders that decayed may still show RS≥80 from prior strength."/>
                     <StrategySH k="swingMomentum" label="Mom"       title="ABSOLUTE price velocity (not relative to peers). Base 50+(5d%×3)+(10d%×1.5)+(21d%×0.5)+5 if above MA10. Score 94≈+13% in 5d. CAVEAT: high Mom ≠ leading. A stock with Mom=99 in a flat market is moving fast; in a roaring market it might be middle of the pack. Pair with IBD RS for relative context. Distribution: ≥75 = top 25%, ≥85 = top 10%."/>
                     <StrategySH k="rsTrend.vs4w"  label="Accel"     title="RS Accel: percentile rank change vs 28 days ago. CAVEAT: single-window measure — universe stdev = 13, so ±3 changes are within noise. For sustained direction, use the RS↑/RS↓ chips above which require BOTH halves of the 12-week window to agree."/>
+                    <StrategySH k="convictionScore" label="Conv"    title="Conviction score (multi-factor composite). 77% RS-rank-driven; remaining 23% from patterns, insider, EPS revisions, sector RS, institutional flow, stage scoring, etc. Click to sort. For tier-1 selection: apply chip filters then sort by Conv descending and review top 20-30."/>
                     {/* Stage + Signals columns removed (data is in the chip
-                        filters above). Use S1/S2/S3/S4 + signal chips to
-                        narrow the visible rows; per-row badges were
-                        duplicating that information. */}
+                        filters above). Conv column ADDED so chip-filter +
+                        sort-by-conviction workflow works without picking
+                        the now-removed Conviction strategy preset. */}
                     <StrategySH k="ticker"        label="Ticker"    title="Ticker symbol. Click to sort alphabetically."/>
                     <StrategySH k="name"          label="Name"      title="Company name. Click to sort alphabetically."/>
                     <StrategySH k="price"         label="Price"     title="Current market price"/>
@@ -5593,8 +5598,15 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
                               : <span className={s.rsTrend.vs4w>3?'up':s.rsTrend.vs4w<-3?'dn':''}>{s.rsTrend.vs4w>0?'+':''}{s.rsTrend.vs4w}</span>)
                           : <span className="muted">—</span>}
                       </td>
-                      {/* Stage + Signals cells removed — data lives in the
-                          chip filters above. */}
+                      {/* Conv cell — sort-by-conviction workflow. */}
+                      <td style={{fontFamily:'var(--font-mono)',fontSize:11,fontWeight:700,
+                          color: s.convictionScore == null ? 'var(--text3)'
+                            : s.convictionScore >= 70 ? 'var(--green)'
+                            : s.convictionScore >= 45 ? 'var(--amber)'
+                            : 'var(--red)'}}
+                          title={s.convictionScore != null ? `Conviction ${s.convictionScore} (multi-factor composite, 77% RS-driven)` : 'Conviction not computed'}>
+                        {s.convictionScore != null ? Math.round(s.convictionScore) : '—'}
+                      </td>
                       <td style={{whiteSpace:'nowrap'}}>
                         {stratRank && <span style={{fontFamily:'var(--font-mono)',fontSize:9,fontWeight:700,color:isReplayPick?'var(--green)':'var(--text3)',marginRight:3}}>#{stratRank}</span>}
                         <span className="td-ticker" title={s.name}>{s.ticker}</span>
@@ -5633,7 +5645,7 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
                     </tr>
                     {expandedTicker===s.ticker && (
                       <tr ref={levelsRef}>
-                        <td colSpan={13} style={{padding:0,background:'var(--bg)',borderLeft:'3px solid var(--amber)',borderBottom:'2px solid var(--amber)'}}>
+                        <td colSpan={14} style={{padding:0,background:'var(--bg)',borderLeft:'3px solid var(--amber)',borderBottom:'2px solid var(--amber)'}}>
                           <div style={{padding:'16px 20px',animation:'fadeUp 0.2s ease'}}>
                             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
                               <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
