@@ -4879,7 +4879,11 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     vcp_breakout:     s => s.rsRank >= 70 && s.vcpForming,
     sepa_trend:       s => (s.sepaScore || 0) >= 6 && s.rsRank >= 70,
     rs_line_new_high: s => s.rsRank >= 75 && s.rsLineNewHigh,
-    conviction:       s => s.rsRank >= 60 && (s.swingMomentum || 0) >= 40,
+    // 'conviction' strategy removed — it was a black-box gate (RS≥60+Mom≥40)
+    // sorted by convictionScore. Empirically conviction is 77% RS rank
+    // anyway. To get the same effect: apply chip filters (S2 + CS + ACC +
+    // patterns + REV) and sort by the convictionScore column. More
+    // transparent and gives identical results.
     emerging_leader:  s => s.rsRank >= 65 && s.rsRank <= 79 && (s.rsTrend?.vs4w || 0) >= 5,
   };
   // Strategy-specific sort (matches replay engine candidate ranking)
@@ -4888,14 +4892,9 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     vcp_breakout:     (a,b) => (a.volumeRatio||1) - (b.volumeRatio||1),
     sepa_trend:       (a,b) => (b.sepaScore||0) - (a.sepaScore||0),
     rs_line_new_high: (a,b) => (b.rsRank||0) - (a.rsRank||0),
-    // Use the SCANNER'S canonical convictionScore (30+ factors:
-    // patterns, insider, stage, EPS revisions, sector RS, accumulation,
-    // institutional flow, etc.) — NOT a 6-factor approximation.
-    // Pre-fix this hand-rolled formula included only RS/Mom/SEPA/RS-Line/
-    // VCP/tfAlign and explicitly disagreed with s.convictionScore on
-    // every row, so selecting "Conviction" strategy produced a list that
-    // was visibly NOT sorted by conviction.
-    conviction:       (a,b) => (b.convictionScore || 0) - (a.convictionScore || 0),
+    // 'conviction' strategy sort removed (see strategyPredicates above).
+    // To sort by conviction in any strategy: click the convictionScore
+    // column header — same effect, transparent.
     emerging_leader:  (a,b) => (b.rsTrend?.vs4w||0) - (a.rsTrend?.vs4w||0),
   };
 
@@ -5347,14 +5346,15 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             // RS-trend direction chips — uses rsTrend.vs4w (4-week rank
             // change) to classify rising / flat / falling. Same data
             // shown inline on Levels caption; here as a quick filter.
-            // Multi-timeframe confluence: 4-week AND 3-month rank changes
-            // must BOTH agree on direction and BOTH be ≥5 points. Filters
-            // single-event spikes. Empirically ~10-15% of universe per
-            // direction, vs 36-39% with the old ±3 single-window noise.
-            {key:'RS',  label:'RS (sustained)',   title:'SUSTAINED RS direction — vs4w AND vs3m both move ≥5 points in same direction. Filters out flat + single-event spikes. Use when you want stocks with multi-timeframe RS dynamics.',col:'var(--cyan)'},
-            {key:'RS↑', label:'RS↑',             title:'RS Trend RISING (sustained) — 4-week rank ≥+5 AND 3-month rank ≥+5. Both timeframes agree. Filters single-spike noise.',col:'var(--green)'},
-            {key:'RS→', label:'RS→',             title:'RS Trend FLAT — both 4-week and 3-month rank changes <5 points. Stable / holding leadership.',col:'var(--text2)'},
-            {key:'RS↓', label:'RS↓',             title:'RS Trend FALLING (sustained) — 4-week ≤-5 AND 3-month ≤-5. Both timeframes agree on decay.',col:'var(--red)'},
+            // RS direction — two-halves confluence (last 4w AND prior 8w
+            // both agree). Filters single-event spikes. ~16% rising / 17%
+            // falling. Flat is the noisy default — not surfaced as a chip
+            // (absence of RS↑/RS↓ already tells you that). Superset 'RS
+            // (sustained)' removed — RS↑ and RS↓ together cover the use
+            // case; the superset just doubled chip surface for the same
+            // filter logic.
+            {key:'RS↑', label:'RS↑',             title:'RS Trend RISING (sustained). Both halves of 12-week window rising ≥3 points: vs4w ≥ +3 AND (vs3m − vs4w) ≥ +3. Rejects flat-then-spike patterns. Caveat: still relative to peers — a stock can have rising RS in a falling market.',col:'var(--green)'},
+            {key:'RS↓', label:'RS↓',             title:'RS Trend FALLING (sustained). Both halves of 12-week window falling ≤-3 points. Decaying leader / institutional rotation out.',col:'var(--red)'},
             {key:'S1',  label:'S1 Basing',       title:'Stage 1: basing below flat 150MA — post-downtrend, watch for breakout into S2',col:'var(--text3)'},
             {key:'S2',  label:'S2 Uptrend',      title:'Stage 2: price above rising 150MA — the ONLY stage to buy longs',col:'var(--green)'},
             {key:'S3',  label:'S3 Topping',      title:'Stage 3: above 150MA but MA flattening — institutional distribution, reduce/avoid',col:'var(--amber)'},
@@ -5472,7 +5472,9 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             {id:'vcp_breakout',    label:'VCP Breakout',    title:'RS≥70 + VCP forming. Sorted by lowest volume ratio (driest base).'},
             {id:'sepa_trend',      label:'SEPA Trend',      title:'SEPA≥6/8 + RS≥70. Sorted by highest SEPA score.'},
             {id:'rs_line_new_high',label:'RS Line NH',      title:'RS≥75 + RS Line at new high. Sorted by RS rank.'},
-            {id:'conviction',      label:'Conviction',      title:'RS≥60 + Momentum≥40. Sorted by multi-factor conviction score.'},
+            // 'conviction' strategy removed — was a black-box gate sorted
+            // by convictionScore. Same effect: chip filters + click the
+            // Conv column header to sort. More transparent.
             {id:'emerging_leader', label:'↗ Emerging',      title:'RS 65-79 + 4W Accel≥+5. Catch leaders early before RS 80+. Sorted by highest acceleration.'},
           ].map(f => (
             <button key={f.id} title={f.title}
@@ -5532,9 +5534,9 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
                 </colgroup>
                 <thead>
                   <tr>
-                    <StrategySH k="rsRank"        label="IBD RS"    title="Percentile rank 1-99 vs universe (12M weighted). ≥ 70 = top 30% institutional quality."/>
-                    <StrategySH k="swingMomentum" label="Mom"       title="Raw price velocity NOW — NOT vs peers. Base 50+(5d%×3)+(10d%×1.5)+(21d%×0.5)+5 if above MA10. Score 94≈13% in 5d. Score 50=flat. ≥60=fast, ≥45=ok, <40=stalling."/>
-                    <StrategySH k="rsTrend.vs4w"  label="Accel"     title="RS Accel: percentile rank change vs 28 days ago. +12=passed 12% of peers. Sort ↓ to find fastest institutional accumulation."/>
+                    <StrategySH k="rsRank"        label="IBD RS"    title="Percentile rank 1-99 vs universe (12M weighted: 40% last 12w, 20% each in prior three 13w buckets). ≥80 = top 20%, ≥70 = top 30%. CAVEAT: lagging — a stock that just started rallying 2-3 weeks ago won't show high RS yet. Past leaders that decayed may still show RS≥80 from prior strength."/>
+                    <StrategySH k="swingMomentum" label="Mom"       title="ABSOLUTE price velocity (not relative to peers). Base 50+(5d%×3)+(10d%×1.5)+(21d%×0.5)+5 if above MA10. Score 94≈+13% in 5d. CAVEAT: high Mom ≠ leading. A stock with Mom=99 in a flat market is moving fast; in a roaring market it might be middle of the pack. Pair with IBD RS for relative context. Distribution: ≥75 = top 25%, ≥85 = top 10%."/>
+                    <StrategySH k="rsTrend.vs4w"  label="Accel"     title="RS Accel: percentile rank change vs 28 days ago. CAVEAT: single-window measure — universe stdev = 13, so ±3 changes are within noise. For sustained direction, use the RS↑/RS↓ chips above which require BOTH halves of the 12-week window to agree."/>
                     {/* Stage + Signals columns removed (data is in the chip
                         filters above). Use S1/S2/S3/S4 + signal chips to
                         narrow the visible rows; per-row badges were
