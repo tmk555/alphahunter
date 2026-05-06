@@ -3464,16 +3464,14 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
 
   return (
     <div>
-      {/* Quick links — Brief drawer (catalysts/news/SEC) and Scanner-tab
-          deep dive. Both surface the same ticker in different ways:
-          drawer = side-panel with text data; Scanner = full row + chart
-          + chart toolbar. Brief is preferred for fast checks. */}
-      <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:10,paddingBottom:8,borderBottom:'1px solid var(--border)'}}>
-        <span style={{fontSize:14,fontFamily:'var(--font-mono)',fontWeight:700,color:'var(--amber)'}}>▶ {s.ticker}</span>
-        <span style={{fontSize:11,color:'var(--text3)'}}>{s.name}</span>
+      {/* BRIEF button only — the parent expanded panel (line ~5907)
+          already shows ticker + name + price + sector + mode buttons,
+          so this used to duplicate that header. Now: just the BRIEF
+          button, right-aligned, minimal footprint. */}
+      <div style={{display:'flex',justifyContent:'flex-end',marginBottom:8}}>
         <button onClick={() => window.openStockBrief?.(s.ticker)}
           title="Open Stock Brief drawer — analyst trend, catalyst tags, news, SEC filings, insider activity, fundamentals card. Side-panel; doesn't navigate away."
-          style={{marginLeft:'auto',padding:'4px 12px',fontSize:10,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:0.5,background:'transparent',color:'var(--cyan)',border:'1px solid var(--cyan)',borderRadius:3,cursor:'pointer'}}>
+          style={{padding:'4px 12px',fontSize:10,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:0.5,background:'transparent',color:'var(--cyan)',border:'1px solid var(--cyan)',borderRadius:3,cursor:'pointer'}}>
           📖 BRIEF
         </button>
       </div>
