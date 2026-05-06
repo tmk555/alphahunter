@@ -304,6 +304,8 @@ function getDrawdownStatus(currentEquity) {
 //   3. revision_up   — earnings revisions trending up (fundamental confirm)
 //   4. pattern       — vcp_forming OR rs_snapshots.pattern_type non-null
 //   5. breadth_ok    — latest breadth regime not distribution/correction
+//   6. volume_surge  — volume_ratio ≥ 2× AND within 5% of 52w high
+//                       (institutional buying near breakout — IBD canonical)
 //
 // Data source: rs_snapshots (latest), revision_scores (latest), breadth_snapshots
 // (latest). Fail-open when NO signal data exists at all (fresh DB, unseen symbol)
@@ -316,7 +318,8 @@ function evaluateSignalConfirmation(symbol) {
 
   try {
     const snap = db().prepare(`
-      SELECT rs_rank, stage, vcp_forming, pattern_type
+      SELECT rs_rank, stage, vcp_forming, pattern_type,
+             volume_ratio, dist_from_high
       FROM rs_snapshots WHERE symbol = ? AND type = 'stock'
       ORDER BY date DESC LIMIT 1
     `).get(symbol);
@@ -325,6 +328,14 @@ function evaluateSignalConfirmation(symbol) {
       if ((snap.rs_rank || 0) >= 85) present.push('rs_strong'); else missing.push('rs_strong');
       if (snap.stage === 2) present.push('stage_2'); else missing.push('stage_2');
       if (snap.vcp_forming || snap.pattern_type) present.push('pattern'); else missing.push('pattern');
+      // Volume surge — captures institutional buying near breakout. Stage 1
+      // stocks with true volume-on-volume entering a base breakout fire this
+      // signal, which lets the gate pass with breadth_ok + volume_surge = 2/6.
+      // Stage 1 stocks WITHOUT real volume (just user "feel") still get
+      // blocked — correctly.
+      const volSurge = (snap.volume_ratio || 0) >= 2.0
+                    && (snap.dist_from_high == null || snap.dist_from_high <= 0.05);
+      if (volSurge) present.push('volume_surge'); else missing.push('volume_surge');
     }
   } catch (_) {}
 
@@ -572,8 +583,8 @@ function preTradeCheck(candidate, openPositions, regime, currentPrices = {}) {
     checks.push({ rule: 'Position Size', pass: true, detail: `${posPct.toFixed(1)}% of account` });
   }
 
-  // 7. Two-signal confirmation (2026-04)
-  // Require ≥2 of {rs_strong, stage_2, revision_up, pattern, breadth_ok}.
+  // 7. Two-signal confirmation (2026-04, expanded 2026-05 to include volume_surge)
+  // Require ≥2 of {rs_strong, stage_2, revision_up, pattern, breadth_ok, volume_surge}.
   // Single-signal entries (e.g. RS alone) slipped too many low-quality stages
   // through — this gate is the primary "quality filter" upstream of sizing.
   //
