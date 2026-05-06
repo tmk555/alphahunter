@@ -117,6 +117,81 @@ function rollingVWAP(bars, period = 20) {
   return result;
 }
 
+// ─── Anchored VWAP (Brian Shannon style) ──────────────────────────────────
+// Cumulative Σ(TP×V)/Σ(V) from a SPECIFIC anchor bar forward — never resets,
+// never slides. The line tracks "average price paid by participants since
+// the anchor event." Stock above AVWAP = post-anchor buyers are in profit;
+// below = they're underwater.
+//
+// Common anchors:
+//   • Last earnings date → "where post-print buyers sit"
+//   • Breakout day → support level for the move
+//   • 52w high / 52w low → reference points for major levels
+//   • IPO date → all-time investor cost basis
+//
+// anchorIndex is the bar index to start from. Bars before the anchor return
+// null. From the anchor onward, value is cumulative volume-weighted mean.
+function anchoredVWAP(bars, anchorIndex) {
+  const n = bars.length;
+  const result = new Array(n).fill(null);
+  if (anchorIndex < 0 || anchorIndex >= n) return result;
+
+  let cumPV = 0, cumV = 0;
+  for (let i = anchorIndex; i < n; i++) {
+    const b = bars[i];
+    const tp = (b.high + b.low + b.close) / 3;
+    const vol = b.volume || 0;
+    cumPV += tp * vol;
+    cumV  += vol;
+    result[i] = cumV > 0 ? cumPV / cumV : null;
+  }
+  return result;
+}
+
+// Resolve a user-supplied anchor spec to a bar index. Spec is one of:
+//   • 'earnings' — most recent earnings date in the bars (looks up
+//     daily_bars meta or bar.metaTags) — falls back to most recent if
+//     not annotated
+//   • '52w_high' — index of highest high in last 252 bars
+//   • '52w_low'  — index of lowest low in last 252 bars
+//   • YYYY-MM-DD — exact date string match (or nearest bar on/after)
+function resolveAnchorIndex(bars, anchorSpec, opts = {}) {
+  if (!bars || !bars.length || !anchorSpec) return -1;
+  const n = bars.length;
+
+  if (anchorSpec === '52w_high') {
+    const start = Math.max(0, n - 252);
+    let bestIdx = -1, bestHigh = -Infinity;
+    for (let i = start; i < n; i++) {
+      if (bars[i].high > bestHigh) { bestHigh = bars[i].high; bestIdx = i; }
+    }
+    return bestIdx;
+  }
+  if (anchorSpec === '52w_low') {
+    const start = Math.max(0, n - 252);
+    let bestIdx = -1, bestLow = Infinity;
+    for (let i = start; i < n; i++) {
+      if (bars[i].low < bestLow) { bestLow = bars[i].low; bestIdx = i; }
+    }
+    return bestIdx;
+  }
+  if (anchorSpec === 'earnings' && opts.earningsDate) {
+    return _findBarOnOrAfter(bars, opts.earningsDate);
+  }
+  // Date string YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(anchorSpec)) {
+    return _findBarOnOrAfter(bars, anchorSpec);
+  }
+  return -1;
+}
+
+function _findBarOnOrAfter(bars, dateStr) {
+  for (let i = 0; i < bars.length; i++) {
+    if (bars[i].date >= dateStr) return i;
+  }
+  return -1;
+}
+
 // ─── Session VWAP for intraday (resets each trading day) ───────────────────
 // Cumulative Σ(TP×V)/Σ(V) from the first bar of each session. Bars must
 // carry a `.date` field (YYYY-MM-DD in ET) as the session key. This is the
@@ -545,6 +620,39 @@ module.exports = function () {
       const ma200 = maSlice(ma200s);
       const vwap  = maSlice(vwap20s);
 
+      // Anchored VWAP — read ?anchor= query (spec: 'earnings',
+      // '52w_high', '52w_low', or YYYY-MM-DD). Cumulative VWAP from
+      // the anchor bar forward. Tracks "average price paid by
+      // participants since the anchor event."
+      let avwap = null;
+      let avwapAnchor = null;
+      const anchorSpec = req.query.anchor || null;
+      if (anchorSpec) {
+        let earningsDate = null;
+        try {
+          const { cacheGet, TTL_QUOTE } = require('../data/cache');
+          const cached = cacheGet('rs:full', TTL_QUOTE);
+          if (Array.isArray(cached)) {
+            const row = cached.find(r => r.ticker === symbol);
+            if (row?.earningsDate) earningsDate = row.earningsDate;
+          }
+        } catch (_) { /* best-effort */ }
+
+        const anchorIdx = resolveAnchorIndex(allBars, anchorSpec, { earningsDate });
+        if (anchorIdx >= 0) {
+          const av = anchoredVWAP(allBars, anchorIdx);
+          avwap = av
+            .slice(offset)
+            .map((v, i) => v != null ? { time: visibleBars[i].date, value: +v.toFixed(2) } : null)
+            .filter(Boolean);
+          avwapAnchor = {
+            spec:  anchorSpec,
+            date:  allBars[anchorIdx].date,
+            price: +allBars[anchorIdx].close.toFixed(2),
+          };
+        }
+      }
+
       // ── Entry / Stop / Target horizontal markers ──────────────────────
       const markers = [];
       const entryPrice   = parseFloat(req.query.entry);
@@ -673,7 +781,10 @@ module.exports = function () {
         timeframe: 'daily',
         bars:    ohlcv,
         volume,
-        overlays: { ma50, ma150, ma200, vwap },
+        // avwap (Anchored VWAP) included only when ?anchor= is set.
+        // avwapAnchor describes the anchor bar so the UI can mark it.
+        overlays: { ma50, ma150, ma200, vwap, ...(avwap ? { avwap } : {}) },
+        avwapAnchor,
         markers,
         events,
         meta: {

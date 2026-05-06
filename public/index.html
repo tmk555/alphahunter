@@ -913,6 +913,11 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
   const pendingClick = useRef(null); // for 2-click tools: stores first click
   const drawingsRef = useRef([]);   // mirror for cleanup
 
+  // Anchored VWAP picker — null = no AVWAP, otherwise 'earnings' / '52w_high'
+  // / '52w_low' / 'YYYY-MM-DD'. Persisted per chart instance only; doesn't
+  // bleed across symbols (re-mounts on symbol change).
+  const [avwapAnchor, setAvwapAnchor] = useState(null);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -922,6 +927,7 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
     if (stop) params.set('stop', stop);
     if (target1) params.set('target1', target1);
     if (target2) params.set('target2', target2);
+    if (avwapAnchor) params.set('anchor', avwapAnchor);
     const fetchChart = (showLoader=false) => {
       if (showLoader) setLoading(true);
       api(`/api/chart/${symbol}?${params}`).then(d => {
@@ -945,7 +951,7 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
       if (isMarketHours) fetchChart(false);
     }, refreshMs);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [symbol, entry, stop, target1, target2, timeframe]);
+  }, [symbol, entry, stop, target1, target2, timeframe, avwapAnchor]);
 
   useEffect(() => {
     if (!chartData || !containerRef.current || !window.LightweightCharts) return;
@@ -1025,6 +1031,20 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
         crosshairMarkerVisible: false,
       });
       vwapSeries.setData(chartData.overlays.vwap.filter(d => d.value !== null).map(d => ({ time: d.time, value: d.value })));
+    }
+
+    // Anchored VWAP — solid gold line (Brian Shannon style). Distinct
+    // from the dashed-pink rolling VWAP. Cumulative from anchor bar.
+    if (chartData.overlays?.avwap?.length) {
+      const avwapSeries = chart.addLineSeries({
+        color: '#ffb454',
+        lineWidth: 2,
+        lineStyle: 0, // Solid (vs rolling vwap dashed)
+        priceLineVisible: false,
+        lastValueVisible: true,   // show last value — useful as a "level"
+        crosshairMarkerVisible: false,
+      });
+      avwapSeries.setData(chartData.overlays.avwap.filter(d => d.value !== null).map(d => ({ time: d.time, value: d.value })));
     }
 
     if (chartData.markers) {
@@ -1575,6 +1595,32 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
         <button onClick={clearDrawings} disabled={drawings.length===0} title="Clear all drawings" style={{opacity:drawings.length?1:0.4}}>✕ Clear</button>
         {drawings.length > 0 && <span style={{fontSize:9,color:'var(--text3)',marginLeft:4}}>{drawings.length} drawing{drawings.length>1?'s':''}</span>}
         {pendingClick.current && <span style={{fontSize:9,color:'var(--amber)',marginLeft:8}}>Click second point...</span>}
+        {/* Anchored VWAP picker — Brian Shannon style. Cumulative VWAP
+            from a chosen anchor event. Only on daily timeframe (would
+            be redundant on intraday session VWAP). */}
+        {timeframe === 'daily' && (
+          <>
+            <div className="toolbar-sep"/>
+            <span className="toolbar-label">AVWAP</span>
+            <button className={avwapAnchor===null?'draw-active':''}
+                    onClick={() => setAvwapAnchor(null)}
+                    title="No anchored VWAP">None</button>
+            <button className={avwapAnchor==='earnings'?'draw-active':''}
+                    onClick={() => setAvwapAnchor('earnings')}
+                    title="Anchored VWAP from last earnings date — 'where post-print buyers sit on average.' Above AVWAP = post-earnings buyers in profit (bullish); below = underwater.">Earn</button>
+            <button className={avwapAnchor==='52w_high'?'draw-active':''}
+                    onClick={() => setAvwapAnchor('52w_high')}
+                    title="Anchored VWAP from 52-week high — average price paid since the prior peak. Resistance level on rallies.">52w↑</button>
+            <button className={avwapAnchor==='52w_low'?'draw-active':''}
+                    onClick={() => setAvwapAnchor('52w_low')}
+                    title="Anchored VWAP from 52-week low — average price paid since the bottom. Support level on dips.">52w↓</button>
+            {chartData?.avwapAnchor && (
+              <span style={{fontSize:9,color:'#ffb454',marginLeft:4}}>
+                @ {chartData.avwapAnchor.date} ${chartData.avwapAnchor.price?.toFixed(2)}
+              </span>
+            )}
+          </>
+        )}
       </div>
       <div style={{position:'relative'}}>
         <div className="chart-overlay-legend" style={{top:8,left:10}}>
@@ -3503,6 +3549,36 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
         {s.convictionScore != null && (
           <span title="Conviction score (multi-factor composite, 30+ factors but 77% RS-rank-driven). Use as a sort key, not a filter.">
             {' '}· Conv <strong style={{color:s.convictionScore>=70?'var(--green)':s.convictionScore>=45?'var(--amber)':'var(--red)'}}>{Math.round(s.convictionScore)}</strong>
+          </span>
+        )}
+        {/* Institutional accumulation/distribution TIER — surfaces the
+            heavy vs moderate distinction. Was previously only on the brief
+            drawer + Daily Plan; now on Scanner Levels strip too. */}
+        {s.institutionalData && s.institutionalData.tier !== 'neutral' && (() => {
+          const inst = s.institutionalData;
+          const isAccum = inst.tier?.includes('accumulation');
+          const isHeavy = inst.tier?.includes('heavy');
+          const color = isAccum ? 'var(--green)' : 'var(--red)';
+          const label = inst.tier?.replace('_', ' ');
+          return (
+            <span title={`Institutional ${label} (score ${inst.institutionalScore}/100). Signals: ${(inst.signals||[]).join(', ') || '—'}. Heavy = U/D ratio ≥1.5 + power days; moderate = ≥1.2.`}>
+              {' '}·{' '}
+              <strong style={{color, fontWeight:isHeavy?700:500}}>
+                {isAccum?'▲':'▼'} {label} {inst.institutionalScore}
+              </strong>
+            </span>
+          );
+        })()}
+        {/* 50-day U/D ratio — the raw underlying number behind the tier.
+            Useful when the tier itself is 'neutral' but the user wants
+            to see the score (e.g., U/D 1.18 just barely below the 1.2
+            B-grade threshold). */}
+        {s.volumeProfile?.upDownRatio50 != null && (
+          <span title={`50-day up-volume / down-volume ratio = ${s.volumeProfile.upDownRatio50.toFixed(2)}. Grade: ${s.volumeProfile.accumulation50 || '—'}. A ≥1.5, B ≥1.2, C 0.9-1.2, D <0.9, E <0.7.`}>
+            {' '}· U/D <strong style={{color:s.volumeProfile.upDownRatio50>=1.5?'var(--green)':s.volumeProfile.upDownRatio50>=1.2?'#8bc34a':s.volumeProfile.upDownRatio50>=0.9?'var(--text2)':'var(--red)'}}>
+              {s.volumeProfile.upDownRatio50.toFixed(2)}
+              {s.volumeProfile.accumulation50 ? ` (${s.volumeProfile.accumulation50})` : ''}
+            </strong>
           </span>
         )}
         {s.earningsDate && <span style={{color:'var(--amber)'}}> · ⚠ Earnings: {s.earningsDate} ({s.daysToEarnings}d)</span>}
