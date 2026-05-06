@@ -4383,9 +4383,32 @@ function IndustryStockDrill({ etf, etfName, rsData, onClose }) {
 }
 
 // ─── Reusable sort hook ───────────────────────────────────────────────────────
-function useSortTable(defaultKey, defaultDir = -1) {
-  const [sortKey, setSortKey] = useState(defaultKey);
-  const [sortDir, setSortDir] = useState(defaultDir);
+function useSortTable(defaultKey, defaultDir = -1, persistKey = null) {
+  // Sort state persistence — when persistKey is provided, sortKey + sortDir
+  // are saved to localStorage and restored on mount. Lets the user navigate
+  // away from a tab (e.g., Scanner) and return without losing their sort.
+  // Without this, every tab switch resets the sort to defaultKey/defaultDir.
+  const _readPersisted = (suffix, fallback) => {
+    if (!persistKey) return fallback;
+    try {
+      const v = localStorage.getItem(`alphahunter:sort:${persistKey}:${suffix}`);
+      if (v == null || v === '') return fallback;
+      return suffix === 'dir' ? (+v || fallback) : v;
+    } catch (_) { return fallback; }
+  };
+
+  const [sortKey, setSortKey] = useState(() => _readPersisted('key', defaultKey));
+  const [sortDir, setSortDir] = useState(() => _readPersisted('dir', defaultDir));
+
+  // Persist on every change (cheap, runs on every sort-state update).
+  useEffect(() => {
+    if (!persistKey) return;
+    try {
+      localStorage.setItem(`alphahunter:sort:${persistKey}:key`, sortKey);
+      localStorage.setItem(`alphahunter:sort:${persistKey}:dir`, String(sortDir));
+    } catch (_) {}
+  }, [sortKey, sortDir, persistKey]);
+
   function toggleSort(k) {
     if (sortKey === k) setSortDir(d => -d);
     else { setSortKey(k); setSortDir(-1); }
@@ -5138,7 +5161,10 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
       rowRefs.current[ticker]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 50);
   }
-  const { sortData: sortRS, SH, setSort, sortKey, sortDir, toggleSort } = useSortTable('rsRank');
+  // persistKey 'scanner' = sort state survives tab navigation away/back.
+  // User clicks Conv column to sort by conviction, navigates to Daily Plan,
+  // returns to Scanner — sort is still on Conv (not reset to RS).
+  const { sortData: sortRS, SH, setSort, sortKey, sortDir, toggleSort } = useSortTable('rsRank', -1, 'scanner');
 
   // Track whether the user has manually clicked a column header since the
   // current strategy was selected. While false, the displayed list uses the
