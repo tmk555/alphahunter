@@ -1758,6 +1758,9 @@ function App() {
   const [isLive, setIsLive] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
   const [selectedSectors, setSelectedSectors] = useState(new Set());
+  // In-Scanner industry filter (parallel to selectedSectors). Industry =
+  // INDUSTRY_STOCKS bucket key, e.g. 'SMH', 'IGV', 'HACK'. Empty Set = no filter.
+  const [selectedIndustries, setSelectedIndustries] = useState(new Set());
 
   // Shared data cache
   const [rsData,    setRsData]    = useState([]);
@@ -2154,7 +2157,7 @@ function App() {
         {tab==='pulse'      && <MarketPulseTab />}
         {tab==='macro'      && <MacroTab />}
         {tab==='rotation'   && <RotationTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
-        {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} rsLoading={rsLoading} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} minMktCap={minMktCap} setMinMktCap={setMinMktCap} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} sigFilters={rsSigFilters} setSigFilters={setRsSigFilters} quickFilter={rsQuickFilter} setQuickFilter={setRsQuickFilter} scannerTarget={scannerTarget} clearScannerTarget={() => setScannerTarget(null)}/>}
+        {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} rsLoading={rsLoading} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} minMktCap={minMktCap} setMinMktCap={setMinMktCap} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} selectedIndustries={selectedIndustries} setSelectedIndustries={setSelectedIndustries} sigFilters={rsSigFilters} setSigFilters={setRsSigFilters} quickFilter={rsQuickFilter} setQuickFilter={setRsQuickFilter} scannerTarget={scannerTarget} clearScannerTarget={() => setScannerTarget(null)}/>}
         {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} rsLoading={rsLoading} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary} setupSigFilters={setupSigFilters} setSetupSigFilters={setSetupSigFilters} mode={setupMode} setMode={setSetupMode} sortBy={setupSortBy} setSortBy={setSetupSortBy} exitStrategy={setupExitStrategy} setExitStrategy={setSetupExitStrategy} minMktCap={minMktCap} setMinMktCap={setMinMktCap}/>}
         {tab==='hedge'      && <HedgeTab />}
         {tab==='trades'     && <TradesTab rsData={rsData} badgeCounts={badgeCounts}/>}
@@ -3582,8 +3585,9 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
           </span>
         )}
         {s.earningsDate && <span style={{color:'var(--amber)'}}> · ⚠ Earnings: {s.earningsDate} ({s.daysToEarnings}d)</span>}
-        {s.volumeTrend==='accumulating' && <span style={{color:'var(--green)'}}> · ACC</span>}
-        {s.volumeTrend==='distributing' && <span style={{color:'var(--red)'}}> · DIST</span>}
+        {/* 1-day ACC/DIST text labels removed — they used s.volumeTrend
+            (single-day proxy). The 50-day institutional tier + U/D
+            ratio above this line is the real accumulation signal. */}
         {/* Position-size formula text removed — was instructional, not
             per-stock. Position-size is computed elsewhere on the levels card. */}
       </div>
@@ -4731,7 +4735,7 @@ function IndustriesTab({ selectedSectors, setSelectedSectors }) {
 }
 
 // ─── RS SCANNER TAB ───────────────────────────────────────────────────────────
-function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, setMinRS, minMktCap, setMinMktCap, selectedSectors, setSelectedSectors, sigFilters, setSigFilters, scannerTarget, clearScannerTarget }) {
+function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, setMinRS, minMktCap, setMinMktCap, selectedSectors, setSelectedSectors, selectedIndustries, setSelectedIndustries, sigFilters, setSigFilters, scannerTarget, clearScannerTarget }) {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   const [rsStaging, setRsStaging] = useState(null);
@@ -5258,6 +5262,10 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     let list = rsData.filter(s => {
       if (!baseFilter(s)) return false;
       if (selectedSectors && selectedSectors.size > 0 && !selectedSectors.has(s.sector)) return false;
+      // Industry filter — multi-select. industry is the ETF symbol
+      // (e.g. 'SMH'), null for stocks not in any INDUSTRY_STOCKS bucket.
+      // Stocks with null industry are excluded when any industry is selected.
+      if (selectedIndustries && selectedIndustries.size > 0 && !selectedIndustries.has(s.industry)) return false;
       // Market cap filter — drops sub-threshold names (default $1B excludes
       // most small/micro-caps that a position trader wouldn't size into).
       if (minMktCapDollars > 0 && (s.mktCap == null || s.mktCap < minMktCapDollars)) return false;
@@ -5421,6 +5429,93 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             </button>
           )}
         </div>
+
+        {/* Sector + Industry filter chips. In-Scanner selectors so the
+            user doesn't have to navigate to Sectors tab. Multi-select,
+            empty = no filter. Sector list derived from rsData (deduped).
+            Industry list shows only buckets with stocks in current rsData. */}
+        {(() => {
+          // Sector counts
+          const sectorCounts = new Map();
+          for (const s of rsData || []) {
+            if (s.sector) sectorCounts.set(s.sector, (sectorCounts.get(s.sector) || 0) + 1);
+          }
+          const sectors = [...sectorCounts.entries()].sort((a,b) => b[1] - a[1]);
+
+          // Industry counts (only stocks that have an industry bucket)
+          const industryCounts = new Map();
+          const industryName   = new Map();
+          for (const s of rsData || []) {
+            if (s.industry) {
+              industryCounts.set(s.industry, (industryCounts.get(s.industry) || 0) + 1);
+              if (s.industryName) industryName.set(s.industry, s.industryName);
+            }
+          }
+          const industries = [...industryCounts.entries()].sort((a,b) => b[1] - a[1]);
+
+          const toggleSector = (name) => {
+            if (!setSelectedSectors) return;
+            setSelectedSectors(prev => {
+              const next = new Set(prev);
+              next.has(name) ? next.delete(name) : next.add(name);
+              return next;
+            });
+          };
+          const toggleIndustry = (etf) => {
+            if (!setSelectedIndustries) return;
+            setSelectedIndustries(prev => {
+              const next = new Set(prev);
+              next.has(etf) ? next.delete(etf) : next.add(etf);
+              return next;
+            });
+          };
+
+          return (
+            <>
+              <div style={{display:'flex',gap:5,marginBottom:6,flexWrap:'wrap',alignItems:'center'}}>
+                <span style={{fontSize:10,color:'var(--text3)',letterSpacing:1,textTransform:'uppercase',marginRight:2,minWidth:50}}>Sectors</span>
+                {sectors.map(([name, count]) => {
+                  const active = selectedSectors?.has(name);
+                  return (
+                    <button key={name} onClick={() => toggleSector(name)}
+                      title={`${count} stocks in ${name}. Click to ${active?'deselect':'select'}.`}
+                      style={{padding:'2px 8px',fontSize:10,border:`1px solid ${active?'var(--cyan)':'var(--border)'}`,borderRadius:3,background:active?'rgba(0,180,255,0.15)':'transparent',color:active?'var(--cyan)':'var(--text3)',cursor:'pointer',fontWeight:active?700:400}}>
+                      {name} <span style={{color:'var(--text3)',fontSize:9}}>{count}</span>
+                    </button>
+                  );
+                })}
+                {selectedSectors?.size > 0 && (
+                  <button onClick={() => setSelectedSectors(new Set())}
+                    style={{padding:'2px 8px',fontSize:10,border:'1px solid var(--border)',borderRadius:3,background:'transparent',color:'var(--text3)',cursor:'pointer'}}>
+                    ✕ Clear sectors
+                  </button>
+                )}
+              </div>
+              {industries.length > 0 && (
+                <div style={{display:'flex',gap:5,marginBottom:10,flexWrap:'wrap',alignItems:'center'}}>
+                  <span style={{fontSize:10,color:'var(--text3)',letterSpacing:1,textTransform:'uppercase',marginRight:2,minWidth:50}}>Industries</span>
+                  {industries.map(([etf, count]) => {
+                    const active = selectedIndustries?.has(etf);
+                    const name   = industryName.get(etf);
+                    return (
+                      <button key={etf} onClick={() => toggleIndustry(etf)}
+                        title={`${name || etf} — ${count} stocks. ETF: ${etf}. Click to ${active?'deselect':'select'}.`}
+                        style={{padding:'2px 8px',fontSize:10,border:`1px solid ${active?'var(--purple)':'var(--border)'}`,borderRadius:3,background:active?'rgba(196,77,255,0.15)':'transparent',color:active?'var(--purple)':'var(--text3)',cursor:'pointer',fontWeight:active?700:400}}>
+                        {etf} <span style={{color:'var(--text3)',fontSize:9}}>{count}</span>
+                      </button>
+                    );
+                  })}
+                  {selectedIndustries?.size > 0 && (
+                    <button onClick={() => setSelectedIndustries(new Set())}
+                      style={{padding:'2px 8px',fontSize:10,border:'1px solid var(--border)',borderRadius:3,background:'transparent',color:'var(--text3)',cursor:'pointer'}}>
+                      ✕ Clear industries
+                    </button>
+                  )}
+                </div>
+              )}
+            </>
+          );
+        })()}
 
         {/* Signal chip filters */}
         <div style={{display:'flex',gap:5,marginBottom:10,flexWrap:'wrap',alignItems:'center'}}>

@@ -46,6 +46,50 @@ const { calcSEPA }   = require('./signals/sepa');
 const { calcEarningsDrift } = require('./signals/earningsDrift');
 const { calcBeta } = require('./risk/position-sizer');
 const { detectPatterns } = require('./signals/patterns');
+const { INDUSTRY_STOCKS, INDUSTRY_ETFS } = require('../universe');
+
+// ─── Sector name normalization ────────────────────────────────────────────
+// Universe data has duplicate sector names from two sources:
+//   • SECTOR_MAP (built from ETF metadata) uses IBD-style abbreviations
+//     ('Healthcare', 'Cons Staples', 'Consumer Disc', 'Technology', ...)
+//   • Yahoo asset profile uses GICS-style full names
+//     ('Health Care', 'Consumer Staples', 'Consumer Discretionary',
+//      'Information Technology', 'Communication Services')
+// Result: filtering by 'Healthcare' missed 28 'Health Care' stocks.
+// This collapses both forms to the IBD-style abbreviated label so
+// chip filters and sector breakdowns work as a single bucket.
+const SECTOR_NORMALIZATION = {
+  'Health Care':            'Healthcare',
+  'Consumer Discretionary': 'Consumer Disc',
+  'Consumer Staples':       'Cons Staples',
+  'Information Technology': 'Technology',
+  'Communication Services': 'Comm Services',
+  'Financial Services':     'Financials',
+};
+function normalizeSector(s) {
+  if (!s) return s;
+  return SECTOR_NORMALIZATION[s] || s;
+}
+
+// ─── Industry derivation ──────────────────────────────────────────────────
+// Inverse of INDUSTRY_STOCKS — maps each ticker to its industry ETF
+// bucket. Built once at module load. Tickers in multiple buckets get the
+// first one (rare; typically only NEE/AES are in both ICLN and GRID).
+// industryName lookup uses the parallel INDUSTRY_ETFS array.
+const STOCK_TO_INDUSTRY = (() => {
+  const m = {};
+  for (const [etf, tickers] of Object.entries(INDUSTRY_STOCKS || {})) {
+    for (const t of tickers) {
+      if (!m[t]) m[t] = etf;  // first match wins
+    }
+  }
+  return m;
+})();
+const INDUSTRY_NAME_BY_ETF = (() => {
+  const m = {};
+  for (const e of INDUSTRY_ETFS || []) m[e.t] = e.n;
+  return m;
+})();
 
 // ─── Daily → Weekly bar aggregator ─────────────────────────────────────
 // Groups daily bars into weekly bars keyed by ISO Monday. Open = Monday's
@@ -381,7 +425,9 @@ async function _runRSScanBody(UNIVERSE, SECTOR_MAP) {
       volume: q.regularMarketVolume, avgVol: q.averageDailyVolume3Month,
       volumeRatio: volRatio,
       volumeSurge: volRatio >= 2.0 && (distFromHigh || 1) <= 0.05,
-      sector: SECTOR_MAP[sym] || 'Unknown',
+      sector: normalizeSector(SECTOR_MAP[sym]) || 'Unknown',
+      industry: STOCK_TO_INDUSTRY[sym] || null,                  // ETF symbol e.g. 'SMH'
+      industryName: INDUSTRY_NAME_BY_ETF[STOCK_TO_INDUSTRY[sym]] || null,  // e.g. 'Semiconductors'
       mktCap: q.marketCap, fwdPE: q.forwardPE,
       epsTrailing, epsForward, epsGrowthEst,
       pegRatio, trailingPE,
