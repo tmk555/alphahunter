@@ -1036,6 +1036,92 @@ registerJobType('fundamentals_refresh', {
   },
 });
 
+// ─── Fundamentals BACKFILL — fast initial coverage ──────────────────────────
+// Companion to fundamentals_refresh_daily. Runs every 5 minutes during
+// market hours and fills in fundamentals for stocks NOT YET in the
+// snapshot (or stale > 14 days). Each run picks up to 50 uncovered
+// stocks ordered by RS rank descending — so the highest-RS uncovered
+// names get fetched first.
+//
+// Self-terminating: once every RS≥50 stock has a fresh snapshot,
+// each run becomes a no-op (returns 0 fetched, exits in <100ms).
+// No need to manually disable; the cron stays scheduled but drops
+// to ~zero work when coverage is complete.
+//
+// Why RS≥50 floor: Yahoo's analyst coverage is sparse for low-RS
+// micro-caps. Fetching them mostly returns nulls — wastes throughput.
+// RS≥50 is "not actively in the bottom half" — reasonable cutoff.
+//
+// Why batch=50 every 5 min: 50 stocks × 12 runs/hour = 600/hour
+// peak. Yahoo tolerates. After ~2-3 hours of business-hours coverage
+// (~10-15 runs), should fully cover the addressable universe.
+registerJobType('fundamentals_backfill', {
+  description: 'Fill missing CAN SLIM fundamentals for uncovered RS≥50 stocks (every 5 min until covered, then no-op)',
+  defaultConfig: { batchSize: 50, rsFloor: 50 },
+  handler: async (config = {}) => {
+    const { getFundamentals } = require('../data/providers/manager');
+    const { cacheGet } = require('../data/cache');
+    const { getDB } = require('../data/database');
+    const batchSize = +config.batchSize || 50;
+    const rsFloor   = +config.rsFloor   || 50;
+
+    const cached = cacheGet('rs:full', 60 * 60 * 1000);
+    if (!cached || !cached.length) {
+      return { error: 'No scan results cached. Run rs_scan first.', fetched: 0 };
+    }
+
+    // Build set of symbols with fresh snapshot (≤14 days old).
+    const fresh = new Set();
+    try {
+      const rows = getDB().prepare(`
+        SELECT symbol FROM fundamentals_snapshot
+        WHERE fetched_at >= datetime('now', '-14 days')
+      `).all();
+      for (const r of rows) fresh.add(r.symbol);
+    } catch (_) { /* table missing — fall through, will fetch everything */ }
+
+    // Pick uncovered RS≥floor stocks, sorted by RS desc (highest RS first).
+    const candidates = cached
+      .filter(s => (s.rsRank || 0) >= rsFloor)
+      .filter(s => !fresh.has(s.ticker))
+      .sort((a, b) => (b.rsRank || 0) - (a.rsRank || 0))
+      .slice(0, batchSize)
+      .map(s => s.ticker);
+
+    if (candidates.length === 0) {
+      // No uncovered stocks — coverage is complete. Cron is now no-op.
+      return { fetched: 0, alreadyCovered: fresh.size, status: 'complete' };
+    }
+
+    let fetched = 0, failed = 0;
+    const concurrency = 4;
+    let idx = 0;
+    async function worker() {
+      while (idx < candidates.length) {
+        const i = idx++;
+        const sym = candidates[i];
+        try {
+          const data = await getFundamentals(sym);
+          if (data) fetched++;
+          else failed++;
+        } catch (_) { failed++; }
+        await new Promise(r => setTimeout(r, 250));
+      }
+    }
+    await Promise.all(Array.from({ length: concurrency }, worker));
+
+    // Recount coverage post-run for reporting.
+    let totalCovered = fresh.size + fetched;
+    return {
+      attempted: candidates.length,
+      fetched,
+      failed,
+      totalCovered,
+      remainingUncoveredEstimate: cached.filter(s => (s.rsRank || 0) >= rsFloor).length - totalCovered,
+    };
+  },
+});
+
 // ─── 14. Morning Brief — Pre-market push notification ─────────────────────
 // Assembles regime status, distribution days, FTD, open positions with P&L,
 // staged orders, and top scan picks into a single push to Telegram/Pushover.
@@ -1526,10 +1612,23 @@ const DEFAULT_JOBS = [
   // 5:00 PM ET pass to avoid Yahoo throttle stacking).
   {
     name: 'fundamentals_refresh_daily',
-    description: 'Pre-fetch CAN SLIM fundamentals for top 400 by RS (powers CS6 chip)',
+    description: 'Pre-fetch CAN SLIM fundamentals for top 600 by RS + tier-1/2 + open positions',
     job_type: 'fundamentals_refresh',
     cron_expression: '30 17 * * 1-5',  // 5:30 PM server local, weekdays
-    config: { topN: 400 },
+    config: { topN: 600 },
+  },
+
+  // Backfill — runs every 5 minutes during market + after-hours window.
+  // Picks up to 50 uncovered RS≥50 stocks per run. Self-terminates as
+  // a no-op once coverage is complete (returns fetched=0 fast).
+  // Schedule covers Mon-Fri 9 AM - 8 PM ET (rough server-local approx).
+  // Outside this window, daily 5:30 PM cron handles top-600 refresh.
+  {
+    name: 'fundamentals_backfill_5min',
+    description: 'Backfill fundamentals for uncovered RS≥50 stocks (50/run, every 5 min, self-terminates)',
+    job_type: 'fundamentals_backfill',
+    cron_expression: '*/5 9-20 * * 1-5',  // Every 5 min, 9 AM - 8 PM, Mon-Fri
+    config: { batchSize: 50, rsFloor: 50 },
   },
 
   // Industry rotation watcher — daily post-close. If an open position's
