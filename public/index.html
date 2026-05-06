@@ -4817,8 +4817,16 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     const v = +(localStorage.getItem('alphahunter:sepaMinScore') || 8);
     return Number.isFinite(v) ? Math.min(8, Math.max(1, v)) : 8;
   });
+  // Timeframe alignment threshold — 1 to 3. Default 3 (durable leader on
+  // all three resolutions). Less noisy than single-window RS chips —
+  // RS rank flipping ±5 on a noisy day doesn't break TF alignment.
+  const [tfMin, setTfMin] = useState(() => {
+    const v = +(localStorage.getItem('alphahunter:tfMin') || 3);
+    return Number.isFinite(v) ? Math.min(3, Math.max(1, v)) : 3;
+  });
   useEffect(() => { try { localStorage.setItem('alphahunter:csMinScore', String(csMinScore)); } catch(_){} }, [csMinScore]);
   useEffect(() => { try { localStorage.setItem('alphahunter:sepaMinScore', String(sepaMinScore)); } catch(_){} }, [sepaMinScore]);
+  useEffect(() => { try { localStorage.setItem('alphahunter:tfMin', String(tfMin)); } catch(_){} }, [tfMin]);
   // Live account size for position-sizing math in stageFromRS. Pre-fix
   // the pyramid path hardcoded $100,000 / $1,000 risk — fine for a stub
   // but wrong for any user whose account isn't exactly that size. Fetch
@@ -5309,6 +5317,12 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     // SEPA threshold filter. Default min=8 (Minervini perfect Stage-2
     // archetype) but editable inline. Source: scanner row sepaScore.
     'SEPA': s => (s.sepaScore || 0) >= sepaMinScore,
+    // Timeframe alignment filter — count of (daily/weekly/monthly RS
+    // ranks) that are ≥80. Default min=3 = durable leader across all
+    // three resolutions. Much MORE STABLE than single-window chips
+    // (RS Line NH, RS rank threshold) which flip on small daily moves.
+    // Use this as the "is this still a leader?" signal.
+    'TF': s => (s.rsTimeframeAlignment ?? s.rsTfAlignment ?? 0) >= tfMin,
   };
 
   const { filtered, replayTop5, replayRank } = (() => {
@@ -5670,6 +5684,28 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
                        onClick={e => e.stopPropagation()}
                        style={{width:28,padding:'0 4px',fontSize:10,border:'none',borderLeft:`1px solid ${active?col+'66':'var(--border)'}`,background:'transparent',color:active?col:'var(--text3)',fontWeight:700,fontFamily:'var(--font-mono)',textAlign:'center',outline:'none'}}/>
                 <span style={{padding:'0 6px 0 0',fontSize:9,color:'var(--text3)',alignSelf:'center'}}>/8</span>
+              </span>
+            );
+          })()}
+          {/* Editable TF alignment chip. Counts daily/weekly/monthly RS
+              ranks ≥80 (max 3). The MOST STABLE leadership signal in the
+              system — doesn't flip on noisy single-day RS moves. Use this
+              as 'is this still a leader?' check during the week. */}
+          {(() => {
+            const active = sigFilters.has('TF');
+            const col = 'var(--green)';
+            return (
+              <span style={{display:'inline-flex',alignItems:'stretch',border:`1px solid ${active?col:'var(--border)'}`,borderRadius:3,overflow:'hidden',height:18,background:active?col+'22':'transparent'}}
+                    title="Timeframe alignment ≥ N/3. Counts how many of {daily, weekly, monthly} RS ranks are ≥80. TF=3 = durable leader across all 3 timeframes. The most stable RS-leadership signal — doesn't flip on noisy single-day moves.">
+                <button onClick={() => toggleSig('TF')}
+                        style={{padding:'0 8px',fontSize:10,border:'none',background:'transparent',color:active?col:'var(--text3)',cursor:'pointer',fontWeight:active?700:400,fontFamily:'var(--font-mono)'}}>
+                  TF ≥
+                </button>
+                <input type="number" min="1" max="3" step="1" value={tfMin}
+                       onChange={e => { const v = +e.target.value; if (Number.isFinite(v) && v>=1 && v<=3) setTfMin(v); }}
+                       onClick={e => e.stopPropagation()}
+                       style={{width:24,padding:'0 4px',fontSize:10,border:'none',borderLeft:`1px solid ${active?col+'66':'var(--border)'}`,background:'transparent',color:active?col:'var(--text3)',fontWeight:700,fontFamily:'var(--font-mono)',textAlign:'center',outline:'none'}}/>
+                <span style={{padding:'0 6px 0 0',fontSize:9,color:'var(--text3)',alignSelf:'center'}}>/3</span>
               </span>
             );
           })()}
