@@ -148,16 +148,37 @@ function anchoredVWAP(bars, anchorIndex) {
   return result;
 }
 
+// Parse Yahoo-format date strings ("Apr 30, 2026", "Jun 3, 2026") to
+// ISO YYYY-MM-DD. Returns null if input doesn't match expected formats.
+// Yahoo's earningsDate isn't ISO so direct string compare against ISO
+// bar.date values is broken (digit '2' < letter 'A' lexicographically).
+const _MONTH = { Jan:'01', Feb:'02', Mar:'03', Apr:'04', May:'05', Jun:'06',
+                 Jul:'07', Aug:'08', Sep:'09', Oct:'10', Nov:'11', Dec:'12' };
+function _toISO(dateStr) {
+  if (!dateStr) return null;
+  // Already ISO?
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
+  // Yahoo format: "Apr 30, 2026" or "Jun 3, 2026"
+  const m = dateStr.match(/^([A-Za-z]{3})\s+(\d{1,2}),\s*(\d{4})$/);
+  if (m) {
+    const mo = _MONTH[m[1]];
+    if (!mo) return null;
+    return `${m[3]}-${mo}-${m[2].padStart(2,'0')}`;
+  }
+  return null;
+}
+
 // Resolve a user-supplied anchor spec to a bar index. Spec is one of:
-//   • 'earnings' — most recent earnings date in the bars (looks up
-//     daily_bars meta or bar.metaTags) — falls back to most recent if
-//     not annotated
+//   • 'earnings' — most recent PAST earnings date. If Yahoo's
+//     earningsDate is in the future (next scheduled), fall back to
+//     ~91 days before it (the previous quarterly print).
 //   • '52w_high' — index of highest high in last 252 bars
 //   • '52w_low'  — index of lowest low in last 252 bars
-//   • YYYY-MM-DD — exact date string match (or nearest bar on/after)
+//   • YYYY-MM-DD — exact date (or nearest bar on/after)
 function resolveAnchorIndex(bars, anchorSpec, opts = {}) {
   if (!bars || !bars.length || !anchorSpec) return -1;
   const n = bars.length;
+  const lastBarDate = bars[n - 1].date;  // ISO YYYY-MM-DD
 
   if (anchorSpec === '52w_high') {
     const start = Math.max(0, n - 252);
@@ -176,7 +197,17 @@ function resolveAnchorIndex(bars, anchorSpec, opts = {}) {
     return bestIdx;
   }
   if (anchorSpec === 'earnings' && opts.earningsDate) {
-    return _findBarOnOrAfter(bars, opts.earningsDate);
+    let iso = _toISO(opts.earningsDate);
+    if (!iso) return -1;
+    // If date is in the future (Yahoo returned NEXT earnings), step
+    // back ~91 days to estimate the PREVIOUS earnings. AVWAP-from-
+    // earnings is meant to track post-print buyer cost basis.
+    if (iso > lastBarDate) {
+      const d = new Date(iso + 'T12:00:00Z');
+      d.setUTCDate(d.getUTCDate() - 91);
+      iso = d.toISOString().slice(0, 10);
+    }
+    return _findBarOnOrAfter(bars, iso);
   }
   // Date string YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(anchorSpec)) {
@@ -185,9 +216,9 @@ function resolveAnchorIndex(bars, anchorSpec, opts = {}) {
   return -1;
 }
 
-function _findBarOnOrAfter(bars, dateStr) {
+function _findBarOnOrAfter(bars, isoDate) {
   for (let i = 0; i < bars.length; i++) {
-    if (bars[i].date >= dateStr) return i;
+    if (bars[i].date >= isoDate) return i;
   }
   return -1;
 }
