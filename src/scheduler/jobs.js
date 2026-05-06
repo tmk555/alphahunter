@@ -868,7 +868,12 @@ registerJobType('scale_in_check', {
 
 registerJobType('revision_scan', {
   description: 'Fetch earnings estimate revisions for top stocks and store snapshots for trend tracking',
-  defaultConfig: { topN: 100 },
+  // Bumped 100 → 200 so RS-borderline names (rank 80-100) don't fall in/out
+  // of coverage day-to-day. Pre-fix: stocks bouncing around rank 95-105 got
+  // skipped on bad days, never accumulated 2 consecutive snapshots, never
+  // computed a revisionScore — the UI showed "No revision history yet"
+  // forever for those names.
+  defaultConfig: { topN: 200 },
   handler: async () => {
     const { fetchEstimateRevisions, storeRevisions, loadPriorRevisions, scoreRevisions } = require('../signals/earningsRevisions');
     const { cacheGet } = require('../data/cache');
@@ -943,39 +948,62 @@ registerJobType('revision_scan', {
 // viewed via the Fundamentals card — so a name like MTZ that's legitimately
 // 6/6 doesn't appear in CS6 results.
 //
-// Why topN=400: the canSlimScore is decision-grade gating for the names
-// you actually act on. Originally topN=200 but coverage felt sparse
-// (242 stocks in snapshot with 15% of universe — many tier-1 candidates
-// outside the top-200-RS would never get CAN SLIM data). 400 doubles
-// coverage to ~30% with ~3-5 min runtime per cron run, still well under
-// Yahoo's throttle ceiling.
+// Why topN=600: previous progression 200 → 400 → now 600. Coverage
+// ~38% of universe at topN=600. Yahoo's analyst coverage drops below
+// RS=70 so going past 600 hits diminishing returns (mostly nulls).
+// Plus: this cron also force-fetches tier-1/2 watchlist + open
+// positions regardless of RS rank, so YOUR curated names are always
+// fresh even if they're not in the top 600.
 //
 // Concurrency=4, throttle=250ms per worker:
-//   16 calls/sec peak, ~5/sec sustained — Yahoo tolerates fine
-//   400 stocks ÷ 4 workers ≈ 100 sequential calls per worker
-//   100 × 250ms = 25 sec per worker (parallel, so total ≈ 25-60s)
-//
-// Going beyond 400 hits diminishing returns — Yahoo returns null for
-// low-RS micro-caps (no analyst coverage), so the marginal coverage
-// benefit shrinks. 400 is the sweet spot.
+//   ~5 calls/sec sustained — Yahoo tolerates fine
+//   600 stocks ÷ 4 workers ≈ 150 sequential calls per worker
+//   150 × 250ms = ~38 sec per worker (parallel, ~38-90s total)
 registerJobType('fundamentals_refresh', {
-  description: 'Pre-fetch CAN SLIM fundamentals for top-N RS stocks (powers CS6 chip filter)',
-  defaultConfig: { topN: 400 },
+  description: 'Pre-fetch CAN SLIM fundamentals for top-N RS stocks + tier-1/2 watchlist + open positions (powers CS6 chip filter)',
+  defaultConfig: { topN: 600 },
   handler: async (config = {}) => {
     const { getFundamentals } = require('../data/providers/manager');
     const { cacheGet } = require('../data/cache');
-    const topN = +config.topN || 400;
+    const topN = +config.topN || 600;
 
     const cached = cacheGet('rs:full', 60 * 60 * 1000);
     if (!cached || !cached.length) {
       return { error: 'No scan results cached. Run rs_scan first.' };
     }
 
-    const tickers = cached
+    // Top-N by RS — the broad coverage layer.
+    const rsTopTickers = cached
       .slice()
       .sort((a, b) => (b.rsRank || 0) - (a.rsRank || 0))
       .slice(0, topN)
       .map(s => s.ticker);
+
+    // Always-fresh: tier-1/2 watchlist + open positions. Reads from
+    // daily_decisions for current tier-1/2 (set by ensureTodayPlan)
+    // and from trades for open positions. These are YOUR curated
+    // names — always covered regardless of where their RS rank sits.
+    const explicitTickers = new Set();
+    try {
+      const { getDB } = require('../data/database');
+      // Open positions
+      const openTrades = getDB().prepare(
+        `SELECT DISTINCT symbol FROM trades WHERE exit_date IS NULL`
+      ).all();
+      for (const r of openTrades) explicitTickers.add(r.symbol);
+      // Today's tier-1/2 from daily_decisions (most recent date)
+      const todaysPlan = getDB().prepare(
+        `SELECT DISTINCT symbol FROM daily_decisions
+         WHERE date = (SELECT MAX(date) FROM daily_decisions)
+           AND tier IN (1, 2)`
+      ).all();
+      for (const r of todaysPlan) explicitTickers.add(r.symbol);
+    } catch (_) { /* best-effort — fall through to RS-only coverage */ }
+
+    // Union: top-N + explicit. Dedupe via Set.
+    const tickerSet = new Set(rsTopTickers);
+    for (const t of explicitTickers) tickerSet.add(t);
+    const tickers = [...tickerSet];
 
     let fetched = 0, failed = 0, score6 = 0;
     const concurrency = 4;
@@ -1485,10 +1513,10 @@ const DEFAULT_JOBS = [
   // "No revision history yet" indefinitely.
   {
     name: 'revision_scan_daily',
-    description: 'Fetch analyst EPS/revenue estimate revisions for top 100 RS stocks',
+    description: 'Fetch analyst EPS/revenue estimate revisions for top 200 RS stocks',
     job_type: 'revision_scan',
     cron_expression: '0 17 * * 1-5',  // 5:00 PM server local, weekdays
-    config: { topN: 100 },
+    config: { topN: 200 },
   },
 
   // Fundamentals refresh — nightly after market close. Pre-fetches CAN
