@@ -943,21 +943,28 @@ registerJobType('revision_scan', {
 // viewed via the Fundamentals card — so a name like MTZ that's legitimately
 // 6/6 doesn't appear in CS6 results.
 //
-// Why topN=200: the canSlimScore is decision-grade gating for the names
-// you actually act on. Top-200 by RS gives comfortable headroom over the
-// ~50 names you might tier-1/2 or scan-screen on a given week. Full universe
-// (~2000 stocks) at concurrency=4 + 250ms throttle would take ~17 min and
-// hit Yahoo's rate-limit; top-200 takes ~2-3 min and stays well under the
-// throttle ceiling. Yahoo also tends to return null for low-RS micro-caps
-// (Yahoo doesn't have analyst coverage), so the marginal coverage benefit
-// of going beyond top-200 is small.
+// Why topN=400: the canSlimScore is decision-grade gating for the names
+// you actually act on. Originally topN=200 but coverage felt sparse
+// (242 stocks in snapshot with 15% of universe — many tier-1 candidates
+// outside the top-200-RS would never get CAN SLIM data). 400 doubles
+// coverage to ~30% with ~3-5 min runtime per cron run, still well under
+// Yahoo's throttle ceiling.
+//
+// Concurrency=4, throttle=250ms per worker:
+//   16 calls/sec peak, ~5/sec sustained — Yahoo tolerates fine
+//   400 stocks ÷ 4 workers ≈ 100 sequential calls per worker
+//   100 × 250ms = 25 sec per worker (parallel, so total ≈ 25-60s)
+//
+// Going beyond 400 hits diminishing returns — Yahoo returns null for
+// low-RS micro-caps (no analyst coverage), so the marginal coverage
+// benefit shrinks. 400 is the sweet spot.
 registerJobType('fundamentals_refresh', {
   description: 'Pre-fetch CAN SLIM fundamentals for top-N RS stocks (powers CS6 chip filter)',
-  defaultConfig: { topN: 200 },
+  defaultConfig: { topN: 400 },
   handler: async (config = {}) => {
     const { getFundamentals } = require('../data/providers/manager');
     const { cacheGet } = require('../data/cache');
-    const topN = +config.topN || 200;
+    const topN = +config.topN || 400;
 
     const cached = cacheGet('rs:full', 60 * 60 * 1000);
     if (!cached || !cached.length) {
@@ -1491,10 +1498,10 @@ const DEFAULT_JOBS = [
   // 5:00 PM ET pass to avoid Yahoo throttle stacking).
   {
     name: 'fundamentals_refresh_daily',
-    description: 'Pre-fetch CAN SLIM fundamentals for top 200 by RS (powers CS6 chip)',
+    description: 'Pre-fetch CAN SLIM fundamentals for top 400 by RS (powers CS6 chip)',
     job_type: 'fundamentals_refresh',
     cron_expression: '30 17 * * 1-5',  // 5:30 PM server local, weekdays
-    config: { topN: 200 },
+    config: { topN: 400 },
   },
 
   // Industry rotation watcher — daily post-close. If an open position's
