@@ -414,6 +414,29 @@ async function _runRSScanBody(UNIVERSE, SECTOR_MAP) {
     const pegRatio      = q.pegRatio || null;
     const trailingPE    = q.trailingPE || null;
 
+    // 20-bar rolling VWAP — volume-weighted average over the last 20
+    // daily bars. Used as a soft mean-reversion / fair-value reference.
+    // vsVWAP20 = % above (positive) or below (negative) the VWAP20 line.
+    // Same calc the chart's rolling VWAP uses; surfaced on rsData rows
+    // so the Scanner can filter by vsVWAP distance.
+    let vwap20 = null, vsVWAP20 = null;
+    try {
+      const last20 = (barsMap[sym] || []).slice(-20);
+      if (last20.length >= 20) {
+        let pvSum = 0, vSum = 0;
+        for (const b of last20) {
+          const tp = (b.high + b.low + b.close) / 3;
+          const v = b.volume || 0;
+          pvSum += tp * v;
+          vSum  += v;
+        }
+        if (vSum > 0) {
+          vwap20 = +(pvSum / vSum).toFixed(2);
+          vsVWAP20 = price > 0 ? +(((price - vwap20) / vwap20) * 100).toFixed(2) : null;
+        }
+      }
+    } catch (_) { /* VWAP best-effort — null when bars unavailable */ }
+
     results.push({
       ticker: sym, name: q.shortName || sym,
       price, chg1d: q.regularMarketChangePercent,
@@ -431,6 +454,8 @@ async function _runRSScanBody(UNIVERSE, SECTOR_MAP) {
       mktCap: q.marketCap, fwdPE: q.forwardPE,
       epsTrailing, epsForward, epsGrowthEst,
       pegRatio, trailingPE,
+      // 20-bar rolling VWAP + distance — for the Scanner's vsVWAP filter.
+      vwap20, vsVWAP20,
       swingMomentum: swingMom,
       earningsDate,
       daysToEarnings,

@@ -4824,9 +4824,26 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     const v = +(localStorage.getItem('alphahunter:tfMin') || 3);
     return Number.isFinite(v) ? Math.min(3, Math.max(1, v)) : 3;
   });
+  // MA50 distance ceiling — passes stocks where vsMA50 ≤ N%. Excludes
+  // "chase candidates" extended too far above MA50. Default 10 (within
+  // ~10% above MA50 = healthy buy zone). 5 = perfect entry zone. 30 =
+  // any uptrend regardless of extension.
+  const [vsMA50Max, setVsMA50Max] = useState(() => {
+    const v = +(localStorage.getItem('alphahunter:vsMA50Max') || 10);
+    return Number.isFinite(v) ? Math.min(50, Math.max(0, v)) : 10;
+  });
+  // VWAP distance ceiling — same idea, for the 20-bar rolling VWAP.
+  // VWAP is volume-weighted (institutions' "fair price"), MA50 is
+  // simple-average. Different smoothing — combine for a tighter buy zone.
+  const [vsVWAPMax, setVsVWAPMax] = useState(() => {
+    const v = +(localStorage.getItem('alphahunter:vsVWAPMax') || 5);
+    return Number.isFinite(v) ? Math.min(30, Math.max(0, v)) : 5;
+  });
   useEffect(() => { try { localStorage.setItem('alphahunter:csMinScore', String(csMinScore)); } catch(_){} }, [csMinScore]);
   useEffect(() => { try { localStorage.setItem('alphahunter:sepaMinScore', String(sepaMinScore)); } catch(_){} }, [sepaMinScore]);
   useEffect(() => { try { localStorage.setItem('alphahunter:tfMin', String(tfMin)); } catch(_){} }, [tfMin]);
+  useEffect(() => { try { localStorage.setItem('alphahunter:vsMA50Max', String(vsMA50Max)); } catch(_){} }, [vsMA50Max]);
+  useEffect(() => { try { localStorage.setItem('alphahunter:vsVWAPMax', String(vsVWAPMax)); } catch(_){} }, [vsVWAPMax]);
   // Live account size for position-sizing math in stageFromRS. Pre-fix
   // the pyramid path hardcoded $100,000 / $1,000 risk — fine for a stub
   // but wrong for any user whose account isn't exactly that size. Fetch
@@ -5323,6 +5340,16 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     // (RS Line NH, RS rank threshold) which flip on small daily moves.
     // Use this as the "is this still a leader?" signal.
     'TF': s => (s.rsTimeframeAlignment ?? s.rsTfAlignment ?? 0) >= tfMin,
+    // vsMA50 ceiling — vsMA50 ≤ N% (the higher number is rejected,
+    // i.e., chase risk filter). Stocks below MA50 (negative vsMA50)
+    // also pass — those are pullback / Stage 1 candidates. Use TF or
+    // S2 to combine if you want only above-MA50 names.
+    'MA50': s => (s.vsMA50 ?? 0) <= vsMA50Max,
+    // VWAP distance ceiling — vsVWAP20 ≤ N. Stocks WITH vsVWAP data
+    // (computed from last 20 bars) pass when within the ceiling. Stocks
+    // without VWAP data (insufficient bars, e.g., recent IPO) get null
+    // vsVWAP20 → null ?? 0 → 0 → passes by default.
+    'VWAP': s => (s.vsVWAP20 ?? 0) <= vsVWAPMax,
   };
 
   const { filtered, replayTop5, replayRank } = (() => {
@@ -5706,6 +5733,50 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
                        onClick={e => e.stopPropagation()}
                        style={{width:24,padding:'0 4px',fontSize:10,border:'none',borderLeft:`1px solid ${active?col+'66':'var(--border)'}`,background:'transparent',color:active?col:'var(--text3)',fontWeight:700,fontFamily:'var(--font-mono)',textAlign:'center',outline:'none'}}/>
                 <span style={{padding:'0 6px 0 0',fontSize:9,color:'var(--text3)',alignSelf:'center'}}>/3</span>
+              </span>
+            );
+          })()}
+          {/* MA50 distance ceiling chip. Passes stocks where vsMA50 ≤ N%.
+              Use to exclude "chase candidates" extended too far above
+              MA50. Default N=10 (within ~10% of MA50 = healthy buy zone).
+              5 = perfect entry. 30 = any uptrend, no extension filter. */}
+          {(() => {
+            const active = sigFilters.has('MA50');
+            const col = '#8bc34a';
+            return (
+              <span style={{display:'inline-flex',alignItems:'stretch',border:`1px solid ${active?col:'var(--border)'}`,borderRadius:3,overflow:'hidden',height:18,background:active?col+'22':'transparent'}}
+                    title="MA50 distance ceiling. Passes stocks where vsMA50 ≤ N%. Excludes chase-risk extended names. 5%=perfect entry zone, 10%=healthy buy zone, 20%+=relaxed. Negative-vsMA50 stocks (below MA50) also pass — combine with S2 chip for above-MA50 only.">
+                <button onClick={() => toggleSig('MA50')}
+                        style={{padding:'0 8px',fontSize:10,border:'none',background:'transparent',color:active?col:'var(--text3)',cursor:'pointer',fontWeight:active?700:400,fontFamily:'var(--font-mono)'}}>
+                  vsMA50 ≤
+                </button>
+                <input type="number" min="0" max="50" step="1" value={vsMA50Max}
+                       onChange={e => { const v = +e.target.value; if (Number.isFinite(v) && v>=0 && v<=50) setVsMA50Max(v); }}
+                       onClick={e => e.stopPropagation()}
+                       style={{width:32,padding:'0 4px',fontSize:10,border:'none',borderLeft:`1px solid ${active?col+'66':'var(--border)'}`,background:'transparent',color:active?col:'var(--text3)',fontWeight:700,fontFamily:'var(--font-mono)',textAlign:'center',outline:'none'}}/>
+                <span style={{padding:'0 6px 0 0',fontSize:9,color:'var(--text3)',alignSelf:'center'}}>%</span>
+              </span>
+            );
+          })()}
+          {/* VWAP distance ceiling chip. Passes stocks where vsVWAP20 ≤ N%.
+              VWAP = 20-bar volume-weighted average (institutions' fair-price
+              reference). Combine with vsMA50 for tighter buy zone — different
+              smoothing methods catch different dimensions of "extended". */}
+          {(() => {
+            const active = sigFilters.has('VWAP');
+            const col = '#ff80ab';
+            return (
+              <span style={{display:'inline-flex',alignItems:'stretch',border:`1px solid ${active?col:'var(--border)'}`,borderRadius:3,overflow:'hidden',height:18,background:active?col+'22':'transparent'}}
+                    title="VWAP distance ceiling. Passes stocks where vsVWAP20 ≤ N%. VWAP = 20-bar volume-weighted average; institutions' soft fair-price reference. 3%=tight, 5%=normal, 10%=relaxed. Stocks with insufficient bars for VWAP (recent IPOs) pass by default.">
+                <button onClick={() => toggleSig('VWAP')}
+                        style={{padding:'0 8px',fontSize:10,border:'none',background:'transparent',color:active?col:'var(--text3)',cursor:'pointer',fontWeight:active?700:400,fontFamily:'var(--font-mono)'}}>
+                  vsVWAP ≤
+                </button>
+                <input type="number" min="0" max="30" step="1" value={vsVWAPMax}
+                       onChange={e => { const v = +e.target.value; if (Number.isFinite(v) && v>=0 && v<=30) setVsVWAPMax(v); }}
+                       onClick={e => e.stopPropagation()}
+                       style={{width:32,padding:'0 4px',fontSize:10,border:'none',borderLeft:`1px solid ${active?col+'66':'var(--border)'}`,background:'transparent',color:active?col:'var(--text3)',fontWeight:700,fontFamily:'var(--font-mono)',textAlign:'center',outline:'none'}}/>
+                <span style={{padding:'0 6px 0 0',fontSize:9,color:'var(--text3)',alignSelf:'center'}}>%</span>
               </span>
             );
           })()}
