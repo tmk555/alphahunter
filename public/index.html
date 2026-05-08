@@ -6461,17 +6461,25 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             // who's actually beating the market right now.
             // Recent additions (Phase 3.1) — flagged with `isNew` so the
             // chip render shows a small dot indicator. Flag stays on for
-            // one rollout cycle, then gets removed in a follow-up commit
-            // once the user has seen them at least once. Use to surface
-            // "look, these are new" without changing chip semantics.
-            {key:'LeadM',  label:'Lead Mkt',  title:'NEW · Beating SPY by ≥5 RS-rank points over the last 4 weeks (stock.vs4w − SPY.vs4w ≥ 5). The "actually outperforming the index right now" signal — different from RS↑ which is vs universe.',col:'var(--green)',isNew:true},
-            {key:'LagM',   label:'Lag Mkt',   title:'NEW · Trailing SPY by ≥5 RS-rank points over the last 4 weeks (stock.vs4w − SPY.vs4w ≤ -5). Stock losing ground vs index — leadership erosion, even if absolute RS is still high.',col:'var(--red)',isNew:true},
-            // Eroding: was a leader (rank ≥85 four weeks ago) but rsRank
+            // one rollout cycle, then gets removed in a follow-up commit.
+            //
+            // Naming convention matches existing RS↑/RS↓ chips so the
+            // user sees an obvious pattern:
+            //   RS↑ / RS↓     → stock's RS trend vs UNIVERSE (existing)
+            //   vsSPY↑/vsSPY↓ → stock's RS trend vs SPY (market-relative)
+            //   Leader↓       → former leader losing rank (first-to-fall)
+            //
+            // Earlier labels (Lead Mkt / Lag Mkt / Eroding) read
+            // ambiguously — "Lead Mkt" could mean "leading market" or
+            // "lead market"; "Eroding" didn't say what was eroding.
+            {key:'LeadM', label:'vsSPY↑',  title:'NEW · Beating SPY by ≥5 RS-rank points over the last 4 weeks (stock.vs4w − SPY.vs4w ≥ 5). The "actually outperforming the index right now" signal — different from RS↑ which is vs universe.',col:'var(--green)',isNew:true},
+            {key:'LagM',  label:'vsSPY↓',  title:'NEW · Trailing SPY by ≥5 RS-rank points over the last 4 weeks (stock.vs4w − SPY.vs4w ≤ -5). Losing ground vs index — leadership erosion, even if absolute RS is still high.',col:'var(--red)',isNew:true},
+            // Leader↓: was a leader (rank ≥85 four weeks ago) but rsRank
             // dropped ≥10 points since. Fingerprint of "first to fall"
             // names that lead the market down. (rsRank − vs4w) reconstructs
             // the 4-week-ago rank — if that was ≥85 AND vs4w ≤ -10, this
             // is a textbook leadership-eroding pattern.
-            {key:'Erode',  label:'Eroding',  title:'NEW · Was an RS leader (rank ≥85 four weeks ago) but lost ≥10 rank points since. (rsRank − vs4w) ≥ 85 AND vs4w ≤ -10. The first-to-fall canary signal — sell-into-strength candidate.',col:'var(--amber)',isNew:true},
+            {key:'Erode', label:'Leader↓', title:'NEW · Former leader rolling over: rank was ≥85 four weeks ago, has dropped ≥10 rank points since. (rsRank − vs4w) ≥ 85 AND vs4w ≤ -10. First-to-fall canary signal — sell-into-strength candidate.',col:'var(--amber)',isNew:true},
             {key:'VCP', label:'VCP',             title:'Volatility Contraction Pattern (DAILY bars) — 2+ price contractions of decreasing depth, range tightening over typically 3-12 weeks. Coiling spring setup before breakout. Best paired with S2 for context.',col:'var(--purple)'},
             {key:'CUP', label:'CUP',             title:'Cup & Handle (DAILY bars). U-shaped base over typically 7-65 weeks, with a smaller handle pullback near the top. Pivot = handle peak. O\'Neil\'s most reliable base pattern.',col:'var(--cyan)'},
             {key:'ASC', label:'ASC',             title:'Ascending Base (DAILY bars). 3+ higher lows with tightening price range, 9-16 weeks typical. Each low above the prior. Pivot = most-recent high.',col:'var(--cyan)'},
