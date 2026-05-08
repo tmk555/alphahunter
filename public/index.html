@@ -3855,7 +3855,17 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
         );
       })()}
       <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:8}}>
-        <div style={{fontSize:10,color:'var(--amber)',fontWeight:700,alignSelf:'center',minWidth:60}} title="10-day cadence · full-in / full-out · stop 1.0×ATR · T1 1.5×ATR · T2 2.5×ATR">⚡ SWING</div>
+        {/* Mode label: TACTICAL = the tighter ATR bracket (1×ATR stop,
+            1.5×ATR T1, 2.5×ATR T2). Suits SWING-cadence trades (10-day
+            cron limit) but the bracket style itself isn't tied to that
+            cadence — it's just "shorter, time-sensitive exits." Renamed
+            from "⚡ SWING" to disambiguate from the SWING cron cadence
+            (where SWING means "10-day hold limit"). User asked the
+            distinguishing question pre-compaction: "so swing.position
+            no more day-based?" — TACTICAL/STRATEGIC make the bracket-
+            style vs cadence distinction explicit. */}
+        <div style={{fontSize:10,color:'var(--amber)',fontWeight:700,alignSelf:'center',minWidth:70}}
+             title="TACTICAL bracket — tighter ATR stops + targets (stop 1.0×ATR · T1 1.5×ATR · T2 2.5×ATR). Suits time-sensitive trades and the SWING cadence (10-day cron hold limit). Use this when you want to be in-and-out within ~2 weeks.">⚡ TACTICAL</div>
         <Cell label={isCustomEntry ? "Entry (custom)" : "Entry"}  val={`$${price?.toFixed(2)}`}         color="var(--cyan)"/>
         <Cell label={isCustomStop ? "Stop (custom)" : `Stop: ${stopReason}`}  val={`$${stop} (-${stopPct}%)`}       color="var(--red)"/>
         <Cell label="Target 1 (1.5×ATR)" val={`$${t1}`}                      color="var(--green)"/>
@@ -3877,7 +3887,15 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
       </div>
       {s.vsMA200 > 0 && (
         <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:6}}>
-          <div style={{fontSize:10,color:'var(--green)',fontWeight:700,alignSelf:'center',minWidth:60}} title="40-day cadence · pyramid ⅓-⅓-⅓ entry · scale-out ladder · stop 2.5×ATR · T1 3.5×ATR · T2 7×ATR">📈 POSITION</div>
+          {/* Mode label: STRATEGIC = the wider ATR bracket (2.5×ATR
+              stop, 3.5×ATR T1, 7×ATR T2). Suits POSITION-cadence
+              trades (no day limit; MA-trail-driven exits) but the
+              bracket style itself isn't tied to that cadence. Renamed
+              from "📈 POSITION" to disambiguate from the POSITION
+              cron cadence (where POSITION means "MA-trail-based,
+              structure-driven exit"). */}
+          <div style={{fontSize:10,color:'var(--green)',fontWeight:700,alignSelf:'center',minWidth:70}}
+               title="STRATEGIC bracket — wider ATR stops + targets (stop 2.5×ATR · T1 3.5×ATR · T2 7×ATR). Suits structural trades and the POSITION cadence (MA-trail driven, no fixed day limit). Pyramid ⅓-⅓-⅓ entry + scale-out ladder. Use this for multi-week / multi-month leadership trades.">📈 STRATEGIC</div>
           <Cell label="Entry zone" val={`$${(price*0.995).toFixed(2)}–$${(price*1.01).toFixed(2)}`} color="var(--cyan)"/>
           <Cell label={isCustomStop ? 'Stop: custom' : `Stop: ${posStopRsn}`} val={`$${effectivePosStop} (-${posStopPct}%)`}                                  color="var(--red)"/>
           <Cell label="Target 1 (3.5×ATR)" val={`$${posT1}`}                                                  color="var(--green)"/>
