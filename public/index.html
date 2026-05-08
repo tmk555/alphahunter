@@ -2160,6 +2160,11 @@ function App() {
         api('/api/rs-scan', { timeout: 5 * 60 * 1000 }).then(d => {
           setRsData((d.stocks || []).filter(s => s.ticker !== 'SPY'));
           setRsLoaded(true);
+          // Surface SPY's RS trend globally so SectorsTab + IndustriesTab
+          // can compute "sector vs SPY" rotation deltas without their own
+          // /api/rs-scan call. Updated each scan; null when SPY trend not
+          // yet populated in rs_snapshots.
+          window._spyTrend = d.spyTrend || null;
           return d;
         }).catch(() => null),
         loadTicker(),
@@ -4923,6 +4928,9 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
   const [selSector, setSelSector] = useState(null);
   const [rotation, setRotation] = useState(null);
   const rsData = window._rsData || [];
+  // SPY trend exposed by App.loadAll → window._spyTrend. Used to compute
+  // each sector's RS-rank delta vs SPY (the rotation heatmap signal).
+  const spyTrend = (typeof window !== 'undefined' && window._spyTrend) || null;
 
   useEffect(() => { load(); loadRotation(); }, []);
 
@@ -4938,8 +4946,89 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
     catch(_) { /* non-critical */ }
   }
 
+  // ─── ROTATION HEATMAP — early-leader / early-decliner sectors ──────
+  // For each sector compute (sector.vs4w − SPY.vs4w). Sort descending so
+  // top-of-list = sectors gaining ground vs SPY (early-leaders, money
+  // rotating in), bottom-of-list = losing ground (early-decliners,
+  // money rotating out). Color tiers: ≥+5 strong leader, ≥+2 mild lead,
+  // ≤-5 strong laggard, ≤-2 mild lag.
+  const rotationHeatmap = (() => {
+    if (!Array.isArray(data) || !data.length || !spyTrend?.vs4w) return null;
+    const enriched = data.map(s => {
+      const v4 = s.rsTrend?.vs4w;
+      if (v4 == null) return null;
+      return {
+        symbol: s.symbol, name: s.name, color: s.color,
+        sectorVs4w: v4,
+        deltaVs4w: +(v4 - spyTrend.vs4w).toFixed(1),
+        sectorRsRank: s.rsRank,
+      };
+    }).filter(Boolean);
+    enriched.sort((a, b) => b.deltaVs4w - a.deltaVs4w);
+    return enriched;
+  })();
+
   return (
     <div>
+      {/* Rotation heatmap — visible only when we have spyTrend AND
+          sector data. Renders above the main sectors table so the
+          "where is the money moving right now" answer is the first
+          thing on the page. */}
+      {rotationHeatmap && rotationHeatmap.length >= 4 && (
+        <div className="panel" style={{marginBottom:12,padding:'12px 14px'}}>
+          <div style={{display:'flex',alignItems:'baseline',gap:10,marginBottom:8,flexWrap:'wrap'}}>
+            <div className="panel-title" style={{margin:0}}>🔄 <span>Rotation Heatmap</span></div>
+            <span style={{fontSize:11,color:'var(--text3)'}}>
+              Sectors sorted by 4-week RS trend vs SPY. Top = money rotating IN (early leaders); bottom = rotating OUT (early decliners).
+            </span>
+            <span style={{marginLeft:'auto',fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>
+              SPY vs4w: <strong style={{color:spyTrend.vs4w>0?'var(--green)':spyTrend.vs4w<0?'var(--red)':'var(--text2)'}}>
+                {spyTrend.vs4w>0?'+':''}{spyTrend.vs4w}
+              </strong>
+            </span>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))',gap:6}}>
+            {rotationHeatmap.map(r => {
+              // Color tier by delta-vs-SPY magnitude. Strong leader / lag
+              // get bordered; mild gets only background. Neutral fades.
+              const d = r.deltaVs4w;
+              const colorTier =
+                d >= 5  ? { bg:'rgba(0,230,118,0.12)', border:'rgba(0,230,118,0.5)', text:'var(--green)' } :
+                d >= 2  ? { bg:'rgba(0,230,118,0.06)', border:'rgba(0,230,118,0.25)', text:'#8bc34a' } :
+                d <= -5 ? { bg:'rgba(255,61,87,0.12)', border:'rgba(255,61,87,0.5)', text:'var(--red)' } :
+                d <= -2 ? { bg:'rgba(255,61,87,0.06)', border:'rgba(255,61,87,0.25)', text:'#ff6b6b' } :
+                          { bg:'var(--bg)', border:'var(--border)', text:'var(--text2)' };
+              return (
+                <div key={r.symbol}
+                  onClick={() => {
+                    if (setSelectedSectors) setSelectedSectors(new Set([r.name]));
+                    if (window.navigateToScanner) window.navigateToScanner(null);
+                  }}
+                  title={`${r.name} (${r.symbol}) — sector vs4w ${r.sectorVs4w>0?'+':''}${r.sectorVs4w}, SPY vs4w ${spyTrend.vs4w>0?'+':''}${spyTrend.vs4w}, delta ${d>0?'+':''}${d}. RS rank ${r.sectorRsRank}. Click to focus this sector and open Scanner.`}
+                  style={{
+                    padding:'6px 10px',
+                    background: colorTier.bg,
+                    border: `1px solid ${colorTier.border}`,
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    fontSize: 11,
+                  }}>
+                  <span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:r.color||'#888'}}/>
+                  <strong style={{color:'var(--text)',flex:1}}>{r.name}</strong>
+                  <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{r.symbol}</span>
+                  <strong style={{fontFamily:'var(--font-mono)',color:colorTier.text,minWidth:32,textAlign:'right'}}>
+                    {d>0?'+':''}{d}
+                  </strong>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="panel">
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14,flexWrap:'wrap',gap:8}}>
           <div>
