@@ -359,7 +359,11 @@ async function _runRSScanBody(UNIVERSE, SECTOR_MAP) {
       const ed = new Date(ts * 1000);
       const now2 = new Date();
       daysToEarnings = Math.round((ed - now2) / (1000 * 60 * 60 * 24));
-      if (daysToEarnings >= -5 && daysToEarnings <= 90) {
+      // Set earningsDate for any earnings within ±90d (1 quarter back or
+      // 1 quarter forward). The previous -5 lower bound made the date
+      // null for stocks 6+ days post-earnings, breaking AVWAP-from-earnings
+      // anchor for any stock whose last print was over a week ago.
+      if (daysToEarnings >= -90 && daysToEarnings <= 90) {
         earningsDate = ed.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
       }
     }
