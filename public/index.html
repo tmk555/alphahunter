@@ -566,6 +566,46 @@ async function runReplayJob({ kind, body, onUpdate, signal, resumeJobId }) {
 // that the job is still running. The badge polls localStorage's active-job
 // map every 2s, fetches each job's server-side status, and renders a compact
 // summary. Clicking it routes back to Replay tab for the full progress view.
+// ─── ProvenanceTag: standardized small "where did this number come from" tag ─
+// One component for every "(SEC)", "[Yahoo]", "CACHED · as of …" surface.
+// Pre-fix the same provenance information was rendered three different
+// ways across the app — `[SEC]` letter-spaced for EPS / Revenue,
+// `(SEC)` parenthesized for P/E, free-form `Source: …` strings in
+// tooltips. Same data, three styles, no consistency.
+//
+// Use:
+//   <ProvenanceTag source="sec" />                             // inline
+//   <ProvenanceTag source="cached" asOf="2026-05-04" />        // with date
+//   <ProvenanceTag source="yahoo" label="Y/Y" />               // custom label
+//
+// Sources:
+//   sec      — SEC EDGAR XBRL filings (10-K / 10-Q quarterly facts)
+//   yahoo    — Yahoo Finance keyless endpoints
+//   polygon  — Polygon.io
+//   alpaca   — Alpaca broker
+//   cached   — daily-job rollup (live fetch unavailable; weekend fallback)
+//   pit      — point-in-time snapshot (no look-ahead bias in backtests)
+//   fallback — inferred fallback (may be biased)
+function ProvenanceTag({ source, asOf, label, style }) {
+  const SOURCE_META = {
+    sec:      { label: 'SEC',      color: 'var(--text3)', title: 'SEC EDGAR XBRL filings (10-K / 10-Q)' },
+    yahoo:    { label: 'YAHOO',    color: 'var(--text3)', title: 'Yahoo Finance' },
+    polygon:  { label: 'POLY',     color: 'var(--text3)', title: 'Polygon.io' },
+    alpaca:   { label: 'ALPACA',   color: 'var(--text3)', title: 'Alpaca broker' },
+    cached:   { label: 'CACHED',   color: 'var(--amber)', title: 'Daily-job cache (live fetch unavailable — typical on weekends/off-hours)' },
+    pit:      { label: 'PIT',      color: 'var(--green)', title: 'Point-in-time snapshot (no look-ahead bias)' },
+    fallback: { label: 'FALLBACK', color: 'var(--amber)', title: 'Inferred fallback — may be biased' },
+  };
+  const meta = SOURCE_META[source] || { label: String(source).toUpperCase(), color: 'var(--text3)', title: `Source: ${source}` };
+  const displayLabel = label || meta.label;
+  return (
+    <span title={meta.title + (asOf ? ` · as of ${asOf}` : '')}
+          style={{fontSize:8,fontFamily:'var(--font-mono)',color:meta.color,letterSpacing:1,marginLeft:4,...(style || {})}}>
+      [{displayLabel}{asOf ? ` ${asOf}` : ''}]
+    </span>
+  );
+}
+
 // ─── FreshnessBanner: one-line "is the data fresh?" pulse ─────────────
 // Replaces a scattering of per-tab status strings ("244/1598 loaded",
 // "fundamentals refreshing", "as of pit_membership") with one banner
@@ -3803,7 +3843,7 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
             {s.trailingPE && s.trailingPE > 0 ? s.trailingPE.toFixed(1) : '—'}
           </strong>
           {s.trailingPESource === 'sec' && s.trailingPE > 0 && (
-            <span style={{fontSize:9,color:'var(--text3)',marginLeft:2}}>(SEC)</span>
+            <ProvenanceTag source="sec" />
           )}
         </span>
         <span title="Forward P/E based on analyst-projected next-year EPS. Forward < Trailing = analysts expect EPS growth. '—' = no analyst estimates available.">
@@ -3936,12 +3976,9 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
               the daily-job rollup answered. Same data the Scanner row sees,
               now reflected here so the two surfaces stop disagreeing. */}
           {revData.source === 'revision_scores_cache' && revData.revision.cachedFromDate && (
-            <span style={{fontSize:9,fontFamily:'var(--font-mono)',padding:'1px 6px',borderRadius:3,
-              background:'rgba(240,165,0,0.10)',border:'1px solid rgba(240,165,0,0.35)',
-              color:'var(--amber)',letterSpacing:1}}
-              title={`Yahoo's live analyst-estimate fetch failed (typical weekend behavior). Showing the score from the last successful daily revision_scan run on ${revData.revision.cachedFromDate}. Same data the Scanner row uses.`}>
-              CACHED · as of {revData.revision.cachedFromDate}
-            </span>
+            <ProvenanceTag source="cached" asOf={revData.revision.cachedFromDate}
+              style={{fontSize:9,padding:'1px 6px',borderRadius:3,
+                background:'rgba(240,165,0,0.10)',border:'1px solid rgba(240,165,0,0.35)'}} />
           )}
           <span style={{fontSize:10,color:'var(--text3)',marginLeft:'auto'}}>
             Future earnings catalyst signal
@@ -4070,7 +4107,7 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
                       {funds.revGrowth_Q0_yoy!=null?`Q0 ${funds.revGrowth_Q0_yoy}%`:'—'}
                     </span>
                     {funds.revGrowth_Q1_yoy != null && <span style={{marginLeft:8}}>Q-1 {funds.revGrowth_Q1_yoy}%</span>}
-                    {funds.revDataSource==='sec_edgar' && <span style={{fontSize:8,color:'var(--text3)',letterSpacing:1,marginLeft:6}}>[SEC]</span>}
+                    {funds.revDataSource==='sec_edgar' && <ProvenanceTag source="sec" />}
                   </div>
                 )}
                 {/* Absolute revenue per quarter from SEC 10-Q. Only shown
@@ -4081,7 +4118,7 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
                 {Array.isArray(funds.revActualQuarterly) && funds.revActualQuarterly.length > 0 && (
                   <div style={{marginTop:4,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}
                        title="Quarterly revenue from SEC 10-Q filings (RevenueFromContractWithCustomer / Revenues / SalesRevenueNet — whichever the company tags).">
-                    <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>REVENUE [SEC]:</span>
+                    <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>REVENUE:</span><ProvenanceTag source="sec" />
                     {funds.revActualQuarterly.slice(0,4).map((r,i) => (
                       <span key={i} style={{fontSize:10,fontFamily:'var(--font-mono)',padding:'1px 6px',borderRadius:3,
                         background:'var(--bg)',border:'1px solid var(--border)',color:'var(--text)'}}
@@ -4158,7 +4195,7 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
                         {trend.map((g,i)=>(
                           <span key={i} style={{fontFamily:'var(--font-mono)',color:g>=25?'var(--green)':g>0?'var(--amber)':'var(--red)',marginRight:6}}>{g}%</span>
                         ))}
-                        {isSEC && <span style={{fontSize:8,color:'var(--text3)',letterSpacing:1,marginRight:6}}>[SEC]</span>}
+                        {isSEC && <ProvenanceTag source="sec" style={{marginRight:6}} />}
                         {funds.annualEpsAccelerating && <span style={{color:'var(--green)',fontWeight:700}}>⚡ accelerating</span>}
                       </div>
                     );
@@ -4175,7 +4212,7 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
                     return (
                       <div style={{marginTop:6,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}
                            title="Diluted EPS per share, sourced from SEC 10-K filings. True CANSLIM 'A' metric — share-count-adjusted, immune to buyback distortion.">
-                        <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>EPS/SHARE [SEC]:</span>
+                        <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>EPS/SHARE:</span><ProvenanceTag source="sec" />
                         {secYears.slice(0,5).map((v,i) => (
                           <span key={i} style={{fontSize:10,fontFamily:'var(--font-mono)',padding:'1px 6px',borderRadius:3,
                             background:v.eps>0?'rgba(0,230,118,0.08)':'rgba(255,61,87,0.08)',
