@@ -1847,7 +1847,12 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
         {pendingClick.current && <span style={{fontSize:9,color:'var(--amber)',marginLeft:8}}>Click second point...</span>}
         {/* Anchored VWAP picker — Brian Shannon style. Cumulative VWAP
             from a chosen anchor event. Only on daily timeframe (would
-            be redundant on intraday session VWAP). */}
+            be redundant on intraday session VWAP).
+            Polish: "Earn" button disabled with explanatory tooltip when
+            no earnings event is present in the chart's events list, AND
+            the toolbar shows live distance of current price from AVWAP
+            (the actionable signal — above = post-anchor buyers in
+            profit; below = underwater). */}
         {timeframe === 'daily' && (
           <>
             <div className="toolbar-sep"/>
@@ -1855,20 +1860,71 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
             <button className={avwapAnchor===null?'draw-active':''}
                     onClick={() => setAvwapAnchor(null)}
                     title="No anchored VWAP">None</button>
-            <button className={avwapAnchor==='earnings'?'draw-active':''}
-                    onClick={() => setAvwapAnchor('earnings')}
-                    title="Anchored VWAP from last earnings date — 'where post-print buyers sit on average.' Above AVWAP = post-earnings buyers in profit (bullish); below = underwater.">Earn</button>
+            {(() => {
+              // "Earn" disabled if no earnings event in chart events.
+              // Fail-safe: when chartData.events is missing/undefined we
+              // KEEP it enabled (server may still resolve the anchor —
+              // we only disable when we KNOW there's no earnings event).
+              const events = chartData?.events;
+              const earnDisabled = Array.isArray(events) && events.length > 0
+                && !events.some(e => /earning/i.test(e?.kind || e?.type || ''));
+              return (
+                <button className={avwapAnchor==='earnings'?'draw-active':''}
+                        onClick={() => !earnDisabled && setAvwapAnchor('earnings')}
+                        disabled={earnDisabled}
+                        style={earnDisabled ? {opacity:0.4,cursor:'not-allowed'} : {}}
+                        title={earnDisabled
+                          ? 'No earnings event in the loaded chart range — Yahoo earningsDate may be missing for this ticker.'
+                          : "Anchored VWAP from last earnings date — 'where post-print buyers sit on average.' Above AVWAP = post-earnings buyers in profit (bullish); below = underwater."}>Earn</button>
+              );
+            })()}
             <button className={avwapAnchor==='52w_high'?'draw-active':''}
                     onClick={() => setAvwapAnchor('52w_high')}
                     title="Anchored VWAP from 52-week high — average price paid since the prior peak. Resistance level on rallies.">52w↑</button>
             <button className={avwapAnchor==='52w_low'?'draw-active':''}
                     onClick={() => setAvwapAnchor('52w_low')}
                     title="Anchored VWAP from 52-week low — average price paid since the bottom. Support level on dips.">52w↓</button>
-            {chartData?.avwapAnchor && (
-              <span style={{fontSize:9,color:'#ffb454',marginLeft:4}}>
-                @ {chartData.avwapAnchor.date} ${chartData.avwapAnchor.price?.toFixed(2)}
-              </span>
-            )}
+            {chartData?.avwapAnchor && (() => {
+              // Latest AVWAP value (last non-null point). Compare to
+              // today's close. Defensive null checks at every step
+              // because the chart sometimes renders before the AVWAP
+              // series is fully attached.
+              const series = Array.isArray(chartData.overlays?.avwap) ? chartData.overlays.avwap : [];
+              const last   = series.length > 0
+                ? series.filter(d => d?.value != null).slice(-1)[0]
+                : null;
+              const bars   = Array.isArray(chartData.bars) ? chartData.bars : [];
+              const lastBar = bars.length > 0 ? bars[bars.length - 1] : null;
+              const close  = lastBar?.close;
+              const avwap  = last?.value;
+              const distPct = (typeof close === 'number' && typeof avwap === 'number' && avwap > 0)
+                ? +(((close - avwap) / avwap) * 100).toFixed(1)
+                : null;
+              const above = distPct != null ? distPct >= 0 : null;
+              const distColor = distPct == null ? 'var(--text3)'
+                : distPct >= 5 ? 'var(--green)'
+                : distPct >= 0 ? '#8bc34a'
+                : distPct >= -5 ? 'var(--amber)'
+                : 'var(--red)';
+              const anchorDate = chartData.avwapAnchor.date || '—';
+              const anchorPrice = typeof chartData.avwapAnchor.price === 'number'
+                ? chartData.avwapAnchor.price.toFixed(2)
+                : '—';
+              return (
+                <span style={{fontSize:9,color:'#ffb454',marginLeft:6,display:'inline-flex',alignItems:'center',gap:6,fontFamily:'var(--font-mono)'}}
+                      title={`Anchored from ${anchorDate} (anchor price $${anchorPrice}). Latest AVWAP value $${typeof avwap==='number'?avwap.toFixed(2):'—'}. Current close $${typeof close==='number'?close.toFixed(2):'—'} = ${distPct != null ? (distPct>=0?'+':'')+distPct+'% ' + (above ? 'above' : 'below') : '—'} the AVWAP line.`}>
+                  <span>@ {anchorDate} ${anchorPrice}</span>
+                  {typeof avwap === 'number' && (
+                    <span style={{color:'#ffb454',opacity:0.85}}>· now ${avwap.toFixed(2)}</span>
+                  )}
+                  {distPct != null && (
+                    <span style={{color:distColor,fontWeight:700,padding:'1px 6px',borderRadius:2,background:above?'rgba(0,230,118,0.10)':'rgba(255,61,87,0.10)'}}>
+                      {above ? '▲' : '▼'} {distPct>=0?'+':''}{distPct}%
+                    </span>
+                  )}
+                </span>
+              );
+            })()}
           </>
         )}
       </div>
@@ -1885,6 +1941,17 @@ function StockChart({ symbol, height = 350, entry, stop, target1, target2 }) {
                 <div className="chart-legend-item" title={chartData?.meta?.timeframe === '39min' ? 'Session VWAP — resets each trading day at 9:30 ET. Cumulative Σ(TP×V)/Σ(V).' : '20-day rolling VWAP — volume-weighted mean over the last 20 daily bars.'}>
                   <div className="chart-legend-dot" style={{background:'#ff80ab'}}/>
                   <span style={{color:'var(--text3)'}}>{vwapLabel}</span>
+                </div>
+              )}
+              {/* Anchored VWAP entry — gold solid line. Only renders
+                  when an AVWAP series is loaded; tooltip names the
+                  anchor event so the user knows what "AVWAP" means in
+                  this chart specifically. */}
+              {chartData?.overlays?.avwap?.length > 0 && (
+                <div className="chart-legend-item"
+                     title={`Anchored VWAP — cumulative Σ(TP×V)/Σ(V) from a fixed anchor bar (Brian Shannon's setup). Anchor: ${chartData?.avwapAnchor?.date || 'unknown'}${typeof chartData?.avwapAnchor?.price === 'number' ? ` ($${chartData.avwapAnchor.price.toFixed(2)})` : ''}. Above this line = anchored buyers in profit (bullish); below = underwater.`}>
+                  <div className="chart-legend-dot" style={{background:'#ffb454'}}/>
+                  <span style={{color:'var(--text3)'}}>AVWAP</span>
                 </div>
               )}
             </>);
