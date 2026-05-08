@@ -15455,9 +15455,20 @@ function TrailDecisionPanel({ position, atr, currentPrice, onChanged }) {
 
   function distFromCurrent(v) { return currentPrice ? +(((v - currentPrice) / currentPrice) * 100).toFixed(1) : null; }
   function distFromEntry(v)   { return entry ? +(((v - entry) / entry) * 100).toFixed(1) : null; }
+  // R-multiple AT the candidate exit: (stop - entry) / R. Positive =
+  // profit taken if hit; negative = below-entry stop. The "what trade
+  // outcome does this stop lock in?" number.
   function rMultipleAt(v) {
     if (!R) return null;
     return +(((v - entry) / R)).toFixed(2);
+  }
+  // Give-back R from CURRENT price: (current - stop) / R. Positive =
+  // how much R you'd give back if stopped immediately from current
+  // price. The decision-relevant number when picking a trail today —
+  // tighter stop = smaller give-back; looser = larger.
+  function giveBackR(v) {
+    if (!R || currentPrice == null) return null;
+    return +(((currentPrice - v) / R)).toFixed(2);
   }
 
   async function applyOnce(stopValue, reason) {
@@ -15513,15 +15524,27 @@ function TrailDecisionPanel({ position, atr, currentPrice, onChanged }) {
         </span>
       </div>
 
-      {/* Candidate stops table */}
+      {/* Candidate stops table — gridTemplateColumns adds a GIVE-BACK
+          column between vs-NOW and vs-ENTRY. Give-back = (current − stop)
+          in R units, the most decision-relevant number when picking a
+          trail stop ("how much R do I give back if hit from here?").
+          Tighter stop = smaller give-back; looser = larger. */}
       <div style={{border:'1px solid var(--border2)',borderRadius:3,overflow:'hidden'}}>
-        <div style={{display:'grid',gridTemplateColumns:'80px 90px 100px 100px 80px 1fr 90px',gap:0,fontSize:10,padding:'5px 8px',background:'var(--bg2)',color:'var(--text3)',fontFamily:'var(--font-mono)',letterSpacing:0.5,fontWeight:700}}>
-          <span>LEVEL</span><span>STOP</span><span>vs NOW</span><span>vs ENTRY</span><span>R-MULT</span><span>NOTE</span><span style={{textAlign:'right'}}>PICK</span>
+        <div style={{display:'grid',gridTemplateColumns:'72px 84px 88px 80px 80px 76px 1fr 80px',gap:0,fontSize:10,padding:'5px 8px',background:'var(--bg2)',color:'var(--text3)',fontFamily:'var(--font-mono)',letterSpacing:0.5,fontWeight:700}}>
+          <span>LEVEL</span>
+          <span>STOP</span>
+          <span title="% distance from current price. Negative = below current (the normal case). Positive = above current — the stop would trigger immediately.">vs NOW</span>
+          <span title="Give-back in R units if hit from current price. (current − stop) ÷ initial R. Tighter trail = smaller give-back. The decision metric: how much R am I willing to forfeit between here and the trail?">GIVE-BACK</span>
+          <span title="% distance from entry price.">vs ENTRY</span>
+          <span title="R-multiple at the candidate exit. (stop − entry) ÷ initial R. Positive = profit locked if hit; -1R = original stop level; below −1R = worse than initial stop.">R-MULT</span>
+          <span>NOTE</span>
+          <span style={{textAlign:'right'}}>PICK</span>
         </div>
         {candidates.map(c => {
           const dN = distFromCurrent(c.value);
           const dE = distFromEntry(c.value);
           const rM = rMultipleAt(c.value);
+          const gb = giveBackR(c.value);   // give-back R from current price
           const tooLoose = dN > 0;  // stop above current → would insta-trigger
           const subZero  = rM != null && rM < -1;  // exit worse than original stop
           const isPick   = chosenLevel === c.key;
@@ -15529,7 +15552,7 @@ function TrailDecisionPanel({ position, atr, currentPrice, onChanged }) {
           return (
             <div key={c.key}
               onClick={() => !tooLoose && setChosenLevel(c.key)}
-              style={{display:'grid',gridTemplateColumns:'80px 90px 100px 100px 80px 1fr 90px',gap:0,fontSize:11,padding:'5px 8px',
+              style={{display:'grid',gridTemplateColumns:'72px 84px 88px 80px 80px 76px 1fr 80px',gap:0,fontSize:11,padding:'5px 8px',
                 fontFamily:'var(--font-mono)',background:rowColor,
                 cursor:tooLoose?'not-allowed':'pointer',
                 opacity:tooLoose?0.4:1,
@@ -15537,6 +15560,13 @@ function TrailDecisionPanel({ position, atr, currentPrice, onChanged }) {
               <span style={{color:'var(--text2)',fontWeight:600}}>{c.label}</span>
               <span style={{color:'var(--text)'}}>${c.value.toFixed(2)}</span>
               <span style={{color:dN!=null?(dN<0?'var(--text3)':'var(--red)'):'var(--text3)'}}>{dN!=null?(dN>0?'+':'')+dN.toFixed(1)+'%':'—'}</span>
+              {/* GIVE-BACK in R: smaller is better. Color by tier:
+                  ≤0.5R green (tight), 0.5-1R amber (moderate), >1R red
+                  (loose). Negative gb (stop above current) shows as '—'
+                  since the row is already disabled (tooLoose). */}
+              <span style={{color:gb!=null && gb >= 0?(gb<=0.5?'var(--green)':gb<=1?'var(--amber)':'var(--red)'):'var(--text3)',fontWeight:600}}>
+                {gb!=null && gb >= 0 ? gb.toFixed(2)+'R' : '—'}
+              </span>
               <span style={{color:dE!=null?(dE<0?'var(--red)':'var(--green)'):'var(--text3)'}}>{dE!=null?(dE>0?'+':'')+dE.toFixed(1)+'%':'—'}</span>
               <span style={{color:rM!=null?(subZero?'var(--red)':rM<0?'var(--amber)':'var(--green)'):'var(--text3)',fontWeight:subZero?700:400}}>
                 {rM!=null?(rM>0?'+':'')+rM.toFixed(2)+'R':'—'}
@@ -15555,11 +15585,24 @@ function TrailDecisionPanel({ position, atr, currentPrice, onChanged }) {
             <input type="number" step="0.01" placeholder="enter $" value={customStop}
               onChange={e => { setCustomStop(e.target.value); setChosenLevel('custom'); }}
               style={{padding:'3px 8px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:3,color:'var(--text)',fontSize:11,fontFamily:'var(--font-mono)',width:120}}/>
-            {customNum > 0 && (
-              <span style={{marginLeft:10,color:'var(--text3)',fontSize:10}}>
-                vs now {distFromCurrent(customNum)>0?'+':''}{distFromCurrent(customNum)?.toFixed(1)}% · vs entry {distFromEntry(customNum)>0?'+':''}{distFromEntry(customNum)?.toFixed(1)}% · {rMultipleAt(customNum)!=null?(rMultipleAt(customNum)>0?'+':'')+rMultipleAt(customNum).toFixed(2)+'R':'—R'}
-              </span>
-            )}
+            {customNum > 0 && (() => {
+              const dN = distFromCurrent(customNum);
+              const dE = distFromEntry(customNum);
+              const rM = rMultipleAt(customNum);
+              const gb = giveBackR(customNum);
+              return (
+                <span style={{marginLeft:10,color:'var(--text3)',fontSize:10}}>
+                  vs now {dN!=null?(dN>0?'+':'')+dN.toFixed(1):'—'}%
+                  {gb != null && gb >= 0 && (
+                    <> · give-back <span style={{color:gb<=0.5?'var(--green)':gb<=1?'var(--amber)':'var(--red)',fontWeight:600}}>{gb.toFixed(2)}R</span></>
+                  )}
+                  {' · '}vs entry {dE!=null?(dE>0?'+':'')+dE.toFixed(1):'—'}%
+                  {rM != null && (
+                    <> · <span style={{color:rM<-1?'var(--red)':rM<0?'var(--amber)':'var(--green)'}}>{rM>0?'+':''}{rM.toFixed(2)}R</span> R-mult</>
+                  )}
+                </span>
+              );
+            })()}
           </span>
           <span style={{textAlign:'right'}}>
             {chosenLevel === 'custom' ? <span style={{color:'var(--cyan)',fontWeight:700}}>● picked</span> : <span style={{color:'var(--text3)'}}>○</span>}
