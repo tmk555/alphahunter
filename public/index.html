@@ -3329,6 +3329,42 @@ function GlobalTradingGuide({ onClose }) {
   );
 }
 
+// ─── Cached portfolio config + daily plan ────────────────────────────────
+// Reused across all open InlineLevels panels so we don't refetch per row.
+// 60s TTL — config changes are rare and the user can refresh manually if
+// they edit settings. window-scoped so multiple components share one fetch.
+window.__ahPortfolioCfg = window.__ahPortfolioCfg || { data: null, ts: 0, inflight: null };
+async function getPortfolioCfgCached() {
+  const cache = window.__ahPortfolioCfg;
+  const fresh = cache.data && (Date.now() - cache.ts) < 60_000;
+  if (fresh) return cache.data;
+  if (cache.inflight) return cache.inflight;
+  cache.inflight = (async () => {
+    try {
+      const cfg = await api('/api/portfolio/config');
+      cache.data = cfg; cache.ts = Date.now();
+      return cfg;
+    } finally { cache.inflight = null; }
+  })();
+  return cache.inflight;
+}
+
+window.__ahDailyPlan = window.__ahDailyPlan || { data: null, ts: 0, inflight: null };
+async function getDailyPlanCached() {
+  const cache = window.__ahDailyPlan;
+  const fresh = cache.data && (Date.now() - cache.ts) < 60_000;
+  if (fresh) return cache.data;
+  if (cache.inflight) return cache.inflight;
+  cache.inflight = (async () => {
+    try {
+      const p = await api('/api/daily-plan/today');
+      cache.data = p; cache.ts = Date.now();
+      return p;
+    } finally { cache.inflight = null; }
+  })();
+  return cache.inflight;
+}
+
 // ─── InlineLevels: shows ATR trade levels for any stock row ──────────────────
 function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
   const [funds, setFunds] = useState(null);
@@ -3338,6 +3374,27 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
   const [news,    setNews]    = useState(null);
   const [revData, setRevData] = useState(null);
   const [revLoad, setRevLoad] = useState(false);
+  const [portfolioCfg, setPortfolioCfg] = useState(null);
+  const [dailyDecision, setDailyDecision] = useState(null);
+
+  // Fetch portfolio config (accountSize + riskPct) once for sizing display.
+  useEffect(() => { getPortfolioCfgCached().then(setPortfolioCfg).catch(() => {}); }, []);
+
+  // Fetch this ticker's daily-plan decision row, if any. Surfaces tier/
+  // status (queued/staged/passed) directly on the Levels card so the user
+  // doesn't need to flip back to the Daily Plan tab to see what they
+  // decided about this name. /daily-plan/today returns the full plan;
+  // we cache it window-globally and filter for this ticker.
+  useEffect(() => {
+    if (!s?.ticker) return;
+    getDailyPlanCached()
+      .then(plan => {
+        const items = plan?.items || plan?.decisions || [];
+        const row = items.find(it => (it.symbol || it.ticker) === s.ticker);
+        setDailyDecision(row || null);
+      })
+      .catch(() => {});
+  }, [s?.ticker]);
 
   useEffect(() => {
     if (!s?.ticker) return;
@@ -3455,6 +3512,31 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
   const customStopAttempted = customStopPrice != null && customStopPrice !== '' && +customStopPrice > 0;
   const customStopInvalid   = customStopAttempted && +customStopPrice >= price;
 
+  // ─── Position sizing (live, derived from portfolio config) ──────────────
+  // dollarRisk = accountSize × riskPct/100
+  // shares     = floor(dollarRisk / (entry − stop))
+  // Mirrors src/risk/position-sizer.js fixedFractional() so the cell
+  // matches what the staging /api/portfolio/size endpoint would return.
+  const sizeFor = (entry, stp) => {
+    if (!portfolioCfg || !(entry > stp) || !(stp > 0)) return null;
+    const accountSize = +portfolioCfg.accountSize || 0;
+    const riskPct     = +portfolioCfg.riskPct || 0;
+    if (!(accountSize > 0) || !(riskPct > 0)) return null;
+    const riskPerShare = entry - stp;
+    const dollarRisk   = accountSize * (riskPct / 100);
+    const shares       = Math.floor(dollarRisk / riskPerShare);
+    if (!(shares > 0)) return null;
+    const positionValue = shares * entry;
+    return {
+      shares,
+      dollarRisk:    +dollarRisk.toFixed(0),
+      positionValue: +positionValue.toFixed(0),
+      portfolioPct:  +(positionValue / accountSize * 100).toFixed(1),
+    };
+  };
+  const swingSize = sizeFor(price, stop);
+  const posSize   = sizeFor(price, effectivePosStop);
+
   const Cell = ({label, val, color}) => (
     <div style={{display:'flex',flexDirection:'column',alignItems:'center',minWidth:90,padding:'6px 10px',background:'var(--bg2)',borderRadius:4,border:'1px solid var(--border)'}}>
       <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1,textTransform:'uppercase',marginBottom:4}}>{label}</div>
@@ -3482,6 +3564,30 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
           ⚠ Custom stop <strong>${customStopPrice}</strong> is at or above entry <strong>${price?.toFixed(2)}</strong> — invalid for a long. Falling back to ATR-based stop. Fix the custom stop or clear it.
         </div>
       )}
+      {/* Daily Plan state badge — surfaces tier/status when this ticker is
+          on today's Daily Plan. Saves a tab-flip to see "did I already
+          decide on this one today?" Color codes: green = staged/submit,
+          amber = queued/pending, gray = passed/skipped. */}
+      {dailyDecision && (() => {
+        const dec = (dailyDecision.decision || dailyDecision.status || 'pending').toLowerCase();
+        const tier = dailyDecision.tier || dailyDecision.confluence_tier || null;
+        const color = dec.includes('stag') || dec.includes('submit') || dec.includes('go') ? 'var(--green)'
+                    : dec.includes('skip') || dec.includes('pass') || dec.includes('reject') ? 'var(--text3)'
+                    : 'var(--amber)';
+        const label = dec.includes('stag') ? 'STAGED'
+                    : dec.includes('submit') ? 'SUBMITTED'
+                    : dec.includes('skip') ? 'SKIPPED'
+                    : dec.includes('pass') ? 'PASSED'
+                    : dec.includes('go') ? 'GO'
+                    : dec.toUpperCase();
+        return (
+          <div style={{padding:'4px 10px',marginBottom:8,background:'rgba(0,255,255,0.04)',border:`1px solid ${color}`,borderRadius:4,fontSize:11,color}} title="This ticker is on today's Daily Plan. Click the Daily Plan tab to change the decision.">
+            📋 Daily Plan: <strong>{label}</strong>
+            {tier && <span style={{marginLeft:8,color:'var(--text3)'}}>tier {tier}</span>}
+            {dailyDecision.skipReason && <span style={{marginLeft:8,color:'var(--text3)'}}>· {dailyDecision.skipReason}</span>}
+          </div>
+        );
+      })()}
       <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:8}}>
         <div style={{fontSize:10,color:'var(--amber)',fontWeight:700,alignSelf:'center',minWidth:60}} title="10-day cadence · full-in / full-out · stop 1.0×ATR · T1 1.5×ATR · T2 2.5×ATR">⚡ SWING</div>
         <Cell label={isCustomEntry ? "Entry (custom)" : "Entry"}  val={`$${price?.toFixed(2)}`}         color="var(--cyan)"/>
@@ -3493,6 +3599,15 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
             3.1 PF) so the T2 R/R is what justifies the trade. */}
         <Cell label="R/R T1 → T2" val={`${rrT1.toFixed(1)} → ${rrT2.toFixed(1)}`} color={rrT2>=2?'var(--green)':'var(--amber)'}/>
         <Cell label="ATR"    val={`$${atr.toFixed(2)} (${s.atrPct}%)`} color="var(--text3)"/>
+        {/* Live position-sizing — derived from portfolio config (accountSize
+            × riskPct%). Saves a context-switch to the Position Sizer tab to
+            see how many shares this trade would buy at this stop. */}
+        {swingSize && (
+          <Cell label="Shares · Risk $" val={`${swingSize.shares}sh · $${swingSize.dollarRisk}`} color="var(--cyan)"/>
+        )}
+        {swingSize && (
+          <Cell label="Position $ · %" val={`$${swingSize.positionValue.toLocaleString()} · ${swingSize.portfolioPct}%`} color="var(--text2)"/>
+        )}
       </div>
       {s.vsMA200 > 0 && (
         <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:6}}>
@@ -3502,6 +3617,12 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
           <Cell label="Target 1 (3.5×ATR)" val={`$${posT1}`}                                                  color="var(--green)"/>
           <Cell label="Target 2 (7×ATR)"   val={`$${posT2}`}                                                  color="var(--green)"/>
           <Cell label="R/R T1 → T2" val={`${posRrT1.toFixed(1)} → ${posRrT2.toFixed(1)}`} color={posRrT2>=2?'var(--green)':'var(--amber)'}/>
+          {posSize && (
+            <Cell label="Shares · Risk $" val={`${posSize.shares}sh · $${posSize.dollarRisk}`} color="var(--cyan)"/>
+          )}
+          {posSize && (
+            <Cell label="Position $ · %" val={`$${posSize.positionValue.toLocaleString()} · ${posSize.portfolioPct}%`} color="var(--text2)"/>
+          )}
         </div>
       )}
       {/* ma50Note line removed — was "Structural reference only, no longer
@@ -3628,6 +3749,42 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
         {/* Position-size formula text removed — was instructional, not
             per-stock. Position-size is computed elsewhere on the levels card. */}
       </div>
+      {/* ── Context strip: sector / industry / MA distance ──
+          Per-stock context that's nice to see on the Levels card without
+          a tab-flip. Sector + industry come from the scanner row;
+          MA distances from vsMA50 / vsMA200 (computed in scanner.js). */}
+      {(s.sector || s.industryName || s.vsMA50 != null || s.vsMA200 != null) && (
+        <div style={{fontSize:10,color:'var(--text3)',marginTop:4,display:'flex',gap:12,flexWrap:'wrap'}}>
+          {s.sector && s.sector !== 'Unknown' && (
+            <span title="GICS sector (normalized). Use to check sector concentration in your book.">
+              <span style={{color:'var(--text3)'}}>Sector:</span> <strong style={{color:'var(--text2)'}}>{s.sector}</strong>
+            </span>
+          )}
+          {s.industryName && (
+            <span title={`Industry ETF ${s.industry || ''} — narrower bucket than sector. Two stocks in the same sector but different industries diversify better.`}>
+              <span style={{color:'var(--text3)'}}>Industry:</span> <strong style={{color:'var(--text2)'}}>{s.industryName}</strong>
+            </span>
+          )}
+          {s.vsMA50 != null && (
+            <span title="% above (positive) or below (negative) the 50-day SMA. Above 50MA = uptrend intact. >5% above = extended (chase risk).">
+              <span style={{color:'var(--text3)'}}>vs 50MA:</span>{' '}
+              <strong style={{color:s.vsMA50>5?'var(--amber)':s.vsMA50>0?'var(--green)':'var(--red)'}}>{s.vsMA50>0?'+':''}{s.vsMA50.toFixed(1)}%</strong>
+            </span>
+          )}
+          {s.vsMA200 != null && (
+            <span title="% above (positive) or below (negative) the 200-day SMA. Above 200MA = long-term uptrend (Stage 2 prerequisite).">
+              <span style={{color:'var(--text3)'}}>vs 200MA:</span>{' '}
+              <strong style={{color:s.vsMA200>0?'var(--green)':'var(--red)'}}>{s.vsMA200>0?'+':''}{s.vsMA200.toFixed(1)}%</strong>
+            </span>
+          )}
+          {s.vsVWAP20 != null && (
+            <span title="% above/below 20-bar rolling VWAP. Mean-reversion reference. Negative = trading below VWAP (possible support); positive = above (extension).">
+              <span style={{color:'var(--text3)'}}>vs VWAP20:</span>{' '}
+              <strong style={{color:s.vsVWAP20>5?'var(--amber)':s.vsVWAP20>0?'var(--green)':'var(--red)'}}>{s.vsVWAP20>0?'+':''}{s.vsVWAP20.toFixed(1)}%</strong>
+            </span>
+          )}
+        </div>
+      )}
 
       {/* ── Analyst Revision badge (prominent, at top of levels) ──
           Source can be 'live' (fresh Yahoo fetch + prior snapshot) or
