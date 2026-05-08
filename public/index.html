@@ -2225,6 +2225,15 @@ function App() {
     try {
       await Promise.all([
         api('/api/rs-scan', { timeout: 5 * 60 * 1000 }).then(d => {
+          // Capture SPY's price-return baselines BEFORE filtering it out
+          // of rsData. The vsSPY chip filters compute (stock.chg1m −
+          // SPY.chg1m) on the fly from these globals — keeps the chips
+          // working even when the running server predates the new
+          // server-side spy1m/vsSPY1m fields (avoids forcing a node
+          // restart for the chip math change).
+          const spyRow = (d.stocks || []).find(s => s.ticker === 'SPY');
+          window._spyChg1m  = (typeof spyRow?.chg1m === 'number') ? spyRow.chg1m : null;
+          window._spyChg3m  = (typeof spyRow?.chg3m === 'number') ? spyRow.chg3m : null;
           setRsData((d.stocks || []).filter(s => s.ticker !== 'SPY'));
           setRsLoaded(true);
           // Surface SPY's RS trend globally so SectorsTab + IndustriesTab
@@ -4028,16 +4037,23 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
             </span>
           )}
           {/* vs SPY (1-month price-return delta) — what the chip actually
-              checks. The earlier rank-delta version had a ceiling problem
-              for top-decile names. This price-based delta has no ceiling. */}
-          {typeof s.vsSPY1m === 'number' && (
-            <span title={`Stock vs SPY 1-month PRICE return: stock.chg1m − SPY.chg1m. Positive = beating SPY by that many percent over the last 4 weeks. ≥+3% fires vsSPY↑; ≤−3% fires vsSPY↓. Replaces the rank-delta version which had a ceiling problem at RS rank 99.`}>
-              <span style={{color:'var(--text3)'}}>vs SPY</span>{' '}
-              <strong style={{color:s.vsSPY1m>=3?'var(--green)':s.vsSPY1m<=-3?'var(--red)':'var(--text2)',fontWeight:600}}>
-                {s.vsSPY1m>0?'+':''}{s.vsSPY1m}%
-              </strong>
-            </span>
-          )}
+              checks. Falls back to on-the-fly compute from s.chg1m and
+              window._spyChg1m so the indicator works even when the
+              running server predates the spy1m route-level field. */}
+          {(() => {
+            const v = (typeof s.vsSPY1m === 'number') ? s.vsSPY1m
+              : (typeof s.chg1m === 'number' && typeof window._spyChg1m === 'number')
+                ? +(s.chg1m - window._spyChg1m).toFixed(2) : null;
+            if (v == null) return null;
+            return (
+              <span title={`Stock vs SPY 1-month PRICE return: stock.chg1m (${s.chg1m}%) − SPY.chg1m (${(window._spyChg1m ?? 0).toFixed(2)}%). Positive = beating SPY by that many percent over the last 4 weeks. ≥+3% fires vsSPY↑; ≤−3% fires vsSPY↓. Replaces the rank-delta version which had a ceiling problem at RS rank 99.`}>
+                <span style={{color:'var(--text3)'}}>vs SPY</span>{' '}
+                <strong style={{color:v>=3?'var(--green)':v<=-3?'var(--red)':'var(--text2)',fontWeight:600}}>
+                  {v>0?'+':''}{v}%
+                </strong>
+              </span>
+            );
+          })()}
         </div>
       ); } catch (e) { console.error('InlineLevels Row 1 (RS) failed:', e, s); return null; } })()}
 
@@ -6138,23 +6154,36 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
       return v4 <= -3 && (v3m - v4) <= -3;   // BOTH halves falling
     },
     // ── Market-relative + leadership (Phase 3.1) ─────────────────────
-    // PRICE-based "vs SPY" check using the 1-month price-return delta
-    // (s.vsSPY1m = stock.chg1m − SPY.chg1m, computed server-side).
+    // PRICE-based "vs SPY" check using the 1-month price-return delta:
+    //   stock.chg1m − SPY.chg1m
+    //
+    // SPY's chg1m is captured at scan-load into window._spyChg1m (see
+    // App.loadAll) so the chip can compute the delta on the fly even
+    // when the running server predates the route-level spy1m field.
+    // Server-side `s.vsSPY1m` is preferred when present; falls back to
+    // the on-the-fly compute otherwise.
     //
     // Why price-delta, not rank-delta:
-    //   The earlier rank-delta version (marketRelativeRsTrend.vs4w)
-    //   had a CEILING — top-decile stocks already at RS rank 99 can't
-    //   gain rank room even when their price beats SPY by 10%, so they
-    //   silently fail the chip. Discovered when MU (rank 99) / KEYS
-    //   (95) / AVGO (84) all lagged the chip during a broad rally
-    //   despite outperforming SPY in absolute price.
+    //   The earlier rank-delta version had a CEILING — top-decile
+    //   stocks at RS rank 99 can't gain rank room even when their
+    //   price beats SPY by 10%, silently failing the chip. Discovered
+    //   when MU (rank 98) / KEYS (94) / AVGO (82) all lagged the
+    //   chip despite outperforming SPY in absolute price.
     //
-    // Threshold ±3% on a 4-week return is meaningful — SPY itself
-    // typically moves ±3-7% in 4 weeks, so a ≥3% delta = real
-    // outperformance. Roughly equivalent in selectivity to the old
-    // ≥5 rank-point check on mid-rank names, but works at the top.
-    'LeadM': s => (s.vsSPY1m ?? null) >= 3,
-    'LagM':  s => (s.vsSPY1m ?? null) <= -3,
+    // Threshold ±3% on 4-week return: SPY itself moves ±3-7%
+    // typically, so ≥3% delta = real outperformance.
+    'LeadM': s => {
+      const v = (typeof s.vsSPY1m === 'number') ? s.vsSPY1m
+        : (typeof s.chg1m === 'number' && typeof window._spyChg1m === 'number')
+          ? +(s.chg1m - window._spyChg1m).toFixed(2) : null;
+      return v != null && v >= 3;
+    },
+    'LagM': s => {
+      const v = (typeof s.vsSPY1m === 'number') ? s.vsSPY1m
+        : (typeof s.chg1m === 'number' && typeof window._spyChg1m === 'number')
+          ? +(s.chg1m - window._spyChg1m).toFixed(2) : null;
+      return v != null && v <= -3;
+    },
     // Eroding: rebuild 4w-ago rank from current rank − vs4w. Was a
     // leader (≥85 then) AND has dropped ≥10 since.
     'Erode': s => {
