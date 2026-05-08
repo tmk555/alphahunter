@@ -4027,11 +4027,14 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
               )}
             </span>
           )}
-          {s.marketRelativeRsTrend?.vs4w != null && (
-            <span title={`Market-relative RS trend (4w): stock vs4w ${s.rsTrend?.vs4w ?? '—'} − SPY vs4w. Positive = beating the index by that many RS-rank points over 4 weeks. ≥+5 fires the vsSPY↑ chip; ≤−5 fires vsSPY↓.`}>
+          {/* vs SPY (1-month price-return delta) — what the chip actually
+              checks. The earlier rank-delta version had a ceiling problem
+              for top-decile names. This price-based delta has no ceiling. */}
+          {typeof s.vsSPY1m === 'number' && (
+            <span title={`Stock vs SPY 1-month PRICE return: stock.chg1m − SPY.chg1m. Positive = beating SPY by that many percent over the last 4 weeks. ≥+3% fires vsSPY↑; ≤−3% fires vsSPY↓. Replaces the rank-delta version which had a ceiling problem at RS rank 99.`}>
               <span style={{color:'var(--text3)'}}>vs SPY</span>{' '}
-              <strong style={{color:s.marketRelativeRsTrend.vs4w>=5?'var(--green)':s.marketRelativeRsTrend.vs4w<=-5?'var(--red)':'var(--text2)',fontWeight:600}}>
-                {s.marketRelativeRsTrend.vs4w>0?'+':''}{s.marketRelativeRsTrend.vs4w}
+              <strong style={{color:s.vsSPY1m>=3?'var(--green)':s.vsSPY1m<=-3?'var(--red)':'var(--text2)',fontWeight:600}}>
+                {s.vsSPY1m>0?'+':''}{s.vsSPY1m}%
               </strong>
             </span>
           )}
@@ -6135,11 +6138,23 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
       return v4 <= -3 && (v3m - v4) <= -3;   // BOTH halves falling
     },
     // ── Market-relative + leadership (Phase 3.1) ─────────────────────
-    // marketRelativeRsTrend.vs4w = stock.vs4w − SPY.vs4w (server side).
-    // null when SPY trend unavailable; chip silently fires off in that
-    // case (no false positives).
-    'LeadM': s => (s.marketRelativeRsTrend?.vs4w ?? null) >= 5,
-    'LagM':  s => (s.marketRelativeRsTrend?.vs4w ?? null) <= -5,
+    // PRICE-based "vs SPY" check using the 1-month price-return delta
+    // (s.vsSPY1m = stock.chg1m − SPY.chg1m, computed server-side).
+    //
+    // Why price-delta, not rank-delta:
+    //   The earlier rank-delta version (marketRelativeRsTrend.vs4w)
+    //   had a CEILING — top-decile stocks already at RS rank 99 can't
+    //   gain rank room even when their price beats SPY by 10%, so they
+    //   silently fail the chip. Discovered when MU (rank 99) / KEYS
+    //   (95) / AVGO (84) all lagged the chip during a broad rally
+    //   despite outperforming SPY in absolute price.
+    //
+    // Threshold ±3% on a 4-week return is meaningful — SPY itself
+    // typically moves ±3-7% in 4 weeks, so a ≥3% delta = real
+    // outperformance. Roughly equivalent in selectivity to the old
+    // ≥5 rank-point check on mid-rank names, but works at the top.
+    'LeadM': s => (s.vsSPY1m ?? null) >= 3,
+    'LagM':  s => (s.vsSPY1m ?? null) <= -3,
     // Eroding: rebuild 4w-ago rank from current rank − vs4w. Was a
     // leader (≥85 then) AND has dropped ≥10 since.
     'Erode': s => {
@@ -6502,8 +6517,8 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             // vs SPY); they CAN'T all be true at once, so AND-filtering
             // them returns 0 results. UI emphasizes this with `mutexGroup`
             // and a "ROTATION:" label rendered alongside.
-            {key:'LeadM', label:'vsSPY↑',  title:'ROTATION (pick one) · Beating SPY by ≥5 RS-rank points over the last 4 weeks. The "actually outperforming the index right now" signal. Mutually exclusive with vsSPY↓ and Leader↓ — clicking one auto-deselects the others.',col:'var(--green)',isNew:true,mutexGroup:'rotation'},
-            {key:'LagM',  label:'vsSPY↓',  title:'ROTATION (pick one) · Trailing SPY by ≥5 RS-rank points over the last 4 weeks. Losing ground vs index — leadership erosion. Mutually exclusive with vsSPY↑ and Leader↓.',col:'var(--red)',isNew:true,mutexGroup:'rotation'},
+            {key:'LeadM', label:'vsSPY↑',  title:'ROTATION (pick one) · Beating SPY by ≥3% in PRICE return over the last 4 weeks (stock.chg1m − SPY.chg1m ≥ 3). Catches absolute outperformance — works for top-decile leaders too (no rank ceiling). Mutually exclusive with vsSPY↓ and Leader↓.',col:'var(--green)',isNew:true,mutexGroup:'rotation'},
+            {key:'LagM',  label:'vsSPY↓',  title:'ROTATION (pick one) · Trailing SPY by ≥3% in PRICE return over the last 4 weeks (stock.chg1m − SPY.chg1m ≤ -3). Losing ground in absolute terms vs index. Mutually exclusive with vsSPY↑ and Leader↓.',col:'var(--red)',isNew:true,mutexGroup:'rotation'},
             // Leader↓: was a leader (rank ≥85 four weeks ago) but rsRank
             // dropped ≥10 points since. Fingerprint of "first to fall"
             // names that lead the market down. Strongly correlated with

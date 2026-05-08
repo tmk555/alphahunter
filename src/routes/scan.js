@@ -39,10 +39,19 @@ module.exports = function(UNIVERSE, SECTOR_MAP) {
       });
       const spyStock = withTrend.find(s => s.ticker === 'SPY');
       const spy3m = spyStock?.chg3m ?? null;
-      const final = spy3m != null
-        ? withTrend.map(s => ({ ...s, vsSPY3m: s.chg3m != null ? +(s.chg3m - spy3m).toFixed(2) : null }))
-        : withTrend;
-      res.json({ stocks: final, universeSize: final.length, spy3m, spyTrend });
+      const spy1m = spyStock?.chg1m ?? null;
+      // Per-row deltas vs SPY for the price-based "leading the market"
+      // signal. The rank-based marketRelativeRsTrend has a known ceiling
+      // problem at top-decile (RS rank 99 stocks can't gain rank room
+      // even when their price beats SPY), so vsSPY1m / vsSPY3m using
+      // raw price returns is the correct metric for the Lead/Lag chips
+      // on already-leader names.
+      const final = withTrend.map(s => ({
+        ...s,
+        vsSPY1m: (spy1m != null && s.chg1m != null) ? +(s.chg1m - spy1m).toFixed(2) : null,
+        vsSPY3m: (spy3m != null && s.chg3m != null) ? +(s.chg3m - spy3m).toFixed(2) : null,
+      }));
+      res.json({ stocks: final, universeSize: final.length, spy1m, spy3m, spyTrend });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
