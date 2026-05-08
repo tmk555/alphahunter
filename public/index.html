@@ -6538,16 +6538,37 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             // chips are alternatives, not stackable AND filters.
             const prev = idx > 0 ? arr[idx-1] : null;
             const showGroupLabel = mutexGroup && prev?.mutexGroup !== mutexGroup;
+            // Active-pick lookup (only meaningful when showing the label).
+            // Lets the label itself tell the user which rotation chip is
+            // active right now — without having to scan the chip row to
+            // find the highlighted button.
+            const activeChip = showGroupLabel
+              ? arr.find(c => c.mutexGroup === mutexGroup && sigFilters.has(c.key))
+              : null;
             return (
               <React.Fragment key={key}>
                 {showGroupLabel && (
                   <span style={{
-                    fontSize:9,color:'var(--text3)',letterSpacing:1,
-                    fontFamily:'var(--font-mono)',padding:'0 6px',
+                    fontSize:9,
+                    color: activeChip ? activeChip.col : 'var(--text3)',
+                    letterSpacing:1,
+                    fontFamily:'var(--font-mono)',
+                    padding:'1px 8px',
                     borderLeft:'1px solid var(--border2)',
-                    marginLeft:4,alignSelf:'center'}}
-                    title="Three answers to the same question (rotation direction vs SPY). Pick ONE — clicking another auto-deselects the prior pick. Cannot stack like the other chips.">
-                    ROTATION (pick 1):
+                    marginLeft:4,
+                    alignSelf:'center',
+                    fontWeight: activeChip ? 700 : 400,
+                    background: activeChip ? `${activeChip.col}18` : 'transparent',
+                    border: activeChip ? `1px solid ${activeChip.col}40` : 'none',
+                    borderRadius: activeChip ? 3 : 0,
+                    transition:'all 0.12s',
+                  }}
+                    title={activeChip
+                      ? `Rotation filter active: ${activeChip.label}. Click the chip again to clear, or click a different rotation chip to switch direction.`
+                      : 'Three answers to the same question (rotation direction vs SPY). Pick ONE — clicking another auto-deselects the prior pick. Cannot stack like the other chips.'}>
+                    {activeChip
+                      ? <>● ROTATION: {activeChip.label}</>
+                      : <>ROTATION (pick 1):</>}
                   </span>
                 )}
                 <button title={title}
