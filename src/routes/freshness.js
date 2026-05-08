@@ -119,4 +119,95 @@ router.get('/freshness', (req, res) => {
   }
 });
 
+// ─── /api/market/pulse — index pulse banner data ─────────────────────────
+//
+// Persistent header strip data: SPY / QQQ / IWM 1d + 1m % change, vs50MA,
+// breadth (% above 50MA / % above 200MA), regime, VIX. One endpoint so
+// the UI doesn't have to fan out 4-5 calls on every page load.
+//
+// Cached in-process for 60s — the underlying data updates ~1-5 min on
+// market hours and once daily off-hours. No need to hit Yahoo each time
+// the user clicks a tab.
+
+const { getHistory } = require('../data/providers/manager');
+
+let _pulseCache = { data: null, ts: 0 };
+const PULSE_TTL_MS = 60_000;
+
+router.get('/market/pulse', async (req, res) => {
+  try {
+    if (_pulseCache.data && (Date.now() - _pulseCache.ts) < PULSE_TTL_MS) {
+      return res.json({ ..._pulseCache.data, fromCache: true, ageSec: Math.round((Date.now() - _pulseCache.ts) / 1000) });
+    }
+
+    const { getQuotes } = require('../data/providers/manager');
+    const symbols = ['SPY', 'QQQ', 'IWM', '^VIX'];
+    const [quotes, histResults] = await Promise.all([
+      getQuotes(symbols),
+      Promise.all(['SPY', 'QQQ', 'IWM'].map(s => getHistory(s).catch(() => null))),
+    ]);
+
+    const indices = ['SPY', 'QQQ', 'IWM'].map((sym, i) => {
+      const q    = (quotes || []).find(x => x.symbol === sym) || {};
+      const hist = histResults[i];
+      // 4-week return = today vs ~20 trading days ago.
+      let chg1m = null;
+      if (Array.isArray(hist) && hist.length >= 21) {
+        const today    = hist[hist.length - 1];
+        const t4wAgo   = hist[hist.length - 21];
+        if (today != null && t4wAgo != null && t4wAgo !== 0) {
+          chg1m = +(((today - t4wAgo) / t4wAgo) * 100).toFixed(2);
+        }
+      }
+      const price = q.regularMarketPrice ?? null;
+      const ma50  = q.fiftyDayAverage ?? null;
+      const ma200 = q.twoHundredDayAverage ?? null;
+      return {
+        symbol:  sym,
+        price,
+        chg1d:   q.regularMarketChangePercent ?? null,
+        chg1m,                                                // ≈ "vs4w"
+        vsMA50:  (price != null && ma50  != null && ma50  !== 0) ? +(((price - ma50)  / ma50)  * 100).toFixed(2) : null,
+        vsMA200: (price != null && ma200 != null && ma200 !== 0) ? +(((price - ma200) / ma200) * 100).toFixed(2) : null,
+      };
+    });
+
+    const vixQuote = (quotes || []).find(x => x.symbol === '^VIX') || {};
+    const vix = {
+      price:   vixQuote.regularMarketPrice ?? null,
+      chg1d:   vixQuote.regularMarketChangePercent ?? null,
+    };
+
+    // Breadth from the daily breadth_snapshots table.
+    const db = getDB();
+    const breadthRow = db.prepare(`
+      SELECT date, pct_above_50ma, pct_above_200ma, new_highs, new_lows,
+             ad_ratio, regime, composite_score
+        FROM breadth_snapshots
+       ORDER BY date DESC LIMIT 1
+    `).get();
+    const breadth = breadthRow ? {
+      date:           breadthRow.date,
+      pctAbove50ma:   breadthRow.pct_above_50ma,
+      pctAbove200ma:  breadthRow.pct_above_200ma,
+      newHighs:       breadthRow.new_highs,
+      newLows:        breadthRow.new_lows,
+      adRatio:        breadthRow.ad_ratio,
+      regime:         breadthRow.regime,
+      compositeScore: breadthRow.composite_score,
+    } : null;
+
+    const out = {
+      asOf:    new Date().toISOString(),
+      indices,
+      vix,
+      breadth,
+    };
+    _pulseCache = { data: out, ts: Date.now() };
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;

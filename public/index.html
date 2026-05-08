@@ -606,6 +606,99 @@ function ProvenanceTag({ source, asOf, label, style }) {
   );
 }
 
+// ─── IndexPulseBanner: persistent market-context strip ───────────────────
+// SPY / QQQ / IWM 1d + 1m % change with vs50MA distance, plus VIX and
+// breadth (% above 50MA, regime). Renders one line at the top of every
+// tab so when you read a Scanner row your eye already has market context.
+//
+// Polls /api/market/pulse every 60s. Endpoint is in-process cached for
+// 60s server-side too, so this is cheap.
+function IndexPulseBanner() {
+  const [data, setData] = React.useState(null);
+  React.useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const d = await api('/api/market/pulse');
+        if (!cancelled) setData(d);
+      } catch (_) { /* silent — banner just stays empty */ }
+    }
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+  if (!data) return null;
+
+  const colorPct  = (v, posThr = 0, negThr = 0) =>
+    v == null ? 'var(--text3)' : v > posThr ? 'var(--green)' : v < negThr ? 'var(--red)' : 'var(--text2)';
+  const fmtPct    = (v) => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+
+  // VIX color: <15 complacency (green), 15-20 normal (text2), 20-30 elevated
+  // (amber), >30 stress (red).
+  const vixColor = data.vix?.price == null
+    ? 'var(--text3)'
+    : data.vix.price < 15 ? 'var(--green)'
+    : data.vix.price < 20 ? 'var(--text2)'
+    : data.vix.price < 30 ? 'var(--amber)'
+    : 'var(--red)';
+
+  // Breadth color: pct_above_50ma — >70 strong, 40-70 mixed, <40 weak.
+  const breadthColor = data.breadth?.pctAbove50ma == null
+    ? 'var(--text3)'
+    : data.breadth.pctAbove50ma >= 70 ? 'var(--green)'
+    : data.breadth.pctAbove50ma >= 40 ? 'var(--amber)'
+    : 'var(--red)';
+
+  return (
+    <div style={{
+      marginBottom: 10,
+      padding: '6px 12px',
+      background: 'var(--bg2)',
+      border: '1px solid var(--border)',
+      borderRadius: 4,
+      fontSize: 11,
+      fontFamily: 'var(--font-mono)',
+      display: 'flex',
+      gap: 16,
+      flexWrap: 'wrap',
+      alignItems: 'center',
+    }}
+      title="Market context: index 1-day + 1-month returns, distance from 50MA, VIX, and breadth (% of stocks above their 50-day MA). The pulse you read every Scanner row against.">
+      <span style={{color:'var(--text3)',letterSpacing:1}}>📡 PULSE</span>
+      {data.indices.map(ix => (
+        <span key={ix.symbol}
+          title={`${ix.symbol} · price $${ix.price?.toFixed(2)} · 1d ${fmtPct(ix.chg1d)} · 1m ${fmtPct(ix.chg1m)} · vs50MA ${fmtPct(ix.vsMA50)} · vs200MA ${fmtPct(ix.vsMA200)}`}>
+          <span style={{color:'var(--text2)',fontWeight:700}}>{ix.symbol}</span>{' '}
+          <strong style={{color:colorPct(ix.chg1d)}}>{fmtPct(ix.chg1d)}</strong>
+          <span style={{color:'var(--text3)'}}> · 1m </span>
+          <strong style={{color:colorPct(ix.chg1m)}}>{fmtPct(ix.chg1m)}</strong>
+          <span style={{color:'var(--text3)'}}> · vs50MA </span>
+          <strong style={{color:colorPct(ix.vsMA50)}}>{fmtPct(ix.vsMA50)}</strong>
+        </span>
+      ))}
+      {data.vix?.price != null && (
+        <span title={`VIX (CBOE volatility index, 30-day implied SPX option vol). <15 complacency · 15-20 normal · 20-30 elevated · >30 stress. 1d change ${fmtPct(data.vix.chg1d)}.`}>
+          <span style={{color:'var(--text3)'}}>VIX</span>{' '}
+          <strong style={{color:vixColor}}>{data.vix.price.toFixed(1)}</strong>
+          <span style={{color:colorPct(data.vix.chg1d), marginLeft:3}}>{fmtPct(data.vix.chg1d)}</span>
+        </span>
+      )}
+      {data.breadth?.pctAbove50ma != null && (
+        <span title={`Breadth (${data.breadth.date}). ${data.breadth.pctAbove50ma}% of universe stocks above 50-day MA · ${data.breadth.pctAbove200ma}% above 200MA · A/D ${data.breadth.adRatio} · ${data.breadth.newHighs} NH / ${data.breadth.newLows} NL. Regime: ${data.breadth.regime}. Composite ${data.breadth.compositeScore}/100.`}>
+          <span style={{color:'var(--text3)'}}>BR</span>{' '}
+          <strong style={{color:breadthColor}}>{data.breadth.pctAbove50ma.toFixed(0)}%</strong>
+          <span style={{color:'var(--text3)',marginLeft:3}}> &gt;50MA</span>
+          {data.breadth.regime && (
+            <span style={{marginLeft:6,color:breadthColor,fontWeight:700,fontSize:10}}>
+              {data.breadth.regime}
+            </span>
+          )}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ─── FreshnessBanner: one-line "is the data fresh?" pulse ─────────────
 // Replaces a scattering of per-tab status strings ("244/1598 loaded",
 // "fundamentals refreshing", "as of pit_membership") with one banner
@@ -2292,6 +2385,11 @@ function App() {
 
       {/* CONTENT */}
       <div id="main">
+        {/* INDEX PULSE — persistent market-context strip (SPY/QQQ/IWM 1d+1m
+            returns, vs50MA, VIX, breadth). Always visible so when you read
+            a Scanner row your eye already has the macro pulse. Polls
+            /api/market/pulse every 60s. */}
+        <IndexPulseBanner />
         {/* DATA-FRESHNESS BANNER — global pulse on how stale RS / fundamentals /
             revisions / macro / breadth are. Replaces the per-tab "244/1598
             loaded" / "as of pit_membership" / "data not available" strings
