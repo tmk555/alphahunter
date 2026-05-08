@@ -4028,7 +4028,7 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
             </span>
           )}
           {s.marketRelativeRsTrend?.vs4w != null && (
-            <span title={`Market-relative RS trend (4w): stock vs4w ${s.rsTrend?.vs4w ?? '—'} − SPY vs4w. Positive = beating the index by that many RS-rank points over 4 weeks. ≥+5 fires the Lead Mkt chip; ≤−5 fires Lag Mkt.`}>
+            <span title={`Market-relative RS trend (4w): stock vs4w ${s.rsTrend?.vs4w ?? '—'} − SPY vs4w. Positive = beating the index by that many RS-rank points over 4 weeks. ≥+5 fires the vsSPY↑ chip; ≤−5 fires vsSPY↓.`}>
               <span style={{color:'var(--text3)'}}>vs SPY</span>{' '}
               <strong style={{color:s.marketRelativeRsTrend.vs4w>=5?'var(--green)':s.marketRelativeRsTrend.vs4w<=-5?'var(--red)':'var(--text2)',fontWeight:600}}>
                 {s.marketRelativeRsTrend.vs4w>0?'+':''}{s.marketRelativeRsTrend.vs4w}
