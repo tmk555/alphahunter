@@ -15137,6 +15137,13 @@ function DailyPlanTab({ rsData, rsLoaded }) {
   const [err, setErr] = useState('');
   const [skipReasonFor, setSkipReasonFor] = useState(null);  // symbol or null
   const [skipReasonText, setSkipReasonText] = useState('');
+  // Adherence stats default collapsed — most days, the user just wants
+  // to see today's tier-1 list + GO/SKIP. Stats are review material,
+  // not decision material. Click to expand.
+  const [statsOpen, setStatsOpen] = useState(false);
+  // Bulk-stage state — disables the button while a STAGE ALL run is
+  // in flight so the user can't double-fire.
+  const [bulkStaging, setBulkStaging] = useState(false);
 
   // Live MA-trail state for OPEN positions (separate from the tier-1
   // decision plan). The EOD cron computes this each weekday after
@@ -15346,6 +15353,41 @@ function DailyPlanTab({ rsData, rsLoaded }) {
     cancelSkip();
   }
 
+  // ─── STAGE ALL PENDING ─────────────────────────────────────────────
+  // Bulk-stage every still-pending row in today's plan in one click.
+  // Use case: user reads the plan in the morning, sees N tier-1 names
+  // they want to act on, and doesn't want to click SUBMIT N times.
+  // Confirms first because each call stages a real bracket order.
+  async function stageAllPending() {
+    const pending = (plan?.items || []).filter(it => it.decision === 'pending');
+    if (!pending.length) {
+      window.showToast?.('Stage All', 'No pending names to stage.');
+      return;
+    }
+    if (!window.confirm(
+      `Stage bracket orders for ALL ${pending.length} pending name${pending.length>1?'s':''}?\n\n` +
+      pending.map(it => `  • ${it.symbol}` + (it.pivotPrice ? ` @ $${it.pivotPrice.toFixed(2)}` : '')).join('\n') +
+      `\n\nEach goes to Trades > Staged for your review before submission.`
+    )) return;
+
+    setBulkStaging(true);
+    let ok = 0, failed = 0;
+    for (const it of pending) {
+      try {
+        await submit(it.symbol);
+        ok++;
+      } catch (e) {
+        failed++;
+      }
+    }
+    setBulkStaging(false);
+    window.showToast?.('Stage All',
+      `Staged ${ok}/${pending.length}` + (failed ? ` · ${failed} failed (see toasts above)` : '') +
+      ' — review in Trades > Staged.',
+      { action: { label: 'Open Trades', onClick: () => window.navigateToTrading?.() } }
+    );
+  }
+
   // ─── Render ────────────────────────────────────────────────────────────
   const summary = plan?.summary || { total: 0, decided: 0, pending: 0, autoSkipped: 0, adherenceRate: null };
   const cutoffPassed = plan?.cutoffPassed;
@@ -15373,36 +15415,26 @@ function DailyPlanTab({ rsData, rsLoaded }) {
           Today's tier-1 decisions. Each name needs a binary commit: <strong style={{color:'var(--green)'}}>SUBMIT</strong> (stage bracket), <strong style={{color:'var(--amber)'}}>WAIT</strong> (defer to tomorrow), or <strong style={{color:'var(--red)'}}>SKIP</strong> (dead with reason). Cutoff at 10:30 AM ET — pending names auto-skip and count against adherence.
         </div>
 
-        {/* Adherence band */}
-        <div style={{display:'flex',gap:14,marginTop:14,alignItems:'center',flexWrap:'wrap'}}>
-          <div style={{display:'inline-flex',alignItems:'center',gap:8}}>
-            <span style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5}}>ADHERENCE</span>
-            <span style={{fontFamily:'var(--font-mono)',fontSize:22,fontWeight:700,color:adherenceColor}}
-                  title={baseline.sampleDays >= 7
-                    ? `Today: ${summary.adherenceRate}%  ·  30-day baseline: ${baseline.baselineRate}%  ·  Last 7 days: ${baseline.last7Rate}%`
-                    : `Need ≥7 days of decision history before relative scoring activates. Currently ${baseline.sampleDays} days logged.`}>
-              {summary.adherenceRate != null ? `${summary.adherenceRate}%` : '—'}
-            </span>
-            {/* Baseline delta — the actual signal. Positive = improving on
-                your own track record. New users see "no baseline yet" until
-                7 days of history. */}
-            {baseline.sampleDays >= 7 && baselineDelta != null && (
-              <span style={{fontSize:11,fontFamily:'var(--font-mono)',color:adherenceColor,fontWeight:700}}>
-                {baselineDelta>=0?'+':''}{baselineDelta}<span style={{color:'var(--text3)',fontWeight:400}}> vs 30d avg</span>
-              </span>
-            )}
-            {baseline.sampleDays > 0 && baseline.sampleDays < 7 && (
-              <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>
-                building baseline ({baseline.sampleDays}/7 days)
-              </span>
-            )}
-          </div>
+        {/* Compact summary line — always visible. The full adherence
+            stats (30d baseline, baseline delta, etc) are behind the
+            ▶ Stats toggle since they're review material, not decision
+            material. Cutoff warning + decision counts stay inline. */}
+        <div style={{display:'flex',gap:14,marginTop:12,alignItems:'center',flexWrap:'wrap'}}>
           <div style={{display:'flex',gap:14,fontSize:12,fontFamily:'var(--font-mono)'}}>
             <span><span style={{color:'var(--text3)'}}>Decided</span> <strong style={{color:'var(--green)'}}>{summary.decided}</strong></span>
             <span><span style={{color:'var(--text3)'}}>Pending</span> <strong style={{color:'var(--amber)'}}>{summary.pending}</strong></span>
-            <span><span style={{color:'var(--text3)'}}>Auto-skip</span> <strong style={{color:'var(--red)'}}>{summary.autoSkipped}</strong></span>
+            {summary.autoSkipped > 0 && (
+              <span><span style={{color:'var(--text3)'}}>Auto-skip</span> <strong style={{color:'var(--red)'}}>{summary.autoSkipped}</strong></span>
+            )}
             <span><span style={{color:'var(--text3)'}}>Total</span> <strong>{summary.total}</strong></span>
           </div>
+          {/* Stats toggle — collapsed by default. Clicking shows the
+              30d adherence baseline + delta. */}
+          <button onClick={() => setStatsOpen(o => !o)}
+            title="Show 30-day adherence baseline and delta. Decision-quality review, not decision-making."
+            style={{padding:'3px 10px',fontSize:10,fontFamily:'var(--font-mono)',color:'var(--text3)',background:'transparent',border:'1px solid var(--border)',borderRadius:3,cursor:'pointer'}}>
+            {statsOpen ? '▼' : '▶'} Stats
+          </button>
           {cutoffPassed && (
             <span style={{marginLeft:'auto',padding:'3px 10px',background:'rgba(255,61,87,0.12)',color:'var(--red)',border:'1px solid rgba(255,61,87,0.4)',borderRadius:3,fontSize:11,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:0.5}}>
               🔒 PAST 10:30 AM ET — late decisions still recorded
@@ -15414,6 +15446,39 @@ function DailyPlanTab({ rsData, rsLoaded }) {
             </span>
           )}
         </div>
+
+        {/* Expanded stats — only when user clicks ▶ Stats. Holds the
+            full adherence band (30d baseline, delta, last-7d, building-
+            baseline message). Hidden by default to keep the morning
+            workflow focused on decisions. */}
+        {statsOpen && (
+          <div style={{display:'flex',gap:14,marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)',alignItems:'center',flexWrap:'wrap'}}>
+            <div style={{display:'inline-flex',alignItems:'center',gap:8}}>
+              <span style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5}}>ADHERENCE</span>
+              <span style={{fontFamily:'var(--font-mono)',fontSize:22,fontWeight:700,color:adherenceColor}}
+                    title={baseline.sampleDays >= 7
+                      ? `Today: ${summary.adherenceRate}%  ·  30-day baseline: ${baseline.baselineRate}%  ·  Last 7 days: ${baseline.last7Rate}%`
+                      : `Need ≥7 days of decision history before relative scoring activates. Currently ${baseline.sampleDays} days logged.`}>
+                {summary.adherenceRate != null ? `${summary.adherenceRate}%` : '—'}
+              </span>
+              {baseline.sampleDays >= 7 && baselineDelta != null && (
+                <span style={{fontSize:11,fontFamily:'var(--font-mono)',color:adherenceColor,fontWeight:700}}>
+                  {baselineDelta>=0?'+':''}{baselineDelta}<span style={{color:'var(--text3)',fontWeight:400}}> vs 30d avg</span>
+                </span>
+              )}
+              {baseline.sampleDays > 0 && baseline.sampleDays < 7 && (
+                <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>
+                  building baseline ({baseline.sampleDays}/7 days)
+                </span>
+              )}
+            </div>
+            {baseline.sampleDays >= 7 && (
+              <div style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>
+                30d avg: <strong style={{color:'var(--text2)'}}>{baseline.baselineRate}%</strong> · last 7d: <strong style={{color:'var(--text2)'}}>{baseline.last7Rate}%</strong>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── EXITS PENDING (live MA-trail) ──────────────────────────────
@@ -15521,8 +15586,32 @@ function DailyPlanTab({ rsData, rsLoaded }) {
         </div>
       )}
 
-      {/* Decision rows */}
+      {/* Decision rows + STAGE ALL bulk action */}
       {!loading && plan?.items?.length > 0 && (
+        <>
+          {/* STAGE ALL PENDING — only renders when there are pending rows.
+              Calls submit() in sequence on each, which marks the decision
+              and stages a bracket order. Confirms first because each call
+              creates a real broker-stageable order in the journal. */}
+          {(() => {
+            const pendingCount = plan.items.filter(it => it.decision === 'pending').length;
+            if (pendingCount === 0) return null;
+            return (
+              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,padding:'10px 14px',background:'rgba(0,230,118,0.06)',border:'1px solid rgba(0,230,118,0.25)',borderRadius:4}}>
+                <span style={{fontSize:11,color:'var(--text2)',flex:1}}>
+                  📋 <strong style={{color:'var(--text)'}}>{pendingCount} pending decision{pendingCount>1?'s':''}</strong>
+                  {' · '}stage them all at once, or click SUBMIT per-row below.
+                </span>
+                <button
+                  onClick={stageAllPending}
+                  disabled={bulkStaging}
+                  title={`Stage bracket orders for all ${pendingCount} pending tier-1 names. Each goes to Trades > Staged for your final review before broker submission.`}
+                  style={{padding:'8px 16px',fontSize:12,fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:0.5,background:bulkStaging?'var(--text3)':'var(--green)',color:'#000',border:'none',borderRadius:4,cursor:bulkStaging?'wait':'pointer',opacity:bulkStaging?0.6:1}}>
+                  {bulkStaging ? '⟳ STAGING...' : `✅ STAGE ALL ${pendingCount} PENDING`}
+                </button>
+              </div>
+            );
+          })()}
         <div style={{display:'flex',flexDirection:'column',gap:10}}>
           {plan.items.map(it => {
             const decisionColor =
@@ -15686,6 +15775,7 @@ function DailyPlanTab({ rsData, rsLoaded }) {
             );
           })}
         </div>
+        </>
       )}
     </div>
   );
