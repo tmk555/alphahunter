@@ -3926,6 +3926,19 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
                 </span>
               </>
             )}
+            {/* Market-relative delta — stock RS trend minus SPY's. The
+                "actually beating the index" signal, separate from rsTrend
+                (which is vs the universe). Only renders when both sides
+                computed (some early-IPO names have no SPY-aligned trend). */}
+            {s.marketRelativeRsTrend?.vs4w != null && (
+              <>
+                {' · '}
+                <span title={`Market-relative RS trend (4w): stock vs4w ${s.rsTrend?.vs4w ?? '—'} − SPY vs4w. Positive = beating the index by that many RS-rank points over 4 weeks. ≥+5 fires the Lead Mkt chip; ≤−5 fires Lag Mkt.`}
+                      style={{color:s.marketRelativeRsTrend.vs4w>=5?'var(--green)':s.marketRelativeRsTrend.vs4w<=-5?'var(--red)':'var(--text2)',fontWeight:600}}>
+                  vs SPY {s.marketRelativeRsTrend.vs4w>0?'+':''}{s.marketRelativeRsTrend.vs4w}
+                </span>
+              </>
+            )}
             ]
           </span>
         )}
@@ -5721,6 +5734,21 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
       const v4 = s.rsTrend?.vs4w ?? 0, v3m = s.rsTrend?.vs3m ?? 0;
       return v4 <= -3 && (v3m - v4) <= -3;   // BOTH halves falling
     },
+    // ── Market-relative + leadership (Phase 3.1) ─────────────────────
+    // marketRelativeRsTrend.vs4w = stock.vs4w − SPY.vs4w (server side).
+    // null when SPY trend unavailable; chip silently fires off in that
+    // case (no false positives).
+    'LeadM': s => (s.marketRelativeRsTrend?.vs4w ?? null) >= 5,
+    'LagM':  s => (s.marketRelativeRsTrend?.vs4w ?? null) <= -5,
+    // Eroding: rebuild 4w-ago rank from current rank − vs4w. Was a
+    // leader (≥85 then) AND has dropped ≥10 since.
+    'Erode': s => {
+      const cur = s.rsRank ?? null;
+      const v4  = s.rsTrend?.vs4w ?? null;
+      if (cur == null || v4 == null) return false;
+      const rankFourWeeksAgo = cur - v4;
+      return rankFourWeeksAgo >= 85 && v4 <= -10;
+    },
     // S2 stays as the active "buy zone" filter; S1/S3/S4 dropped (rarely
     // used as filters — Stage column on the row already shows the value).
     'S2':  s => s.stage===2,
@@ -6051,6 +6079,19 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             {key:'↗',   label:'↗ Emerging',     title:'RS rank 65-79 (just below leadership) AND 4-week rank rose ≥+5 points (gaining ground). Pre-leader entry zone — catches names BEFORE they hit RS=80. Caveat: 4-week single-window measure, can be noisy (universe stdev=13).',col:'var(--cyan)'},
             {key:'RS↑', label:'RS↑',             title:'RS Trend RISING (sustained). Both halves of 12-week window rising ≥3 points: vs4w ≥ +3 AND (vs3m − vs4w) ≥ +3. Rejects flat-then-spike patterns. Caveat: still relative to peers — a stock can have rising RS in a falling market.',col:'var(--green)'},
             {key:'RS↓', label:'RS↓',             title:'RS Trend FALLING (sustained). Both halves of 12-week window falling ≤-3 points. Decaying leader / institutional rotation out.',col:'var(--red)'},
+            // ─── Market-relative + leadership chips (Phase 3.1) ────────────
+            // RS↑ above measures vs the universe; these measure vs SPY
+            // directly. A stock can have rising RS rank but still be lagging
+            // the index — and vice versa in a chop. Lead/Lag tells you
+            // who's actually beating the market right now.
+            {key:'LeadM',  label:'Lead Mkt',  title:'Beating SPY by ≥5 RS-rank points over the last 4 weeks (stock.vs4w − SPY.vs4w ≥ 5). The "actually outperforming the index right now" signal — different from RS↑ which is vs universe.',col:'var(--green)'},
+            {key:'LagM',   label:'Lag Mkt',   title:'Trailing SPY by ≥5 RS-rank points over the last 4 weeks (stock.vs4w − SPY.vs4w ≤ -5). Stock losing ground vs index — leadership erosion, even if absolute RS is still high.',col:'var(--red)'},
+            // Eroding: was a leader (rank ≥85 four weeks ago) but rsRank
+            // dropped ≥10 points since. Fingerprint of "first to fall"
+            // names that lead the market down. (rsRank − vs4w) reconstructs
+            // the 4-week-ago rank — if that was ≥85 AND vs4w ≤ -10, this
+            // is a textbook leadership-eroding pattern.
+            {key:'Erode',  label:'Eroding',  title:'Was an RS leader (rank ≥85 four weeks ago) but lost ≥10 rank points since. (rsRank − vs4w) ≥ 85 AND vs4w ≤ -10. The first-to-fall canary signal — sell-into-strength candidate.',col:'var(--amber)'},
             {key:'VCP', label:'VCP',             title:'Volatility Contraction Pattern (DAILY bars) — 2+ price contractions of decreasing depth, range tightening over typically 3-12 weeks. Coiling spring setup before breakout. Best paired with S2 for context.',col:'var(--purple)'},
             {key:'CUP', label:'CUP',             title:'Cup & Handle (DAILY bars). U-shaped base over typically 7-65 weeks, with a smaller handle pullback near the top. Pivot = handle peak. O\'Neil\'s most reliable base pattern.',col:'var(--cyan)'},
             {key:'ASC', label:'ASC',             title:'Ascending Base (DAILY bars). 3+ higher lows with tightening price range, 9-16 weeks typical. Each low above the prior. Pivot = most-recent high.',col:'var(--cyan)'},

@@ -15,18 +15,34 @@ module.exports = function(UNIVERSE, SECTOR_MAP) {
       const stocks = await runRSScan(UNIVERSE, SECTOR_MAP);
       // Bulk-fetch trends for the whole scan in one 100-day window query
       // instead of materializing the full history per request.
-      const trends = getRSTrendsBulk(RS_HISTORY, stocks.map(s => s.ticker));
+      // Include SPY in the lookup so we can compute market-relative
+      // RS deltas (used by the Lead/Lag chips on the client).
+      const tickers = stocks.map(s => s.ticker);
+      const tickersWithSpy = tickers.includes('SPY') ? tickers : [...tickers, 'SPY'];
+      const trends = getRSTrendsBulk(RS_HISTORY, tickersWithSpy);
+      const spyTrend = trends.get('SPY') || null;
       const withTrend = stocks.map(s => {
         const rsTrend = trends.get(s.ticker) || null;
         const { convictionScore, reasons: convictionReasons } = calcConviction(s, rsTrend);
-        return { ...s, rsTrend, convictionScore, convictionReasons };
+        // Market-relative trend: rsTrend vs SPY trend at each lookback.
+        // Lets a chip filter "stock outperforming SPY by ≥5 RS points
+        // over the last 4 weeks" without per-row state on the client.
+        // null when either side missing.
+        let marketRelativeRsTrend = null;
+        if (rsTrend && spyTrend) {
+          marketRelativeRsTrend = {
+            vs4w:  (rsTrend.vs4w != null && spyTrend.vs4w != null) ? +(rsTrend.vs4w - spyTrend.vs4w).toFixed(1) : null,
+            vs3m:  (rsTrend.vs3m != null && spyTrend.vs3m != null) ? +(rsTrend.vs3m - spyTrend.vs3m).toFixed(1) : null,
+          };
+        }
+        return { ...s, rsTrend, convictionScore, convictionReasons, marketRelativeRsTrend };
       });
       const spyStock = withTrend.find(s => s.ticker === 'SPY');
       const spy3m = spyStock?.chg3m ?? null;
       const final = spy3m != null
         ? withTrend.map(s => ({ ...s, vsSPY3m: s.chg3m != null ? +(s.chg3m - spy3m).toFixed(2) : null }))
         : withTrend;
-      res.json({ stocks: final, universeSize: final.length, spy3m });
+      res.json({ stocks: final, universeSize: final.length, spy3m, spyTrend });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
