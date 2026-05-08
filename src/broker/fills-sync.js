@@ -155,8 +155,17 @@ async function syncBrokerFills({ lookbackDays = 7, limit = 100 } = {}) {
 
   // Dedupe strictly on alpaca_order_id — the old symbol:date guard blocked
   // subsequent pyramid tranches on the same day from ever being synced.
+  // ALSO union in merged_fill_orders: Alpaca can fragment one staged order
+  // into N filled-buy events each with its own ID; those Nth partials get
+  // folded into the primary row by the merge path below, and we record
+  // their IDs in merged_fill_orders so the next sync doesn't re-process
+  // them as fresh fills.
   const existing     = db.prepare('SELECT alpaca_order_id FROM trades WHERE alpaca_order_id IS NOT NULL').all();
-  const existingIds  = new Set(existing.map(t => t.alpaca_order_id));
+  const merged       = db.prepare('SELECT alpaca_order_id FROM merged_fill_orders').all();
+  const existingIds  = new Set([
+    ...existing.map(t => t.alpaca_order_id),
+    ...merged.map(m => m.alpaca_order_id),
+  ]);
 
   // Backfill sector on older auto-synced trades that predated sector capture.
   const backfilled = db.prepare(`
@@ -174,6 +183,48 @@ async function syncBrokerFills({ lookbackDays = 7, limit = 100 } = {}) {
   `);
   const sectorLookup = db.prepare('SELECT sector FROM universe_mgmt WHERE symbol = ?');
 
+  // ─── Fragmented-fill merge ──────────────────────────────────────────────
+  // Alpaca occasionally splits a single staged buy order into multiple
+  // filled-buy events, each with its own alpaca_order_id (FCFS 68sh →
+  // 24+22+22 was the canonical case; DELL 27sh → 9+9+9 and TER 15sh →
+  // 5+5+5 had the same shape). Without this guard, syncBrokerFills inserts
+  // one trade row per fragment and the journal shows N rows for one
+  // logical entry — share/P&L accounting still sums correctly, but the
+  // journal is unreadable and tax-lot rows multiply.
+  //
+  // Match: same symbol, same fill_date, |entry_price - fill_price| within
+  // 0.5%, and the candidate row was created in the last 10 minutes (tight
+  // enough that intentional pyramid scaling at the same price hours later
+  // doesn't get folded in by accident). Merge updates shares (additive),
+  // recomputes weighted-avg entry_price, and appends a [FRAGMENT-MERGED]
+  // note. The merged order id is recorded in merged_fill_orders so the
+  // next sync skips it.
+  const findMergeCandidate = db.prepare(`
+    SELECT id, entry_price, shares, initial_shares, remaining_shares,
+           stop_price, target1, target2, alpaca_order_id, notes
+      FROM trades
+     WHERE symbol = ?
+       AND entry_date = ?
+       AND exit_date IS NULL
+       AND ABS(entry_price - ?) / NULLIF(?,0) < 0.005
+       AND datetime(created_at) > datetime('now', '-10 minutes')
+     ORDER BY id DESC
+     LIMIT 1
+  `);
+  const mergeFill = db.prepare(`
+    UPDATE trades
+       SET shares           = ?,
+           initial_shares   = ?,
+           remaining_shares = ?,
+           entry_price      = ?,
+           notes            = COALESCE(notes,'') || char(10) || ?
+     WHERE id = ?
+  `);
+  const recordMerged = db.prepare(`
+    INSERT OR IGNORE INTO merged_fill_orders (alpaca_order_id, primary_trade_id, shares, fill_price)
+    VALUES (?, ?, ?, ?)
+  `);
+
   for (const order of filled) {
     if (existingIds.has(order.id)) continue;
     let fillDate = (order.filled_at || order.created_at).split('T')[0];
@@ -182,6 +233,85 @@ async function syncBrokerFills({ lookbackDays = 7, limit = 100 } = {}) {
     const staged = db.prepare(
       'SELECT stop_price, target1_price, target2_price, source, conviction_score, strategy, exit_strategy, entry_price, created_at FROM staged_orders WHERE alpaca_order_id = ?'
     ).get(order.id);
+
+    const fillPrice = +order.filled_avg_price;
+    const fillQty   = +order.filled_qty;
+
+    // Fragmented-fill check: is there an OPEN row created seconds ago at
+    // approx the same price for the same symbol/day? If so, fold this
+    // fill into it instead of inserting a duplicate.
+    const mergeCandidate = findMergeCandidate.get(order.symbol, fillDate, fillPrice, fillPrice);
+    if (mergeCandidate) {
+      const oldQty       = mergeCandidate.initial_shares ?? mergeCandidate.shares ?? 0;
+      const totalQty     = oldQty + fillQty;
+      const weightedAvg  = totalQty > 0
+        ? +((mergeCandidate.entry_price * oldQty + fillPrice * fillQty) / totalQty).toFixed(4)
+        : mergeCandidate.entry_price;
+      const remaining    = (mergeCandidate.remaining_shares ?? oldQty) + fillQty;
+      const note         = `[FRAGMENT-MERGED] +${fillQty}sh @ $${fillPrice.toFixed(2)} from order ${order.id.slice(0,8)} (now ${totalQty}sh @ $${weightedAvg.toFixed(2)})`;
+      mergeFill.run(totalQty, totalQty, remaining, weightedAvg, note, mergeCandidate.id);
+
+      // If THIS fragment carries staged context and the primary row's
+      // bracket is empty, fill it in — the staged-matched fragment may
+      // arrive 2nd or 3rd in the batch, and we don't want to lose the
+      // user-staged stop/T1/T2 just because the primary inserted first.
+      if (staged && (mergeCandidate.stop_price == null || mergeCandidate.target1 == null)) {
+        db.prepare(`
+          UPDATE trades
+             SET stop_price         = COALESCE(stop_price, ?),
+                 initial_stop_price = COALESCE(initial_stop_price, ?),
+                 target1            = COALESCE(target1, ?),
+                 target2            = COALESCE(target2, ?),
+                 strategy           = COALESCE(strategy, ?),
+                 exit_strategy      = COALESCE(exit_strategy, ?),
+                 was_system_signal  = 1
+           WHERE id = ?
+        `).run(staged.stop_price, staged.stop_price, staged.target1_price, staged.target2_price,
+               staged.strategy || null, staged.exit_strategy || 'full_in_scale_out',
+               mergeCandidate.id);
+      }
+
+      recordMerged.run(order.id, mergeCandidate.id, fillQty, fillPrice);
+
+      // Fold this fragment into the primary's tax lot too — we don't want
+      // a separate tax_lots row per fragment.
+      try {
+        createTaxLot({
+          tradeId:      mergeCandidate.id,
+          symbol:       order.symbol,
+          shares:       fillQty,
+          costBasis:    fillPrice,
+          acquiredDate: fillDate,
+        });
+      } catch (_) {}
+
+      // Slippage capture for the fragment.
+      try {
+        const signalDate  = staged?.created_at?.split('T')[0] || fillDate;
+        const buyIntended = order.limit_price != null ? +order.limit_price
+          : staged?.entry_price ? +staged.entry_price
+          : fillPrice;
+        logExecution({
+          tradeId:      mergeCandidate.id,
+          symbol:       order.symbol,
+          side:         'buy',
+          intendedPrice: buyIntended,
+          fillPrice,
+          shares:       fillQty,
+          orderType:    order.type || 'market',
+          signalDate,
+          orderDate:    (order.submitted_at || order.created_at)?.split('T')[0],
+          fillDate,
+        });
+      } catch (_) {}
+
+      synced.push({ symbol: order.symbol, price: fillPrice, qty: fillQty, date: fillDate, mergedInto: mergeCandidate.id });
+      // IMPORTANT: also reserve this id in the in-memory dedupe set so
+      // subsequent iterations of the same loop don't double-process it
+      // (the merged_fill_orders SELECT only ran once, before the loop).
+      existingIds.add(order.id);
+      continue;
+    }
 
     const sector = sectorLookup.get(order.symbol)?.sector || null;
 

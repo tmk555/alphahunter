@@ -1375,6 +1375,30 @@ function initSchema() {
   // tick just delays — the pilot retries on the next tick and fires as soon
   // as the gate passes.
   safeAddColumn('pyramid_plans', 'vwap_gate', 'JSON');
+
+  // ─── merged_fill_orders ──────────────────────────────────────────────────
+  // Idempotency tracker for fragmented broker fills. Alpaca sometimes splits
+  // ONE staged order into multiple `filled buy` events, each with its own
+  // alpaca_order_id (DELL 27sh → 9+9+9, TER 15sh → 5+5+5, FCFS 68sh →
+  // 24+22+22 — all observed in production). The single-row trade journal
+  // shouldn't show three rows for one logical entry, so syncBrokerFills
+  // merges the 2nd-Nth partials into the primary trade row (additive
+  // shares + weighted-avg entry_price).
+  //
+  // This table records the alpaca_order_ids that have been folded into a
+  // primary trade row, so the next syncBrokerFills run skips them instead
+  // of re-processing as fresh fills.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS merged_fill_orders (
+      alpaca_order_id  TEXT PRIMARY KEY,
+      primary_trade_id INTEGER NOT NULL,
+      shares           INTEGER NOT NULL,
+      fill_price       REAL    NOT NULL,
+      merged_at        TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (primary_trade_id) REFERENCES trades(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_merged_fill_primary ON merged_fill_orders(primary_trade_id);
+  `);
 }
 
 // One-time migration from legacy JSON files into SQLite
