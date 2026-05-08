@@ -977,4 +977,247 @@ async function reconcileZombieJournalRows({
   return { closed, skipped, dryRun: !!dryRun };
 }
 
-module.exports = { syncBrokerFills, reconcileOrphanPositions, reconcileZombieJournalRows, computeTargetsFromStop };
+// ─── Fragmented-fill merge (historical / backfill) ──────────────────────
+//
+// The forward-prevention path lives inside syncBrokerFills (see line ~228).
+// This function is the BACKFILL path for sets that were already inserted
+// as separate rows BEFORE the prevention guard existed.
+//
+// Algorithm:
+//   1. Find groups of trade rows that look like fragmented fills:
+//      same symbol, same entry_date, entry_prices within 0.5%,
+//      created within 60 minutes of each other.
+//   2. Pick the "primary" row in each group:
+//      - prefer one whose alpaca_order_id matches a staged_orders row
+//      - else the lowest id (oldest)
+//   3. Sum shares and recompute weighted-avg entry_price into primary.
+//   4. Re-point FK rows (execution_log, tax_lots, decision_log,
+//      stop_moves) from secondaries to primary.
+//   5. Delete secondaries.
+//   6. Record each merged secondary's alpaca_order_id in
+//      merged_fill_orders so a future syncBrokerFills doesn't try to
+//      re-insert them.
+//
+// Two modes:
+//   - dryRun=true (default): return the plan, write nothing.
+//   - symbol: required for executing — the user has to pass an explicit
+//     symbol so we can't accidentally merge the entire trades table.
+//
+// Audit log: every executed merge writes a JSON snapshot of the affected
+// rows BEFORE mutation to data/audit_logs/, mirroring the pattern used
+// by the zombie-dupe cleanup. Reversible from that file.
+
+function mergeFragmentedFills({ symbol = null, dryRun = true } = {}) {
+  const db = getDB();
+  const fs = require('fs');
+  const path = require('path');
+
+  // ── 1. Find candidate groups ────────────────────────────────────────
+  // Group by (symbol, entry_date) and surface those with >1 row close
+  // in price + time. Both OPEN and CLOSED groups are candidates; for
+  // closed groups we additionally require all rows share the same
+  // exit_date and exit_price (so total P&L is preserved by the merge —
+  // we're consolidating accounting, not changing the realized result).
+  // Group by (symbol, entry_date, COALESCE(exit_date,'OPEN')) so a row
+  // closed on a different day starts a new group. Without the exit_date
+  // bucket, MKSI 12 fragments closed on 2026-04-20 grouped with row 56
+  // (entry same day but closed 2026-04-29 at a different price); the
+  // exit-mismatch guard then dropped the whole group instead of merging
+  // the homogenous 12.
+  const groupsRaw = db.prepare(`
+    SELECT symbol, entry_date,
+           COALESCE(date(exit_date), 'OPEN') as exit_bucket,
+           MIN(id) as first_id,
+           GROUP_CONCAT(id) as ids
+      FROM trades
+     WHERE 1=1
+       ${symbol ? 'AND symbol = ?' : ''}
+     GROUP BY symbol, entry_date, COALESCE(date(exit_date), 'OPEN')
+    HAVING COUNT(*) > 1
+  `).all(...(symbol ? [symbol] : []));
+
+  const groups = [];
+  for (const g of groupsRaw) {
+    const ids = g.ids.split(',').map(Number);
+    const rows = db.prepare(
+      `SELECT id, symbol, entry_date, entry_price, shares, initial_shares, remaining_shares,
+              alpaca_order_id, stop_price, target1, target2, strategy, exit_strategy, created_at,
+              exit_date, exit_price, exit_reason, pnl_dollars, realized_pnl_dollars
+         FROM trades WHERE id IN (${ids.map(() => '?').join(',')})`
+    ).all(...ids);
+
+    // Tighten: only keep groups where prices are within 2% of each
+    // other. The forward-prevention path uses 0.5% (same minute, same
+    // staged order); backfill is more lenient because Alpaca's order
+    // book sweeps in the historical MKSI case spanned ~1.16%. Combined
+    // with same-day + identical exit fields (closed groups) + 60-min
+    // create window (open groups), 2% safely separates fragmentation
+    // from pyramid scale-in.
+    const minP = Math.min(...rows.map(r => r.entry_price));
+    const maxP = Math.max(...rows.map(r => r.entry_price));
+    if ((maxP - minP) / minP > 0.02) continue;
+
+    // Tighten: created_at within 60 minutes of each other (legitimate
+    // fragments arrive within seconds; pyramid tranches usually hours
+    // or days apart).
+    const ts = rows.map(r => Date.parse(r.created_at.replace(' ', 'T') + 'Z')).filter(n => !Number.isNaN(n));
+    if (ts.length === rows.length && (Math.max(...ts) - Math.min(...ts)) > 60 * 60 * 1000) continue;
+
+    // CLOSED-row guard: every row in the group must agree on exit DAY
+    // AND exit_price (within $0.01). Compare by date(exit_date), not
+    // the full timestamp — fragmented fills sometimes record exits
+    // seconds apart (DAL had 18:13:02 / 18:13:04 / 18:13:04) but on
+    // the same trading day. Different exit DAYS = genuinely separate
+    // trades; don't merge.
+    const exitDays = new Set(rows.map(r => (r.exit_date || 'OPEN').slice(0, 10)));
+    if (exitDays.size > 1) continue;
+    const isClosedGroup = !exitDays.has('OPEN');
+    if (isClosedGroup) {
+      const minE = Math.min(...rows.map(r => r.exit_price || 0));
+      const maxE = Math.max(...rows.map(r => r.exit_price || 0));
+      if (maxE - minE > 0.01) continue;
+    }
+
+    // Pick primary: prefer one whose alpaca_order_id matches a
+    // staged_orders row (carries bracket context), else lowest id.
+    const stagedMatched = rows.find(r => {
+      if (!r.alpaca_order_id) return false;
+      return !!db.prepare('SELECT 1 FROM staged_orders WHERE alpaca_order_id = ?').get(r.alpaca_order_id);
+    });
+    const primary = stagedMatched || rows.slice().sort((a, b) => a.id - b.id)[0];
+    const secondaries = rows.filter(r => r.id !== primary.id);
+
+    const totalShares = rows.reduce((s, r) => s + (r.initial_shares ?? r.shares ?? 0), 0);
+    const weightedAvg = +(rows.reduce((s, r) => s + r.entry_price * (r.initial_shares ?? r.shares ?? 0), 0) / totalShares).toFixed(4);
+
+    // For closed groups, also compute aggregated P&L. exit_price is
+    // identical (we filtered to that case above), so total realized
+    // dollars = total_shares × (exit_price − weighted_entry).
+    const aggExit = isClosedGroup ? {
+      exitDate:           rows[0].exit_date,
+      exitPrice:          rows[0].exit_price,
+      exitReason:         rows[0].exit_reason,
+      totalPnlDollars:    +(totalShares * (rows[0].exit_price - weightedAvg)).toFixed(2),
+      totalPnlPercent:    +((rows[0].exit_price / weightedAvg - 1) * 100).toFixed(2),
+    } : null;
+
+    groups.push({
+      symbol:       g.symbol,
+      entryDate:    g.entry_date,
+      isClosedGroup,
+      primaryId:    primary.id,
+      secondaryIds: secondaries.map(r => r.id),
+      currentRows:  rows.map(r => ({
+        id: r.id, shares: r.shares, entryPrice: r.entry_price,
+        alpacaOrderId: r.alpaca_order_id,
+        exitDate: r.exit_date, exitPrice: r.exit_price,
+        pnl: r.pnl_dollars,
+      })),
+      newPrimary:   { shares: totalShares, entryPrice: weightedAvg, ...(aggExit || {}) },
+    });
+  }
+
+  if (dryRun) {
+    return { dryRun: true, candidates: groups, count: groups.length };
+  }
+  if (!symbol) {
+    return { error: 'symbol parameter required for execute mode (dryRun=false). Refusing to merge whole table.' };
+  }
+  if (!groups.length) {
+    return { dryRun: false, executed: [], message: `No fragmented-fill groups found for ${symbol}.` };
+  }
+
+  // ── 2. Execute (per-symbol) ─────────────────────────────────────────
+  // Audit dump first.
+  const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  const auditDir = path.join(__dirname, '..', '..', 'data', 'audit_logs');
+  if (!fs.existsSync(auditDir)) fs.mkdirSync(auditDir, { recursive: true });
+  const auditFile = path.join(auditDir, `fragment_merge_${symbol}_${ts}.json`);
+
+  const executed = [];
+  const tx = db.transaction(() => {
+    const auditRows = { trades: [], execution_log: [], tax_lots: [], decision_log: [], stop_moves: [] };
+
+    for (const g of groups) {
+      const allIds = [g.primaryId, ...g.secondaryIds];
+      // Snapshot every affected row.
+      auditRows.trades.push(...db.prepare(
+        `SELECT * FROM trades WHERE id IN (${allIds.map(() => '?').join(',')})`
+      ).all(...allIds));
+      for (const tbl of ['execution_log', 'tax_lots', 'decision_log', 'stop_moves']) {
+        auditRows[tbl].push(...db.prepare(
+          `SELECT * FROM ${tbl} WHERE trade_id IN (${allIds.map(() => '?').join(',')})`
+        ).all(...allIds));
+      }
+
+      // Merge: update primary's shares + entry_price.
+      // For closed groups also rewrite aggregated exit P&L (exit_date /
+      // exit_price are unchanged — already identical across the group).
+      const noteSuffix = `[FRAGMENT-MERGED-BACKFILL] folded ${g.secondaryIds.length} fragment row(s) into this primary at $${g.newPrimary.entryPrice} × ${g.newPrimary.shares}sh`;
+      if (g.isClosedGroup) {
+        // Closed group — preserve realized P&L by recomputing from
+        // weighted entry × total shares × (exit − entry).
+        db.prepare(`
+          UPDATE trades
+             SET shares           = ?,
+                 initial_shares   = ?,
+                 remaining_shares = 0,
+                 entry_price      = ?,
+                 pnl_dollars      = ?,
+                 pnl_percent      = ?,
+                 notes            = COALESCE(notes,'') || char(10) || ?
+           WHERE id = ?
+        `).run(g.newPrimary.shares, g.newPrimary.shares, g.newPrimary.entryPrice,
+               g.newPrimary.totalPnlDollars, g.newPrimary.totalPnlPercent,
+               noteSuffix, g.primaryId);
+      } else {
+        db.prepare(`
+          UPDATE trades
+             SET shares           = ?,
+                 initial_shares   = ?,
+                 remaining_shares = ?,
+                 entry_price      = ?,
+                 notes            = COALESCE(notes,'') || char(10) || ?
+           WHERE id = ?
+        `).run(g.newPrimary.shares, g.newPrimary.shares, g.newPrimary.shares, g.newPrimary.entryPrice,
+               noteSuffix, g.primaryId);
+      }
+
+      // Re-point FK rows from secondaries → primary.
+      for (const sid of g.secondaryIds) {
+        for (const tbl of ['execution_log', 'tax_lots', 'stop_moves']) {
+          db.prepare(`UPDATE ${tbl} SET trade_id = ? WHERE trade_id = ?`).run(g.primaryId, sid);
+        }
+        // decision_log has trade_id as PRIMARY KEY — can't have two rows
+        // with same key; just delete the secondary's decision row (the
+        // primary's grade still applies post-merge).
+        db.prepare(`DELETE FROM decision_log WHERE trade_id = ?`).run(sid);
+      }
+
+      // Record secondary order_ids in merged_fill_orders.
+      for (const sid of g.secondaryIds) {
+        const sec = db.prepare(`SELECT alpaca_order_id, shares, entry_price FROM trades WHERE id = ?`).get(sid);
+        if (sec?.alpaca_order_id) {
+          db.prepare(`
+            INSERT OR IGNORE INTO merged_fill_orders (alpaca_order_id, primary_trade_id, shares, fill_price)
+            VALUES (?, ?, ?, ?)
+          `).run(sec.alpaca_order_id, g.primaryId, sec.shares, sec.entry_price);
+        }
+      }
+
+      // Delete secondaries from trades.
+      for (const sid of g.secondaryIds) {
+        db.prepare(`DELETE FROM trades WHERE id = ?`).run(sid);
+      }
+
+      executed.push({ ...g, status: 'merged' });
+    }
+
+    fs.writeFileSync(auditFile, JSON.stringify(auditRows, null, 2));
+  });
+  tx();
+
+  return { dryRun: false, symbol, executed, count: executed.length, auditFile };
+}
+
+module.exports = { syncBrokerFills, reconcileOrphanPositions, reconcileZombieJournalRows, computeTargetsFromStop, mergeFragmentedFills };

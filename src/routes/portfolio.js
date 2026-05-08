@@ -1164,6 +1164,36 @@ module.exports = function(db) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ─── Fragmented-fill merge (admin / per-symbol) ────────────────────
+  //
+  // Backfill the fragmented-fill consolidation that the live syncBrokerFills
+  // path now does for new fills, but wasn't doing before. Two flavors:
+  //
+  //   POST /api/portfolio/merge-fragments              (dryRun, all symbols)
+  //     Returns the merge plan — every group of trade rows that look like
+  //     fragments of one staged order. Writes nothing.
+  //
+  //   POST /api/portfolio/merge-fragments  body: { symbol, dryRun: false }
+  //     EXECUTE for one symbol. Sums shares, recomputes weighted-avg
+  //     entry_price into the primary row, re-points FK rows
+  //     (execution_log / tax_lots / decision_log / stop_moves) to the
+  //     primary, deletes secondaries, and records the secondary
+  //     alpaca_order_ids in merged_fill_orders so the next sync skips
+  //     them. Audit-dumps every affected row to data/audit_logs/ first
+  //     so the merge is reversible.
+  //
+  // Refuses to execute without an explicit symbol — guards against an
+  // accidental "merge the whole table" call.
+  router.post('/portfolio/merge-fragments', (req, res) => {
+    try {
+      const { mergeFragmentedFills } = require('../broker/fills-sync');
+      const { symbol = null, dryRun = true } = req.body || {};
+      const result = mergeFragmentedFills({ symbol, dryRun });
+      if (result.error) return res.status(400).json(result);
+      res.json(result);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // Manual trigger for journal→broker stop sync. Ensures every open journal
   // row has a matching broker sell-stop at the journal's stop_price. Patches
   // mismatched legs, creates new stops where none exist, never loosens.
