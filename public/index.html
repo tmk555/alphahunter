@@ -6014,10 +6014,35 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     );
   }
 
-  // Signal filter chips — from App props, persists across tab switches
+  // Signal filter chips — from App props, persists across tab switches.
+  //
+  // Most chips are independent ANDs (CS6 + S2 + ACC = "stocks matching
+  // all three"). But the rotation-direction trio (vsSPY↑ / vsSPY↓ /
+  // Leader↓) answers the SAME question with three exclusive answers:
+  //   - vsSPY↑   = beating SPY by ≥5
+  //   - vsSPY↓   = trailing SPY by ≥5
+  //   - Leader↓  = former leader, lost ≥10 (which is also ≤−10 vs4w,
+  //                strongly correlated with vsSPY↓)
+  //
+  // No stock can simultaneously beat SPY by 5 AND trail SPY by 5 — so
+  // turning two of these on at once = always 0 results, which is the
+  // "I clicked all three and got nothing" UX failure the user hit.
+  // Treat them as a radio group: clicking one auto-disables the other
+  // two.
+  const ROTATION_GROUP = new Set(['LeadM', 'LagM', 'Erode']);
   const toggleSig = key => setSigFilters(prev => {
     const next = new Set(prev);
-    next.has(key) ? next.delete(key) : next.add(key);
+    if (ROTATION_GROUP.has(key)) {
+      // Radio-group behavior for rotation direction. Click an active
+      // one to deselect; click a different one to switch direction.
+      const wasActive = next.has(key);
+      // Drop all rotation-group keys first.
+      for (const k of ROTATION_GROUP) next.delete(k);
+      // If the clicked one wasn't active, activate it now.
+      if (!wasActive) next.add(key);
+    } else {
+      next.has(key) ? next.delete(key) : next.add(key);
+    }
     return next;
   });
 
@@ -6472,14 +6497,19 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             // Earlier labels (Lead Mkt / Lag Mkt / Eroding) read
             // ambiguously — "Lead Mkt" could mean "leading market" or
             // "lead market"; "Eroding" didn't say what was eroding.
-            {key:'LeadM', label:'vsSPY↑',  title:'NEW · Beating SPY by ≥5 RS-rank points over the last 4 weeks (stock.vs4w − SPY.vs4w ≥ 5). The "actually outperforming the index right now" signal — different from RS↑ which is vs universe.',col:'var(--green)',isNew:true},
-            {key:'LagM',  label:'vsSPY↓',  title:'NEW · Trailing SPY by ≥5 RS-rank points over the last 4 weeks (stock.vs4w − SPY.vs4w ≤ -5). Losing ground vs index — leadership erosion, even if absolute RS is still high.',col:'var(--red)',isNew:true},
+            // Mutex group — toggleSig() radio-clicks within {LeadM, LagM,
+            // Erode}. Three answers to one question (rotation direction
+            // vs SPY); they CAN'T all be true at once, so AND-filtering
+            // them returns 0 results. UI emphasizes this with `mutexGroup`
+            // and a "ROTATION:" label rendered alongside.
+            {key:'LeadM', label:'vsSPY↑',  title:'ROTATION (pick one) · Beating SPY by ≥5 RS-rank points over the last 4 weeks. The "actually outperforming the index right now" signal. Mutually exclusive with vsSPY↓ and Leader↓ — clicking one auto-deselects the others.',col:'var(--green)',isNew:true,mutexGroup:'rotation'},
+            {key:'LagM',  label:'vsSPY↓',  title:'ROTATION (pick one) · Trailing SPY by ≥5 RS-rank points over the last 4 weeks. Losing ground vs index — leadership erosion. Mutually exclusive with vsSPY↑ and Leader↓.',col:'var(--red)',isNew:true,mutexGroup:'rotation'},
             // Leader↓: was a leader (rank ≥85 four weeks ago) but rsRank
             // dropped ≥10 points since. Fingerprint of "first to fall"
-            // names that lead the market down. (rsRank − vs4w) reconstructs
-            // the 4-week-ago rank — if that was ≥85 AND vs4w ≤ -10, this
-            // is a textbook leadership-eroding pattern.
-            {key:'Erode', label:'Leader↓', title:'NEW · Former leader rolling over: rank was ≥85 four weeks ago, has dropped ≥10 rank points since. (rsRank − vs4w) ≥ 85 AND vs4w ≤ -10. First-to-fall canary signal — sell-into-strength candidate.',col:'var(--amber)',isNew:true},
+            // names that lead the market down. Strongly correlated with
+            // vsSPY↓ but more specific — only fires on names that WERE
+            // leaders, so it's a smaller / cleaner subset.
+            {key:'Erode', label:'Leader↓', title:'ROTATION (pick one) · Former leader rolling over: rank was ≥85 four weeks ago, has dropped ≥10 rank points since. First-to-fall canary signal — sell-into-strength candidate. Mutually exclusive with vsSPY↑ and vsSPY↓.',col:'var(--amber)',isNew:true,mutexGroup:'rotation'},
             {key:'VCP', label:'VCP',             title:'Volatility Contraction Pattern (DAILY bars) — 2+ price contractions of decreasing depth, range tightening over typically 3-12 weeks. Coiling spring setup before breakout. Best paired with S2 for context.',col:'var(--purple)'},
             {key:'CUP', label:'CUP',             title:'Cup & Handle (DAILY bars). U-shaped base over typically 7-65 weeks, with a smaller handle pullback near the top. Pivot = handle peak. O\'Neil\'s most reliable base pattern.',col:'var(--cyan)'},
             {key:'ASC', label:'ASC',             title:'Ascending Base (DAILY bars). 3+ higher lows with tightening price range, 9-16 weeks typical. Each low above the prior. Pivot = most-recent high.',col:'var(--cyan)'},
@@ -6501,19 +6531,47 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             {key:'ACC', label:'ACC',              title:'Accumulation (50-day) — IBD A or B grade: up-volume / down-volume ratio ≥ 1.2 over the last 50 trading days. CANNOT be faked by a single-day spike. A grade ≥ 1.5 = heavy institutional buying; B grade ≥ 1.2 = moderate. The real "stock under accumulation" signal.',col:'var(--green)'},
             {key:'⚡',  label:'⚡ Vol Surge',     title:'Today\'s volume ≥ 2× the 3-month average AND price within 5% of 52-week high. Volume confirmation of breakout / continuation.',col:'var(--amber)'},
             {key:'REV↑',label:'REV↑',            title:'Analyst estimate revision score ≥50 (out of 100). Aggregates EPS+revenue estimate changes for current+next year. Source: revision_scores cache, refreshed nightly by revision_scan_daily cron at 5 PM ET. Score ≥70 = strong upgrade, 50-69 = upgrade.',col:'var(--green)'},
-          ].map(({key,label,title,col,isNew})=>(
-            <button key={key} title={title}
-              onClick={()=>toggleSig(key)}
-              style={{padding:'2px 9px',fontSize:10,border:`1px solid ${sigFilters.has(key)?col:isNew?col:'var(--border)'}`,borderRadius:3,background:sigFilters.has(key)?col+'22':isNew?col+'10':'transparent',color:sigFilters.has(key)?col:isNew?col:'var(--text3)',cursor:'pointer',fontWeight:sigFilters.has(key)?700:isNew?600:400,transition:'all 0.12s',position:'relative'}}>
-              {label}
-              {/* NEW indicator — small dot in the top-right corner of
-                  the chip. One-rollout-cycle visibility marker. */}
-              {isNew && (
-                <span aria-hidden="true"
-                      style={{position:'absolute',top:-2,right:-2,width:6,height:6,borderRadius:'50%',background:col,boxShadow:`0 0 4px ${col}`,border:'1px solid var(--bg)'}}/>
-              )}
-            </button>
-          ))}
+          ].map(({key,label,title,col,isNew,mutexGroup},idx,arr)=>{
+            // Mutex-group decoration: when transitioning INTO a mutex
+            // group (current chip is in group, previous wasn't), inject
+            // a "ROTATION (pick one):" label so the user sees the three
+            // chips are alternatives, not stackable AND filters.
+            const prev = idx > 0 ? arr[idx-1] : null;
+            const showGroupLabel = mutexGroup && prev?.mutexGroup !== mutexGroup;
+            return (
+              <React.Fragment key={key}>
+                {showGroupLabel && (
+                  <span style={{
+                    fontSize:9,color:'var(--text3)',letterSpacing:1,
+                    fontFamily:'var(--font-mono)',padding:'0 6px',
+                    borderLeft:'1px solid var(--border2)',
+                    marginLeft:4,alignSelf:'center'}}
+                    title="Three answers to the same question (rotation direction vs SPY). Pick ONE — clicking another auto-deselects the prior pick. Cannot stack like the other chips.">
+                    ROTATION (pick 1):
+                  </span>
+                )}
+                <button title={title}
+                  onClick={()=>toggleSig(key)}
+                  style={{
+                    padding:'2px 9px',fontSize:10,
+                    border:`${mutexGroup?'1px dashed':'1px solid'} ${sigFilters.has(key)?col:isNew?col:'var(--border)'}`,
+                    borderRadius:3,
+                    background:sigFilters.has(key)?col+'22':isNew?col+'10':'transparent',
+                    color:sigFilters.has(key)?col:isNew?col:'var(--text3)',
+                    cursor:'pointer',
+                    fontWeight:sigFilters.has(key)?700:isNew?600:400,
+                    transition:'all 0.12s',position:'relative'}}>
+                  {label}
+                  {/* NEW indicator — small dot in the top-right corner.
+                      One-rollout-cycle visibility marker. */}
+                  {isNew && (
+                    <span aria-hidden="true"
+                          style={{position:'absolute',top:-2,right:-2,width:6,height:6,borderRadius:'50%',background:col,boxShadow:`0 0 4px ${col}`,border:'1px solid var(--bg)'}}/>
+                  )}
+                </button>
+              </React.Fragment>
+            );
+          })}
           {/* Editable CAN SLIM threshold chip — toggles the 'CS' filter
               and lets the user adjust the minimum score in line. Default
               is 6 (perfect) but a stop trader might want ≥4 (looser pool).
