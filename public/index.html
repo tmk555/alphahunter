@@ -4974,21 +4974,44 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
   }
 
   // ─── ROTATION HEATMAP — early-leader / early-decliner sectors ──────
-  // For each sector compute (sector.vs4w − SPY.vs4w). Sort descending so
-  // top-of-list = sectors gaining ground vs SPY (early-leaders, money
-  // rotating in), bottom-of-list = losing ground (early-decliners,
-  // money rotating out). Color tiers: ≥+5 strong leader, ≥+2 mild lead,
-  // ≤-5 strong laggard, ≤-2 mild lag.
+  // Merged view: combines the visual rotation heatmap (vs-SPY 4w delta)
+  // with the Sector Rotation Model's outputs (composite score, OW/MW/UW
+  // tilt, size boost). Pre-merge these were two separate panels showing
+  // ranked sectors with green/red color coding — same visual, different
+  // math, redundant for the user.
+  //
+  // Each tile now surfaces:
+  //   - vs-SPY 4w delta (the heatmap signal — color tier)
+  //   - sector RS rank
+  //   - rotation model tilt (▲ OW / ● MW / ▼ UW)
+  //   - size boost (e.g. +15% — applied to per-stock conviction in trades)
+  //
+  // Sorted by vs-SPY delta descending: top = money rotating IN, bottom =
+  // rotating OUT. Tilt comes from the rotation model (3-factor composite),
+  // not the vs-SPY delta — they correlate but aren't identical, so
+  // showing both keeps the model's sizing context visible.
   const rotationHeatmap = (() => {
     if (!Array.isArray(data) || !data.length || !spyTrend?.vs4w) return null;
+    // Build rotation-model lookup keyed by sector name. The /api/sectors/rotation
+    // endpoint returns rows shaped { sector, compositeScore, rank, tilt, sizeBoost }.
+    const modelBySector = new Map(
+      (rotation?.sectors || []).map(r => [r.sector, r])
+    );
     const enriched = data.map(s => {
       const v4 = s.rsTrend?.vs4w;
       if (v4 == null) return null;
+      const m = modelBySector.get(s.name) || null;
       return {
         symbol: s.symbol, name: s.name, color: s.color,
         sectorVs4w: v4,
         deltaVs4w: +(v4 - spyTrend.vs4w).toFixed(1),
         sectorRsRank: s.rsRank,
+        // Rotation-model fields (null when the model hasn't loaded yet
+        // or this sector wasn't in the model's response).
+        compositeScore: m?.compositeScore ?? null,
+        modelRank:      m?.rank ?? null,
+        tilt:           m?.tilt ?? null,
+        sizeBoost:      m?.sizeBoost ?? null,
       };
     }).filter(Boolean);
     enriched.sort((a, b) => b.deltaVs4w - a.deltaVs4w);
@@ -5006,15 +5029,22 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
           <div style={{display:'flex',alignItems:'baseline',gap:10,marginBottom:8,flexWrap:'wrap'}}>
             <div className="panel-title" style={{margin:0}}>🔄 <span>Rotation Heatmap</span></div>
             <span style={{fontSize:11,color:'var(--text3)'}}>
-              Sectors sorted by 4-week RS trend vs SPY. Top = money rotating IN (early leaders); bottom = rotating OUT (early decliners).
+              Sorted by 4-week RS trend vs SPY (top = money rotating IN, bottom = OUT). Each tile also shows the rotation-model tilt and size boost.
             </span>
             <span style={{marginLeft:'auto',fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>
-              SPY vs4w: <strong style={{color:spyTrend.vs4w>0?'var(--green)':spyTrend.vs4w<0?'var(--red)':'var(--text2)'}}>
-                {spyTrend.vs4w>0?'+':''}{spyTrend.vs4w}
-              </strong>
+              {/* Composite methodology surfaced inline so the user knows
+                  what tilt + size-boost are computed from. */}
+              <span title="Sector Rotation Model: composite = RS 50% + 1M momentum 30% + 3M momentum 20%. Top 3 sectors get OW (overweight) tilt + +15% size boost on per-stock conviction. Bottom 3 get UW (underweight) tilt + −15% boost.">
+                model: RS 50 + 1M 30 + 3M 20
+              </span>
+              <span style={{marginLeft:10}}>
+                SPY vs4w: <strong style={{color:spyTrend.vs4w>0?'var(--green)':spyTrend.vs4w<0?'var(--red)':'var(--text2)'}}>
+                  {spyTrend.vs4w>0?'+':''}{spyTrend.vs4w}
+                </strong>
+              </span>
             </span>
           </div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))',gap:6}}>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(220px, 1fr))',gap:6}}>
             {rotationHeatmap.map(r => {
               // Color tier by delta-vs-SPY magnitude. Strong leader / lag
               // get bordered; mild gets only background. Neutral fades.
@@ -5025,13 +5055,19 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
                 d <= -5 ? { bg:'rgba(255,61,87,0.12)', border:'rgba(255,61,87,0.5)', text:'var(--red)' } :
                 d <= -2 ? { bg:'rgba(255,61,87,0.06)', border:'rgba(255,61,87,0.25)', text:'#ff6b6b' } :
                           { bg:'var(--bg)', border:'var(--border)', text:'var(--text2)' };
+              // Rotation-model tilt label/color. Independent from the
+              // delta-vs-SPY color (different metric — see methodology
+              // tooltip above).
+              const tiltLabel = r.tilt === 'overweight' ? '▲ OW' : r.tilt === 'underweight' ? '▼ UW' : r.tilt ? '● MW' : null;
+              const tiltColor = r.tilt === 'overweight' ? 'var(--green)' : r.tilt === 'underweight' ? 'var(--red)' : 'var(--text3)';
+              const boostPct  = r.sizeBoost != null ? Math.round((r.sizeBoost - 1) * 100) : null;
               return (
                 <div key={r.symbol}
                   onClick={() => {
                     if (setSelectedSectors) setSelectedSectors(new Set([r.name]));
                     if (window.navigateToScanner) window.navigateToScanner(null);
                   }}
-                  title={`${r.name} (${r.symbol}) — sector vs4w ${r.sectorVs4w>0?'+':''}${r.sectorVs4w}, SPY vs4w ${spyTrend.vs4w>0?'+':''}${spyTrend.vs4w}, delta ${d>0?'+':''}${d}. RS rank ${r.sectorRsRank}. Click to focus this sector and open Scanner.`}
+                  title={`${r.name} (${r.symbol}) — sector vs4w ${r.sectorVs4w>0?'+':''}${r.sectorVs4w}, SPY vs4w ${spyTrend.vs4w>0?'+':''}${spyTrend.vs4w}, delta ${d>0?'+':''}${d}. Sector RS rank ${r.sectorRsRank}.${r.compositeScore != null ? ` Rotation-model composite ${r.compositeScore.toFixed?.(1) ?? r.compositeScore} (rank #${r.modelRank}). Tilt: ${r.tilt || 'unranked'}. Size boost: ${boostPct != null ? (boostPct >= 0 ? '+' : '') + boostPct + '%' : '—'} on per-stock conviction.` : ''} Click to focus and open Scanner.`}
                   style={{
                     padding:'6px 10px',
                     background: colorTier.bg,
@@ -5039,16 +5075,35 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
                     borderRadius: 4,
                     cursor: 'pointer',
                     display: 'flex',
-                    alignItems: 'center',
-                    gap: 6,
+                    flexDirection: 'column',
+                    gap: 3,
                     fontSize: 11,
                   }}>
-                  <span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:r.color||'#888'}}/>
-                  <strong style={{color:'var(--text)',flex:1}}>{r.name}</strong>
-                  <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{r.symbol}</span>
-                  <strong style={{fontFamily:'var(--font-mono)',color:colorTier.text,minWidth:32,textAlign:'right'}}>
-                    {d>0?'+':''}{d}
-                  </strong>
+                  {/* Top row: dot · name · symbol · vs-SPY delta */}
+                  <div style={{display:'flex',alignItems:'center',gap:6}}>
+                    <span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:r.color||'#888'}}/>
+                    <strong style={{color:'var(--text)',flex:1}}>{r.name}</strong>
+                    <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{r.symbol}</span>
+                    <strong style={{fontFamily:'var(--font-mono)',color:colorTier.text,minWidth:32,textAlign:'right'}}>
+                      {d>0?'+':''}{d}
+                    </strong>
+                  </div>
+                  {/* Bottom row: tilt + size boost (only when model loaded). */}
+                  {tiltLabel && (
+                    <div style={{display:'flex',alignItems:'center',gap:8,fontSize:9,fontFamily:'var(--font-mono)',color:'var(--text3)'}}>
+                      <span style={{color:tiltColor,fontWeight:700}}>{tiltLabel}</span>
+                      {boostPct != null && (
+                        <span style={{color: boostPct > 0 ? 'var(--green)' : boostPct < 0 ? 'var(--red)' : 'var(--text3)'}}>
+                          size {boostPct >= 0 ? '+' : ''}{boostPct}%
+                        </span>
+                      )}
+                      {r.compositeScore != null && (
+                        <span style={{marginLeft:'auto',color:'var(--text3)'}}>
+                          score {(r.compositeScore.toFixed?.(0) ?? r.compositeScore)}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -5166,45 +5221,12 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
             <button onClick={()=>setSelectedSectors(new Set())} style={{marginLeft:'auto',padding:'2px 8px',fontSize:11,border:'1px solid var(--border)',borderRadius:3,background:'transparent',color:'var(--text3)',cursor:'pointer'}}>✕ Clear focus</button>
           </div>
         )}
-        {/* Sector Rotation Model */}
-        {rotation && rotation.sectors && (
-          <div style={{marginTop:16,padding:14,background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-              <div>
-                <span style={{fontWeight:700,fontSize:14,color:'var(--text)'}}>Sector Rotation Model</span>
-                <span style={{fontSize:11,color:'var(--text3)',marginLeft:10}}>Composite: RS 50% + 1M Mom 30% + 3M Mom 20%</span>
-              </div>
-              <button className="btn btn-sm" onClick={loadRotation}>↻</button>
-            </div>
-            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))',gap:8}}>
-              {rotation.sectors.map(s => {
-                const tiltColor = s.tilt === 'overweight' ? 'var(--green)' : s.tilt === 'underweight' ? 'var(--red)' : 'var(--text3)';
-                const tiltBg = s.tilt === 'overweight' ? 'rgba(0,230,118,0.08)' : s.tilt === 'underweight' ? 'rgba(255,82,82,0.08)' : 'rgba(255,255,255,0.03)';
-                const tiltLabel = s.tilt === 'overweight' ? '▲ OW' : s.tilt === 'underweight' ? '▼ UW' : '● MW';
-                return (
-                  <div key={s.sector} style={{padding:'8px 10px',background:tiltBg,border:`1px solid ${tiltColor}33`,borderRadius:4}}>
-                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
-                      <span style={{fontWeight:700,fontSize:12,color:'var(--text)'}}>{s.sector}</span>
-                      <span style={{fontSize:11,fontWeight:700,color:tiltColor}}>{tiltLabel}</span>
-                    </div>
-                    <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'var(--text3)'}}>
-                      <span>Score: {s.compositeScore?.toFixed?.(1) ?? s.compositeScore}</span>
-                      <span>Rank #{s.rank}</span>
-                    </div>
-                    <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>
-                      Size boost: {((s.sizeBoost || 1) * 100 - 100).toFixed(0)}%
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            {rotation.methodology && (
-              <div style={{marginTop:8,fontSize:10,color:'var(--text3)'}}>
-                Top {rotation.methodology?.overweightCount || 3} overweight · Bottom {rotation.methodology?.underweightCount || 3} underweight · Size boost applied to conviction scoring
-              </div>
-            )}
-          </div>
-        )}
+        {/* Sector Rotation Model panel REMOVED — its outputs (composite
+            score, OW/MW/UW tilt, size boost) are now surfaced inline on
+            each Rotation Heatmap tile above. One panel, one place to
+            look. The /api/sectors/rotation fetch is kept (loadRotation +
+            rotation state) so the heatmap can still join the model
+            data; just no longer renders as a separate ranked grid. */}
         {selSector && (
           <SectorStocks sectorName={data.find(d=>d.symbol===selSector)?.name||selSector} rsData={rsData} onClose={()=>setSelSector(null)}/>
         )}
@@ -5222,6 +5244,9 @@ function IndustriesTab({ selectedSectors, setSelectedSectors }) {
   const { sortData, SH: IndSH } = useSortTable('rsRank');
   const [selInd2, setSelInd2] = useState(null);
   const rsData = window._rsData || [];
+  // SPY trend exposed by App.loadAll → window._spyTrend. Used to compute
+  // each industry's 4-week RS-rank delta vs SPY (the heatmap signal).
+  const spyTrend = (typeof window !== 'undefined' && window._spyTrend) || null;
 
   useEffect(() => { load(); }, []);
 
@@ -5238,8 +5263,102 @@ function IndustriesTab({ selectedSectors, setSelectedSectors }) {
     return true;
   });
 
+  // ─── ROTATION HEATMAP (industries) ──────────────────────────────────
+  // Same algorithm as the Sectors heatmap: for each industry ETF compute
+  // (industry.vs4w − SPY.vs4w), sort descending. Top = money rotating IN
+  // at the industry granularity (e.g. SMH semis, IGV software); bottom =
+  // rotating OUT. Industries don't have a separate Rotation Model
+  // (no /api/industries/rotation endpoint), so tiles only carry the
+  // vs-SPY delta — no OW/UW tilt or size boost overlay.
+  //
+  // Honors the parent sector-focus filter so when the user clicks "🎯
+  // focused" on Sectors, only that sector's industries appear.
+  const rotationHeatmap = (() => {
+    if (!Array.isArray(filtered) || !filtered.length || !spyTrend?.vs4w) return null;
+    const enriched = filtered.map(e => {
+      const v4 = e.rsTrend?.vs4w;
+      if (v4 == null) return null;
+      return {
+        symbol: e.symbol, name: e.name, sector: e.sector,
+        industryVs4w: v4,
+        deltaVs4w: +(v4 - spyTrend.vs4w).toFixed(1),
+        industryRsRank: e.rsRank,
+      };
+    }).filter(Boolean);
+    enriched.sort((a, b) => b.deltaVs4w - a.deltaVs4w);
+    return enriched;
+  })();
+
   return (
     <div>
+      {/* Rotation heatmap (industries) — visible only when we have spyTrend
+          and at least 4 industries to rank. Clicking a tile focuses on the
+          parent sector + opens Scanner for that sector's stocks (same UX
+          as the Sectors heatmap; we don't have a per-industry-ETF stock
+          drill from here). */}
+      {rotationHeatmap && rotationHeatmap.length >= 4 && (
+        <div className="panel" style={{marginBottom:12,padding:'12px 14px'}}>
+          <div style={{display:'flex',alignItems:'baseline',gap:10,marginBottom:8,flexWrap:'wrap'}}>
+            <div className="panel-title" style={{margin:0}}>🔄 <span>Industry Rotation Heatmap</span></div>
+            <span style={{fontSize:11,color:'var(--text3)'}}>
+              Sorted by 4-week RS trend vs SPY. Top = money rotating IN to this industry; bottom = rotating OUT. Finer granularity than the sector heatmap — leadership often concentrates inside one or two industries within the leading sector.
+            </span>
+            <span style={{marginLeft:'auto',fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>
+              SPY vs4w: <strong style={{color:spyTrend.vs4w>0?'var(--green)':spyTrend.vs4w<0?'var(--red)':'var(--text2)'}}>
+                {spyTrend.vs4w>0?'+':''}{spyTrend.vs4w}
+              </strong>
+            </span>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(200px, 1fr))',gap:6}}>
+            {rotationHeatmap.map(r => {
+              const d = r.deltaVs4w;
+              const colorTier =
+                d >= 5  ? { bg:'rgba(0,230,118,0.12)', border:'rgba(0,230,118,0.5)', text:'var(--green)' } :
+                d >= 2  ? { bg:'rgba(0,230,118,0.06)', border:'rgba(0,230,118,0.25)', text:'#8bc34a' } :
+                d <= -5 ? { bg:'rgba(255,61,87,0.12)', border:'rgba(255,61,87,0.5)', text:'var(--red)' } :
+                d <= -2 ? { bg:'rgba(255,61,87,0.06)', border:'rgba(255,61,87,0.25)', text:'#ff6b6b' } :
+                          { bg:'var(--bg)', border:'var(--border)', text:'var(--text2)' };
+              return (
+                <div key={r.symbol}
+                  onClick={() => {
+                    // Click drills the parent sector — Scanner pre-filters
+                    // to that sector. (We don't have a per-industry-ETF
+                    // pre-filter on Scanner today; sector-level is the
+                    // closest available.)
+                    if (setSelectedSectors && r.sector) setSelectedSectors(new Set([r.sector]));
+                    if (window.navigateToScanner) window.navigateToScanner(null);
+                  }}
+                  title={`${r.name} (${r.symbol}) in ${r.sector || '—'} — industry vs4w ${r.industryVs4w>0?'+':''}${r.industryVs4w}, SPY vs4w ${spyTrend.vs4w>0?'+':''}${spyTrend.vs4w}, delta ${d>0?'+':''}${d}. Industry RS rank ${r.industryRsRank}. Click to focus parent sector and open Scanner.`}
+                  style={{
+                    padding:'6px 10px',
+                    background: colorTier.bg,
+                    border: `1px solid ${colorTier.border}`,
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 2,
+                    fontSize: 11,
+                  }}>
+                  <div style={{display:'flex',alignItems:'center',gap:6}}>
+                    <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)',minWidth:36}}>{r.symbol}</span>
+                    <strong style={{color:'var(--text)',flex:1,fontSize:11}}>{r.name}</strong>
+                    <strong style={{fontFamily:'var(--font-mono)',color:colorTier.text,minWidth:32,textAlign:'right'}}>
+                      {d>0?'+':''}{d}
+                    </strong>
+                  </div>
+                  {r.sector && (
+                    <div style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>
+                      {r.sector} · RS {r.industryRsRank}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="panel">
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14,flexWrap:'wrap',gap:8}}>
           <div>
@@ -6200,14 +6319,19 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             // directly. A stock can have rising RS rank but still be lagging
             // the index — and vice versa in a chop. Lead/Lag tells you
             // who's actually beating the market right now.
-            {key:'LeadM',  label:'Lead Mkt',  title:'Beating SPY by ≥5 RS-rank points over the last 4 weeks (stock.vs4w − SPY.vs4w ≥ 5). The "actually outperforming the index right now" signal — different from RS↑ which is vs universe.',col:'var(--green)'},
-            {key:'LagM',   label:'Lag Mkt',   title:'Trailing SPY by ≥5 RS-rank points over the last 4 weeks (stock.vs4w − SPY.vs4w ≤ -5). Stock losing ground vs index — leadership erosion, even if absolute RS is still high.',col:'var(--red)'},
+            // Recent additions (Phase 3.1) — flagged with `isNew` so the
+            // chip render shows a small dot indicator. Flag stays on for
+            // one rollout cycle, then gets removed in a follow-up commit
+            // once the user has seen them at least once. Use to surface
+            // "look, these are new" without changing chip semantics.
+            {key:'LeadM',  label:'Lead Mkt',  title:'NEW · Beating SPY by ≥5 RS-rank points over the last 4 weeks (stock.vs4w − SPY.vs4w ≥ 5). The "actually outperforming the index right now" signal — different from RS↑ which is vs universe.',col:'var(--green)',isNew:true},
+            {key:'LagM',   label:'Lag Mkt',   title:'NEW · Trailing SPY by ≥5 RS-rank points over the last 4 weeks (stock.vs4w − SPY.vs4w ≤ -5). Stock losing ground vs index — leadership erosion, even if absolute RS is still high.',col:'var(--red)',isNew:true},
             // Eroding: was a leader (rank ≥85 four weeks ago) but rsRank
             // dropped ≥10 points since. Fingerprint of "first to fall"
             // names that lead the market down. (rsRank − vs4w) reconstructs
             // the 4-week-ago rank — if that was ≥85 AND vs4w ≤ -10, this
             // is a textbook leadership-eroding pattern.
-            {key:'Erode',  label:'Eroding',  title:'Was an RS leader (rank ≥85 four weeks ago) but lost ≥10 rank points since. (rsRank − vs4w) ≥ 85 AND vs4w ≤ -10. The first-to-fall canary signal — sell-into-strength candidate.',col:'var(--amber)'},
+            {key:'Erode',  label:'Eroding',  title:'NEW · Was an RS leader (rank ≥85 four weeks ago) but lost ≥10 rank points since. (rsRank − vs4w) ≥ 85 AND vs4w ≤ -10. The first-to-fall canary signal — sell-into-strength candidate.',col:'var(--amber)',isNew:true},
             {key:'VCP', label:'VCP',             title:'Volatility Contraction Pattern (DAILY bars) — 2+ price contractions of decreasing depth, range tightening over typically 3-12 weeks. Coiling spring setup before breakout. Best paired with S2 for context.',col:'var(--purple)'},
             {key:'CUP', label:'CUP',             title:'Cup & Handle (DAILY bars). U-shaped base over typically 7-65 weeks, with a smaller handle pullback near the top. Pivot = handle peak. O\'Neil\'s most reliable base pattern.',col:'var(--cyan)'},
             {key:'ASC', label:'ASC',             title:'Ascending Base (DAILY bars). 3+ higher lows with tightening price range, 9-16 weeks typical. Each low above the prior. Pivot = most-recent high.',col:'var(--cyan)'},
@@ -6229,11 +6353,17 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             {key:'ACC', label:'ACC',              title:'Accumulation (50-day) — IBD A or B grade: up-volume / down-volume ratio ≥ 1.2 over the last 50 trading days. CANNOT be faked by a single-day spike. A grade ≥ 1.5 = heavy institutional buying; B grade ≥ 1.2 = moderate. The real "stock under accumulation" signal.',col:'var(--green)'},
             {key:'⚡',  label:'⚡ Vol Surge',     title:'Today\'s volume ≥ 2× the 3-month average AND price within 5% of 52-week high. Volume confirmation of breakout / continuation.',col:'var(--amber)'},
             {key:'REV↑',label:'REV↑',            title:'Analyst estimate revision score ≥50 (out of 100). Aggregates EPS+revenue estimate changes for current+next year. Source: revision_scores cache, refreshed nightly by revision_scan_daily cron at 5 PM ET. Score ≥70 = strong upgrade, 50-69 = upgrade.',col:'var(--green)'},
-          ].map(({key,label,title,col})=>(
+          ].map(({key,label,title,col,isNew})=>(
             <button key={key} title={title}
               onClick={()=>toggleSig(key)}
-              style={{padding:'2px 9px',fontSize:10,border:`1px solid ${sigFilters.has(key)?col:'var(--border)'}`,borderRadius:3,background:sigFilters.has(key)?col+'22':'transparent',color:sigFilters.has(key)?col:'var(--text3)',cursor:'pointer',fontWeight:sigFilters.has(key)?700:400,transition:'all 0.12s'}}>
+              style={{padding:'2px 9px',fontSize:10,border:`1px solid ${sigFilters.has(key)?col:isNew?col:'var(--border)'}`,borderRadius:3,background:sigFilters.has(key)?col+'22':isNew?col+'10':'transparent',color:sigFilters.has(key)?col:isNew?col:'var(--text3)',cursor:'pointer',fontWeight:sigFilters.has(key)?700:isNew?600:400,transition:'all 0.12s',position:'relative'}}>
               {label}
+              {/* NEW indicator — small dot in the top-right corner of
+                  the chip. One-rollout-cycle visibility marker. */}
+              {isNew && (
+                <span aria-hidden="true"
+                      style={{position:'absolute',top:-2,right:-2,width:6,height:6,borderRadius:'50%',background:col,boxShadow:`0 0 4px ${col}`,border:'1px solid var(--bg)'}}/>
+              )}
             </button>
           ))}
           {/* Editable CAN SLIM threshold chip — toggles the 'CS' filter
@@ -10335,15 +10465,27 @@ function SectorIndustryRSTrend({ type, title, api: apiPath }) {
   return (
     <div style={{marginTop:20}}>
       <hr style={{border:'none',borderTop:'1px solid var(--border)',margin:'20px 0'}}/>
-      <button className="btn btn-sm" onClick={handleOpen} style={{marginBottom:10}}>
-        {open?'▼':'▶'} {title} ({trends.length > 0 ? `${trends.length} items, ${history?.totalDays||0} snapshots` : 'click to load'})
+      {/* Collapsed by default — the Rotation Heatmap above answers
+          "where is the money moving right now?" with the vs-SPY 4w
+          delta. This history view answers a different (secondary)
+          question: "is the rotation a 1-month spike or a 3-month
+          trend?" via 1W/1M/2M/3M lookbacks. Click to expand when you
+          want to confirm whether a heatmap signal has staying power. */}
+      <button className="btn btn-sm" onClick={handleOpen} style={{marginBottom:10}}
+              title="Multi-lookback RS history (1W / 1M / 2M / 3M). Use this AFTER the heatmap to confirm whether a rotation is a recent spike or a sustained trend.">
+        {open?'▼':'▶'} {title}
+        <span style={{fontSize:10,color:'var(--text3)',marginLeft:6}}>
+          {trends.length > 0 ? `· ${trends.length} items, ${history?.totalDays||0} snapshots` : '· click to load'}
+        </span>
       </button>
       {open && (
         <div>
           <div className="panel-sub" style={{marginBottom:8}}>
-            Sorted by <strong>current IBD RS rank</strong> (default) — different from the main table above which defaults to RS Accel.
-            This view shows <em>where each {type === 'sectors' ? 'sector' : 'industry'} stands today</em> and how its rank has drifted over 1W/1M/2M/3M.
-            Use it to find absolute leaders; use the main table to find fastest improvers.
+            Multi-lookback RS history. Sorted by <strong>current IBD RS rank</strong>.
+            Complement to the rotation heatmap above — heatmap answers
+            "is this rotating right now?" (4w vs SPY); this answers
+            "is the rotation 1-month noise or a 3-month trend?" (multiple
+            lookbacks). Use both: heatmap to spot, history to confirm.
           </div>
           {loading && <Loader msg={`Loading ${type} RS history...`}/>}
           {history?.totalDays === 0 && (
