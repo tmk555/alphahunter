@@ -279,7 +279,7 @@ async function _runRSScanBody(UNIVERSE, SECTOR_MAP) {
     const fundsRows = getDB().prepare(`
       SELECT symbol, can_slim_score, eps_growth_q0_yoy, eps_growth_yoy,
              revenue_growth_yoy, short_pct_float, institution_pct,
-             return_on_equity
+             return_on_equity, ttm_eps_sec
         FROM fundamentals_snapshot
        WHERE fetched_at >= datetime('now', '-7 days')
     `).all();
@@ -416,7 +416,22 @@ async function _runRSScanBody(UNIVERSE, SECTOR_MAP) {
     const epsGrowthEst  = epsTrailing && epsForward && epsTrailing > 0
       ? +((epsForward/epsTrailing - 1)*100).toFixed(1) : null;
     const pegRatio      = q.pegRatio || null;
-    const trailingPE    = q.trailingPE || null;
+
+    // P/E with SEC fallback. Yahoo's trailingPE comes back null for some
+    // symbols (recent IPOs, small caps, foreign ADRs without USD ADS data
+    // — e.g. CRDO, OPLN). When that happens, recompute from SEC TTM EPS:
+    // sum the last 4 reported quarterly EPS (cached on
+    // fundamentals_snapshot.ttm_eps_sec) and divide live price by it.
+    // Source-tagged so the UI can show "P/E (SEC)" vs "P/E (Yahoo)".
+    let trailingPE       = q.trailingPE || null;
+    let trailingPESource = trailingPE != null ? 'yahoo' : null;
+    if (trailingPE == null) {
+      const ttmEpsSEC = fundsBySymbol[sym]?.ttm_eps_sec;
+      if (ttmEpsSEC != null && ttmEpsSEC > 0 && price > 0) {
+        trailingPE = +(price / ttmEpsSEC).toFixed(2);
+        trailingPESource = 'sec';
+      }
+    }
 
     // 20-bar rolling VWAP — volume-weighted average over the last 20
     // daily bars. Used as a soft mean-reversion / fair-value reference.
@@ -457,7 +472,7 @@ async function _runRSScanBody(UNIVERSE, SECTOR_MAP) {
       industryName: INDUSTRY_NAME_BY_ETF[STOCK_TO_INDUSTRY[sym]] || null,  // e.g. 'Semiconductors'
       mktCap: q.marketCap, fwdPE: q.forwardPE,
       epsTrailing, epsForward, epsGrowthEst,
-      pegRatio, trailingPE,
+      pegRatio, trailingPE, trailingPESource,
       // 20-bar rolling VWAP + distance — for the Scanner's vsVWAP filter.
       vwap20, vsVWAP20,
       swingMomentum: swingMom,

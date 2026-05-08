@@ -3554,10 +3554,13 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
             trailing "·" was conflicting with P/E's leading "·" producing
             the "Vol 0.34x · · P/E:" double-dot artifact). */}
         {' · '}
-        <span title="Trailing P/E (last 12 months EPS). '—' = company has negative or zero TTM earnings (unprofitable / loss-making). Many momentum stocks have no trailing P/E.">
+        <span title={`Trailing P/E (last 12 months EPS).${s.trailingPESource === 'sec' ? ' Source: SEC TTM EPS (Yahoo trailingPE was null — common for recent IPOs / foreign ADRs).' : ''} '—' = company has negative or zero TTM earnings (unprofitable / loss-making). Many momentum stocks have no trailing P/E.`}>
           P/E: <strong style={{color:!s.trailingPE||s.trailingPE<=0?'var(--text3)':s.trailingPE<=15?'var(--green)':s.trailingPE<=30?'var(--text)':s.trailingPE<=50?'var(--amber)':'var(--red)'}}>
             {s.trailingPE && s.trailingPE > 0 ? s.trailingPE.toFixed(1) : '—'}
           </strong>
+          {s.trailingPESource === 'sec' && s.trailingPE > 0 && (
+            <span style={{fontSize:9,color:'var(--text3)',marginLeft:2}}>(SEC)</span>
+          )}
         </span>
         <span title="Forward P/E based on analyst-projected next-year EPS. Forward < Trailing = analysts expect EPS growth. '—' = no analyst estimates available.">
           {' '}fwd <strong style={{color:!s.fwdPE||s.fwdPE<=0?'var(--text3)':s.fwdPE<=15?'var(--green)':s.fwdPE<=30?'var(--text)':s.fwdPE<=50?'var(--amber)':'var(--red)'}}>

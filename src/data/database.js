@@ -1376,6 +1376,15 @@ function initSchema() {
   // as the gate passes.
   safeAddColumn('pyramid_plans', 'vwap_gate', 'JSON');
 
+  // ─── SEC-derived TTM EPS for P/E fallback ─────────────────────────────
+  // Yahoo's trailingPE comes back null for some symbols (small caps,
+  // recent IPOs, foreign ADRs without USD ADS data). We have SEC quarterly
+  // EPS in epsActualQuarterly via providers/manager.js — summing the most
+  // recent 4 quarters gives TTM EPS, and price ÷ TTM-EPS recreates the P/E
+  // that Yahoo dropped. Cached on fundamentals_snapshot so the scanner
+  // hot path doesn't re-fetch SEC facts per stock.
+  safeAddColumn('fundamentals_snapshot', 'ttm_eps_sec', 'REAL');
+
   // ─── merged_fill_orders ──────────────────────────────────────────────────
   // Idempotency tracker for fragmented broker fills. Alpaca sometimes splits
   // ONE staged order into multiple `filled buy` events, each with its own

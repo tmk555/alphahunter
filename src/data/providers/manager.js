@@ -501,6 +501,20 @@ async function getFundamentals(symbol) {
     console.log(`  Fundamentals ${symbol}: SEC-only build (Yahoo unavailable)`);
   }
 
+  // ─── SEC TTM EPS (sum of last 4 reported quarters) ─────────────────────
+  // Used by the scanner as a P/E fallback when Yahoo's trailingPE is null
+  // (small caps, recent IPOs, foreign ADRs). epsActualQuarterly is already
+  // sorted newest-first; take 4 quarters and sum if all 4 are present.
+  // Skip when fewer than 4 quarters reported (recent IPOs) — partial-year
+  // sums would mislead.
+  let ttmEpsSEC = null;
+  try {
+    const last4 = (epsActualQuarterly || []).slice(0, 4);
+    if (last4.length === 4 && last4.every(q => typeof q.actual === 'number' && Number.isFinite(q.actual))) {
+      ttmEpsSEC = +last4.reduce((s, q) => s + q.actual, 0).toFixed(4);
+    }
+  } catch (_) { /* fall through with null */ }
+
   // Cache the CAN-SLIM-relevant fields to fundamentals_snapshot so the
   // scanner can attach canSlimScore to rsData rows without per-stock
   // refetches. Best-effort; failure here doesn't break the response.
@@ -510,8 +524,8 @@ async function getFundamentals(symbol) {
       INSERT INTO fundamentals_snapshot
         (symbol, can_slim_score, eps_growth_q0_yoy, eps_growth_yoy,
          revenue_growth_yoy, short_pct_float, institution_pct,
-         return_on_equity, fetched_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+         return_on_equity, ttm_eps_sec, fetched_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(symbol) DO UPDATE SET
         can_slim_score     = excluded.can_slim_score,
         eps_growth_q0_yoy  = excluded.eps_growth_q0_yoy,
@@ -520,11 +534,13 @@ async function getFundamentals(symbol) {
         short_pct_float    = excluded.short_pct_float,
         institution_pct    = excluded.institution_pct,
         return_on_equity   = excluded.return_on_equity,
+        ttm_eps_sec        = excluded.ttm_eps_sec,
         fetched_at         = excluded.fetched_at
     `).run(
       symbol, canSlimScore,
       epsGrowth_Q0_yoy, epsGrowthYoY, revenueGrowthYoY,
       shortPercentFloat, institutionPct, returnOnEquity,
+      ttmEpsSEC,
     );
   } catch (_) { /* snapshot write is best-effort */ }
 
