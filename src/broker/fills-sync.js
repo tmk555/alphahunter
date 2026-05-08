@@ -1136,7 +1136,14 @@ function mergeFragmentedFills({ symbol = null, dryRun = true } = {}) {
 
   const executed = [];
   const tx = db.transaction(() => {
-    const auditRows = { trades: [], execution_log: [], tax_lots: [], decision_log: [], stop_moves: [] };
+    // Audit snapshot: every table that gets mutated below. Mirror the
+    // SAME table list as the re-point loop so nothing is touched without
+    // being captured here first.
+    const FK_TABLES = ['execution_log', 'tax_lots', 'decision_log',
+                       'stop_moves', 'alert_subscriptions',
+                       'position_trail_state', 'scale_in_plans'];
+    const auditRows = { trades: [] };
+    for (const t of FK_TABLES) auditRows[t] = [];
 
     for (const g of groups) {
       const allIds = [g.primaryId, ...g.secondaryIds];
@@ -1144,7 +1151,7 @@ function mergeFragmentedFills({ symbol = null, dryRun = true } = {}) {
       auditRows.trades.push(...db.prepare(
         `SELECT * FROM trades WHERE id IN (${allIds.map(() => '?').join(',')})`
       ).all(...allIds));
-      for (const tbl of ['execution_log', 'tax_lots', 'decision_log', 'stop_moves']) {
+      for (const tbl of FK_TABLES) {
         auditRows[tbl].push(...db.prepare(
           `SELECT * FROM ${tbl} WHERE trade_id IN (${allIds.map(() => '?').join(',')})`
         ).all(...allIds));
@@ -1183,9 +1190,18 @@ function mergeFragmentedFills({ symbol = null, dryRun = true } = {}) {
                noteSuffix, g.primaryId);
       }
 
-      // Re-point FK rows from secondaries → primary.
+      // Re-point FK rows from secondaries → primary across ALL tables
+      // that reference trades.id. Anything we miss here triggers a
+      // FOREIGN KEY constraint violation on the trades DELETE below.
+      // execution_log + tax_lots + stop_moves: append-only event logs,
+      // safe to re-point.
+      // alert_subscriptions: per-trade alert hooks; re-point so they
+      // continue to fire on the merged primary instead of orphaning.
+      // position_trail_state: per-trade trail state; re-point.
       for (const sid of g.secondaryIds) {
-        for (const tbl of ['execution_log', 'tax_lots', 'stop_moves']) {
+        for (const tbl of ['execution_log', 'tax_lots', 'stop_moves',
+                           'alert_subscriptions', 'position_trail_state',
+                           'scale_in_plans']) {
           db.prepare(`UPDATE ${tbl} SET trade_id = ? WHERE trade_id = ?`).run(g.primaryId, sid);
         }
         // decision_log has trade_id as PRIMARY KEY — can't have two rows
