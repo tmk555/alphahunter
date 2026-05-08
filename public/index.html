@@ -566,6 +566,123 @@ async function runReplayJob({ kind, body, onUpdate, signal, resumeJobId }) {
 // that the job is still running. The badge polls localStorage's active-job
 // map every 2s, fetches each job's server-side status, and renders a compact
 // summary. Clicking it routes back to Replay tab for the full progress view.
+// ─── FreshnessBanner: one-line "is the data fresh?" pulse ─────────────
+// Replaces a scattering of per-tab status strings ("244/1598 loaded",
+// "fundamentals refreshing", "as of pit_membership") with one banner
+// the user reads in 2 seconds and ignores when everything is green.
+//
+// Polls /api/freshness every 60s. Click expands to a multi-line detail
+// (last fetch time per data source). Color rule:
+//   green  – fresh   (rs<24hr, fundamentals<60min, etc)
+//   amber  – recent  (a bit stale but still usable)
+//   red    – stale   (regenerate this data source)
+//   gray   – missing (table empty or write failed)
+function FreshnessBanner() {
+  const [data, setData]       = React.useState(null);
+  const [open, setOpen]       = React.useState(false);
+  React.useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const d = await api('/api/freshness');
+        if (!cancelled) setData(d);
+      } catch (_) { /* silent — banner just stays empty */ }
+    }
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+  if (!data) return null;
+
+  // Status → color helper. 'fresh' is the silent default; only the
+  // problem states get loud colors so green sources don't clutter.
+  const colorFor = (s) =>
+    s === 'fresh'   ? 'var(--green)'
+  : s === 'recent'  ? 'var(--text2)'
+  : s === 'stale'   ? 'var(--red)'
+  : s === 'missing' ? 'var(--text3)'
+                    : 'var(--text2)';
+
+  // Compact age formatter: <60min as "Xm", <24hr as "Xh", else "Xd".
+  const ageStr = (m) => {
+    if (m == null) return '—';
+    if (m < 60)        return `${m}m`;
+    if (m < 24*60)     return `${Math.round(m/60)}h`;
+    return `${Math.round(m/(24*60))}d`;
+  };
+
+  // Worst-status driven outer color so the bar itself signals trouble.
+  const overallOrder = { missing: 3, stale: 2, recent: 1, fresh: 0 };
+  const sources = [
+    { key: 'rsScan',       label: 'RS Scan',        d: data.rsScan },
+    { key: 'fundamentals', label: 'Fundamentals',   d: data.fundamentals, extra: `${data.fundamentals.coveragePct}% (${data.fundamentals.covered}/${data.fundamentals.total})` },
+    { key: 'revisions',    label: 'Revisions',      d: data.revisions,    extra: `${data.revisions.covered} symbols` },
+    { key: 'macro',        label: 'Macro',          d: data.macro },
+    { key: 'breadth',      label: 'Breadth',        d: data.breadth },
+  ];
+  const worst = sources.reduce(
+    (acc, s) => Math.max(acc, overallOrder[s.d?.status ?? 'missing'] || 0),
+    0
+  );
+  const overallColor = worst >= 2 ? 'var(--red)' : worst === 1 ? 'var(--amber)' : 'var(--green)';
+
+  return (
+    <div
+      style={{
+        marginBottom: 10,
+        padding: '6px 12px',
+        background: 'var(--bg2)',
+        border: `1px solid ${overallColor}`,
+        borderRadius: 4,
+        fontSize: 11,
+        fontFamily: 'var(--font-mono)',
+        cursor: 'pointer',
+        userSelect: 'none',
+      }}
+      onClick={() => setOpen(!open)}
+      title="Click to expand. Shows when each data source was last refreshed and how complete coverage is.">
+      {/* COLLAPSED ROW — one-line, color-coded chips */}
+      <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
+        <span style={{color:'var(--text3)',letterSpacing:1}}>📊 DATA</span>
+        {sources.map(s => (
+          <span key={s.key} style={{color:colorFor(s.d?.status)}}>
+            <span style={{color:'var(--text3)'}}>{s.label}</span>{' '}
+            <strong>{ageStr(s.d?.ageMin)}</strong>
+            {s.extra && <span style={{color:'var(--text3)',marginLeft:4}}>· {s.extra}</span>}
+          </span>
+        ))}
+        <span style={{color:'var(--text3)',marginLeft:'auto'}}>
+          🔓 {data.openTrades} open · {open ? '▼' : '▶'}
+        </span>
+      </div>
+      {/* EXPANDED ROW — last-fetch timestamps (raw) per source. */}
+      {open && (
+        <div style={{marginTop:6,paddingTop:6,borderTop:'1px solid var(--border)',display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:6,color:'var(--text3)'}}>
+          {sources.map(s => (
+            <div key={s.key}>
+              <span style={{color:colorFor(s.d?.status)}}>● </span>
+              <strong style={{color:'var(--text2)'}}>{s.label}</strong>{' '}
+              {(s.d?.lastDate || s.d?.lastFetch) && (
+                <span style={{color:'var(--text3)'}}>
+                  last: {s.d.lastDate || s.d.lastFetch}
+                </span>
+              )}
+              {!s.d?.lastDate && !s.d?.lastFetch && (
+                <span style={{color:'var(--text3)'}}>no rows</span>
+              )}
+            </div>
+          ))}
+          <div style={{gridColumn:'1 / -1',color:'var(--text3)',fontSize:10,marginTop:4}}>
+            <strong>fresh</strong> = RS&lt;24hr, fundamentals&lt;60min ·
+            <strong style={{marginLeft:4}}>recent</strong> = usable but aging ·
+            <strong style={{marginLeft:4,color:'var(--red)'}}>stale</strong> = needs regen
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GlobalReplayJobsBadge({ onJump }) {
   // Pre-fix this read localStorage's REPLAY_JOBS_KEY (one slot per kind) and
   // could only show ONE running job per kind at a time. With three regime-
@@ -2135,6 +2252,12 @@ function App() {
 
       {/* CONTENT */}
       <div id="main">
+        {/* DATA-FRESHNESS BANNER — global pulse on how stale RS / fundamentals /
+            revisions / macro / breadth are. Replaces the per-tab "244/1598
+            loaded" / "as of pit_membership" / "data not available" strings
+            that didn't agree with each other. Polls every 60s. Click to
+            expand. */}
+        <FreshnessBanner />
         {/* GLOBAL REPLAY-JOB BADGE — same App-level lift as the warming
             banner below. A 10-minute auto-sweep launched from Replay must
             stay visible when the user switches to Market Pulse / Macro /
@@ -5953,13 +6076,10 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
               viewed. Visible only when CS6 chip is active so it doesn't
               add noise for users who don't need it. */}
           {sigFilters.has('CS') && (() => {
-            const cs6Coverage = (rsData || []).filter(s => s.canSlimScore != null).length;
             return (
               <span style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
-                <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--font-mono)'}}
-                      title={`CS6 coverage: ${cs6Coverage} stocks have a cached canSlimScore. Click 'Refresh' to fetch top 50 by conviction (~30-60 sec).`}>
-                  data: <strong style={{color:cs6Coverage>=20?'var(--green)':cs6Coverage>=5?'var(--amber)':'var(--red)'}}>{cs6Coverage}</strong>/{(rsData||[]).length}
-                </span>
+                {/* Coverage count moved to the global FreshnessBanner.
+                    Keeping the Refresh button — it's an action, not a status. */}
                 <button
                   onClick={async () => {
                     // Top 50 by convictionScore — they're the names most worth
