@@ -5525,14 +5525,14 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
 
   // Signal chip filter — if any chips active, stock must pass ALL of them
   const sigChecks = {
-    '★':   s => s.rsRank>=70 && (s.rsTrend?.vs4w||0)>0 && s.swingMomentum>=60,
+    // ─── PHASE 1.2 chip consolidation: dropped checks ────────────────
+    // ★ (Triple), PYR, wANY, 🔥 At High, S1, S3, S4, DIST removed —
+    // see chip definition list above for rationale. Filter logic
+    // deleted alongside the chip so a stale filter key in localStorage
+    // (e.g. saved 'PYR' from a prior session) silently no-ops instead
+    // of throwing.
     '⭐':   s => s.rsLineNewHigh,
     '↗':   s => s.rsTrend?.vs4w>5 && s.rsRank>=65 && s.rsRank<80,
-    // 🔺 Pyramid: has ANY pattern that resolves a pivot — mirrors the acceptance
-    // rule in src/broker/pyramid-plans.js detectPivotForPyramid(). If this
-    // chip matches, pyramid_auto will successfully build a plan. Superset of
-    // VCP/CUP/ASC/PWR/HTF — use this when you want "any pyramid-ready base."
-    'PYR': s => s.vcpForming || !!s.bestPattern,
     'VCP': s => s.vcpForming,
     'CUP': s => s.patternData?.patterns?.cupHandle?.detected,
     'ASC': s => s.patternData?.patterns?.ascendingBase?.detected,
@@ -5545,9 +5545,6 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     'wWP': s => s.patternDataWeekly?.patterns?.wPattern?.detected,
     // Weekly variants — same detectors on weekly-aggregated bars.
     // Cleaner signal, fewer false positives from daily noise.
-    // Superset wANY = ANY weekly pattern (cup OR asc OR pwr OR htf OR W).
-    // Renamed from 'W' to free that name for the W pattern proper.
-    'wANY': s => !!s.patternDataWeekly?.bestPattern,
     'wCUP': s => s.patternDataWeekly?.patterns?.cupHandle?.detected,
     'wASC': s => s.patternDataWeekly?.patterns?.ascendingBase?.detected,
     'wPWR': s => s.patternDataWeekly?.patterns?.powerPlay?.detected,
@@ -5589,10 +5586,9 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
       const v4 = s.rsTrend?.vs4w ?? 0, v3m = s.rsTrend?.vs3m ?? 0;
       return v4 <= -3 && (v3m - v4) <= -3;   // BOTH halves falling
     },
-    'S1':  s => s.stage===1,
+    // S2 stays as the active "buy zone" filter; S1/S3/S4 dropped (rarely
+    // used as filters — Stage column on the row already shows the value).
     'S2':  s => s.stage===2,
-    'S3':  s => s.stage===3,
-    'S4':  s => s.stage===4,
     '1→2': s => s.stage===2 && s.priorStage===1,
     // ACC / DIST — 50-day institutional accumulation/distribution.
     //
@@ -5606,8 +5602,8 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     // single-day spike — requires 10+ weeks of more up-volume than
     // down-volume. Same signal IBD's A-E grades use.
     'ACC':  s => ['A','B'].includes(s.volumeProfile?.accumulation50),
-    'DIST': s => ['D','E'].includes(s.volumeProfile?.accumulation50),
-    '🔥':  s => s.distFromHigh!=null && s.distFromHigh<=0.005,
+    // 'DIST' and '🔥 At High' chips dropped — see chip-defs comment for
+    // rationale. Filter logic removed alongside.
     '⚡':  s => s.volumeSurge,
     'REV↑':s => (s.revisionScore||0) >= 50,
     // CAN SLIM threshold filter. Default min=6 (perfect score) but
@@ -5905,10 +5901,21 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
         <div style={{display:'flex',gap:5,marginBottom:10,flexWrap:'wrap',alignItems:'center'}}>
           <span style={{fontSize:10,color:'var(--text3)',letterSpacing:1,textTransform:'uppercase',marginRight:2}}>Signals</span>
           {[
-            {key:'★',   label:'★ Triple',      title:'RS≥70 (top 30% by 12-month rank) AND Accel>0 (4-week rank rising) AND Mom≥75 (top 25% by absolute price velocity). Three independent conditions all true. Note: Accel is single-window — for sustained direction use RS↑.',col:'var(--green)'},
+            // ─── PHASE 1.2 chip consolidation ────────────────────────
+            // Dropped (subsumed by other chips or low signal value):
+            //   ★ Triple   — subsumed by RS↑ + Mom-min input
+            //   PYR        — superset of VCP+CUP+ASC+PWR+HTF+WP (use individuals)
+            //   wANY       — superset of weekly patterns (use individuals)
+            //   🔥 At High — already implied by ⭐ LNH + distFromHigh on row
+            //   S1, S3, S4 — Stage labels useful as info, rarely as active filters
+            //   DIST       — anti-pattern, rarely searched intentionally
+            //
+            // Order: RS quality first (top filters), then patterns, then
+            // stage/volume/revisions.
             {key:'⭐',   label:'⭐ RS Line New High', title:'Stock/SPY price ratio within 0.5% of its 252-day (12-month, 52-week) maximum. Means the stock is outperforming SPY structurally over a year. IBD\'s #1 signal — different from RS rank because it\'s vs SPY directly, not vs the universe.',col:'var(--gold)'},
             {key:'↗',   label:'↗ Emerging',     title:'RS rank 65-79 (just below leadership) AND 4-week rank rose ≥+5 points (gaining ground). Pre-leader entry zone — catches names BEFORE they hit RS=80. Caveat: 4-week single-window measure, can be noisy (universe stdev=13).',col:'var(--cyan)'},
-            {key:'PYR', label:'🔺 Pyramid-ready',title:'Has a definable pivot — either VCP forming OR any of cup/asc/power/HTF/W detected (DAILY bars). pyramid_auto exit strategy can build a 3-tranche scale-in plan on these. Superset of VCP+CUP+ASC+PWR+HTF+WP chips.',col:'var(--cyan)'},
+            {key:'RS↑', label:'RS↑',             title:'RS Trend RISING (sustained). Both halves of 12-week window rising ≥3 points: vs4w ≥ +3 AND (vs3m − vs4w) ≥ +3. Rejects flat-then-spike patterns. Caveat: still relative to peers — a stock can have rising RS in a falling market.',col:'var(--green)'},
+            {key:'RS↓', label:'RS↓',             title:'RS Trend FALLING (sustained). Both halves of 12-week window falling ≤-3 points. Decaying leader / institutional rotation out.',col:'var(--red)'},
             {key:'VCP', label:'VCP',             title:'Volatility Contraction Pattern (DAILY bars) — 2+ price contractions of decreasing depth, range tightening over typically 3-12 weeks. Coiling spring setup before breakout. Best paired with S2 for context.',col:'var(--purple)'},
             {key:'CUP', label:'CUP',             title:'Cup & Handle (DAILY bars). U-shaped base over typically 7-65 weeks, with a smaller handle pullback near the top. Pivot = handle peak. O\'Neil\'s most reliable base pattern.',col:'var(--cyan)'},
             {key:'ASC', label:'ASC',             title:'Ascending Base (DAILY bars). 3+ higher lows with tightening price range, 9-16 weeks typical. Each low above the prior. Pivot = most-recent high.',col:'var(--cyan)'},
@@ -5921,31 +5928,13 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             // Weekly variants — same detectors on weekly-aggregated bars.
             // Cleaner signal, fewer false positives from daily noise.
             {key:'wWP', label:'wWP',             title:'W Pattern / double bottom on WEEKLY bars (last 60 weeks). Tightened spacing 4-16 weeks (1-4 months — institutional reversal scale). Same rules as daily WP otherwise. Stronger signal than daily because each bar is a week of price action.',col:'#ff80ab'},
-            {key:'wANY',label:'wANY',            title:'ANY weekly pattern detected (CUP, ASC, PWR, HTF, OR W). Pink chip color denotes weekly. Use as a coarse "show me names with any weekly chart structure" filter.',col:'#ff80ab'},
             {key:'wCUP',label:'wCUP',            title:'Cup & Handle on WEEKLY bars (typically 7-65 weeks of base). Institutional-scale base — the canonical Minervini / O\'Neil setup. Cleaner signal than daily because weekly bars filter intraday noise.',col:'#ff80ab'},
             {key:'wASC',label:'wASC',            title:'Ascending Base on WEEKLY bars. 3+ higher lows over typically 9-16 weeks with tightening range. Multi-month version of daily ASC.',col:'#ff80ab'},
             {key:'wPWR',label:'wPWR',            title:'Power Play on WEEKLY bars. 3+ weeks of tight consolidation near highs after strong prior advance. Stronger than daily PWR — multi-week consolidations have higher follow-through.',col:'#ff80ab'},
             {key:'wHTF',label:'wHTF',            title:'High Tight Flag on WEEKLY bars. Multi-month 100%+ rally + 3-5 week flag. Very rare; very high-conviction continuation pattern when found.',col:'#ff80ab'},
-            // RS-trend direction chips — uses rsTrend.vs4w (4-week rank
-            // change) to classify rising / flat / falling. Same data
-            // shown inline on Levels caption; here as a quick filter.
-            // RS direction — two-halves confluence (last 4w AND prior 8w
-            // both agree). Filters single-event spikes. ~16% rising / 17%
-            // falling. Flat is the noisy default — not surfaced as a chip
-            // (absence of RS↑/RS↓ already tells you that). Superset 'RS
-            // (sustained)' removed — RS↑ and RS↓ together cover the use
-            // case; the superset just doubled chip surface for the same
-            // filter logic.
-            {key:'RS↑', label:'RS↑',             title:'RS Trend RISING (sustained). Both halves of 12-week window rising ≥3 points: vs4w ≥ +3 AND (vs3m − vs4w) ≥ +3. Rejects flat-then-spike patterns. Caveat: still relative to peers — a stock can have rising RS in a falling market.',col:'var(--green)'},
-            {key:'RS↓', label:'RS↓',             title:'RS Trend FALLING (sustained). Both halves of 12-week window falling ≤-3 points. Decaying leader / institutional rotation out.',col:'var(--red)'},
-            {key:'S1',  label:'S1 Basing',       title:'Weinstein Stage 1: price near or below FLAT 150-day MA after a prior downtrend. Accumulation phase — institutions slowly buying. Watch for breakout into S2.',col:'var(--text3)'},
             {key:'S2',  label:'S2 Uptrend',      title:'Weinstein Stage 2: price ABOVE rising 150-day MA. Confirmed uptrend — the ONLY stage to buy longs. Most CAN SLIM / SEPA setups require S2.',col:'var(--green)'},
-            {key:'S3',  label:'S3 Topping',      title:'Weinstein Stage 3: price still above 150MA but MA is FLATTENING. Distribution phase — institutions selling into strength. Reduce / avoid new longs.',col:'var(--amber)'},
-            {key:'S4',  label:'S4 Decline',      title:'Weinstein Stage 4: price BELOW declining 150-day MA. Confirmed downtrend. Avoid all longs. Short candidates if you trade short.',col:'var(--red)'},
             {key:'1→2', label:'1→2 Breakout',    title:'Stage 1→2 transition (today vs yesterday\'s snapshot). Stock just broke from base into uptrend. Earliest institutional breakout signal — gets +10 conviction bonus.',col:'var(--gold)'},
             {key:'ACC', label:'ACC',              title:'Accumulation (50-day) — IBD A or B grade: up-volume / down-volume ratio ≥ 1.2 over the last 50 trading days. CANNOT be faked by a single-day spike. A grade ≥ 1.5 = heavy institutional buying; B grade ≥ 1.2 = moderate. The real "stock under accumulation" signal.',col:'var(--green)'},
-            {key:'DIST',label:'DIST',             title:'Distribution (50-day) — IBD D or E grade: up-volume / down-volume ratio < 0.9 over the last 50 trading days. Sustained institutional selling. D grade < 0.9; E grade < 0.7 = heavy distribution.',col:'var(--red)'},
-            {key:'🔥',  label:'🔥 At High',      title:'Within 0.5% of the 52-week high (252-day max close). New-high zone where breakouts and chases happen.',col:'var(--amber)'},
             {key:'⚡',  label:'⚡ Vol Surge',     title:'Today\'s volume ≥ 2× the 3-month average AND price within 5% of 52-week high. Volume confirmation of breakout / continuation.',col:'var(--amber)'},
             {key:'REV↑',label:'REV↑',            title:'Analyst estimate revision score ≥50 (out of 100). Aggregates EPS+revenue estimate changes for current+next year. Source: revision_scores cache, refreshed nightly by revision_scan_daily cron at 5 PM ET. Score ≥70 = strong upgrade, 50-69 = upgrade.',col:'var(--green)'},
           ].map(({key,label,title,col})=>(
