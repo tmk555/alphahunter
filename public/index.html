@@ -2498,7 +2498,7 @@ function App() {
         )}
         {tab==='pulse'      && <MarketPulseTab />}
         {tab==='macro'      && <MacroTab />}
-        {tab==='rotation'   && <RotationTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
+        {tab==='rotation'   && <RotationTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} selectedIndustries={selectedIndustries} setSelectedIndustries={setSelectedIndustries}/>}
         {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} rsLoading={rsLoading} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} minMktCap={minMktCap} setMinMktCap={setMinMktCap} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} selectedIndustries={selectedIndustries} setSelectedIndustries={setSelectedIndustries} sigFilters={rsSigFilters} setSigFilters={setRsSigFilters} quickFilter={rsQuickFilter} setQuickFilter={setRsQuickFilter} scannerTarget={scannerTarget} clearScannerTarget={() => setScannerTarget(null)}/>}
         {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} rsLoading={rsLoading} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary} setupSigFilters={setupSigFilters} setSetupSigFilters={setSetupSigFilters} mode={setupMode} setMode={setSetupMode} sortBy={setupSortBy} setSortBy={setSetupSortBy} exitStrategy={setupExitStrategy} setExitStrategy={setSetupExitStrategy} minMktCap={minMktCap} setMinMktCap={setMinMktCap}/>}
         {tab==='hedge'      && <HedgeTab />}
@@ -4933,7 +4933,7 @@ function SectorStocks({ sectorName, rsData: propData, onClose }) {
 
 // ─── IndustryStockDrill: shows stocks specific to a clicked industry ETF ────────
 // Fetches from /api/industry-stocks/:etf which uses INDUSTRY_STOCKS mapping
-function IndustryStockDrill({ etf, etfName, rsData, onClose }) {
+function IndustryStockDrill({ etf, etfName, rsData, onClose, onOpenInScanner }) {
   const [stocks,  setStocks]  = useState([]);
   const [loading, setLoading] = useState(true);
   const { sortData: sortID, SH: IDH } = useSortTable('rsRank');
@@ -4958,7 +4958,16 @@ function IndustryStockDrill({ etf, etfName, rsData, onClose }) {
           </span>
           {!loading && <span style={{fontSize:10,color:'var(--text3)',marginLeft:10}}>{stocks.length} stocks from universe</span>}
         </div>
-        <button onClick={onClose} style={{background:'transparent',border:'none',color:'var(--text3)',cursor:'pointer',fontSize:16}}>✕</button>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          {onOpenInScanner && (
+            <button onClick={onOpenInScanner}
+              title={`Jump to Scanner with ${etf} industry filter applied — same ${stocks.length} stocks but with full signal/strategy filtering available.`}
+              style={{background:'rgba(196,77,255,0.12)',border:'1px solid var(--purple)',color:'var(--purple)',padding:'3px 10px',fontSize:11,fontWeight:700,borderRadius:3,cursor:'pointer',fontFamily:'var(--font-mono)',letterSpacing:1}}>
+              → SCANNER ({etf})
+            </button>
+          )}
+          <button onClick={onClose} style={{background:'transparent',border:'none',color:'var(--text3)',cursor:'pointer',fontSize:16}}>✕</button>
+        </div>
       </div>
       {loading ? <Loader msg="Loading industry stocks..."/> : stocks.length === 0 ? (
         <div style={{fontSize:12,color:'var(--text3)',padding:'8px 0'}}>No universe stocks mapped to this industry. Check universe.js INDUSTRY_STOCKS.</div>
@@ -5102,7 +5111,7 @@ function useSortTable(defaultKey, defaultDir = -1, persistKey = null) {
 // underlying components stay intact (no component refactor needed) — we
 // just route by level. selectedSectors state is shared so a sector
 // selection in Sectors view filters the Industries view consistently.
-function RotationTab({ selectedSectors, setSelectedSectors }) {
+function RotationTab({ selectedSectors, setSelectedSectors, selectedIndustries, setSelectedIndustries }) {
   const [level, setLevel] = useState(() => {
     try { return localStorage.getItem('alphahunter:rotation-level') || 'sectors'; }
     catch (_) { return 'sectors'; }
@@ -5134,7 +5143,7 @@ function RotationTab({ selectedSectors, setSelectedSectors }) {
       </div>
       {level === 'sectors'
         ? <SectorsTab    selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>
-        : <IndustriesTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors}/>}
+        : <IndustriesTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} selectedIndustries={selectedIndustries} setSelectedIndustries={setSelectedIndustries}/>}
     </div>
   );
 }
@@ -5429,7 +5438,7 @@ function SectorsTab({ selectedSectors, setSelectedSectors }) {
 }
 
 
-function IndustriesTab({ selectedSectors, setSelectedSectors }) {
+function IndustriesTab({ selectedSectors, setSelectedSectors, selectedIndustries, setSelectedIndustries }) {
   const [data,    setData]   = useState([]);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
@@ -5513,11 +5522,13 @@ function IndustriesTab({ selectedSectors, setSelectedSectors }) {
               return (
                 <div key={r.symbol}
                   onClick={() => {
-                    // Click drills the parent sector — Scanner pre-filters
-                    // to that sector. (We don't have a per-industry-ETF
-                    // pre-filter on Scanner today; sector-level is the
-                    // closest available.)
+                    // Pre-filter the Scanner by THIS industry ETF (e.g. SMH),
+                    // and also focus the parent sector so the sector chip
+                    // matches. Pre-fix only set sector focus, which gave the
+                    // user the whole sector instead of just this industry's
+                    // ~15-20 names.
                     if (setSelectedSectors && r.sector) setSelectedSectors(new Set([r.sector]));
+                    if (setSelectedIndustries) setSelectedIndustries(new Set([r.symbol]));
                     if (window.navigateToScanner) window.navigateToScanner(null);
                   }}
                   title={`${r.name} (${r.symbol}) in ${r.sector || '—'} — industry vs4w ${r.industryVs4w>0?'+':''}${r.industryVs4w}, SPY vs4w ${spyTrend.vs4w>0?'+':''}${spyTrend.vs4w}, delta ${d>0?'+':''}${d}. Industry RS rank ${r.industryRsRank}. Click to focus parent sector and open Scanner.`}
@@ -5641,7 +5652,15 @@ function IndustriesTab({ selectedSectors, setSelectedSectors }) {
         )}
 
         {selInd2 && (
-          <IndustryStockDrill etf={selInd2} etfName={data.find(d=>d.symbol===selInd2)?.name} rsData={rsData} onClose={()=>setSelInd2(null)}/>
+          <IndustryStockDrill etf={selInd2} etfName={data.find(d=>d.symbol===selInd2)?.name} rsData={rsData} onClose={()=>setSelInd2(null)}
+            onOpenInScanner={() => {
+              // Pre-filter Scanner by the drilled industry ETF and focus
+              // its parent sector. Same UX as the heatmap tile click.
+              const parent = data.find(d => d.symbol === selInd2)?.sector;
+              if (setSelectedSectors && parent) setSelectedSectors(new Set([parent]));
+              if (setSelectedIndustries) setSelectedIndustries(new Set([selInd2]));
+              if (window.navigateToScanner) window.navigateToScanner(null);
+            }}/>
         )}
         <SectorIndustryRSTrend type="industries" title="Industry RS — Current Rank (with 1W/1M/2M/3M history)" api="/api/rs-history/industries"/>
       </div>
