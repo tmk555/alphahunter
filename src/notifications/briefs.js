@@ -232,6 +232,55 @@ async function assembleMorningBrief() {
   lines.push('');
   htmlLines.push('');
 
+  // ── 4.5. Rotation Snapshot ──────────────────────────────────────────────
+  // Top themes by current RS + acceleration, plus today's Leading Edge
+  // industries. Sits before Deep Scan Picks because it's the macro context
+  // that justifies the per-stock picks — if no theme is leading, the picks
+  // are top-down homeless and the user should size lighter.
+  let rotationSnapshot = { topThemes: [], leadingEdge: [], watching: [] };
+  try {
+    const { computeLeadingEdge, computeThemes } = require('../signals/rotation-alert');
+    const themes = await computeThemes();
+    const edge = await computeLeadingEdge();
+    rotationSnapshot = {
+      topThemes:   (themes || []).slice(0, 3),
+      leadingEdge: edge.leadingEdge || [],
+      watching:    (edge.watching || []).slice(0, 3),
+    };
+  } catch (_) { /* non-fatal */ }
+
+  if (rotationSnapshot.topThemes.length || rotationSnapshot.leadingEdge.length || rotationSnapshot.watching.length) {
+    lines.push('🔄 ROTATION SNAPSHOT');
+    htmlLines.push('🔄 <b>ROTATION SNAPSHOT</b>');
+
+    if (rotationSnapshot.topThemes.length) {
+      const fmtTheme = t => {
+        const accel = t.vs1m != null ? (t.vs1m > 0 ? `+${t.vs1m}` : `${t.vs1m}`) : '—';
+        return `${t.theme} (RS ${t.current ?? '—'}, ${accel} 1M)`;
+      };
+      const themesLine = rotationSnapshot.topThemes.map(fmtTheme).join('; ');
+      lines.push(`  Top themes: ${themesLine}`);
+      htmlLines.push(`  <b>Top themes:</b> ${rotationSnapshot.topThemes.map(t => `${t.theme} <i>(RS ${t.current ?? '—'}, ${t.vs1m>0?'+':''}${t.vs1m ?? '—'} 1M)</i>`).join('; ')}`);
+    }
+
+    if (rotationSnapshot.leadingEdge.length) {
+      const fmtEdge = r => `${r.etf}/${r.name} (${r.vs1m>0?'+':''}${r.vs1m} 1M, tilt ${r.tiltStatus})`;
+      lines.push(`  🌱 Leading Edge: ${rotationSnapshot.leadingEdge.map(fmtEdge).join('; ')}`);
+      htmlLines.push(`  🌱 <b>Leading Edge:</b> ${rotationSnapshot.leadingEdge.map(r => `<b>${r.etf}</b>/${r.name} (${r.vs1m>0?'+':''}${r.vs1m} 1M, tilt ${r.tiltStatus})`).join('; ')}`);
+    } else {
+      lines.push('  🌱 Leading Edge: none today — current rotations have matured.');
+      htmlLines.push('  🌱 <b>Leading Edge:</b> <i>none today — current rotations have matured.</i>');
+    }
+
+    if (rotationSnapshot.watching.length) {
+      const fmtWatch = r => `${r.etf} (${r.vs1m>0?'+':''}${r.vs1m} 1M)`;
+      lines.push(`  👀 Watching: ${rotationSnapshot.watching.map(fmtWatch).join('; ')}`);
+      htmlLines.push(`  👀 <b>Watching:</b> ${rotationSnapshot.watching.map(r => `<b>${r.etf}</b> (${r.vs1m>0?'+':''}${r.vs1m} 1M)`).join('; ')}`);
+    }
+    lines.push('');
+    htmlLines.push('');
+  }
+
   // ── 5. Deep Scan Picks ──────────────────────────────────────────────────
   // Single source of truth now that Top Picks is retired. Prefers the
   // scheduler-populated deep_scan_cache; if stale/empty, computes inline so
@@ -310,6 +359,11 @@ async function assembleMorningBrief() {
       heatPct: heat.heatPct,
       stagedOrders: stagedOrders.length,
       topPicks: topPicks.length,
+      rotation: {
+        topThemes:        rotationSnapshot.topThemes.map(t => ({ theme: t.theme, current: t.current, vs1m: t.vs1m })),
+        leadingEdgeCount: rotationSnapshot.leadingEdge.length,
+        watchingCount:    rotationSnapshot.watching.length,
+      },
     },
   };
 }
