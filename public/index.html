@@ -17158,6 +17158,56 @@ function WatchlistTab({ rsData, rsLoaded, navigateToScanner }) {
     };
   }, []);
 
+  // Auto-promotion from the daily rotation_alert job. On mount, pulls
+  // pending rotation_picks from the server, adds any not already on the
+  // watchlist to Tier 2 with the FRESH ROTATION thesis, and POSTs accept
+  // for each so they don't re-trigger. Dismissed picks (user removes them
+  // manually) stay out — the picks-by-(date,etf,ticker) UNIQUE makes the
+  // server-side insert idempotent across re-runs, so a removed pick won't
+  // come back the next day even if the industry is still leading-edge.
+  const [autoPromoted, setAutoPromoted] = React.useState([]);
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await api('/api/rotation/picks?status=pending');
+        if (cancelled) return;
+        const current = readWatchlist();
+        const have = new Set(current.map(it => it.ticker));
+        const added = [];
+        const next = [...current];
+        for (const p of (r.picks || [])) {
+          if (have.has(p.ticker)) {
+            // Already on the list (user added manually) — skip the auto-promote
+            // but flip server-side status so it stops appearing as "pending".
+            fetch(`/api/rotation/picks/${p.id}/accept`, { method: 'POST' }).catch(() => {});
+            continue;
+          }
+          next.push({
+            ticker: p.ticker,
+            tier: 2,
+            thesis: p.thesis || `🌱 FRESH ROTATION — ${p.industry_name || p.etf}`,
+            notes: `Auto-added ${p.date} (rotation_alert · ${p.etf}). RS ${p.rs_rank}.`,
+            addedAt: new Date().toISOString(),
+            source: 'rotation_alert',
+          });
+          have.add(p.ticker);
+          added.push(p);
+          fetch(`/api/rotation/picks/${p.id}/accept`, { method: 'POST' }).catch(() => {});
+        }
+        if (added.length) {
+          writeWatchlist(next);
+          setItems(next);
+          setAutoPromoted(added);
+          window.showToast?.('Watchlist',
+            `🌱 Auto-added ${added.length} fresh-rotation pick${added.length===1?'':'s'}: ${added.map(a=>a.ticker).join(', ')}`,
+          );
+        }
+      } catch (_) { /* picks endpoint optional / missing — non-fatal */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   // Index rsData for O(1) per-ticker lookup of live fields
   const liveByTicker = React.useMemo(() => {
     const m = new Map();
@@ -17211,6 +17261,24 @@ function WatchlistTab({ rsData, rsLoaded, navigateToScanner }) {
         <div className="panel-sub">
           Persistent tier-1/2/3 shortlist from your Sunday routine. Tier 1 = "ready this week" · Tier 2 = "watching" · Tier 3 = "thesis only". Live RS / pattern / distance-from-high comes from the latest scanner sweep.
         </div>
+
+        {/* Auto-promotion banner — surfaces the names the daily rotation_alert
+            job just added so the user sees what changed without hunting through
+            the list. Dismisses on next mount (state isn't persisted). */}
+        {autoPromoted.length > 0 && (
+          <div style={{marginTop:10,padding:'8px 12px',background:'rgba(0,230,118,0.10)',border:'1px solid rgba(0,230,118,0.4)',borderRadius:4,fontSize:12}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+              <span style={{color:'var(--green)',fontWeight:700}}>🌱 Auto-added from Leading Edge rotation:</span>
+              {autoPromoted.map(p => (
+                <span key={p.ticker} title={`${p.ticker} — ${p.industry_name} (${p.etf}), RS ${p.rs_rank}`}
+                  style={{padding:'2px 8px',background:'rgba(0,230,118,0.15)',border:'1px solid rgba(0,230,118,0.4)',borderRadius:3,color:'var(--green)',fontWeight:700,fontFamily:'var(--font-mono)',fontSize:11}}>
+                  {p.ticker}<span style={{marginLeft:5,color:'var(--text3)',fontWeight:400,fontSize:10}}>· {p.etf}</span>
+                </span>
+              ))}
+              <span style={{color:'var(--text3)',fontSize:11,marginLeft:'auto'}}>Tier 2 · review and promote if it earns it.</span>
+            </div>
+          </div>
+        )}
 
         {/* Quick add + filter row */}
         <div style={{display:'flex',gap:10,marginTop:14,alignItems:'center',flexWrap:'wrap'}}>

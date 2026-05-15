@@ -5,7 +5,10 @@ const router  = express.Router();
 const { runRSScan, runETFScan } = require('../scanner');
 const { getRSTrendsBulk, RS_HISTORY, SEC_HISTORY, IND_HISTORY } = require('../data/store');
 const { computeRotation, getSectorRotationHistory } = require('../signals/rotation');
-const { computeLeadingEdge, computeThemes } = require('../signals/rotation-alert');
+const {
+  computeLeadingEdge, computeThemes,
+  listRotationPicks, markPick,
+} = require('../signals/rotation-alert');
 
 module.exports = function(SECTOR_ETFS, INDUSTRY_ETFS, INDUSTRY_STOCKS, UNIVERSE, SECTOR_MAP) {
   // /api/sectors
@@ -74,6 +77,30 @@ module.exports = function(SECTOR_ETFS, INDUSTRY_ETFS, INDUSTRY_STOCKS, UNIVERSE,
     try {
       const themes = await computeThemes();
       res.json({ asOf: new Date().toISOString().slice(0, 10), count: themes.length, themes });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // /api/rotation/picks — server-side queue of Leading-Edge stock picks
+  // produced by the daily rotation_alert job. The Watchlist tab fetches
+  // status=pending on load, auto-promotes to Tier 2, then POSTs accept on
+  // each. Survives across browsers because it lives in SQLite, not
+  // localStorage.
+  router.get('/rotation/picks', (req, res) => {
+    try {
+      const status = req.query.status || 'pending';
+      const picks = listRotationPicks({ status, sinceDays: 30 });
+      res.json({ status, count: picks.length, picks });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+  router.post('/rotation/picks/:id/:action', express.json(), (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const action = req.params.action;
+      const status = action === 'accept' ? 'accepted'
+                   : action === 'dismiss' ? 'dismissed'
+                   : null;
+      if (!status) return res.status(400).json({ error: 'action must be accept|dismiss' });
+      res.json(markPick(id, status));
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

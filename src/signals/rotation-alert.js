@@ -30,6 +30,20 @@ function _ensureStateTable() {
       last_alert_date TEXT,
       vs1m_at_alert INTEGER
     );
+    CREATE TABLE IF NOT EXISTS rotation_picks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL,
+      etf TEXT NOT NULL,
+      industry_name TEXT,
+      ticker TEXT NOT NULL,
+      rs_rank INTEGER,
+      thesis TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',  -- pending | accepted | dismissed
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      acted_at TEXT,
+      UNIQUE (date, etf, ticker)
+    );
+    CREATE INDEX IF NOT EXISTS idx_rotation_picks_status ON rotation_picks(status, date DESC);
   `);
 }
 
@@ -164,7 +178,7 @@ async function runRotationAlert(config = {}) {
     const shouldAlert = !lastAlert || (daysSinceAlert >= 14 && grewMaterially);
     if (!shouldAlert) continue;
 
-    const topPicks = _topPicksForIndustry(e.etf);
+    const topPicks = _topPicksForIndustry(e.etf, 70, 3);
     const picksStr = topPicks.length
       ? topPicks.map(p => `${p.symbol}(${p.rsRank})`).join(', ')
       : 'no RS≥70 names in bucket';
@@ -176,6 +190,21 @@ async function runRotationAlert(config = {}) {
     logAlert.run('rotation_leading_edge', e.etf, message, JSON.stringify(data));
     markAlerted.run(today, e.vs1m, e.etf);
     newAlerts.push({ etf: e.etf, name: e.name, message, topPicks });
+
+    // Persist each top pick as a pending watchlist suggestion. The
+    // Watchlist tab auto-promotes pending rows to Tier 2 on next load,
+    // marking the server-side row as 'accepted'. UNIQUE(date,etf,ticker)
+    // makes the insert idempotent across re-runs the same day.
+    const insertPick = db.prepare(`
+      INSERT OR IGNORE INTO rotation_picks (date, etf, industry_name, ticker, rs_rank, thesis)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    for (const p of topPicks) {
+      insertPick.run(
+        today, e.etf, e.name, p.symbol, p.rsRank,
+        `🌱 FRESH ROTATION — ${e.name} (${e.etf})`,
+      );
+    }
 
     if (!quietMode) {
       try {
@@ -254,4 +283,31 @@ async function computeThemes() {
   return themes;
 }
 
-module.exports = { computeLeadingEdge, computeThemes, runRotationAlert };
+// ─── Rotation pick lifecycle helpers ────────────────────────────────────────
+// Pending picks are surfaced on Watchlist load. Once added they're flipped
+// to 'accepted' so they don't re-prompt. Dismissed picks stay logged for
+// audit but aren't surfaced again.
+
+function listRotationPicks({ status = 'pending', sinceDays = 30 } = {}) {
+  _ensureStateTable();
+  return getDB().prepare(`
+    SELECT * FROM rotation_picks
+    WHERE status = ?
+      AND date >= date('now', ?)
+    ORDER BY date DESC, rs_rank DESC
+  `).all(status, `-${sinceDays} days`);
+}
+
+function markPick(id, status) {
+  if (!['accepted', 'dismissed'].includes(status)) return { ok: false, error: 'invalid status' };
+  _ensureStateTable();
+  const r = getDB().prepare(
+    `UPDATE rotation_picks SET status = ?, acted_at = datetime('now') WHERE id = ?`
+  ).run(status, id);
+  return { ok: r.changes > 0 };
+}
+
+module.exports = {
+  computeLeadingEdge, computeThemes, runRotationAlert,
+  listRotationPicks, markPick,
+};
