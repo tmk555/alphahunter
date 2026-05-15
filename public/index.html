@@ -5232,7 +5232,25 @@ function LeadingEdgePanel({ setSelectedSectors, setSelectedIndustries }) {
         <span style={{fontSize:10,color:'var(--text3)',flex:1}}>
           Industries rotating IN before the tilt model promotes them. Click any row to open Scanner pre-filtered to that industry.
         </span>
-        <button onClick={load} className="btn btn-sm" title="Refresh leading-edge computation">↻</button>
+        <button
+          onClick={async () => {
+            try {
+              const r = await api('/api/rotation/alerter/run', { method: 'POST' });
+              const picks = (r.newAlerts || []).flatMap(a => a.picks || []);
+              const msg = r.leadingEdgeCount === 0
+                ? 'No fresh Leading Edge today — picks unchanged.'
+                : picks.length
+                  ? `Found ${r.newAlerts.length} new Leading Edge industr${r.newAlerts.length===1?'y':'ies'} · queued ${picks.length} pick${picks.length===1?'':'s'}: ${picks.slice(0,4).join(', ')}${picks.length>4?'…':''}`
+                  : `Found ${r.leadingEdgeCount} Leading Edge industr${r.leadingEdgeCount===1?'y':'ies'}; no new alerts (already triggered or no RS≥70 stocks).`;
+              window.showToast?.('Rotation Alerter', msg);
+              load();
+            } catch (e) { window.showToast?.('Rotation Alerter', e.message, true); }
+          }}
+          className="btn btn-sm"
+          title="Run the rotation alerter now — same job the daily 4:45 PM ET cron triggers. Recomputes Leading Edge, enqueues new picks for the Watchlist, and fires phone alerts on any fresh promotions.">
+          ▶ RUN ALERTER
+        </button>
+        <button onClick={load} className="btn btn-sm" title="Refresh leading-edge computation (no alerter side-effects)">↻</button>
       </div>
       {!collapsed && (
         <>

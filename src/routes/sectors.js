@@ -8,6 +8,7 @@ const { computeRotation, getSectorRotationHistory } = require('../signals/rotati
 const {
   computeLeadingEdge, computeThemes,
   listRotationPicks, markPick,
+  runRotationAlert,
 } = require('../signals/rotation-alert');
 
 module.exports = function(SECTOR_ETFS, INDUSTRY_ETFS, INDUSTRY_STOCKS, UNIVERSE, SECTOR_MAP) {
@@ -78,6 +79,23 @@ module.exports = function(SECTOR_ETFS, INDUSTRY_ETFS, INDUSTRY_STOCKS, UNIVERSE,
       const themes = await computeThemes();
       res.json({ asOf: new Date().toISOString().slice(0, 10), count: themes.length, themes });
     } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // /api/rotation/alerter/run — manually trigger the rotation_alert job.
+  // Same computation the daily cron runs. Quality-of-life: lets the user
+  // refresh Leading Edge + repopulate rotation_picks from the panel
+  // header without trekking to Scheduler. Returns the same shape as the
+  // cron handler so the caller can show "found N picks" toast inline.
+  router.post('/rotation/alerter/run', async (req, res) => {
+    try {
+      const result = await runRotationAlert({});
+      res.json({
+        ok: true,
+        date: result.date,
+        leadingEdgeCount: result.leadingEdge.length,
+        newAlerts: result.newAlerts.map(a => ({ etf: a.etf, name: a.name, picks: a.topPicks?.map(p => p.symbol) || [] })),
+      });
+    } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
   });
 
   // /api/rotation/picks — server-side queue of Leading-Edge stock picks
