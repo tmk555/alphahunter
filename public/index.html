@@ -4361,23 +4361,56 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
                     <span style={{fontSize:10,color:'var(--green)',fontWeight:700,background:'rgba(0,230,118,0.12)',padding:'2px 6px',borderRadius:3}}>★ 3-qtr streak ≥25%</span>
                   )}
                 </div>
-                {/* Actual EPS per share from earningsHistory.
-                    Date shown is FISCAL QUARTER END (e.g. 2026-03-31 for Q1
-                    2026), NOT the earnings announcement date. Yahoo's free
-                    API doesn't expose announcement dates — for TXN the gap
-                    can be 3+ weeks. Label and tooltip make this explicit so
-                    users don't read "03/31: $1.45" as "earnings announced
-                    on 03/31 with EPS $1.45". */}
-                {funds.epsActualQuarterly?.length > 0 && (
-                  <div style={{marginTop:6,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}
-                    title="Each entry shows the fiscal-quarter end date and the EPS reported for that quarter. The actual earnings announcement typically lands 2-4 weeks after quarter end.">
-                    <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>ACTUAL EPS/SHARE (qtr ended):</span>
-                    {funds.epsActualQuarterly.map((q,i) => (
+                {/* GAAP EPS per share — SEC primary (10-Q filings) or Yahoo
+                    fallback when SEC has no coverage. Date is FISCAL QUARTER
+                    END, NOT the earnings announcement date (announcement
+                    typically lands 2-4 weeks later). The Wall St / adjusted
+                    series is rendered as a separate strip below — keep them
+                    apart because surprise % is on a non-GAAP basis and
+                    overlaying it on GAAP actuals creates contradictions
+                    (e.g. ENPH Q1 26: GAAP −$0.06 next to "+5.5% beat"). */}
+                {funds.epsActualQuarterly?.length > 0 && (() => {
+                  const isSEC = funds.dataSources?.epsQuarterly === 'sec_edgar';
+                  return (
+                    <div style={{marginTop:6,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}
+                      title={isSEC
+                        ? 'GAAP diluted EPS per share from SEC 10-Q filings. Audited, share-count-adjusted, includes stock-based comp and other charges that Wall St typically strips out. The actual earnings announcement typically lands 2-4 weeks after quarter end.'
+                        : 'EPS per share from Yahoo earningsHistory (non-GAAP / adjusted basis) — SEC has no coverage for this symbol. The earnings announcement typically lands 2-4 weeks after the fiscal quarter end.'}>
+                      <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>
+                        {isSEC ? 'GAAP EPS/SHARE (qtr ended):' : 'ACTUAL EPS/SHARE (qtr ended):'}
+                      </span>
+                      {isSEC && <ProvenanceTag source="sec" />}
+                      {funds.epsActualQuarterly.map((q,i) => (
+                        <span key={i} style={{fontSize:10,fontFamily:'var(--font-mono)',padding:'1px 6px',borderRadius:3,
+                          background:q.actual!=null && q.actual<0 ? 'rgba(255,61,87,0.08)' : q.surprisePct>0?'rgba(0,230,118,0.08)':q.surprisePct<0?'rgba(255,61,87,0.08)':'var(--bg)',
+                          border:`1px solid ${q.actual!=null && q.actual<0 ? 'var(--red)' : q.surprisePct>0?'var(--green)':q.surprisePct<0?'var(--red)':'var(--border)'}`,
+                          color:'var(--text)'}}
+                          title={`Q ended ${q.date}: ${isSEC?'GAAP':'actual'} $${q.actual?.toFixed(2)}${q.estimate!=null?` vs est $${q.estimate.toFixed(2)}`:''}${q.surprisePct!=null?` (${q.surprisePct>0?'+':''}${(q.surprisePct*100).toFixed(1)}% surprise)`:''}. Announcement date is typically 2-4 weeks after quarter end.`}>
+                          {q.date}: <strong>${q.actual?.toFixed(2)}</strong>
+                          {q.surprisePct!=null && <span style={{color:q.surprisePct>0?'var(--green)':'var(--red)',marginLeft:3,fontSize:9}}>
+                            {q.surprisePct>0?'+':''}{(q.surprisePct*100).toFixed(1)}%
+                          </span>}
+                        </span>
+                      ))}
+                    </div>
+                  );
+                })()}
+                {/* Adjusted / Wall St EPS strip — shown alongside GAAP when
+                    SEC is the primary source. This is the non-GAAP number
+                    companies report in their press release and the basis
+                    Wall St uses for estimates / surprise %. Both bases are
+                    useful: GAAP is the audited reality, adjusted is what
+                    drives the post-print reaction. */}
+                {Array.isArray(funds.epsAdjustedQuarterly) && funds.epsAdjustedQuarterly.length > 0 && (
+                  <div style={{marginTop:4,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}
+                    title="Adjusted / non-GAAP EPS from Yahoo earningsHistory — what the company reports in its press release after stripping stock-based comp, restructuring, etc. This is the basis Wall St analyst estimates and surprise % are computed against, so it's apples-to-apples within this strip but NOT directly comparable to the GAAP row above.">
+                    <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1}}>ADJ EPS [Wall St]:</span>
+                    {funds.epsAdjustedQuarterly.map((q,i) => (
                       <span key={i} style={{fontSize:10,fontFamily:'var(--font-mono)',padding:'1px 6px',borderRadius:3,
                         background:q.surprisePct>0?'rgba(0,230,118,0.08)':q.surprisePct<0?'rgba(255,61,87,0.08)':'var(--bg)',
                         border:`1px solid ${q.surprisePct>0?'var(--green)':q.surprisePct<0?'var(--red)':'var(--border)'}`,
                         color:'var(--text)'}}
-                        title={`Q ended ${q.date}: actual $${q.actual?.toFixed(2)}${q.estimate!=null?` vs est $${q.estimate.toFixed(2)}`:''}${q.surprisePct!=null?` (${q.surprisePct>0?'+':''}${(q.surprisePct*100).toFixed(1)}% surprise)`:''}. Announcement date is typically 2-4 weeks after quarter end.`}>
+                        title={`Q ended ${q.date}: adjusted $${q.actual?.toFixed(2)}${q.estimate!=null?` vs est $${q.estimate.toFixed(2)}`:''}${q.surprisePct!=null?` (${q.surprisePct>0?'+':''}${(q.surprisePct*100).toFixed(1)}% surprise)`:''}. Non-GAAP basis.`}>
                         {q.date}: <strong>${q.actual?.toFixed(2)}</strong>
                         {q.surprisePct!=null && <span style={{color:q.surprisePct>0?'var(--green)':'var(--red)',marginLeft:3,fontSize:9}}>
                           {q.surprisePct>0?'+':''}{(q.surprisePct*100).toFixed(1)}%

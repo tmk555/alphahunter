@@ -294,7 +294,7 @@ async function getFundamentals(symbol) {
   //     institutionPct, insiderPct
   //     grossMargins, returnOnEquity, debtToEquity
   //     forwardPE
-  //     analyst estimate / surprise / surprisePct (overlay onto SEC quarters)
+  //     epsAdjustedQuarterly (non-GAAP / Wall St actual + estimate + surprise)
   //     epsAnnualValues (net-income $B series, used by net-income chart)
   //
   //   FALLBACK rules:
@@ -353,22 +353,33 @@ async function getFundamentals(symbol) {
   // directly. If SEC is empty (foreign ADR, etc.) we fall back to Yahoo's
   // equivalent. Nothing gets "spliced on top" — each field is chosen once.
 
-  // Quarterly EPS list. SEC actual + Yahoo's analyst estimate/surprise overlay.
+  // Quarterly EPS list — SEC GAAP, no Yahoo surprise overlay. Yahoo's
+  // analyst estimates and surprise % are computed against ADJUSTED / non-GAAP
+  // EPS, which for SBC-heavy names (ENPH, etc.) diverges sharply from SEC's
+  // GAAP diluted EPS. Overlaying Yahoo's +5.5% onto SEC's −$0.06 produced a
+  // contradiction (a "beat" sitting next to a loss). Keep the two basis sets
+  // separate: GAAP here, adjusted in epsAdjustedQuarterly below.
   let epsActualQuarterly = [];
+  let epsAdjustedQuarterly = [];   // Yahoo non-GAAP / Wall St view — for UI strip
   if (Array.isArray(secQ) && secQ.length) {
-    const yahooByDate = new Map((yahoo?.epsActualQuarterly || []).map(q => [q.date, q]));
     epsActualQuarterly = secQ.map(s => ({
       date:        s.date,
-      actual:      s.eps,
-      estimate:    yahooByDate.get(s.date)?.estimate    ?? null,
-      surprise:    yahooByDate.get(s.date)?.surprise    ?? null,
-      surprisePct: yahooByDate.get(s.date)?.surprisePct ?? null,
+      actual:      s.eps,          // GAAP diluted EPS from 10-Q
+      estimate:    null,           // Wall St estimates are non-GAAP — see epsAdjustedQuarterly
+      surprise:    null,
+      surprisePct: null,
       filedAt:     s.filedAt,
       form:        s.form,
       source:      'sec_edgar',
     }));
     dataSources.epsQuarterly = 'sec_edgar';
+    if (Array.isArray(yahoo?.epsActualQuarterly)) {
+      epsAdjustedQuarterly = yahoo.epsActualQuarterly;
+    }
   } else if (Array.isArray(yahoo?.epsActualQuarterly) && yahoo.epsActualQuarterly.length) {
+    // No SEC coverage (foreign ADR, recent IPO). Yahoo is the only source —
+    // its actual/estimate/surprise are all on the same non-GAAP basis, so
+    // they're internally consistent and surface here as the primary list.
     epsActualQuarterly = yahoo.epsActualQuarterly;
     dataSources.epsQuarterly = 'yahoo';
   }
@@ -551,6 +562,7 @@ async function getFundamentals(symbol) {
 
     // SEC-primary block
     epsActualQuarterly,
+    epsAdjustedQuarterly,
     epsGrowthQoQ,
     epsGrowth_Q0_yoy, epsGrowth_Q1_yoy, epsGrowth_Q2_yoy,
     c_pass_q0, c_pass_q1, c_pass_q2,
