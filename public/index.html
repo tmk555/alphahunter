@@ -2504,7 +2504,7 @@ function App() {
         {tab==='hedge'      && <HedgeTab />}
         {tab==='trades'     && <TradesTab rsData={rsData} badgeCounts={badgeCounts}/>}
         {tab==='watchlist'  && <WatchlistTab rsData={rsData} rsLoaded={rsLoaded} navigateToScanner={navigateToScanner}/>}
-        {tab==='plan'       && <DailyPlanTab rsData={rsData} rsLoaded={rsLoaded}/>}
+        {tab==='plan'       && <DailyPlanTab rsData={rsData} rsLoaded={rsLoaded} setSelectedSectors={setSelectedSectors} setSelectedIndustries={setSelectedIndustries}/>}
         {tab==='yesterday'  && <YesterdayTab rsData={rsData}/>}
         {tab==='weekly'     && <WeeklyReviewTab rsData={rsData}/>}
         {tab==='replay'     && <ReplayTab />}
@@ -16154,7 +16154,7 @@ function TrailDecisionPanel({ position, atr, currentPrice, onChanged }) {
 //   - rsData (live price, conviction, insider clusters, RS, pattern flags)
 //   - /api/daily-plan/today (decision state from server)
 //   - POST /api/daily-plan/decision per click
-function DailyPlanTab({ rsData, rsLoaded }) {
+function DailyPlanTab({ rsData, rsLoaded, setSelectedSectors, setSelectedIndustries }) {
   const [plan, setPlan] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -16432,6 +16432,14 @@ function DailyPlanTab({ rsData, rsLoaded }) {
 
   return (
     <div>
+      {/* Rotation dashboard pinned above the daily plan — the zero-click
+          morning read of where money is rotating. Same component used
+          on the Rotation tab; rendering it here saves the two-click
+          (Rotation → Industries) detour every morning. */}
+      <LeadingEdgePanel
+        setSelectedSectors={setSelectedSectors}
+        setSelectedIndustries={setSelectedIndustries}
+      />
       <div className="panel" style={{marginBottom:14}}>
         <div className="panel-title">🌅 <span>Daily Plan · {plan?.date || '—'}</span></div>
         <div className="panel-sub">
