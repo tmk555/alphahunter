@@ -187,31 +187,36 @@ const SECTOR_ETFS = [
 ];
 
 // ─── Industry ETFs ─────────────────────────────────────────────────────────────
+// `theme` groups industries that share a common macro driver and tend to
+// rotate together. Theme RS often leads the individual-industry rotation
+// — when AI as a theme accelerates, SMH/IGV/HACK/ROBO all turn up before
+// the per-ETF rotation tilt model flips them individually. Themes are
+// hand-curated; collapse or split as the macro picture changes.
 const INDUSTRY_ETFS = [
-  {t:'SMH',  n:'Semiconductors',       sec:'Technology'},
-  {t:'IGV',  n:'Software',             sec:'Technology'},
-  {t:'HACK', n:'Cybersecurity',        sec:'Technology'},
-  {t:'ROBO', n:'Robotics/AI',          sec:'Technology'},
-  {t:'ITA',  n:'Aerospace & Defense',  sec:'Industrials'},
-  {t:'GRID', n:'Power Infrastructure', sec:'Industrials'},
-  {t:'ITB',  n:'Homebuilders',         sec:'Consumer Disc'},
-  {t:'IBB',  n:'Biotech (Large)',      sec:'Healthcare'},
-  {t:'XBI',  n:'Biotech (Small/Mid)',  sec:'Healthcare'},
-  {t:'IHF',  n:'Managed Care',        sec:'Healthcare'},
-  {t:'XOP',  n:'Oil & Gas E&P',       sec:'Energy'},
-  {t:'ICLN', n:'Clean Energy',        sec:'Energy'},
-  {t:'URA',  n:'Uranium',             sec:'Energy'},
-  {t:'GDX',  n:'Gold Miners',         sec:'Materials'},
-  {t:'COPX', n:'Copper Miners',       sec:'Materials'},
-  {t:'LIT',  n:'Lithium/Battery',     sec:'Materials'},
-  {t:'JETS', n:'Airlines',            sec:'Industrials'},
-  {t:'XRT',  n:'Retail',              sec:'Consumer Disc'},
-  {t:'KRE',  n:'Regional Banks',      sec:'Financials'},
-  {t:'FINX', n:'Fintech',             sec:'Financials'},
-  {t:'IAK',  n:'Insurance',           sec:'Financials'},
-  {t:'IYT',  n:'Transportation',      sec:'Industrials'},
-  {t:'XHB',  n:'Housing',             sec:'Consumer Disc'},
-  {t:'IHI',  n:'Medical Devices',     sec:'Healthcare'},
+  {t:'SMH',  n:'Semiconductors',       sec:'Technology',   theme:'AI / Compute'},
+  {t:'IGV',  n:'Software',             sec:'Technology',   theme:'AI / Compute'},
+  {t:'HACK', n:'Cybersecurity',        sec:'Technology',   theme:'AI / Compute'},
+  {t:'ROBO', n:'Robotics/AI',          sec:'Technology',   theme:'AI / Compute'},
+  {t:'ITA',  n:'Aerospace & Defense',  sec:'Industrials',  theme:'Defense / Reshoring'},
+  {t:'GRID', n:'Power Infrastructure', sec:'Industrials',  theme:'Energy Transition'},
+  {t:'ITB',  n:'Homebuilders',         sec:'Consumer Disc',theme:'Housing / Consumer'},
+  {t:'IBB',  n:'Biotech (Large)',      sec:'Healthcare',   theme:'Biotech'},
+  {t:'XBI',  n:'Biotech (Small/Mid)',  sec:'Healthcare',   theme:'Biotech'},
+  {t:'IHF',  n:'Managed Care',         sec:'Healthcare',   theme:'Healthcare Services'},
+  {t:'XOP',  n:'Oil & Gas E&P',        sec:'Energy',       theme:'Fossil Energy'},
+  {t:'ICLN', n:'Clean Energy',         sec:'Energy',       theme:'Energy Transition'},
+  {t:'URA',  n:'Uranium',              sec:'Energy',       theme:'Energy Transition'},
+  {t:'GDX',  n:'Gold Miners',          sec:'Materials',    theme:'Precious Metals'},
+  {t:'COPX', n:'Copper Miners',        sec:'Materials',    theme:'Industrial Metals'},
+  {t:'LIT',  n:'Lithium/Battery',      sec:'Materials',    theme:'Energy Transition'},
+  {t:'JETS', n:'Airlines',             sec:'Industrials',  theme:'Travel / Reopening'},
+  {t:'XRT',  n:'Retail',               sec:'Consumer Disc',theme:'Housing / Consumer'},
+  {t:'KRE',  n:'Regional Banks',       sec:'Financials',   theme:'Financials'},
+  {t:'FINX', n:'Fintech',              sec:'Financials',   theme:'Financials'},
+  {t:'IAK',  n:'Insurance',            sec:'Financials',   theme:'Financials'},
+  {t:'IYT',  n:'Transportation',       sec:'Industrials',  theme:'Defense / Reshoring'},
+  {t:'XHB',  n:'Housing',              sec:'Consumer Disc',theme:'Housing / Consumer'},
+  {t:'IHI',  n:'Medical Devices',      sec:'Healthcare',   theme:'Healthcare Services'},
 ];
 
 // ─── Industry → Stock mapping ──────────────────────────────────────────────────

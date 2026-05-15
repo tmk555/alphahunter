@@ -199,4 +199,59 @@ async function runRotationAlert(config = {}) {
   return { date: today, leadingEdge: edge, newAlerts };
 }
 
-module.exports = { computeLeadingEdge, runRotationAlert };
+// ─── Theme aggregation ──────────────────────────────────────────────────────
+// Roll the per-industry trends up to theme level (see universe.INDUSTRY_ETFS
+// `theme` field). Each theme's RS rank = mean of member current ranks; deltas
+// = mean of member deltas. We use means (not medians) so a small theme like
+// "Precious Metals" with two members responds to both equally; for bigger
+// themes the mean still reflects the dominant direction.
+//
+// Theme RS often leads individual industry rotation by 1-2 weeks because the
+// market hits theme baskets before money distinguishes between (say) SMH
+// vs IGV — so a rising theme rank is an earlier signal than any single ETF.
+async function computeThemes() {
+  const etfList = INDUSTRY_ETFS.map(e => e.t);
+  const trends = getRSTrendsBulk(IND_HISTORY, etfList);
+
+  // Group by theme. Missing theme → 'Other' (shouldn't happen with curated
+  // INDUSTRY_ETFS but guards against drift).
+  const byTheme = new Map();
+  for (const def of INDUSTRY_ETFS) {
+    const theme = def.theme || 'Other';
+    if (!byTheme.has(theme)) byTheme.set(theme, []);
+    byTheme.get(theme).push({ def, trend: trends.get(def.t) || null });
+  }
+
+  const themes = [];
+  for (const [theme, members] of byTheme) {
+    const withTrend = members.filter(m => m.trend);
+    if (!withTrend.length) continue;
+    const mean = (key) => {
+      const vs = withTrend.map(m => m.trend[key]).filter(v => v != null);
+      if (!vs.length) return null;
+      return +(vs.reduce((a, b) => a + b, 0) / vs.length).toFixed(1);
+    };
+    themes.push({
+      theme,
+      memberCount: members.length,
+      members: members.map(m => ({
+        etf: m.def.t,
+        name: m.def.n,
+        current: m.trend?.current ?? null,
+        vs1w: m.trend?.vs1w ?? null,
+        vs1m: m.trend?.vs1m ?? null,
+        vs3m: m.trend?.vs3m ?? null,
+      })),
+      current: mean('current'),
+      vs1w:    mean('vs1w'),
+      vs1m:    mean('vs1m'),
+      vs3m:    mean('vs3m'),
+    });
+  }
+  // Sort by current RS rank descending — the strongest theme tops the list.
+  // Ties broken by vs1m so a tied-rank theme with positive acceleration wins.
+  themes.sort((a, b) => (b.current ?? 0) - (a.current ?? 0) || (b.vs1m ?? 0) - (a.vs1m ?? 0));
+  return themes;
+}
+
+module.exports = { computeLeadingEdge, computeThemes, runRotationAlert };

@@ -5124,6 +5124,7 @@ function useSortTable(defaultKey, defaultDir = -1, persistKey = null) {
 // Each row clickable → Scanner pre-filtered to that industry ETF.
 function LeadingEdgePanel({ setSelectedSectors, setSelectedIndustries }) {
   const [data, setData]       = useState(null);
+  const [themes, setThemes]   = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState('');
   const [collapsed, setCollapsed] = useState(() => {
@@ -5133,8 +5134,14 @@ function LeadingEdgePanel({ setSelectedSectors, setSelectedIndustries }) {
 
   async function load() {
     setLoading(true); setError('');
-    try { setData(await api('/api/rotation/leading-edge')); }
-    catch (e) { setError(e.message); }
+    try {
+      const [edge, themeRes] = await Promise.all([
+        api('/api/rotation/leading-edge'),
+        api('/api/rotation/themes').catch(() => null),
+      ]);
+      setData(edge);
+      setThemes(themeRes);
+    } catch (e) { setError(e.message); }
     setLoading(false);
   }
   useEffect(() => { load(); }, []);
@@ -5231,6 +5238,41 @@ function LeadingEdgePanel({ setSelectedSectors, setSelectedIndustries }) {
         <>
           {loading && <Loader msg="Loading rotation classification..."/>}
           {error && <ErrorBox msg={error}/>}
+          {/* Theme-level RS strip. Surfaces the macro-driver baskets
+              (AI/Compute, Energy Transition, etc.) sorted by current RS so
+              the user can spot which theme is leading before the individual
+              ETF rotation tilts catch up. Each chip is non-interactive for
+              now — it's a context view, not a filter target. */}
+          {themes?.themes?.length > 0 && (
+            <div style={{marginBottom:10,padding:'6px 8px',background:'var(--bg)',border:'1px dashed var(--border)',borderRadius:3}}>
+              <div style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,marginBottom:4,fontWeight:700}}
+                title="Themes group industries that share a macro driver. Theme RS often leads individual-ETF rotation by 1-2 weeks because money hits the basket before differentiating. Mean of member ETF ranks; vs1m is mean of member 30d rank deltas.">
+                🧭 THEMES (ranked by RS · vs 1M acceleration)
+              </div>
+              <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                {themes.themes.map(t => {
+                  const rs = t.current;
+                  const accel = t.vs1m;
+                  const tone =
+                    accel != null && accel >=  5 && rs >= 70 ? { bg:'rgba(0,230,118,0.12)', fg:'var(--green)', border:'rgba(0,230,118,0.4)' } :
+                    accel != null && accel >=  3            ? { bg:'rgba(0,230,118,0.06)', fg:'#8bc34a',      border:'rgba(0,230,118,0.2)' } :
+                    accel != null && accel <= -5            ? { bg:'rgba(255,61,87,0.08)', fg:'var(--red)',   border:'rgba(255,61,87,0.3)' } :
+                                                              { bg:'var(--bg2)',           fg:'var(--text2)', border:'var(--border)' };
+                  return (
+                    <span key={t.theme}
+                      title={`${t.theme} — ${t.memberCount} ETF${t.memberCount===1?'':'s'}: ${t.members.map(m => m.etf).join(', ')}. Mean RS ${rs}, mean vs1W ${t.vs1w>0?'+':''}${t.vs1w}, vs1M ${accel>0?'+':''}${accel}, vs3M ${t.vs3m>0?'+':''}${t.vs3m}.`}
+                      style={{padding:'3px 8px',fontSize:10,fontFamily:'var(--font-mono)',background:tone.bg,border:`1px solid ${tone.border}`,color:tone.fg,borderRadius:3,whiteSpace:'nowrap'}}>
+                      <strong>{t.theme}</strong>
+                      <span style={{marginLeft:6,opacity:0.7}}>RS {rs}</span>
+                      <span style={{marginLeft:5,fontWeight:700,color:accel>0?'var(--green)':accel<0?'var(--red)':'var(--text3)'}}>
+                        {accel>0?'+':''}{accel}
+                      </span>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {data && (
             <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(330px,1fr))',gap:12}}>
               {/* Strict Leading Edge */}

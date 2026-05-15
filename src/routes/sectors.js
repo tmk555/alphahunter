@@ -5,7 +5,7 @@ const router  = express.Router();
 const { runRSScan, runETFScan } = require('../scanner');
 const { getRSTrendsBulk, RS_HISTORY, SEC_HISTORY, IND_HISTORY } = require('../data/store');
 const { computeRotation, getSectorRotationHistory } = require('../signals/rotation');
-const { computeLeadingEdge } = require('../signals/rotation-alert');
+const { computeLeadingEdge, computeThemes } = require('../signals/rotation-alert');
 
 module.exports = function(SECTOR_ETFS, INDUSTRY_ETFS, INDUSTRY_STOCKS, UNIVERSE, SECTOR_MAP) {
   // /api/sectors
@@ -62,6 +62,18 @@ module.exports = function(SECTOR_ETFS, INDUSTRY_ETFS, INDUSTRY_STOCKS, UNIVERSE,
           risingWeak:  risingWeak.length,
         },
       });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // /api/rotation/themes — theme-level RS aggregation. Themes group
+  // industries that share a macro driver (e.g. SMH/IGV/HACK/ROBO →
+  // "AI / Compute"). Each theme carries member ETF list + mean current
+  // rank + mean vs1w/vs1m/vs3m. Often leads the per-industry rotation by
+  // 1-2 weeks because the market hits theme baskets before differentiating.
+  router.get('/rotation/themes', async (req, res) => {
+    try {
+      const themes = await computeThemes();
+      res.json({ asOf: new Date().toISOString().slice(0, 10), count: themes.length, themes });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
