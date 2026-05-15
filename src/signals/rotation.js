@@ -224,22 +224,14 @@ function computeIndustryRotation(industryEtfDefs, industryScanResults) {
   };
 }
 
-// Lookup a stock's industry ETF tilt. Input: stock's sector (to constrain
-// which industries count — a GRID lead should boost Industrials stocks,
-// not Tech stocks). Returns the sizeBoost multiplier (1.0 if no match).
-//
-// Design note: a stock doesn't directly know its industry ETF; we infer
-// by parentSector match. This over-boosts (every Industrials stock gets
-// the GRID boost if GRID is leading), but it's a reasonable proxy until
-// universe.js gains explicit stock→industry mapping.
-function getIndustryTilt(sector, industryRotationModel) {
-  if (!industryRotationModel?.industries || !sector) return 1.0;
-  // Take the single best-tilted industry within the parent sector
-  const matches = industryRotationModel.industries.filter(i => i.parentSector === sector);
-  if (!matches.length) return 1.0;
-  // Return the best boost if at least one industry in this sector is leading
-  const best = matches.reduce((a, b) => a.sizeBoost > b.sizeBoost ? a : b);
-  return best.sizeBoost;
+// Lookup a stock's industry ETF tilt. Input: the stock's industry ETF
+// symbol (e.g. 'SMH'), which the scanner derives from
+// universe.INDUSTRY_STOCKS. Returns the sizeBoost multiplier (1.0 if the
+// stock has no industry bucket or that ETF isn't in the rotation model).
+function getIndustryTilt(industryEtf, industryRotationModel) {
+  if (!industryRotationModel?.industries || !industryEtf) return 1.0;
+  const match = industryRotationModel.industries.find(i => i.etf === industryEtf);
+  return match?.sizeBoost || 1.0;
 }
 
 // ─── Historical sector rotation from rs_snapshots ───────────────────────────

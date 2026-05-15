@@ -98,7 +98,7 @@ async function runDeepScan({ stocks, mode = 'both', sectorEtfs = null, industryE
       } catch (_) { /* fall back to whatever was on the stock */ }
     }
     const convictionOverride = evaluateConvictionOverride(s, convictionScore, regime);
-    const industryTilt = getIndustryTilt(s.sector, industryRotationModel);
+    const industryTilt = getIndustryTilt(s.industry, industryRotationModel);
     return {
       ...s,
       rsTrend,

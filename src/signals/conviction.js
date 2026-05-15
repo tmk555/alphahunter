@@ -93,18 +93,18 @@ function calcConviction(stock, rsTrend, rotationModel, industryRotationModel = n
   }
 
   // Industry rotation tilt: secondary signal on top of sector rotation.
-  // Smaller magnitude (±3 vs sector's ±5/4) — we only boost the best industry
-  // within the stock's parent sector, so a stock in a leading INDUSTRY within
-  // a leading SECTOR stacks both bonuses (+5 sector + +3 industry = +8).
-  // This is IBD's "leading stock in a leading industry in a leading sector".
+  // Smaller magnitude (±3 vs sector's ±5/4). Matched on the stock's actual
+  // industry ETF (stock.industry, from universe.INDUSTRY_STOCKS) — so a
+  // stock in a leading INDUSTRY within a leading SECTOR stacks both bonuses
+  // (+5 sector + +3 industry = +8). This is IBD's "leading stock in a
+  // leading industry in a leading sector".
   // (Reason is pushed later, after `reasons` is declared.)
-  let bestIndustryMatch = null;
-  if (industryRotationModel?.industries && stock.sector) {
-    const matches = industryRotationModel.industries.filter(i => i.parentSector === stock.sector);
-    if (matches.length) {
-      bestIndustryMatch = matches.reduce((a, b) => a.sizeBoost > b.sizeBoost ? a : b);
-      if (bestIndustryMatch.tilt === 'leading')      score += 3;
-      else if (bestIndustryMatch.tilt === 'lagging') score -= 2;
+  let industryMatch = null;
+  if (industryRotationModel?.industries && stock.industry) {
+    industryMatch = industryRotationModel.industries.find(i => i.etf === stock.industry) || null;
+    if (industryMatch) {
+      if (industryMatch.tilt === 'leading')      score += 3;
+      else if (industryMatch.tilt === 'lagging') score -= 2;
     }
   }
 
@@ -204,8 +204,8 @@ function calcConviction(stock, rsTrend, rotationModel, industryRotationModel = n
   if (stg === 4) reasons.push('⚠ Stage 4 downtrend — avoid longs');
 
   // Industry leader reason (see industry rotation tilt block above)
-  if (bestIndustryMatch?.tilt === 'leading') {
-    reasons.push(`Leading industry: ${bestIndustryMatch.industry} (rank ${bestIndustryMatch.rank})`);
+  if (industryMatch?.tilt === 'leading') {
+    reasons.push(`Leading industry: ${industryMatch.industry} (rank ${industryMatch.rank})`);
   }
 
   return { convictionScore: +score.toFixed(1), reasons };
