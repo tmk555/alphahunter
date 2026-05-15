@@ -550,6 +550,23 @@ registerJobType('rotation_watch', {
   },
 });
 
+// ─── Rotation Alert (OFFENSIVE) ─────────────────────────────────────────────
+// Counterpart to rotation_watch above. Where rotation_watch tightens stops
+// on positions whose industry is fading, rotation_alert flags industries
+// that are rotating IN before the tilt model promotes them to "leading" —
+// the entry-side signal you'd otherwise miss. Inserts into `alerts`, fires
+// notification channels, and tracks state in rotation_alert_state so it
+// doesn't re-ping the same industry every day.
+
+registerJobType('rotation_alert', {
+  description: 'Flag industries entering Leading Edge state (rising RS, not yet promoted by tilt model)',
+  defaultConfig: {},
+  handler: async (config) => {
+    const { runRotationAlert } = require('../signals/rotation-alert');
+    return runRotationAlert(config);
+  },
+});
+
 // ─── Pyramid Plans Watcher ──────────────────────────────────────────────────
 // Runs every minute during market hours. Checks every armed pyramid plan
 // for trigger + volume-pace + gap conditions, and fires the next tranche
@@ -1641,6 +1658,18 @@ const DEFAULT_JOBS = [
     job_type: 'rotation_watch',
     cron_expression: '15 17 * * 1-5',  // 5:15 PM server local, weekdays
     config: { rsDropThreshold: 20, lookbackDays: 10, tightTrailPct: 0.04 },
+  },
+
+  // Rotation alerter (offensive). Runs at 4:45 PM — 15 minutes after
+  // rs_scan_daily writes today's snapshots, so the Leading Edge computation
+  // sees current rankings. Fires a phone push when an industry enters
+  // Leading Edge state (rising RS, fresh, not yet promoted by tilt model).
+  {
+    name: 'rotation_alert_daily',
+    description: 'Phone alert when an industry enters Leading Edge state (offensive rotation signal)',
+    job_type: 'rotation_alert',
+    cron_expression: '45 16 * * 1-5',  // 4:45 PM server local, weekdays
+    config: {},
   },
 
   // Pyramid plans watcher — runs every 1 min during market hours.

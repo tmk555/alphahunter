@@ -5111,6 +5111,183 @@ function useSortTable(defaultKey, defaultDir = -1, persistKey = null) {
 // underlying components stay intact (no component refactor needed) — we
 // just route by level. selectedSectors state is shared so a sector
 // selection in Sectors view filters the Industries view consistently.
+// ─── Leading Edge banner ────────────────────────────────────────────────────
+// Sits at the top of the Rotation tab and answers "where is rotation
+// happening RIGHT NOW that the tilt model hasn't promoted yet?" — the
+// offensive counterpart to rotation_watch's defensive stop-tightening.
+// API: /api/rotation/leading-edge. Three classification buckets:
+//   • Leading Edge — strict (alert-worthy): rising, vs1m≥+8, vs3m≤0, tilt
+//     not yet 'leading'. The window for early entry.
+//   • Watching — rising and 1m strong but vs3m already positive. Rotation
+//     is real but already matured; tradable but not "early".
+//   • Rising (context) — modest 1m gain (+3 to +7). Hints, not signals.
+// Each row clickable → Scanner pre-filtered to that industry ETF.
+function LeadingEdgePanel({ setSelectedSectors, setSelectedIndustries }) {
+  const [data, setData]       = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState('');
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem('alphahunter:leading-edge-collapsed') === '1'; }
+    catch (_) { return false; }
+  });
+
+  async function load() {
+    setLoading(true); setError('');
+    try { setData(await api('/api/rotation/leading-edge')); }
+    catch (e) { setError(e.message); }
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, []);
+
+  const toggleCollapsed = () => {
+    setCollapsed(c => {
+      try { localStorage.setItem('alphahunter:leading-edge-collapsed', c ? '0' : '1'); } catch (_) {}
+      return !c;
+    });
+  };
+
+  const openInScanner = (row) => {
+    if (setSelectedSectors && row.sector) setSelectedSectors(new Set([row.sector]));
+    if (setSelectedIndustries)            setSelectedIndustries(new Set([row.etf]));
+    if (window.navigateToScanner)         window.navigateToScanner(null);
+  };
+
+  const Row = ({ r, tone }) => (
+    <div onClick={() => openInScanner(r)}
+      title={`${r.name} (${r.etf}) — IBD RS ${r.current}, vs 1W ${r.vs1w>0?'+':''}${r.vs1w}, vs 1M ${r.vs1m>0?'+':''}${r.vs1m}, vs 3M ${r.vs3m>0?'+':''}${r.vs3m}. Tilt model: ${r.tiltStatus}${r.tiltRank?` (#${r.tiltRank})`:''}. ${r.constituents} stocks in INDUSTRY_STOCKS bucket. Click to open Scanner filtered to this industry.`}
+      style={{
+        display:'grid',
+        gridTemplateColumns:'46px 1fr 36px 36px 36px',
+        gap:6, alignItems:'center',
+        padding:'4px 8px',
+        background:tone.bg,
+        border:`1px solid ${tone.border}`,
+        borderRadius:3,
+        cursor:'pointer',
+        fontSize:11,
+        marginBottom:3,
+      }}>
+      <span style={{fontFamily:'var(--font-mono)',fontWeight:700,color:tone.fg,fontSize:11}}>{r.etf}</span>
+      <span style={{color:'var(--text2)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+        {r.name}
+        <span style={{color:'var(--text3)',fontSize:9,marginLeft:5}}>· {r.sector}</span>
+      </span>
+      <span title="RS rank change vs 1W ago" style={{fontFamily:'var(--font-mono)',fontSize:10,textAlign:'right',color:r.vs1w>0?'var(--green)':r.vs1w<0?'var(--red)':'var(--text3)'}}>
+        {r.vs1w>0?'+':''}{r.vs1w ?? '—'}
+      </span>
+      <span title="RS rank change vs 1M ago" style={{fontFamily:'var(--font-mono)',fontSize:10,fontWeight:700,textAlign:'right',color:r.vs1m>0?'var(--green)':'var(--text3)'}}>
+        {r.vs1m>0?'+':''}{r.vs1m ?? '—'}
+      </span>
+      <span title="RS rank change vs 3M ago — Leading Edge requires this ≤ 0 (still early)" style={{fontFamily:'var(--font-mono)',fontSize:10,textAlign:'right',color:r.vs3m>0?'var(--amber)':'var(--green)'}}>
+        {r.vs3m>0?'+':''}{r.vs3m ?? '—'}
+      </span>
+    </div>
+  );
+
+  const HeaderRow = () => (
+    <div style={{
+      display:'grid', gridTemplateColumns:'46px 1fr 36px 36px 36px',
+      gap:6, padding:'0 8px', marginBottom:3,
+      fontSize:9, color:'var(--text3)', letterSpacing:1, textTransform:'uppercase',
+    }}>
+      <span>ETF</span>
+      <span>Industry · Sector</span>
+      <span title="vs 1W rank change" style={{textAlign:'right'}}>1W</span>
+      <span title="vs 1M rank change" style={{textAlign:'right'}}>1M</span>
+      <span title="vs 3M rank change — Leading Edge requires this ≤ 0" style={{textAlign:'right'}}>3M</span>
+    </div>
+  );
+
+  const TONES = {
+    edge:    { bg:'rgba(0,230,118,0.10)', border:'rgba(0,230,118,0.5)',  fg:'var(--green)' },
+    watch:   { bg:'rgba(240,165,0,0.07)', border:'rgba(240,165,0,0.35)', fg:'var(--amber)' },
+    context: { bg:'var(--bg)',            border:'var(--border)',         fg:'var(--text2)'},
+  };
+
+  const counts = data?.counts || { leadingEdge:0, watching:0, risingWeak:0 };
+  const summary = counts.leadingEdge > 0
+    ? `${counts.leadingEdge} on Leading Edge`
+    : counts.watching > 0
+      ? `${counts.watching} on Watching list — no fresh edge today`
+      : 'no rotation signal';
+
+  return (
+    <div className="panel" style={{marginBottom:12,padding:'10px 14px'}}>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:collapsed?0:8,flexWrap:'wrap'}}>
+        <button onClick={toggleCollapsed} title={collapsed?'Expand':'Collapse'}
+          style={{background:'transparent',border:'none',color:'var(--text3)',cursor:'pointer',fontSize:12,padding:0}}>
+          {collapsed ? '▶' : '▼'}
+        </button>
+        <span className="panel-title" style={{margin:0}}>🌱 <span>Leading Edge</span></span>
+        <span style={{fontSize:11,color:counts.leadingEdge>0?'var(--green)':'var(--text3)',fontWeight:counts.leadingEdge>0?700:400}}>
+          {summary}
+        </span>
+        <span style={{fontSize:10,color:'var(--text3)',flex:1}}>
+          Industries rotating IN before the tilt model promotes them. Click any row to open Scanner pre-filtered to that industry.
+        </span>
+        <button onClick={load} className="btn btn-sm" title="Refresh leading-edge computation">↻</button>
+      </div>
+      {!collapsed && (
+        <>
+          {loading && <Loader msg="Loading rotation classification..."/>}
+          {error && <ErrorBox msg={error}/>}
+          {data && (
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(330px,1fr))',gap:12}}>
+              {/* Strict Leading Edge */}
+              <div>
+                <div style={{fontSize:10,color:'var(--green)',letterSpacing:1,marginBottom:4,fontWeight:700}}
+                  title="Strict criteria: direction=rising OR vs1w≥+5, vs1m≥+8, vs3m≤0, tilt not 'leading'. The early-entry window — alert-worthy.">
+                  🌱 LEADING EDGE ({counts.leadingEdge})
+                </div>
+                {data.leadingEdge.length === 0 ? (
+                  <div style={{fontSize:11,color:'var(--text3)',padding:'6px 10px',background:'var(--bg)',border:'1px dashed var(--border)',borderRadius:3}}>
+                    No fresh edge today. The watching list shows the next best.
+                  </div>
+                ) : (
+                  <>
+                    <HeaderRow/>
+                    {data.leadingEdge.map(r => <Row key={r.etf} r={r} tone={TONES.edge}/>)}
+                  </>
+                )}
+              </div>
+              {/* Watching */}
+              <div>
+                <div style={{fontSize:10,color:'var(--amber)',letterSpacing:1,marginBottom:4,fontWeight:700}}
+                  title="vs1m≥+8 and rising, but vs3m already positive — rotation has matured. Still tradable, but you're not catching the first move.">
+                  👀 WATCHING ({counts.watching})
+                </div>
+                {data.watching.length === 0 ? (
+                  <div style={{fontSize:11,color:'var(--text3)',padding:'6px 10px',background:'var(--bg)',border:'1px dashed var(--border)',borderRadius:3}}>—</div>
+                ) : (
+                  <>
+                    <HeaderRow/>
+                    {data.watching.map(r => <Row key={r.etf} r={r} tone={TONES.watch}/>)}
+                  </>
+                )}
+              </div>
+              {/* Rising (context) */}
+              <div>
+                <div style={{fontSize:10,color:'var(--text3)',letterSpacing:1,marginBottom:4,fontWeight:700}}
+                  title="Rising direction but vs1m gain is modest (+3 to +7). Context only — not a signal yet, but worth noting if vs1m climbs above +8 in coming days.">
+                  📈 RISING (context) ({counts.risingWeak})
+                </div>
+                {data.risingWeak.length === 0 ? (
+                  <div style={{fontSize:11,color:'var(--text3)',padding:'6px 10px',background:'var(--bg)',border:'1px dashed var(--border)',borderRadius:3}}>—</div>
+                ) : (
+                  <>
+                    <HeaderRow/>
+                    {data.risingWeak.map(r => <Row key={r.etf} r={r} tone={TONES.context}/>)}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function RotationTab({ selectedSectors, setSelectedSectors, selectedIndustries, setSelectedIndustries }) {
   const [level, setLevel] = useState(() => {
     try { return localStorage.getItem('alphahunter:rotation-level') || 'sectors'; }
@@ -5125,6 +5302,10 @@ function RotationTab({ selectedSectors, setSelectedSectors, selectedIndustries, 
   ];
   return (
     <div>
+      <LeadingEdgePanel
+        setSelectedSectors={setSelectedSectors}
+        setSelectedIndustries={setSelectedIndustries}
+      />
       <div className="panel" style={{padding:'8px 10px',marginBottom:12}}>
         <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
           <span style={{fontSize:9,color:'var(--text3)',letterSpacing:1.5,fontFamily:'var(--font-mono)',marginRight:6}}>LEVEL</span>

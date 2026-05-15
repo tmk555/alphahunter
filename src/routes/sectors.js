@@ -5,6 +5,7 @@ const router  = express.Router();
 const { runRSScan, runETFScan } = require('../scanner');
 const { getRSTrendsBulk, RS_HISTORY, SEC_HISTORY, IND_HISTORY } = require('../data/store');
 const { computeRotation, getSectorRotationHistory } = require('../signals/rotation');
+const { computeLeadingEdge } = require('../signals/rotation-alert');
 
 module.exports = function(SECTOR_ETFS, INDUSTRY_ETFS, INDUSTRY_STOCKS, UNIVERSE, SECTOR_MAP) {
   // /api/sectors
@@ -40,6 +41,28 @@ module.exports = function(SECTOR_ETFS, INDUSTRY_ETFS, INDUSTRY_STOCKS, UNIVERSE,
       const industriesOut = await runETFScan(INDUSTRY_ETFS, IND_HISTORY, 'IND_');
       res.json({ industries: industriesOut });
     } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // /api/rotation/leading-edge — industries rotating IN before the tilt
+  // model has flagged them as "leading". Powers the UI banner and the
+  // daily rotation_alert push. Computation is cheap (uses cached rotation
+  // model + bulk RS trend lookup) but the underlying runETFScan does hit
+  // the provider on first call after cache expiry.
+  router.get('/rotation/leading-edge', async (req, res) => {
+    try {
+      const { leadingEdge, watching, risingWeak } = await computeLeadingEdge();
+      res.json({
+        asOf:        new Date().toISOString().slice(0, 10),
+        leadingEdge,
+        watching,
+        risingWeak,
+        counts: {
+          leadingEdge: leadingEdge.length,
+          watching:    watching.length,
+          risingWeak:  risingWeak.length,
+        },
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   // /api/industry-stocks/:etf
