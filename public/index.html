@@ -4935,17 +4935,26 @@ function SectorStocks({ sectorName, rsData: propData, onClose }) {
 // Fetches from /api/industry-stocks/:etf which uses INDUSTRY_STOCKS mapping
 function IndustryStockDrill({ etf, etfName, rsData, onClose, onOpenInScanner }) {
   const [stocks,  setStocks]  = useState([]);
+  const [requested, setRequested] = useState(null);  // total in INDUSTRY_STOCKS bucket
+  const [missing, setMissing] = useState([]);        // bucket members not in current scan
   const [loading, setLoading] = useState(true);
   const { sortData: sortID, SH: IDH } = useSortTable('rsRank');
 
-  useEffect(() => {
-    api(`/api/industry-stocks/${etf}`)
-      .then(d => setStocks(d.stocks || []))
+  function load({ fresh = false } = {}) {
+    setLoading(true);
+    const url = `/api/industry-stocks/${etf}${fresh ? '?fresh=1' : ''}`;
+    api(url)
+      .then(d => {
+        setStocks(d.stocks || []);
+        setRequested(d.requested ?? (d.stocks || []).length);
+        setMissing(d.missing || []);
+      })
       .catch(() => {
-        setStocks([]);
+        setStocks([]); setRequested(null); setMissing([]);
       })
       .finally(() => setLoading(false));
-  }, [etf]);
+  }
+  useEffect(() => { load(); }, [etf]);
 
   if (!etf) return null;
 
@@ -4956,9 +4965,23 @@ function IndustryStockDrill({ etf, etfName, rsData, onClose, onOpenInScanner }) 
           <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--amber)',letterSpacing:2,fontWeight:700}}>
             {etfName||etf} — CONSTITUENT STOCKS RANKED BY IBD RS
           </span>
-          {!loading && <span style={{fontSize:10,color:'var(--text3)',marginLeft:10}}>{stocks.length} stocks from universe</span>}
+          {!loading && (
+            <span style={{fontSize:10,color:'var(--text3)',marginLeft:10}}>
+              {requested != null && requested !== stocks.length
+                ? <>{stocks.length} of {requested} stocks <span style={{color:'var(--amber)'}} title={`${missing.length} bucket member${missing.length===1?'':'s'} not in current scan: ${missing.join(', ')}. Usually the quote fetch failed for these during the warm scan (Yahoo throttle / illiquid / delisted). Click ↻ Rescan to retry.`}>· {missing.length} missing ⚠</span></>
+                : <>{stocks.length} stocks from universe</>}
+            </span>
+          )}
         </div>
         <div style={{display:'flex',alignItems:'center',gap:8}}>
+          {missing.length > 0 && (
+            <button onClick={() => load({ fresh: true })}
+              disabled={loading}
+              title={`Re-run the scan to try the ${missing.length} missing ticker${missing.length===1?'':'s'}: ${missing.join(', ')}. Bypasses the 5-minute scan cache.`}
+              style={{background:'rgba(240,165,0,0.12)',border:'1px solid var(--amber)',color:'var(--amber)',padding:'3px 10px',fontSize:11,fontWeight:700,borderRadius:3,cursor:loading?'wait':'pointer',fontFamily:'var(--font-mono)',letterSpacing:1,opacity:loading?0.6:1}}>
+              {loading ? '↻ …' : '↻ RESCAN'}
+            </button>
+          )}
           {onOpenInScanner && (
             <button onClick={onOpenInScanner}
               title={`Jump to Scanner with ${etf} industry filter applied — same ${stocks.length} stocks but with full signal/strategy filtering available.`}

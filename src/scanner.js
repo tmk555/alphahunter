@@ -206,12 +206,40 @@ async function _runRSScanBody(UNIVERSE, SECTOR_MAP) {
   for (let i = 0; i < uniq.length; i += QUOTE_BATCH) {
     quoteBatches.push(uniq.slice(i, i + QUOTE_BATCH));
   }
+  // Per-batch error tally — silent batch failures used to drop 50 symbols at a
+  // time with no signal. Surface the count + a retry pass so partial scans
+  // don't masquerade as "this industry only has 5 stocks" in the UI drill.
+  let batchFailures = 0;
   await pLimit(quoteBatches.map(batchSyms => async () => {
     try {
       const batch = await getQuotes(batchSyms);
       for (const q of batch) allQuotes[q.symbol] = q;
-    } catch(_) {}
+    } catch(_) { batchFailures++; }
   }), 8);
+  if (batchFailures) {
+    console.warn(`  RS scan: ${batchFailures} of ${quoteBatches.length} quote batches failed (≈${batchFailures * QUOTE_BATCH} symbols missing — will self-heal)`);
+  }
+  // Self-heal pass — any symbol still missing a quote after the batched
+  // fetch gets one more try individually. Catches both batch-wide failures
+  // (whole 50-symbol slice swallowed silently above) and per-symbol gaps
+  // inside an otherwise-successful batch (Yahoo returned partial). Keeps
+  // concurrency low (4) since we're talking about a few dozen retries at
+  // most and don't want to amplify whatever throttling caused the gap.
+  const missingAfterBatch = uniq.filter(s => !allQuotes[s]?.regularMarketPrice);
+  if (missingAfterBatch.length) {
+    await pLimit(missingAfterBatch.map(sym => async () => {
+      try {
+        const r = await getQuotes([sym]);
+        if (r?.[0]?.symbol) allQuotes[r[0].symbol] = r[0];
+      } catch (_) { /* leave missing — will be excluded from results */ }
+    }), 4);
+    const stillMissing = uniq.filter(s => !allQuotes[s]?.regularMarketPrice);
+    if (stillMissing.length) {
+      console.warn(`  RS scan: self-heal recovered ${missingAfterBatch.length - stillMissing.length}/${missingAfterBatch.length}; ${stillMissing.length} still missing (sample: ${stillMissing.slice(0, 10).join(', ')}${stillMissing.length > 10 ? '…' : ''})`);
+    } else {
+      console.log(`  RS scan: self-heal recovered all ${missingAfterBatch.length} missing symbols`);
+    }
+  }
   const tQuotes = Date.now();
   console.log(`  RS scan: quotes done in ${((tQuotes - t0)/1000).toFixed(1)}s (${Object.keys(allQuotes).length}/${uniq.length} symbols)`);
 

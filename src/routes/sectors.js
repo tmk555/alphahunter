@@ -3,6 +3,7 @@ const express = require('express');
 const router  = express.Router();
 
 const { runRSScan, runETFScan } = require('../scanner');
+const { cacheInvalidatePrefix } = require('../data/cache');
 const { getRSTrendsBulk, RS_HISTORY, SEC_HISTORY, IND_HISTORY } = require('../data/store');
 const { computeRotation, getSectorRotationHistory } = require('../signals/rotation');
 const {
@@ -127,10 +128,20 @@ module.exports = function(SECTOR_ETFS, INDUSTRY_ETFS, INDUSTRY_STOCKS, UNIVERSE,
     try {
       const etf    = req.params.etf.toUpperCase();
       const tickers = INDUSTRY_STOCKS[etf] || [];
+      // ?fresh=1 bypasses the rs:full cache so the scanner re-fetches quotes
+      // and history. UI's "↻ RESCAN" button uses this when bucket members
+      // are missing from the cached scan.
+      if (req.query.fresh === '1') {
+        cacheInvalidatePrefix('rs:');
+      }
       const stocks  = await runRSScan(UNIVERSE, SECTOR_MAP);
-      const filtered = tickers
-        .map(t => stocks.find(s => s.ticker === t))
-        .filter(Boolean);
+      const scanIdx = new Map(stocks.map(s => [s.ticker, s]));
+      const filtered = tickers.map(t => scanIdx.get(t)).filter(Boolean);
+      // Surface which INDUSTRY_STOCKS members aren't in the current scan —
+      // typically means the quote fetch failed during the warm scan (Yahoo
+      // throttle, delisted, illiquid). The UI badges this so "5 of 11"
+      // doesn't masquerade as "this industry only has 5 stocks."
+      const missing = tickers.filter(t => !scanIdx.has(t));
       // Bulk trend lookup scoped to this industry's tickers — typically a
       // few dozen names, so the IN-clause path stays well under 200 rows
       // instead of loading the full 3.7M-row history.
@@ -138,7 +149,13 @@ module.exports = function(SECTOR_ETFS, INDUSTRY_ETFS, INDUSTRY_STOCKS, UNIVERSE,
       const result = filtered
         .map(s => ({ ...s, rsTrend: trends.get(s.ticker) || null }))
         .sort((a,b) => b.rsRank - a.rsRank);
-      res.json({ etf, stocks: result, total: result.length });
+      res.json({
+        etf,
+        stocks: result,
+        total: result.length,
+        requested: tickers.length,
+        missing,
+      });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
