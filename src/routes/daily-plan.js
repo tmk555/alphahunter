@@ -30,6 +30,7 @@ const {
   ensureTodayPlan,
   recordDecision,
   removeFromPlan,
+  clearTodaysPendingPlan,
   autoSkipExpiredPending,
   getTodayPlan,
   getYesterdaysOutcomes,
@@ -112,6 +113,18 @@ module.exports = function() {
       res.json(result);
     } catch (e) {
       res.status(400).json({ error: e.message });
+    }
+  });
+
+  // DELETE /api/daily-plan/today — bulk-delete all PENDING rows. Used by
+  // Watchlist's ✕ CLEAR ALL so wiping the source tier-1 list also wipes
+  // the rows that were auto-seeded from it. Decided rows (submit / wait
+  // / skip / auto_skip) stay — the journal is preserved.
+  router.delete('/daily-plan/today', (req, res) => {
+    try {
+      res.json(clearTodaysPendingPlan());
+    } catch (e) {
+      res.status(500).json({ error: e.message });
     }
   });
 

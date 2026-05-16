@@ -208,6 +208,18 @@ function removeFromPlan(symbol) {
   return { removed: r.changes, symbol };
 }
 
+// Bulk-delete all PENDING rows from today's plan. Used by Watchlist's
+// ✕ CLEAR ALL so wiping the source-of-truth tier-1 list also clears
+// the rows that were auto-seeded from it. Already-decided rows (submit
+// / wait / skip / auto_skip) are preserved so the journal stays intact.
+function clearTodaysPendingPlan() {
+  const date = _today();
+  const r = getDB().prepare(
+    `DELETE FROM daily_decisions WHERE date = ? AND decision = 'pending'`
+  ).run(date);
+  return { date, removed: r.changes };
+}
+
 // Fetch today's plan with current decision states, sorted by conviction desc.
 // `liveByTicker` is an optional Map<symbol, scannerRow> from the caller
 // (UI passes rsData) so we can include current price + insider cluster
@@ -591,6 +603,7 @@ module.exports = {
   ensureTodayPlan,
   recordDecision,
   removeFromPlan,
+  clearTodaysPendingPlan,
   autoSkipExpiredPending,
   getTodayPlan,
   getYesterdaysOutcomes,
