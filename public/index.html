@@ -11086,6 +11086,7 @@ function SectorIndustryRSTrend({ type, title, api: apiPath }) {
                   <SISH k="vs1m"      label="vs 1M"  title="RS rank change vs 30 days ago"/>
                   <SISH k="vs2m"      label="vs 2M"  title="RS rank change vs 60 days ago"/>
                   <SISH k="vs3m"      label="vs 3M"  title="RS rank change vs 90 days ago"/>
+                  <SISH k="accelChange1w" label="Δ Accel" title="Change in 4-week RS acceleration over the last week. = vs4w_today − vs4w_one_week_ago. Negative on a high-rank name = the 'first crack': momentum has reversed even though absolute rank hasn't dropped yet. Sort ascending and look at the top to find leaders quietly turning."/>
                   <th title="Signal derived from RS level + direction">Signal</th>
                 </tr>
               </thead>
@@ -11111,6 +11112,21 @@ function SectorIndustryRSTrend({ type, title, api: apiPath }) {
                       <td className={t.vs1m>0?'up':t.vs1m<0?'dn':''}>{t.vs1m!=null?(t.vs1m>0?'+':'')+t.vs1m:'—'}</td>
                       <td className={t.vs2m>0?'up':t.vs2m<0?'dn':''}>{t.vs2m!=null?(t.vs2m>0?'+':'')+t.vs2m:'—'}</td>
                       <td className={t.vs3m>0?'up':t.vs3m<0?'dn':''}>{t.vs3m!=null?(t.vs3m>0?'+':'')+t.vs3m:'—'}</td>
+                      {/* Δ Accel — highlight first-crack candidates: a row with current ≥ 70 AND
+                          accelChange1w ≤ −5 means a top-quartile name whose 4-week trend has
+                          materially reversed in the last week. Bold + bg flag to draw the eye. */}
+                      {(() => {
+                        const v = t.accelChange1w;
+                        const cracking = v != null && v <= -5 && t.current != null && t.current >= 70;
+                        return (
+                          <td className={v>0?'up':v<0?'dn':''}
+                              style={cracking ? {background:'rgba(255,61,87,0.15)',fontWeight:700,fontFamily:'var(--font-mono)'} : undefined}
+                              title={cracking ? `⚠ First crack: rank ${t.current} (still top quartile) but the 4-week trend has flipped ${v>0?'+':''}${v} in the last 7 days.` : undefined}>
+                            {v != null ? (v>0?'+':'')+v : '—'}
+                            {cracking && <span style={{marginLeft:3,fontSize:9,color:'var(--red)'}}>⚠</span>}
+                          </td>
+                        );
+                      })()}
                       <td style={{fontSize:12,color:'var(--text2)'}}>{signal}</td>
                     </tr>
                   );

@@ -204,7 +204,7 @@ function _buildAllTrends(db, type, last, windowDays) {
     arr.push(r);
   }
 
-  const lookbacks = [7, 14, 28, 60, 90];
+  const lookbacks = [7, 14, 28, 35, 60, 90];
   const targetByDays = {};
   for (const d of lookbacks) {
     const t = new Date(last + 'T12:00:00Z');
@@ -229,9 +229,20 @@ function _buildAllTrends(db, type, last, windowDays) {
     };
 
     const w1 = findAt(7),  w2 = findAt(14), w4 = findAt(28);
+    const w5 = findAt(35);  // for accelChange1w derivation (see below)
     const m3 = findAt(90), m2 = findAt(60);
     const dir  = w1 != null ? (now-w1 > 3 ? 'rising' : now-w1 < -3 ? 'falling' : 'flat') : 'new';
     const note = now < 50 && dir === 'rising' ? 'low-RS-rising' : dir;
+    // Acceleration change over the last week — momentum-of-momentum.
+    // = vs4w_today  − vs4w_one_week_ago
+    // = (now − rank_28d_ago) − (rank_7d_ago − rank_35d_ago)
+    // = now − rank_28d − rank_7d + rank_35d
+    // Positive: rotation is accelerating. Negative: rotation is fading
+    // even if absolute rank hasn't dropped yet — the "first crack" signal
+    // on top-quartile names.
+    const accelChange1w = (w4 != null && w1 != null && w5 != null)
+      ? +((now - w4) - (w1 - w5)).toFixed(0)
+      : null;
     out.set(sym, {
       current: now, direction: dir, note,
       vs1w: w1 != null ? +(now-w1).toFixed(0) : null,
@@ -240,6 +251,7 @@ function _buildAllTrends(db, type, last, windowDays) {
       vs3m: m3 != null ? +(now-m3).toFixed(0) : null,
       vs1m: w4 != null ? +(now-w4).toFixed(0) : null,  // 4 weeks ≈ 1 month
       vs2m: m2 != null ? +(now-m2).toFixed(0) : null,
+      accelChange1w,
     });
   }
   return out;
@@ -293,7 +305,7 @@ function getRSTrendsBulk(type, symbols = null, opts = {}) {
         if (!arr) { arr = []; bySym.set(r.symbol, arr); }
         arr.push(r);
       }
-      const lookbacks = [7, 14, 28, 60, 90];
+      const lookbacks = [7, 14, 28, 35, 60, 90];
       const targetByDays = {};
       for (const d of lookbacks) {
         const t = new Date(last + 'T12:00:00Z');
@@ -315,9 +327,13 @@ function getRSTrendsBulk(type, symbols = null, opts = {}) {
           return best?.rs_rank ?? null;
         };
         const w1 = findAt(7),  w2 = findAt(14), w4 = findAt(28);
+        const w5 = findAt(35);  // for accelChange1w derivation
         const m3 = findAt(90), m2 = findAt(60);
         const dir  = w1 != null ? (now-w1 > 3 ? 'rising' : now-w1 < -3 ? 'falling' : 'flat') : 'new';
         const note = now < 50 && dir === 'rising' ? 'low-RS-rising' : dir;
+        const accelChange1w = (w4 != null && w1 != null && w5 != null)
+          ? +((now - w4) - (w1 - w5)).toFixed(0)
+          : null;
         out.set(sym, {
           current: now, direction: dir, note,
           vs1w: w1 != null ? +(now-w1).toFixed(0) : null,
@@ -326,6 +342,7 @@ function getRSTrendsBulk(type, symbols = null, opts = {}) {
           vs3m: m3 != null ? +(now-m3).toFixed(0) : null,
           vs1m: w4 != null ? +(now-w4).toFixed(0) : null,
           vs2m: m2 != null ? +(now-m2).toFixed(0) : null,
+          accelChange1w,
         });
       }
       return out;
