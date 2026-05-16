@@ -2319,29 +2319,38 @@ function App() {
   //
   //   Default tab is 'plan' — the app opens to "what do I act on today"
   //   not "what's the macro context."
+  // Tab grouping ordered by the position-trader morning flow:
+  //   TODAY    — action loop (plan + journal)
+  //   SIGNALS  — context (regime → macro → rotation) read once per day
+  //   PICK     — funnel (scan → bucket → ready-to-trade) in workflow order
+  //   DEEP     — niche / one-off tools (hedge construction, replay engine)
+  //   ADMIN    — system health
+  // Within each group, left→right matches the order you'd actually open
+  // them. Pre-fix, DECIDE held Trade Setups before Scanner — backwards
+  // for a Sunday research pass where you discover names in Scanner first
+  // and only check Trade Setups for the system's own conviction picks.
   const TAB_GROUPS = [
     { label: 'TODAY', tabs: [
-      { id:'plan',      label:'🌅 Daily Plan' },        // NEW — action loop
+      { id:'plan',      label:'🌅 Daily Plan' },
       { id:'trades',    label:'💼 Trades', badge: tradesUrgent || null, badgeWarn: !!badgeCounts.review },
-      { id:'yesterday', label:'✅ Yesterday' },          // NEW — review loop
-      { id:'weekly',    label:'📅 Week Review' },        // NEW — pattern detection
+      { id:'yesterday', label:'✅ Yesterday' },
+      { id:'weekly',    label:'📅 Week Review' },
     ] },
-    { label: 'DECIDE', tabs: [
-      { id:'watchlist', label:'⭐ Watchlist' },           // tier-1/2/3 commit list
-      { id:'setups',    label:'🎯 Trade Setups' },
-      { id:'rs',        label:'📊 Scanner' },
-    ] },
-    { label: 'DEEP', tabs: [
-      { id:'rotation',  label:'🔄 Rotation' },
+    { label: 'SIGNALS', tabs: [
       { id:'pulse',     label:'⚡ Market Pulse' },
       { id:'macro',     label:'📉 Macro' },
+      { id:'rotation',  label:'🔄 Rotation' },
+    ] },
+    { label: 'PICK', tabs: [
+      { id:'rs',        label:'📊 Scanner' },
+      { id:'watchlist', label:'⭐ Watchlist' },
+      { id:'setups',    label:'🎯 Trade Setups' },
+    ] },
+    { label: 'DEEP', tabs: [
       { id:'hedge',     label:'🛡 Hedge' },
       { id:'replay',    label:'🔁 Replay' },
     ] },
     { label: 'ADMIN', tabs: [
-      // Diagnostics moved here from DEEP — system health / performance
-      // attribution / edge telemetry are admin-flavored, not market-
-      // analysis. Better visual balance (5/2 vs the prior 6/1).
       { id:'diagnostics', label:'📈 Diagnostics' },
       { id:'settings',  label:'⚙ Settings' },
     ] },
@@ -3718,9 +3727,41 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
   const [revLoad, setRevLoad] = useState(false);
   const [portfolioCfg, setPortfolioCfg] = useState(null);
   const [dailyDecision, setDailyDecision] = useState(null);
+  // Rotation context for this stock's industry. Lazy-fetched + cached
+  // window-wide so opening 10 expand panels doesn't fire 10 round-trips.
+  // Match key is s.industry (the ETF symbol) against any of leadingEdge /
+  // watching / risingWeak buckets returned by /api/rotation/leading-edge.
+  const [rotationCtx, setRotationCtx] = useState(null);
 
   // Fetch portfolio config (accountSize + riskPct) once for sizing display.
   useEffect(() => { getPortfolioCfgCached().then(setPortfolioCfg).catch(() => {}); }, []);
+
+  // Resolve this stock's industry → rotation classification (Leading
+  // Edge / Watching / Rising / not in any bucket) so the user can see at
+  // a glance whether the stock has rotation tailwind or is sitting in a
+  // fading industry. Same cache as the LeadingEdgePanel, so opening
+  // Scanner rows doesn't trigger extra fetches.
+  useEffect(() => {
+    if (!s?.industry) { setRotationCtx(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        if (!window.__ahLeadingEdge || Date.now() - window.__ahLeadingEdge.ts > 5 * 60_000) {
+          const data = await api('/api/rotation/leading-edge');
+          window.__ahLeadingEdge = { ts: Date.now(), data };
+        }
+        if (cancelled) return;
+        const d = window.__ahLeadingEdge.data;
+        const match =
+          d.leadingEdge?.find(i => i.etf === s.industry) ? { tier: 'leading_edge', row: d.leadingEdge.find(i => i.etf === s.industry) } :
+          d.watching?.find(i => i.etf === s.industry)    ? { tier: 'watching',    row: d.watching.find(i => i.etf === s.industry) } :
+          d.risingWeak?.find(i => i.etf === s.industry)  ? { tier: 'rising',      row: d.risingWeak.find(i => i.etf === s.industry) } :
+                                                            null;
+        setRotationCtx(match);
+      } catch (_) { /* additive — strip just won't render */ }
+    })();
+    return () => { cancelled = true; };
+  }, [s?.industry]);
 
   // Fetch this ticker's daily-plan decision row, if any. Surfaces tier/
   // status (queued/staged/passed) directly on the Levels card so the user
@@ -4239,6 +4280,42 @@ function InlineLevels({ stock: s, customEntryPrice, customStopPrice }) {
               <strong style={{color:s.vsVWAP20>5?'var(--amber)':s.vsVWAP20>0?'var(--green)':'var(--red)'}}>{s.vsVWAP20>0?'+':''}{s.vsVWAP20.toFixed(1)}%</strong>
             </span>
           )}
+        </div>
+      )}
+
+      {/* ── Rotation context strip ───────────────────────────────────────
+          One-line answer to "does this stock have rotation tailwind?".
+          Reads from /api/rotation/leading-edge: if the stock's industry
+          ETF sits in Leading Edge / Watching / Rising, badge it with
+          that classification + the industry's 1W/1M deltas. Stocks in
+          industries that don't show up (neutral or fading) get no badge
+          — absence is itself the signal. */}
+      {rotationCtx && (
+        <div style={{fontSize:10,color:'var(--text3)',marginTop:4,display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+          <span style={{color:'var(--text3)'}}>Rotation:</span>
+          {(() => {
+            const r = rotationCtx.row;
+            const tone =
+              rotationCtx.tier === 'leading_edge' ? { bg:'rgba(0,230,118,0.15)', fg:'var(--green)', border:'var(--green)', label:'🌱 LEADING EDGE' } :
+              rotationCtx.tier === 'watching'     ? { bg:'rgba(240,165,0,0.12)', fg:'var(--amber)', border:'var(--amber)', label:'👀 WATCHING' } :
+                                                    { bg:'var(--bg2)',           fg:'var(--text2)', border:'var(--border)', label:'📈 RISING' };
+            return (
+              <span title={`${r.name} (${r.etf}) — IBD RS ${r.current}, vs 1W ${r.vs1w>0?'+':''}${r.vs1w}, vs 1M ${r.vs1m>0?'+':''}${r.vs1m}, vs 3M ${r.vs3m>0?'+':''}${r.vs3m}. Tilt model: ${r.tiltStatus}. ${rotationCtx.tier === 'leading_edge' ? 'Early-entry window — industry not yet promoted by tilt model.' : rotationCtx.tier === 'watching' ? 'Rotation already mature — tradable but you are not first.' : 'Modest 1M gain — context only.'}`}
+                style={{padding:'1px 7px',borderRadius:3,background:tone.bg,border:`1px solid ${tone.border}`,color:tone.fg,fontWeight:700,fontFamily:'var(--font-mono)',fontSize:10,letterSpacing:0.5}}>
+                {tone.label}
+              </span>
+            );
+          })()}
+          {(() => {
+            const r = rotationCtx.row;
+            return (
+              <span style={{fontFamily:'var(--font-mono)',color:'var(--text2)'}}>
+                {r.etf} <span style={{color:'var(--text3)'}}>·</span> vs1W <strong style={{color:r.vs1w>0?'var(--green)':'var(--red)'}}>{r.vs1w>0?'+':''}{r.vs1w}</strong>
+                {' '}<span style={{color:'var(--text3)'}}>·</span> vs1M <strong style={{color:r.vs1m>0?'var(--green)':'var(--red)'}}>{r.vs1m>0?'+':''}{r.vs1m}</strong>
+                {' '}<span style={{color:'var(--text3)'}}>·</span> tilt <span style={{color:r.tiltStatus==='leading'?'var(--green)':r.tiltStatus==='lagging'?'var(--red)':'var(--text3)'}}>{r.tiltStatus}</span>
+              </span>
+            );
+          })()}
         </div>
       )}
 
