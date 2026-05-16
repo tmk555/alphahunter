@@ -8661,6 +8661,16 @@ function MarketPulseTab() {
 
   return (
     <div>
+      {/* Top-of-tab purpose banner. The Market Pulse tab does ONE job:
+          answers "should I be aggressive today?" by translating regime +
+          breadth into a position-size dial. Surfacing that question
+          explicitly stops the user from re-deriving it every morning. */}
+      <div style={{padding:'10px 14px',marginBottom:14,background:'rgba(0,180,255,0.05)',border:'1px solid rgba(0,180,255,0.25)',borderRadius:5}}>
+        <div style={{fontSize:11,color:'var(--cyan)',letterSpacing:2,fontWeight:700,marginBottom:4}}>⚡ MARKET PULSE — REGIME GATE</div>
+        <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.5}}>
+          <strong style={{color:'var(--text)'}}>Should I be aggressive today?</strong> The Regime banner below sets your sizing dial — Bull/Caution/Bear maps to <strong style={{color:'var(--green)'}}>full</strong>, <strong style={{color:'var(--amber)'}}>half</strong>, or <strong style={{color:'var(--red)'}}>no new longs</strong>. In a Caution tape even great CAN SLIM setups fail ~70% of the time (O'Neil's data) — the gate isn't optional, it controls how much real money you put behind a signal.
+        </div>
+      </div>
       <SectionHeader label="Act Now" sub="regime stance · capacity · breadth alarms" />
       {/* REGIME BANNER — most prominent element on the page */}
       {regime && (
@@ -10039,6 +10049,16 @@ function MacroTab() {
 
   return (
     <div>
+      {/* Top-of-tab purpose banner. Macro's role is theme-finder, not
+          stock-picker. It explains WHY a sector is leading and whether
+          the rotation has staying power. Combined with Rotation it
+          tells you which leaders to chase and which to fade. */}
+      <div style={{padding:'10px 14px',marginBottom:14,background:'rgba(196,77,255,0.05)',border:'1px solid rgba(196,77,255,0.25)',borderRadius:5}}>
+        <div style={{fontSize:11,color:'var(--purple)',letterSpacing:2,fontWeight:700,marginBottom:4}}>📉 MACRO — THEME FINDER</div>
+        <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.5}}>
+          <strong style={{color:'var(--text)'}}>Why is this sector leading? And will it last?</strong> Macro alone won't pick a stock — combine it with Rotation. Yields rising + dollar falling → commodity producers. Credit spreads widening (HY OAS up) → defensive sectors. Curve steepening → financials. Use these reads to gauge whether a Leading-Edge rotation is a durable macro shift or a 2-week mean-reversion bounce.
+        </div>
+      </div>
       {/* VIX Term Structure — live (Yahoo) */}
       {vixTermStructure && (
         <div className="panel" style={{marginBottom:14, borderColor: termStructureRegime?.color || 'var(--border)'}}>
