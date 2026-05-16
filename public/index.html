@@ -17376,6 +17376,25 @@ function WatchlistTab({ rsData, rsLoaded, navigateToScanner }) {
             style={{padding:'7px 10px',width:180,background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',fontSize:12,fontFamily:'var(--font-mono)',letterSpacing:0.5,outline:'none'}}/>
           <button onClick={add} className="btn btn-primary btn-sm" disabled={!addTicker.trim()}>+ ADD</button>
 
+          {/* Clear-all reset — wipes the whole watchlist after a confirm.
+              For users restarting from scratch (new strategy, fresh
+              Sunday routine) instead of pruning name-by-name. Doesn't
+              touch the server-side rotation_picks table, so future
+              auto-promotions still flow in as intended. */}
+          {items.length > 0 && (
+            <button
+              onClick={() => {
+                if (!window.confirm(`Clear all ${items.length} ticker${items.length===1?'':'s'} from the watchlist? This is irreversible — auto-added rotation picks will not come back (they're marked accepted server-side).`)) return;
+                persist([]);
+                window.dispatchEvent(new CustomEvent('watchlist-changed'));
+                window.showToast?.('Watchlist', `Cleared ${items.length} ticker${items.length===1?'':'s'}`);
+              }}
+              title="Wipe the entire watchlist. Confirm prompt before it fires."
+              style={{padding:'5px 10px',fontSize:11,background:'transparent',border:'1px solid var(--red)',color:'var(--red)',borderRadius:3,cursor:'pointer',fontFamily:'var(--font-mono)',fontWeight:700,letterSpacing:0.5}}>
+              ✕ CLEAR ALL
+            </button>
+          )}
+
           {/* Auto-fill Tier 1 — the producer the Daily Plan needs.
               Pulls top-N conviction names from the latest scanner data
               that pass quality gates (RS≥80, no earnings ≤14d,
