@@ -8,7 +8,16 @@ function db() { return getDB(); }
 
 const DEFAULT_CONFIG = {
   accountSize: 100000,
-  riskPerTrade: 1.5,       // % per trade
+  riskPerTrade: 1.5,       // % per trade (legacy fallback)
+  // Trade Architect: grade-based per-trade risk ladder. A = highest
+  // conviction earns 2.0%, B standard 1.5%, C probe 1.0%. The Sizing
+  // module reads these to compute dollar-risk. Falls back to riskPerTrade
+  // when convictionGrade isn't set on the trade dossier.
+  riskPerTradePctByGrade: { A: 2.0, B: 1.5, C: 1.0 },
+  // Default stop distance below pivot when the Sizing module has no
+  // explicit stop. 7% matches O'Neil's "8% sell rule" with a touch of
+  // breathing room above it.
+  defaultStopPct: 7,
   maxPortfolioHeat: 8,     // % total risk across all positions
   maxSectorExposure: 25,   // % of account in any single sector
   maxIndustryPositions: 3, // max positions in same industry group

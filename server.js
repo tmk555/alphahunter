@@ -191,6 +191,7 @@ const sectorRoutes        = require('./src/routes/sectors')(SECTOR_ETFS, INDUSTR
 const macroRoutes         = require('./src/routes/macro');
 const tradeSetupsRoutes   = require('./src/routes/tradeSetups')(runScan, anthropic, SECTOR_ETFS);
 const watchlistRoutes     = require('./src/routes/watchlist');
+const architectRoutes     = require('./src/routes/architect');
 const picksRoutes         = require('./src/routes/picks')(runScan, SECTOR_ETFS);
 const fundamentalsRoutes  = require('./src/routes/fundamentals');
 const claudeRoutes        = require('./src/routes/claude')(anthropic);
@@ -222,6 +223,7 @@ app.use('/api', sectorRoutes);
 app.use('/api', macroRoutes);
 app.use('/api', tradeSetupsRoutes);
 app.use('/api', watchlistRoutes);
+app.use('/api', architectRoutes);
 app.use('/api', picksRoutes);
 app.use('/api', fundamentalsRoutes);
 app.use('/api', claudeRoutes);

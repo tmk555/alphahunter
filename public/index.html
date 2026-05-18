@@ -2346,6 +2346,13 @@ function App() {
       { id:'watchlist', label:'⭐ Watchlist' },
       { id:'setups',    label:'🎯 Trade Setups' },
     ] },
+    { label: 'ARCHITECT', tabs: [
+      // Dedicated stage: build the dossier + size the trade BEFORE
+      // staging. Sits between PICK (find the name) and the actual
+      // bracket order. The conviction-grade ladder forces the user to
+      // write down WHY this trade earns A/B/C size.
+      { id:'architect', label:'🏗 Architect' },
+    ] },
     { label: 'DEEP', tabs: [
       { id:'hedge',     label:'🛡 Hedge' },
       { id:'replay',    label:'🔁 Replay' },
@@ -2510,6 +2517,7 @@ function App() {
         {tab==='rotation'   && <RotationTab selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} selectedIndustries={selectedIndustries} setSelectedIndustries={setSelectedIndustries}/>}
         {tab==='rs'         && <RSTab rsData={rsData} rsLoaded={rsLoaded} rsLoading={rsLoading} setRsData={setRsData} setRsLoaded={setRsLoaded} minRS={minRS} setMinRS={setMinRS} minMktCap={minMktCap} setMinMktCap={setMinMktCap} selectedSectors={selectedSectors} setSelectedSectors={setSelectedSectors} selectedIndustries={selectedIndustries} setSelectedIndustries={setSelectedIndustries} sigFilters={rsSigFilters} setSigFilters={setRsSigFilters} quickFilter={rsQuickFilter} setQuickFilter={setRsQuickFilter} scannerTarget={scannerTarget} clearScannerTarget={() => setScannerTarget(null)}/>}
         {tab==='setups'     && <TradeSetupsTab rsData={rsData} rsLoaded={rsLoaded} rsLoading={rsLoading} results={swingResults} setResults={setSwingResults} regime={swingRegime} setRegime={setSwingRegime} scanned={swingScanned} setScanned={setSwingScanned} summary={swingSummary} setSummary={setSwingSummary} setupSigFilters={setupSigFilters} setSetupSigFilters={setSetupSigFilters} mode={setupMode} setMode={setSetupMode} sortBy={setupSortBy} setSortBy={setSetupSortBy} exitStrategy={setupExitStrategy} setExitStrategy={setSetupExitStrategy} minMktCap={minMktCap} setMinMktCap={setMinMktCap}/>}
+        {tab==='architect'  && <TradeArchitectTab rsData={rsData}/>}
         {tab==='hedge'      && <HedgeTab />}
         {tab==='trades'     && <TradesTab rsData={rsData} badgeCounts={badgeCounts}/>}
         {tab==='watchlist'  && <WatchlistTab rsData={rsData} rsLoaded={rsLoaded} navigateToScanner={navigateToScanner}/>}
@@ -17704,6 +17712,454 @@ if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('watchlist-changed'));
     return true;
   };
+}
+
+// ─── TRADE ARCHITECT — Dossier + Sizing ─────────────────────────────────────
+// Two-stage pre-trade workflow:
+//   Stage 4 — Dossier: per-ticker JSON capture (thesis, kill criteria,
+//     catalysts, horizon, conviction grade) with auto-prefill from
+//     scanner + fundamentals. Forces written rationale before sizing.
+//   Stage 5 — Sizing: reads dossier + portfolio config and computes full
+//     position $/shares, probe (half-size), add-on ladder, max-cap check.
+//     Math is shown inline so the user can re-derive any number.
+//
+// Persistence: SQLite (dossiers + themes tables, server-side). No
+// localStorage — survives across browsers and devices.
+function TradeArchitectTab({ rsData }) {
+  const [ticker, setTicker]     = useState('');
+  const [dossier, setDossier]   = useState(null);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState('');
+  const [saving, setSaving]     = useState(false);
+  const [themes, setThemes]     = useState([]);
+  const [allDossiers, setAllDossiers] = useState([]);
+  const [funds, setFunds]       = useState(null);
+
+  // Portfolio config (account size, risk budgets). Reused by Sizing.
+  const [config, setConfig] = useState(null);
+  useEffect(() => {
+    api('/api/portfolio/config').then(setConfig).catch(()=>{});
+  }, []);
+
+  // Theme dropdown — union of curated (industry ETFs) + user-added.
+  async function loadThemes() {
+    try { const r = await api('/api/themes'); setThemes(r.themes || []); }
+    catch (_) { /* non-fatal — dropdown will be empty */ }
+  }
+  useEffect(() => { loadThemes(); }, []);
+
+  // Existing dossiers list — for the left rail "recent dossiers" picker.
+  async function loadDossierList() {
+    try { const r = await api('/api/dossiers'); setAllDossiers(r.dossiers || []); }
+    catch (_) {}
+  }
+  useEffect(() => { loadDossierList(); }, []);
+
+  // Load a specific dossier (or null if no prior version exists). Also
+  // pulls live fundamentals so the prefill block always reflects today.
+  async function loadDossier(t) {
+    if (!t) return;
+    const T = t.toUpperCase().trim();
+    setLoading(true); setError('');
+    try {
+      const existing = await api(`/api/dossiers/${T}`).catch(e => {
+        if (/not found/i.test(e.message)) return null;
+        throw e;
+      });
+      // Fundamentals — best-effort, used to prefill technical+fundamental
+      // snapshots if the dossier is fresh or to refresh stale snapshots.
+      let fund = null;
+      try { fund = await api(`/api/fundamentals/${T}`); } catch (_) {}
+      setFunds(fund);
+      const live = (rsData || []).find(s => s.ticker === T);
+      setDossier(existing || _seedDossier(T, live, fund));
+    } catch (e) {
+      setError(e.message);
+    }
+    setLoading(false);
+  }
+
+  // Build a fresh dossier blob from scanner row + fundamentals. Idempotent
+  // — re-running this rebuilds the auto-prefill fields only; user-written
+  // fields (thesis, killCriteria, catalysts, holdHorizon, conviction)
+  // start blank so the user has to fill them in to "commit" the dossier.
+  function _seedDossier(T, live, fund) {
+    return {
+      ticker: T,
+      currentPrice:    live?.price ?? null,
+      pivotPrice:      live?.vcpPivot ?? (live?.w52h ? +(live.w52h * 1.001).toFixed(2) : null),
+      theme:           '',
+      fundamentalSnapshot: {
+        revGrowthQ0:    fund?.revGrowth_Q0_yoy ?? null,
+        revGrowthQ1:    fund?.revGrowth_Q1_yoy ?? null,
+        revGrowthTrend: (fund?.revActualQuarterly || []).slice(0, 4).map(q => ({ date: q.date, rev: q.revenue })),
+        epsGrowthQ0:    fund?.epsGrowth_Q0_yoy ?? null,
+        epsGrowthYoY:   fund?.epsGrowthYoY ?? null,
+        canSlimScore:   fund?.canSlimScore ?? null,
+      },
+      technicalSnapshot: {
+        stage:          live?.stage ?? null,
+        sepaScore:      live?.sepaScore ?? null,
+        rsRank:         live?.rsRank ?? null,
+        rsLineNewHigh:  live?.rsLineNewHigh ?? false,
+        vcpForming:     live?.vcpForming ?? false,
+        bestPattern:    live?.bestPattern ?? null,
+        distFromHigh:   live?.distFromHigh ?? null,
+        vsMA50:         live?.vsMA50 ?? null,
+        vsMA200:        live?.vsMA200 ?? null,
+      },
+      sector:          live?.sector ?? null,
+      industry:        live?.industry ?? null,
+      industryName:    live?.industryName ?? null,
+      thesis:          ['', '', ''],
+      killCriteria:    ['', '', ''],
+      catalysts:       [{date:'',description:''}, {date:'',description:''}, {date:'',description:''}],
+      holdHorizonDays: 60,
+      convictionGrade: 'B',
+      prefilledAt:     new Date().toISOString(),
+    };
+  }
+
+  async function saveDossier() {
+    if (!dossier?.ticker) return;
+    setSaving(true); setError('');
+    try {
+      const saved = await api(`/api/dossiers/${dossier.ticker}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dossier),
+      });
+      setDossier(saved);
+      loadDossierList();
+      loadThemes(); // pick up any new theme the user typed
+      window.showToast?.('Architect', `Dossier saved for ${dossier.ticker}`);
+    } catch (e) {
+      setError(e.message);
+      window.showToast?.('Architect', `Save failed: ${e.message}`, true);
+    }
+    setSaving(false);
+  }
+
+  function patch(updates) {
+    setDossier(d => d ? { ...d, ...updates } : d);
+  }
+
+  function patchArr(field, i, value) {
+    setDossier(d => {
+      if (!d) return d;
+      const next = [...(d[field] || [])];
+      next[i] = value;
+      return { ...d, [field]: next };
+    });
+  }
+
+  function patchCatalyst(i, key, value) {
+    setDossier(d => {
+      if (!d) return d;
+      const next = [...(d.catalysts || [])];
+      next[i] = { ...next[i], [key]: value };
+      return { ...d, catalysts: next };
+    });
+  }
+
+  // ─── Sizing math ────────────────────────────────────────────────────────
+  // Pulled out into pure function so the inline math display can reuse it.
+  function computeSizing(d, cfg) {
+    if (!d || !cfg) return null;
+    const grade = d.convictionGrade || 'B';
+    const gradeRiskMap = cfg.riskPerTradePctByGrade || { A: 2.0, B: 1.5, C: 1.0 };
+    const riskPct = gradeRiskMap[grade] ?? (cfg.riskPerTrade || 1);
+    const acct = +cfg.accountSize || 0;
+    const dollarRisk = +(acct * (riskPct / 100)).toFixed(0);
+    const entry = +d.pivotPrice || 0;
+    const stop  = +d.stopPrice  || (entry ? +(entry * (1 - (cfg.defaultStopPct || 7) / 100)).toFixed(2) : 0);
+    const riskPerShare = entry > 0 && stop > 0 && entry > stop ? +(entry - stop).toFixed(2) : 0;
+    const fullShares   = riskPerShare > 0 ? Math.floor(dollarRisk / riskPerShare) : 0;
+    const fullDollars  = +(fullShares * entry).toFixed(0);
+    const fullPct      = acct > 0 ? +(fullDollars / acct * 100).toFixed(1) : 0;
+    const maxPct       = cfg.maxPositionPct || 25;
+    const capDollars   = +(acct * maxPct / 100).toFixed(0);
+    const capped       = fullDollars > capDollars;
+    const finalDollars = capped ? capDollars : fullDollars;
+    const finalShares  = entry > 0 ? Math.floor(finalDollars / entry) : 0;
+    const probeShares  = Math.floor(finalShares / 2);
+    const probeDollars = +(probeShares * entry).toFixed(0);
+    return {
+      grade, riskPct, dollarRisk, entry, stop, riskPerShare,
+      fullShares, fullDollars, fullPct,
+      maxPct, capDollars, capped,
+      finalShares, finalDollars,
+      probeShares, probeDollars,
+      addLadder: [
+        { label: '+5% from pivot',        trigger: +(entry * 1.05).toFixed(2), shares: Math.floor((finalShares - probeShares) / 2) },
+        { label: '+10% from pivot',       trigger: +(entry * 1.10).toFixed(2), shares: finalShares - probeShares - Math.floor((finalShares - probeShares) / 2) },
+      ],
+    };
+  }
+  const sizing = computeSizing(dossier, config);
+
+  // ─── Render ─────────────────────────────────────────────────────────────
+  const labelStyle = { fontSize:10, color:'var(--text3)', letterSpacing:1.5, textTransform:'uppercase', marginBottom:4, fontWeight:700 };
+  const inputStyle = { width:'100%', background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:3, color:'var(--text)', padding:'6px 8px', fontSize:12, fontFamily:'var(--font-mono)', outline:'none', boxSizing:'border-box' };
+  const cardStyle  = { background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:4, padding:'10px 12px' };
+
+  return (
+    <div>
+      {/* Tab purpose banner */}
+      <div style={{padding:'10px 14px',marginBottom:14,background:'rgba(0,230,118,0.05)',border:'1px solid rgba(0,230,118,0.25)',borderRadius:5}}>
+        <div style={{fontSize:11,color:'var(--green)',letterSpacing:2,fontWeight:700,marginBottom:4}}>🏗 TRADE ARCHITECT — DOSSIER + SIZING</div>
+        <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.5}}>
+          <strong style={{color:'var(--text)'}}>Write the thesis. Size the trade.</strong> Before staging a bracket, build a dossier (3 bullets thesis · 3 kill criteria · 3 catalysts · conviction A/B/C) and compute position size. The grade-based ladder forces you to commit on conviction <em>in writing</em> — A grades earn 2.0% risk, B 1.5%, C 1.0%. No conviction, no size.
+        </div>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'minmax(220px,260px) 1fr',gap:14,alignItems:'start'}}>
+        {/* ── Left rail: existing dossiers ─────────────────────────────── */}
+        <div className="panel" style={{padding:'10px 12px'}}>
+          <div style={{...labelStyle, marginBottom:8}}>Recent dossiers ({allDossiers.length})</div>
+          <div style={{display:'flex',gap:6,marginBottom:10}}>
+            <input
+              placeholder="Ticker"
+              value={ticker}
+              onChange={e => setTicker(e.target.value.toUpperCase())}
+              onKeyDown={e => { if (e.key === 'Enter') loadDossier(ticker); }}
+              autoCorrect="off" autoCapitalize="characters" spellCheck={false}
+              style={{...inputStyle, flex:1}}/>
+            <button onClick={() => loadDossier(ticker)} className="btn btn-primary btn-sm" disabled={!ticker.trim() || loading}>
+              {loading ? '…' : 'OPEN'}
+            </button>
+          </div>
+          <div style={{maxHeight:380,overflowY:'auto',display:'flex',flexDirection:'column',gap:4}}>
+            {allDossiers.length === 0 && <div style={{fontSize:11,color:'var(--text3)',padding:8}}>No dossiers yet. Type a ticker to start one.</div>}
+            {allDossiers.map(d => (
+              <button key={d.ticker} onClick={() => { setTicker(d.ticker); loadDossier(d.ticker); }}
+                style={{textAlign:'left',padding:'6px 8px',background:dossier?.ticker===d.ticker?'rgba(0,230,118,0.10)':'var(--bg)',border:`1px solid ${dossier?.ticker===d.ticker?'var(--green)':'var(--border)'}`,borderRadius:3,color:'var(--text2)',cursor:'pointer',fontFamily:'var(--font-mono)',fontSize:11}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
+                  <strong style={{color:'var(--text)'}}>{d.ticker}</strong>
+                  <span style={{fontSize:9,color:d.convictionGrade==='A'?'var(--green)':d.convictionGrade==='C'?'var(--amber)':'var(--text2)'}}>
+                    {d.convictionGrade ? `[${d.convictionGrade}]` : ''}
+                  </span>
+                </div>
+                <div style={{fontSize:9,color:'var(--text3)',marginTop:2}}>
+                  {d.theme || '—'} · {(d.updated_at || '').slice(0, 10)}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* ── Right: active dossier editor + sizing ───────────────────── */}
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          {error && <ErrorBox msg={error}/>}
+          {!dossier && (
+            <div className="panel" style={{padding:'30px 20px',textAlign:'center',color:'var(--text3)',fontSize:13}}>
+              Type a ticker on the left and click <strong style={{color:'var(--text2)'}}>OPEN</strong> to start a new dossier or load an existing one.
+              <div style={{fontSize:11,marginTop:10}}>The Architect auto-prefills price, pivot, fundamentals, and technical snapshot. You write the thesis.</div>
+            </div>
+          )}
+
+          {dossier && (
+            <>
+              {/* ─── Stage 4: Dossier ───────────────────────────────── */}
+              <div className="panel">
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:10,flexWrap:'wrap',gap:6}}>
+                  <div>
+                    <div className="panel-title">{dossier.ticker} <span>Dossier</span></div>
+                    <div className="panel-sub" style={{fontSize:11}}>
+                      {dossier.sector || '—'} · {dossier.industryName || dossier.industry || '—'}
+                      {dossier.currentPrice != null && <> · ${fmt(dossier.currentPrice)}</>}
+                      {dossier.updated_at && <> · last saved {dossier.updated_at.slice(0,16).replace('T',' ')}</>}
+                    </div>
+                  </div>
+                  <div style={{display:'flex',gap:6}}>
+                    <button onClick={() => loadDossier(dossier.ticker)} className="btn btn-sm" title="Re-pull live price + fundamentals (preserves user-written fields)">↻ Refresh prefill</button>
+                    <button onClick={saveDossier} className="btn btn-primary btn-sm" disabled={saving}>{saving ? 'Saving…' : '💾 Save'}</button>
+                  </div>
+                </div>
+
+                {/* Auto-prefilled snapshots */}
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:14}}>
+                  <div style={cardStyle}>
+                    <div style={labelStyle}>📈 Technical Snapshot (auto)</div>
+                    <div style={{fontSize:11,color:'var(--text2)',fontFamily:'var(--font-mono)',lineHeight:1.7}}>
+                      <div>RS {dossier.technicalSnapshot?.rsRank ?? '—'} · Stage {dossier.technicalSnapshot?.stage ?? '—'} · SEPA {dossier.technicalSnapshot?.sepaScore ?? '—'}/8</div>
+                      <div>vs50MA {dossier.technicalSnapshot?.vsMA50 != null ? `${dossier.technicalSnapshot.vsMA50>0?'+':''}${dossier.technicalSnapshot.vsMA50.toFixed(1)}%` : '—'} · vs200MA {dossier.technicalSnapshot?.vsMA200 != null ? `${dossier.technicalSnapshot.vsMA200>0?'+':''}${dossier.technicalSnapshot.vsMA200.toFixed(1)}%` : '—'}</div>
+                      <div>
+                        {dossier.technicalSnapshot?.rsLineNewHigh && <span style={{color:'var(--gold)'}}>⭐ RS-Line New High </span>}
+                        {dossier.technicalSnapshot?.vcpForming && <span style={{color:'var(--purple)'}}>VCP </span>}
+                        {dossier.technicalSnapshot?.bestPattern && <span style={{color:'var(--cyan)'}}>{dossier.technicalSnapshot.bestPattern}</span>}
+                      </div>
+                      <div style={{color:'var(--text3)',fontSize:10}}>dist from 52H {dossier.technicalSnapshot?.distFromHigh != null ? `-${(dossier.technicalSnapshot.distFromHigh*100).toFixed(1)}%` : '—'}</div>
+                    </div>
+                  </div>
+                  <div style={cardStyle}>
+                    <div style={labelStyle}>💰 Fundamental Snapshot (auto)</div>
+                    <div style={{fontSize:11,color:'var(--text2)',fontFamily:'var(--font-mono)',lineHeight:1.7}}>
+                      <div>Rev Q0 Y/Y {dossier.fundamentalSnapshot?.revGrowthQ0 != null ? `${dossier.fundamentalSnapshot.revGrowthQ0}%` : '—'} · Q-1 {dossier.fundamentalSnapshot?.revGrowthQ1 != null ? `${dossier.fundamentalSnapshot.revGrowthQ1}%` : '—'}</div>
+                      <div>EPS Q0 Y/Y {dossier.fundamentalSnapshot?.epsGrowthQ0 != null ? `${dossier.fundamentalSnapshot.epsGrowthQ0}%` : '—'} · Annual {dossier.fundamentalSnapshot?.epsGrowthYoY != null ? `${dossier.fundamentalSnapshot.epsGrowthYoY}%` : '—'}</div>
+                      <div>CAN SLIM {dossier.fundamentalSnapshot?.canSlimScore != null ? `${dossier.fundamentalSnapshot.canSlimScore}/6` : '—'}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Pivot + theme + horizon + conviction */}
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:10,marginBottom:14}}>
+                  <div>
+                    <div style={labelStyle} title="Breakout pivot — top of base/handle. Price above this = entry trigger.">Pivot $</div>
+                    <input type="number" step="0.01" value={dossier.pivotPrice ?? ''}
+                      onChange={e => patch({ pivotPrice: e.target.value === '' ? null : +e.target.value })}
+                      style={inputStyle}/>
+                  </div>
+                  <div>
+                    <div style={labelStyle} title="Macro theme this trade belongs to. Dropdown shows curated + user-added themes. Type to add new.">Theme</div>
+                    <input list="ah-themes" value={dossier.theme || ''}
+                      onChange={e => patch({ theme: e.target.value })}
+                      placeholder="AI / Compute"
+                      style={inputStyle}/>
+                    <datalist id="ah-themes">
+                      {themes.map(t => <option key={t.theme} value={t.theme}/>)}
+                    </datalist>
+                  </div>
+                  <div>
+                    <div style={labelStyle} title="Days you expect to hold this position if the thesis plays out. Drives time-stop logic downstream.">Hold horizon (days)</div>
+                    <input type="number" min="1" max="365" value={dossier.holdHorizonDays ?? 60}
+                      onChange={e => patch({ holdHorizonDays: +e.target.value })}
+                      style={inputStyle}/>
+                  </div>
+                  <div>
+                    <div style={labelStyle} title="A = highest conviction (2.0% risk), B = standard (1.5%), C = small probe (1.0%). Force-rank yourself.">Conviction grade</div>
+                    <select value={dossier.convictionGrade || 'B'}
+                      onChange={e => patch({ convictionGrade: e.target.value })}
+                      style={{...inputStyle, padding:'5px 8px'}}>
+                      <option value="A">A — Highest (2.0%)</option>
+                      <option value="B">B — Standard (1.5%)</option>
+                      <option value="C">C — Probe (1.0%)</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* User-written fields */}
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:14}}>
+                  <div>
+                    <div style={labelStyle} title="Three bullets capturing why this trade should work. Be specific — vague bullets produce vague reviews.">🎯 Thesis (3 bullets)</div>
+                    {[0,1,2].map(i => (
+                      <input key={i} value={dossier.thesis?.[i] || ''}
+                        onChange={e => patchArr('thesis', i, e.target.value)}
+                        placeholder={`Reason ${i+1}…`}
+                        style={{...inputStyle, marginBottom:5}}/>
+                    ))}
+                  </div>
+                  <div>
+                    <div style={labelStyle} title="Three measurable conditions that would invalidate the thesis. Trigger an exit when any one fires.">💀 Kill Criteria (3 bullets)</div>
+                    {[0,1,2].map(i => (
+                      <input key={i} value={dossier.killCriteria?.[i] || ''}
+                        onChange={e => patchArr('killCriteria', i, e.target.value)}
+                        placeholder={`If ${i+1}…`}
+                        style={{...inputStyle, marginBottom:5}}/>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{marginBottom:6}}>
+                  <div style={labelStyle} title="Dated events that should move the stock — earnings, conferences, product launches, macro prints. Mark dates so the position monitor can flag pre/post-event windows.">📅 Catalysts (date + description)</div>
+                  {[0,1,2].map(i => (
+                    <div key={i} style={{display:'grid',gridTemplateColumns:'140px 1fr',gap:6,marginBottom:5}}>
+                      <input type="date" value={dossier.catalysts?.[i]?.date || ''}
+                        onChange={e => patchCatalyst(i, 'date', e.target.value)}
+                        style={{...inputStyle, colorScheme:'dark'}}/>
+                      <input value={dossier.catalysts?.[i]?.description || ''}
+                        onChange={e => patchCatalyst(i, 'description', e.target.value)}
+                        placeholder={`Catalyst ${i+1} — e.g. Q3 earnings, conference, product launch…`}
+                        style={inputStyle}/>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* ─── Stage 5: Sizing ─────────────────────────────────── */}
+              <div className="panel">
+                <div className="panel-title">Position <span>Sizing</span></div>
+                <div className="panel-sub" style={{fontSize:11}}>
+                  Risk-first: dollar-risk = account × {sizing?.riskPct ?? '—'}% (grade {sizing?.grade ?? '—'}). Position cap: {sizing?.maxPct ?? '—'}% of NAV. Probe = ½ full size to test the entry.
+                </div>
+
+                <div style={{display:'grid',gridTemplateColumns:'180px 180px 1fr',gap:14,marginTop:12,alignItems:'start'}}>
+                  <div>
+                    <div style={labelStyle}>Entry (pivot) $</div>
+                    <input type="number" step="0.01" value={dossier.pivotPrice ?? ''}
+                      onChange={e => patch({ pivotPrice: e.target.value === '' ? null : +e.target.value })}
+                      style={inputStyle}/>
+                  </div>
+                  <div>
+                    <div style={labelStyle} title="Stop loss. Override the default % below pivot with a specific technical level.">Stop $ {dossier.stopPrice == null && <span style={{color:'var(--text3)'}}>(auto: {config?.defaultStopPct ?? 7}% below)</span>}</div>
+                    <input type="number" step="0.01" value={dossier.stopPrice ?? ''}
+                      onChange={e => patch({ stopPrice: e.target.value === '' ? null : +e.target.value })}
+                      placeholder={dossier.pivotPrice ? `auto ${(+(dossier.pivotPrice * (1 - (config?.defaultStopPct ?? 7)/100))).toFixed(2)}` : ''}
+                      style={inputStyle}/>
+                  </div>
+                  <div>
+                    <div style={labelStyle}>Math (transparent)</div>
+                    {!config && <div style={{fontSize:11,color:'var(--text3)'}}>Loading portfolio config…</div>}
+                    {config && sizing && (
+                      <div style={{fontSize:11,fontFamily:'var(--font-mono)',color:'var(--text2)',lineHeight:1.7}}>
+                        <div>account NAV: <strong>${fmt(config.accountSize, 0)}</strong> × risk <strong>{sizing.riskPct}%</strong> = $ risk <strong>${fmt(sizing.dollarRisk, 0)}</strong></div>
+                        <div>entry <strong>${fmt(sizing.entry)}</strong> − stop <strong>${fmt(sizing.stop)}</strong> = risk/share <strong>${fmt(sizing.riskPerShare)}</strong></div>
+                        <div>$ risk / risk per share = full shares <strong>{sizing.fullShares}</strong> (${fmt(sizing.fullDollars, 0)}, {sizing.fullPct}% of NAV)</div>
+                        {sizing.capped && (
+                          <div style={{color:'var(--amber)'}}>⚠ would exceed {sizing.maxPct}% cap (${fmt(sizing.capDollars, 0)}) — capping to <strong>{sizing.finalShares} shares</strong></div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {sizing && sizing.finalShares > 0 && (
+                  <>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10,marginTop:14}}>
+                      <div style={{...cardStyle,borderColor:'var(--green)'}}>
+                        <div style={labelStyle}>Full position</div>
+                        <div style={{fontSize:20,fontWeight:700,color:'var(--green)',fontFamily:'var(--font-mono)'}}>{sizing.finalShares} sh</div>
+                        <div style={{fontSize:11,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>${fmt(sizing.finalDollars, 0)} · {(sizing.finalDollars/config.accountSize*100).toFixed(1)}% NAV</div>
+                      </div>
+                      <div style={{...cardStyle,borderColor:'var(--cyan)'}}>
+                        <div style={labelStyle}>Probe (½ size)</div>
+                        <div style={{fontSize:20,fontWeight:700,color:'var(--cyan)',fontFamily:'var(--font-mono)'}}>{sizing.probeShares} sh</div>
+                        <div style={{fontSize:11,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>${fmt(sizing.probeDollars, 0)} · {(sizing.probeDollars/config.accountSize*100).toFixed(1)}% NAV</div>
+                      </div>
+                      <div style={{...cardStyle,borderColor:'var(--amber)'}}>
+                        <div style={labelStyle}>Risk on entry</div>
+                        <div style={{fontSize:20,fontWeight:700,color:'var(--amber)',fontFamily:'var(--font-mono)'}}>${fmt(sizing.dollarRisk, 0)}</div>
+                        <div style={{fontSize:11,color:'var(--text3)',fontFamily:'var(--font-mono)'}}>{sizing.riskPct}% of NAV · {sizing.grade}-grade</div>
+                      </div>
+                    </div>
+
+                    {/* Add-on ladder */}
+                    <div style={{marginTop:14}}>
+                      <div style={{...labelStyle, marginBottom:6}}>🔺 Add-on ladder (after probe fills)</div>
+                      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+                        {sizing.addLadder.map((step, i) => (
+                          <div key={i} style={cardStyle}>
+                            <div style={{fontSize:11,color:'var(--text2)'}}>
+                              <strong style={{color:'var(--cyan)'}}>{step.label}</strong>
+                              <span style={{marginLeft:8,color:'var(--text3)'}}>@ ${fmt(step.trigger)}</span>
+                            </div>
+                            <div style={{fontSize:13,fontWeight:700,color:'var(--text)',fontFamily:'var(--font-mono)',marginTop:3}}>{step.shares} sh</div>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{fontSize:10,color:'var(--text3)',marginTop:6}}>
+                        Tranches sum to full size. Pyramid only if probe is in profit and the original thesis still holds.
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ─── HEDGE TAB — Short candidates, hedge recommendations, instruments, stream ──
