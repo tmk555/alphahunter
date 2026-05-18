@@ -8771,6 +8771,55 @@ function MarketPulseTab() {
 
   return (
     <div>
+      {/* ── 5-second weekend check ────────────────────────────────────────
+          Two numbers a position trader needs Friday evening through Sunday:
+          (a) did breadth degrade since last weekend? (1W composite delta)
+          (b) what cycle state are we in? (1M structural read)
+          Everything below this line is a drill-down. If both numbers look
+          stable, close the laptop. If either flashes, scroll. */}
+      {(bWarning?.deltas || cycle?.mode) && (
+        <div style={{padding:'8px 14px',marginBottom:10,background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:5,display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',fontFamily:'var(--font-mono)'}}>
+          <span style={{fontSize:10,color:'var(--text3)',letterSpacing:1.5,fontWeight:700}}>🔍 WEEKEND CHECK</span>
+          {bWarning?.deltas?.composite5d != null && (() => {
+            const v = bWarning.deltas.composite5d;
+            const col = v <= -10 ? 'var(--red)' : v <= -5 ? 'var(--amber)' : v >= 5 ? 'var(--green)' : 'var(--text2)';
+            const tag = v <= -10 ? ' ⚠ sharp drop' : v <= -5 ? ' · soft' : v >= 5 ? ' · improving' : '';
+            return (
+              <span title="Composite breadth change vs 7 days ago. ≤−10 = sharp deterioration (size down); ≤−5 = softening; ≥+5 = improving.">
+                <span style={{color:'var(--text3)',fontSize:11}}>1W composite:</span>{' '}
+                <strong style={{color:col,fontSize:13}}>{v>0?'+':''}{v}</strong>
+                <span style={{color:col,fontSize:10,fontWeight:700}}>{tag}</span>
+              </span>
+            );
+          })()}
+          {bWarning?.label && bWarning.level > 0 && (
+            <span style={{color:bWarning.color,fontSize:11,fontWeight:700}} title={(bWarning.reasons||[]).join(' · ')}>
+              · BREADTH {bWarning.label}
+            </span>
+          )}
+          {cycle?.mode && (() => {
+            const m = cycle.mode;
+            const col = m === 'UPTREND' || m === 'FTD_CONFIRMED' ? 'var(--green)'
+                     : m === 'CORRECTION' || m === 'BEAR' || m === 'FTD_FAILED' ? 'var(--red)'
+                     : 'var(--amber)';
+            return (
+              <span title="O'Neil/IBD cycle state — slower structural read. UPTREND / FTD_CONFIRMED = hunt for entries; CORRECTION / BEAR = position management only.">
+                <span style={{color:'var(--text3)',fontSize:11}}>1M cycle:</span>{' '}
+                <strong style={{color:col,fontSize:12,letterSpacing:1}}>{m.replace(/_/g,' ')}</strong>
+                {cycle.confidence != null && <span style={{color:'var(--text3)',fontSize:10,marginLeft:4}}>({cycle.confidence}% conf)</span>}
+              </span>
+            );
+          })()}
+          {cycle?.distributionDays?.count != null && (
+            <span title="Distribution days in the trailing 25 sessions. ≥4 = under pressure; ≥6 = correction risk.">
+              <span style={{color:'var(--text3)',fontSize:11}}>· Dist:</span>{' '}
+              <strong style={{color:cycle.distributionDays.count>=6?'var(--red)':cycle.distributionDays.count>=4?'var(--amber)':'var(--green)',fontSize:12}}>
+                {cycle.distributionDays.count}
+              </strong>
+            </span>
+          )}
+        </div>
+      )}
       {/* Top-of-tab purpose banner. The Market Pulse tab does ONE job:
           answers "should I be aggressive today?" by translating regime +
           breadth into a position-size dial. Surfacing that question
