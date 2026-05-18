@@ -247,6 +247,7 @@ async function submitStagedOrder(stagedId, overrides = {}) {
         side:            staged.side,
         entryType:       staged.order_type,
         entryLimitPrice: entryLimit,
+        entryStopPrice:  entryStop,
         stopPrice:       staged.stop_price,
         timeInForce,
         tranches,

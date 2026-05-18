@@ -133,7 +133,8 @@ class MockBrokerAdapter extends BrokerAdapter {
       type:         params.entryType,
       status:       'new',
       timeInForce:  params.timeInForce || 'gtc',
-      limitPrice:   params.entryType === 'limit' ? params.entryLimitPrice : undefined,
+      limitPrice:   (params.entryType === 'limit' || params.entryType === 'stop_limit') ? params.entryLimitPrice : undefined,
+      stopPrice:    (params.entryType === 'stop'  || params.entryType === 'stop_limit') ? params.entryStopPrice  : undefined,
       submittedAt:  _now(),
       bracketGroupId: groupId,
       legs: [],
@@ -197,6 +198,7 @@ class MockBrokerAdapter extends BrokerAdapter {
           side:                 params.side,
           entryType:            params.entryType,
           entryLimitPrice:      params.entryLimitPrice,
+          entryStopPrice:       params.entryStopPrice,
           stopPrice:            params.stopPrice,
           takeProfitLimitPrice: t.takeProfitLimitPrice,
           timeInForce:          params.timeInForce || 'gtc',
@@ -415,12 +417,20 @@ function _validateSimpleOrder(p) {
   if (!p.symbol) throw new Error('simple: symbol required');
   if (!(p.qty > 0)) throw new Error('simple: qty must be > 0');
   if (!['buy', 'sell'].includes(p.side)) throw new Error(`simple: bad side ${p.side}`);
-  if (!['market', 'limit'].includes(p.type)) throw new Error(`simple: bad type ${p.type}`);
+  if (!['market', 'limit', 'stop', 'stop_limit'].includes(p.type)) throw new Error(`simple: bad type ${p.type}`);
   if (p.type === 'limit' && !(p.limitPrice > 0)) throw new Error('simple: limitPrice required for limit orders');
+  // ARM AT BROKER: stop / stop_limit entries carry the trigger in entryStopPrice
+  // (mock just acknowledges it; no live price feed to fire against).
+  if ((p.type === 'stop' || p.type === 'stop_limit') && !(p.entryStopPrice > 0)) {
+    throw new Error(`simple: entryStopPrice required for ${p.type} orders`);
+  }
+  if (p.type === 'stop_limit' && !(p.limitPrice > 0)) {
+    throw new Error('simple: limitPrice required for stop_limit orders');
+  }
 }
 
 function _validateBracket(p) {
-  _validateSimpleOrder({ ...p, type: p.entryType, limitPrice: p.entryLimitPrice });
+  _validateSimpleOrder({ ...p, type: p.entryType, limitPrice: p.entryLimitPrice, entryStopPrice: p.entryStopPrice });
   if (!(p.stopPrice > 0)) throw new Error('bracket: stopPrice required');
   if (!(p.takeProfitLimitPrice > 0)) throw new Error('bracket: takeProfitLimitPrice required');
   if (p.side === 'buy' && !(p.stopPrice < p.takeProfitLimitPrice)) {

@@ -198,6 +198,7 @@ class AlpacaAdapter extends BrokerAdapter {
           side:                 params.side,
           entryType:            params.entryType,
           entryLimitPrice:      params.entryLimitPrice,
+          entryStopPrice:       params.entryStopPrice,
           stopPrice:            params.stopPrice,
           takeProfitLimitPrice: t.takeProfitLimitPrice,
           timeInForce:          params.timeInForce || 'gtc',
