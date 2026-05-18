@@ -6502,6 +6502,7 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
     '⭐':   s => s.rsLineNewHigh,
     '↗':   s => s.rsTrend?.vs4w>5 && s.rsRank>=65 && s.rsRank<80,
     'VCP': s => s.vcpForming,
+    'wHi': s => s.weeklyHigherHigh,
     'CUP': s => s.patternData?.patterns?.cupHandle?.detected,
     'ASC': s => s.patternData?.patterns?.ascendingBase?.detected,
     'PWR': s => s.patternData?.patterns?.powerPlay?.detected,
@@ -6956,6 +6957,7 @@ function RSTab({ rsData, rsLoaded, rsLoading, setRsData, setRsLoaded, minRS, set
             // leaders, so it's a smaller / cleaner subset.
             {key:'Erode', label:'Leader↓', title:'ROTATION (pick one) · Former leader rolling over: rank was ≥85 four weeks ago, has dropped ≥10 rank points since. First-to-fall canary signal — sell-into-strength candidate. Mutually exclusive with vsSPY↑ and vsSPY↓.',col:'var(--amber)',isNew:true,mutexGroup:'rotation'},
             {key:'VCP', label:'VCP',             title:'Volatility Contraction Pattern (DAILY bars) — 2+ price contractions of decreasing depth, range tightening over typically 3-12 weeks. Coiling spring setup before breakout. Best paired with S2 for context.',col:'var(--purple)'},
+            {key:'wHi', label:'wHi',             title:'Fresh weekly higher-high — this week\'s close is above last week\'s high. Confirms a weekly breakout from a base. Best paired with VCP (base structure) and ⭐ (RS Line new high) for a clean breakout candidate.',col:'var(--green)',isNew:true},
             {key:'CUP', label:'CUP',             title:'Cup & Handle (DAILY bars). U-shaped base over typically 7-65 weeks, with a smaller handle pullback near the top. Pivot = handle peak. O\'Neil\'s most reliable base pattern.',col:'var(--cyan)'},
             {key:'ASC', label:'ASC',             title:'Ascending Base (DAILY bars). 3+ higher lows with tightening price range, 9-16 weeks typical. Each low above the prior. Pivot = most-recent high.',col:'var(--cyan)'},
             {key:'PWR', label:'PWR',             title:'Power Play (DAILY bars). 3+ weeks of tight consolidation near 52-week highs after a strong prior advance. Tightest consolidation = best signal. Pivot = consolidation high.',col:'var(--cyan)'},

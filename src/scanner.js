@@ -516,6 +516,41 @@ async function _runRSScanBody(UNIVERSE, SECTOR_MAP) {
       sepa, sepaScore,
       ...calcRSLine(closes, histMap['SPY'] || []),
       ...calcStage(closes, ma150),
+      // Fresh weekly breakout — this week's close above last week's high.
+      // Position-trader signal: a clean weekly close above the last weekly
+      // candle's high = a new weekly higher-high. Strongest when it lands
+      // after a multi-week base (combine with VCP chip).
+      weeklyHigherHigh: (() => {
+        const bars = barsMap[sym];
+        if (!bars || bars.length < 12) return false;
+        // Group daily bars into ISO-week buckets (Mon-Fri). Walk back from
+        // the latest bar collecting candles into weeks.
+        const weeks = [];
+        let cur = null;
+        for (let i = bars.length - 1; i >= 0 && weeks.length < 3; i--) {
+          const b = bars[i];
+          if (!b?.date) continue;
+          const d = new Date(b.date + 'T00:00:00Z');
+          const weekKey = (() => {
+            const dow = d.getUTCDay();
+            const offsetToMon = (dow + 6) % 7;
+            const mon = new Date(d); mon.setUTCDate(d.getUTCDate() - offsetToMon);
+            return mon.toISOString().slice(0, 10);
+          })();
+          if (!cur || cur.key !== weekKey) {
+            if (cur) weeks.push(cur);
+            cur = { key: weekKey, high: b.high, close: b.close };
+          } else {
+            if (b.high > cur.high) cur.high = b.high;
+            // Latest bar in the week (we iterate backward so the FIRST bar
+            // we see is the latest trading day) sets the close.
+          }
+        }
+        if (cur) weeks.push(cur);
+        // weeks[0] = current week, weeks[1] = prior week
+        if (weeks.length < 2 || cur == null) return false;
+        return weeks[0].close > weeks[1].high;
+      })(),
       rawRS,
       rawRSWeekly,
       rawRSMonthly,
