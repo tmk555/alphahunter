@@ -17731,6 +17731,9 @@ function TradeArchitectTab({ rsData }) {
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState('');
   const [saving, setSaving]     = useState(false);
+  // ARM AT BROKER state — covers stage + arm round-trip + last result.
+  const [arming, setArming]     = useState(false);
+  const [armResult, setArmResult] = useState(null);  // {orderId, pivot, shares} on success, {error} on failure
   const [themes, setThemes]     = useState([]);
   const [allDossiers, setAllDossiers] = useState([]);
   const [funds, setFunds]       = useState(null);
@@ -18150,6 +18153,90 @@ function TradeArchitectTab({ rsData }) {
                       <div style={{fontSize:10,color:'var(--text3)',marginTop:6}}>
                         Tranches sum to full size. Pyramid only if probe is in profit and the original thesis still holds.
                       </div>
+                    </div>
+
+                    {/* ── ARM AT BROKER ──────────────────────────────────
+                        Two-step server flow: POST /staging creates the
+                        staged row, then POST /staging/:id/arm flips
+                        order_type to 'stop' and submits to Alpaca as a
+                        buy-stop bracket. Order sits at the broker and
+                        auto-fires when price prints through pivot. */}
+                    <div style={{marginTop:14,padding:'10px 12px',background:'rgba(0,230,118,0.05)',border:'1px solid rgba(0,230,118,0.3)',borderRadius:5}}>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8}}>
+                        <div>
+                          <div style={{fontSize:11,color:'var(--green)',letterSpacing:1.5,fontWeight:700}}>🎯 ARM AT BROKER — PROBE BRACKET</div>
+                          <div style={{fontSize:10,color:'var(--text3)',marginTop:3}}>
+                            Submits a buy-stop bracket ({sizing.probeShares} sh probe @ ${fmt(sizing.entry)} · stop ${fmt(sizing.stop)}). Sits at the broker and fires the moment price prints through pivot — no phone needed.
+                          </div>
+                        </div>
+                        <button
+                          disabled={arming || !dossier.pivotPrice || !sizing.probeShares}
+                          onClick={async () => {
+                            if (!window.confirm(`Arm BUY STOP for ${dossier.ticker}: ${sizing.probeShares} sh @ $${fmt(sizing.entry)} (probe). Stop $${fmt(sizing.stop)}. Order will sit at the broker and fire automatically when price prints through pivot. Continue?`)) return;
+                            setArming(true); setArmResult(null);
+                            try {
+                              // Step 1 — stage the row. Use probe-size + entry/stop/target1.
+                              const target1 = +(sizing.entry + (sizing.entry - sizing.stop) * 2).toFixed(2);  // 2R
+                              const target2 = +(sizing.entry + (sizing.entry - sizing.stop) * 3).toFixed(2);  // 3R
+                              const staged = await api('/api/staging', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  symbol: dossier.ticker,
+                                  entry_price: sizing.entry,
+                                  stop_price:  sizing.stop,
+                                  target1_price: target1,
+                                  target2_price: target2,
+                                  qty:  sizing.probeShares,
+                                  side: 'buy',
+                                  notes: `Architect ARM · ${dossier.convictionGrade}-grade · ${dossier.theme || ''}`,
+                                }),
+                              });
+                              // Step 2 — flip to stop-entry and submit to broker.
+                              const armed = await api(`/api/staging/${staged.id}/arm`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ pivot: sizing.entry }),
+                              });
+                              setArmResult({
+                                ok: true,
+                                orderId: armed.submission?.id || staged.id,
+                                pivot:   armed.armedAtPivot,
+                                shares:  sizing.probeShares,
+                                t1: target1, t2: target2,
+                              });
+                              window.showToast?.('Architect', `${dossier.ticker} armed @ $${fmt(sizing.entry)} — broker will auto-fire on break`);
+                            } catch (e) {
+                              setArmResult({ ok: false, error: e.message });
+                              window.showToast?.('Architect', `Arm failed: ${e.message}`, true);
+                            }
+                            setArming(false);
+                          }}
+                          style={{
+                            padding:'8px 18px',
+                            background: arming ? 'var(--text3)' : 'var(--green)',
+                            border: '1px solid var(--green)',
+                            color: '#000',
+                            fontWeight: 800,
+                            letterSpacing: 1.5,
+                            borderRadius: 4,
+                            cursor: arming ? 'wait' : 'pointer',
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: 12,
+                          }}>
+                          {arming ? '⏳ ARMING…' : '🎯 ARM AT BROKER'}
+                        </button>
+                      </div>
+                      {armResult?.ok && (
+                        <div style={{marginTop:8,padding:'6px 10px',background:'rgba(0,230,118,0.15)',borderRadius:3,fontSize:11,color:'var(--green)',fontFamily:'var(--font-mono)'}}>
+                          ✓ Armed: order <strong>{armResult.orderId}</strong> · {armResult.shares} sh BUY STOP @ ${fmt(armResult.pivot)} · TP1 ${fmt(armResult.t1)} / TP2 ${fmt(armResult.t2)}
+                        </div>
+                      )}
+                      {armResult && !armResult.ok && (
+                        <div style={{marginTop:8,padding:'6px 10px',background:'rgba(255,61,87,0.10)',borderRadius:3,fontSize:11,color:'var(--red)',fontFamily:'var(--font-mono)'}}>
+                          ✗ Failed: {armResult.error}
+                        </div>
+                      )}
                     </div>
                   </>
                 )}

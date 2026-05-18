@@ -160,6 +160,18 @@ class AlpacaAdapter extends BrokerAdapter {
       if (params.entryLimitPrice == null) throw new Error("submitBracketOrder: entryLimitPrice required when entryType='limit'");
       p.limit_price = params.entryLimitPrice;
     }
+    // Stop / stop-limit entry — the Trade Architect "ARM AT BROKER" path.
+    // Order sits at the broker until price prints through entryStopPrice;
+    // then converts to a market (or limit, if stop_limit) order. Bracket
+    // legs (TP + SL) arm only after the entry fills.
+    if (params.entryType === 'stop' || params.entryType === 'stop_limit') {
+      if (params.entryStopPrice == null) throw new Error(`submitBracketOrder: entryStopPrice required when entryType='${params.entryType}'`);
+      p.stop_price = params.entryStopPrice;
+      if (params.entryType === 'stop_limit') {
+        if (params.entryLimitPrice == null) throw new Error("submitBracketOrder: entryLimitPrice required when entryType='stop_limit'");
+        p.limit_price = params.entryLimitPrice;
+      }
+    }
     if (params.stopLimitPrice != null) {
       p.stop_loss.limit_price = params.stopLimitPrice;
     }
@@ -291,7 +303,10 @@ function validateBracketParams(p) {
   if (!p.symbol) throw new Error('bracket: symbol required');
   if (!(p.qty > 0)) throw new Error('bracket: qty must be > 0');
   if (!['buy', 'sell'].includes(p.side)) throw new Error(`bracket: side must be 'buy' or 'sell', got ${p.side}`);
-  if (!['market', 'limit'].includes(p.entryType)) throw new Error(`bracket: entryType must be 'market' or 'limit', got ${p.entryType}`);
+  // 'stop' / 'stop_limit' added for ARM AT BROKER (auto-fire on pivot break).
+  if (!['market', 'limit', 'stop', 'stop_limit'].includes(p.entryType)) {
+    throw new Error(`bracket: entryType must be 'market'|'limit'|'stop'|'stop_limit', got ${p.entryType}`);
+  }
   if (!(p.stopPrice > 0)) throw new Error('bracket: stopPrice required');
   if (!(p.takeProfitLimitPrice > 0)) throw new Error('bracket: takeProfitLimitPrice required');
   // For longs, stop must be below TP; for shorts, above.
@@ -300,6 +315,18 @@ function validateBracketParams(p) {
   }
   if (p.side === 'sell' && !(p.stopPrice > p.takeProfitLimitPrice)) {
     throw new Error(`bracket: short order needs stopPrice (${p.stopPrice}) > takeProfitLimitPrice (${p.takeProfitLimitPrice})`);
+  }
+  // For a buy-stop entry, the broker stop-loss MUST sit below the entry
+  // trigger — otherwise the SL fires the moment the entry does. Same
+  // intuition mirrored for sell-stop shorts.
+  if ((p.entryType === 'stop' || p.entryType === 'stop_limit')) {
+    if (!(p.entryStopPrice > 0)) throw new Error(`bracket: entryStopPrice required when entryType='${p.entryType}'`);
+    if (p.side === 'buy' && !(p.stopPrice < p.entryStopPrice)) {
+      throw new Error(`bracket: long stop-entry needs stopPrice (${p.stopPrice}) < entryStopPrice (${p.entryStopPrice})`);
+    }
+    if (p.side === 'buy' && !(p.entryStopPrice < p.takeProfitLimitPrice)) {
+      throw new Error(`bracket: long stop-entry needs entryStopPrice (${p.entryStopPrice}) < takeProfitLimitPrice (${p.takeProfitLimitPrice})`);
+    }
   }
 }
 

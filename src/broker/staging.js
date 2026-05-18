@@ -227,7 +227,11 @@ async function submitStagedOrder(stagedId, overrides = {}) {
     const broker = getBroker();
     const exitStrategy = staged.exit_strategy || 'full_in_scale_out';
     const timeInForce  = staged.time_in_force || 'gtc';
-    const entryLimit   = staged.order_type === 'limit' ? staged.entry_price : undefined;
+    const entryLimit   = (staged.order_type === 'limit' || staged.order_type === 'stop_limit') ? staged.entry_price : undefined;
+    // For ARM AT BROKER: stop / stop_limit entries fire when price prints
+    // through entry_price. We reuse the staged entry_price as the trigger
+    // (the pivot) so the staging form needs no new column.
+    const entryStop    = (staged.order_type === 'stop' || staged.order_type === 'stop_limit') ? staged.entry_price : undefined;
 
     // ── Dispatch: multi-tranche vs single bracket ─────────────────────────
     if (isScaleOutStrategy(exitStrategy) && staged.target1_price) {
@@ -262,6 +266,7 @@ async function submitStagedOrder(stagedId, overrides = {}) {
         side:                 staged.side,
         entryType:            staged.order_type,
         entryLimitPrice:      entryLimit,
+        entryStopPrice:       entryStop,
         stopPrice:            staged.stop_price,
         takeProfitLimitPrice: staged.target1_price || staged.target2_price,
         timeInForce,

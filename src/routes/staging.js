@@ -183,6 +183,44 @@ module.exports = function(db, runScan) {
     }
   });
 
+  // ─── ARM AT BROKER ───────────────────────────────────────────────────────
+  // Submit the staged order as a buy-stop bracket NOW, with the broker
+  // holding the trigger. Order fires the moment price prints through pivot
+  // (entry_price). Different from /staging/:id/arm-gate which keeps the
+  // trigger on the app side and polls for volume/VWAP confirmation.
+  //
+  // Use case: position trader sets up over the weekend, doesn't want to be
+  // at the phone for the breakout. The stop-buy bracket sits at Alpaca and
+  // auto-fires. App still gets the fill notification via syncOrderStatus.
+  //
+  // Body: { pivot?: number }  — override the pivot/trigger price, otherwise
+  //   uses the row's existing entry_price.
+  router.post('/staging/:id/arm', async (req, res) => {
+    try {
+      const id = +req.params.id;
+      const row = db.prepare('SELECT * FROM staged_orders WHERE id = ?').get(id);
+      if (!row) return res.status(404).json({ error: 'not found' });
+      if (row.status !== 'staged') {
+        return res.status(400).json({ error: `Cannot arm: order is ${row.status}, must be staged` });
+      }
+      const pivot = req.body?.pivot != null ? +req.body.pivot : row.entry_price;
+      if (!(pivot > 0)) return res.status(400).json({ error: 'pivot price required' });
+      if (row.side === 'buy' && !(row.stop_price < pivot)) {
+        return res.status(400).json({ error: `stop_price (${row.stop_price}) must be < pivot (${pivot}) for buy-stop entry` });
+      }
+      // Flip order_type to 'stop' and snap entry_price to the pivot. The
+      // existing submit pipeline then routes through the new stop-entry
+      // path in submitBracketOrder.
+      db.prepare(
+        `UPDATE staged_orders SET order_type = 'stop', entry_price = ? WHERE id = ?`
+      ).run(pivot, id);
+      const result = await submitStagedOrder(id, {});
+      res.json({ ...result, armedAtPivot: pivot });
+    } catch (e) {
+      res.status(400).json({ error: e.message, riskCheck: e.riskCheck || null });
+    }
+  });
+
   // ─── Cancel staged order ──────────────────────────────────────────────────
   router.post('/staging/:id/cancel', async (req, res) => {
     try {
